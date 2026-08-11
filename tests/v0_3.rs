@@ -14,7 +14,8 @@ use openaip_os::trace::{View, build_timeline};
 use serde_json::{Value, json};
 use std::net::SocketAddr;
 use std::time::Duration;
-use tokio::net::TcpListener;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message;
 
 /// 确定性 Fake 认知引擎（仅测试，不发货）：按 step 返回结构化决策，绑定世界对象。
@@ -329,4 +330,336 @@ async fn collect_ws(addr: &SocketAddr, path: &str) -> Vec<Value> {
     }
     let _ = ws.close(None).await;
     out
+}
+
+/// 最小 HTTP/1.1 客户端（Connection: close，无第三方依赖），返回 (状态码, body)。
+async fn http_call(
+    addr: SocketAddr,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+) -> (u16, String) {
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let req = match body {
+        Some(b) => format!(
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{b}",
+            b.len()
+        ),
+        None => format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"),
+    };
+    stream.write_all(req.as_bytes()).await.unwrap();
+    let mut buf = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut buf)).await;
+    let text = String::from_utf8_lossy(&buf);
+    let (head, rest) = text.split_once("\r\n\r\n").unwrap_or(("", ""));
+    let status: u16 = head
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let cl = head.lines().find_map(|l| {
+        l.to_ascii_lowercase()
+            .strip_prefix("content-length: ")
+            .and_then(|v| v.trim().parse::<usize>().ok())
+    });
+    let body = match cl {
+        Some(n) => rest.get(..n).unwrap_or(rest).to_string(),
+        None => rest.to_string(),
+    };
+    (status, body)
+}
+
+/// 启动匿名服务（内存库 + FakeEngine），返回地址；调用方负责喂数据。
+async fn spawn_server(kernel: std::sync::Arc<RuntimeKernel>) -> SocketAddr {
+    let engine: std::sync::Arc<dyn AgentEngine> = std::sync::Arc::new(FakeEngine);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let ks = kernel.clone();
+    tokio::spawn(async move {
+        let _ = server::serve(ks, engine, listener, "ui/dist").await;
+    });
+    tokio::time::sleep(Duration::from_millis(150)).await; // 等绑定就绪
+    addr
+}
+
+// ── TC-012：多候选闭环缩放（每客户 → 1 挽留任务 + 1 needs_retention 边） ────────────────
+#[tokio::test]
+async fn tc012_multi_candidate_closed_loop() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    for id in ["001", "002", "003"] {
+        kernel
+            .create_object("Customer", id, json!({ "name": id }))
+            .await
+            .unwrap();
+    }
+    let run_id = generate_run_id();
+    Planner::new(&kernel)
+        .run_goal(&FakeEngine, "reduce churn", "retention-agent", &run_id)
+        .await
+        .expect("多候选也应跑通");
+
+    let tasks = kernel.query_objects("RetentionTask").await.unwrap();
+    assert_eq!(tasks.len(), 3, "应为 3 个客户各创建 1 个任务");
+    let edges = kernel.query_relations("needs_retention").await.unwrap();
+    assert_eq!(edges.len(), 3, "应建立 3 条 needs_retention 边");
+    for e in &edges {
+        assert_eq!(e.relation, "needs_retention");
+        assert!(tasks.iter().any(|t| t.id == e.target), "边目标应为挽留任务");
+    }
+}
+
+// ── TC-011 正向：非破坏性能力经 Policy 校验应 Allow（对照 TC-011-b 的 Deny） ─────────────
+#[test]
+fn tc011_policy_allow_non_destructive() {
+    let steps = [
+        PlanStep {
+            capability: Capability::CreateObject {
+                object_type: "X".into(),
+                id: "x1".into(),
+                data: json!({}),
+            },
+            object_refs: vec!["x1".into()],
+            description: "create".into(),
+        },
+        PlanStep {
+            capability: Capability::LinkRelation {
+                source: "a".into(),
+                edge: "r".into(),
+                target: "b".into(),
+            },
+            object_refs: vec!["a".into()],
+            description: "link".into(),
+        },
+        PlanStep {
+            capability: Capability::QueryObjects {
+                object_type: "X".into(),
+            },
+            object_refs: vec![],
+            description: "query".into(),
+        },
+        PlanStep {
+            capability: Capability::EmitEvent {
+                event_type: "E".into(),
+                refs: vec!["a".into()],
+            },
+            object_refs: vec!["a".into()],
+            description: "emit".into(),
+        },
+    ];
+    for step in steps {
+        assert_eq!(
+            Policy::check(&step),
+            PolicyDecision::Allow,
+            "非破坏性能力应 Allow"
+        );
+    }
+}
+
+// ── TC-012-b：空世界（无候选客户）兜底绑定 "world" 哨兵，且不创建任务 ───────────────────
+#[tokio::test]
+async fn tc012b_empty_world_object_refs_sentinel() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    let run_id = generate_run_id();
+    Planner::new(&kernel)
+        .run_goal(&FakeEngine, "reduce churn", "retention-agent", &run_id)
+        .await
+        .expect("空世界也应跑通");
+
+    let events = kernel
+        .list_events(TraceQuery::for_run(&run_id))
+        .await
+        .unwrap();
+    assert!(!events.is_empty());
+    for e in &events {
+        assert!(
+            e.object_refs.iter().any(|r| r == "world"),
+            "空世界事件应兜底绑定 world: {}",
+            e.event_type
+        );
+    }
+    assert!(
+        kernel
+            .query_objects("RetentionTask")
+            .await
+            .unwrap()
+            .is_empty(),
+        "空世界不应创建任务"
+    );
+}
+
+// ── TC-013：TraceQuery 过滤（run/agent/object）与 after_id 游标 ───────────────────────
+#[tokio::test]
+async fn tc013_trace_query_filters() {
+    let (kernel, run_id) = seed_and_run(&FakeEngine).await;
+    let all = kernel
+        .list_events(TraceQuery::for_run(&run_id))
+        .await
+        .unwrap();
+    assert!(!all.is_empty());
+
+    // agent 过滤等价
+    let by_agent = kernel
+        .list_events(TraceQuery::for_agent("retention-agent"))
+        .await
+        .unwrap();
+    assert_eq!(by_agent.len(), all.len(), "agent 过滤应等价");
+
+    // object 过滤：仅返回绑定 001 的事件
+    let by_obj = kernel
+        .list_events(TraceQuery::for_run(&run_id).with_object("001"))
+        .await
+        .unwrap();
+    assert!(!by_obj.is_empty(), "应存在绑定客户 001 的事件");
+    assert!(
+        by_obj
+            .iter()
+            .all(|e| e.object_refs.contains(&"001".to_string())),
+        "全部应绑定 001"
+    );
+
+    // after 游标：跳过首条后剩余
+    let first_id = all[0].id.clone();
+    let after = kernel
+        .list_events(TraceQuery::for_run(&run_id).with_after(&first_id))
+        .await
+        .unwrap();
+    assert_eq!(after.len(), all.len() - 1, "游标后应少一条");
+    assert!(after.iter().all(|e| e.id != first_id), "游标事件不应包含");
+}
+
+// ── TC-009 衍生：REST 列表分页 + 单条缺失 WB2002 ──────────────────────────────────────
+#[tokio::test]
+async fn tc_rest_trace_list_and_404() {
+    let kernel = std::sync::Arc::new(RuntimeKernel::new(
+        LibSQLStorage::open(":memory:").await.unwrap(),
+    ));
+    kernel
+        .create_object("Customer", "001", json!({ "name": "Apple" }))
+        .await
+        .unwrap();
+    let addr = spawn_server(kernel.clone()).await;
+
+    let run_id = generate_run_id();
+    Planner::new(kernel.as_ref())
+        .run_goal(&FakeEngine, "reduce churn", "retention-agent", &run_id)
+        .await
+        .unwrap();
+
+    let (_st, body) = http_call(addr, "GET", "/api/v1/wb/agent/trace?pageSize=2", None).await;
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["code"], 0, "列表应成功: {body}");
+    assert!(
+        v["data"]["total"].as_u64().unwrap() >= 8,
+        "应至少 8 条认知事件"
+    );
+    assert_eq!(
+        v["data"]["list"].as_array().unwrap().len(),
+        2,
+        "pageSize=2 返回 2 条"
+    );
+
+    let (_st2, body2) = http_call(addr, "GET", "/api/v1/wb/agent/trace/tr_missing", None).await;
+    let v2: Value = serde_json::from_str(&body2).unwrap();
+    assert_eq!(v2["code"], 2002, "缺失 trace 应 WB2002: {body2}");
+}
+
+// ── TC-009 衍生：POST /run 门禁（缺 agentId→WB1001；有效→runId+streamUrl） + timeline ──
+#[tokio::test]
+async fn tc_rest_run_start_gate() {
+    let kernel = std::sync::Arc::new(RuntimeKernel::new(
+        LibSQLStorage::open(":memory:").await.unwrap(),
+    ));
+    kernel
+        .create_object("Customer", "001", json!({ "name": "Apple" }))
+        .await
+        .unwrap();
+    let addr = spawn_server(kernel.clone()).await;
+
+    // 缺 agentId → WB1001
+    let (_s, b1) = http_call(
+        addr,
+        "POST",
+        "/api/v1/wb/agent/run",
+        Some(r#"{"goal":"reduce churn"}"#),
+    )
+    .await;
+    let v1: Value = serde_json::from_str(&b1).unwrap();
+    assert_eq!(v1["code"], 1001, "缺 agentId 应 WB1001: {b1}");
+
+    // 有效 → runId + streamUrl
+    let (_s2, b2) = http_call(
+        addr,
+        "POST",
+        "/api/v1/wb/agent/run",
+        Some(r#"{"agentId":"retention-agent","goal":"reduce churn"}"#),
+    )
+    .await;
+    let v2: Value = serde_json::from_str(&b2).unwrap();
+    assert_eq!(v2["code"], 0, "应成功触发: {b2}");
+    let run_id = v2["data"]["runId"].as_str().unwrap().to_string();
+    assert!(v2["data"]["streamUrl"].as_str().unwrap().contains(&run_id));
+
+    // 轮询 timeline（Executive 视图应含决策摘要）
+    let tl_path = format!("/api/v1/wb/agent/run/{run_id}/timeline?view=executive");
+    let mut status = String::new();
+    let mut decision: Option<Value> = None;
+    for _ in 0..10 {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let (_s, tb) = http_call(addr, "GET", &tl_path, None).await;
+        let tv: Value = serde_json::from_str(&tb).unwrap();
+        status = tv["data"]["status"].as_str().unwrap_or("").to_string();
+        decision = Some(tv["data"]["decision"].clone());
+        if status == "Completed" {
+            break;
+        }
+    }
+    assert_eq!(status, "Completed", "FakeEngine 应跑通");
+    assert!(
+        decision.is_some_and(|d| !d.is_null()),
+        "Executive 视图应返回决策摘要"
+    );
+}
+
+// ── TC-009 衍生：WebSocket 按 run 隔离（仅收目标 run 的事件，不混入其它 run） ───────────
+#[tokio::test]
+async fn tc_ws_run_scoped() {
+    let kernel = std::sync::Arc::new(RuntimeKernel::new(
+        LibSQLStorage::open(":memory:").await.unwrap(),
+    ));
+    let run_a = generate_run_id();
+    let run_b = generate_run_id();
+    // 向同一 kernel 注入两个 run 的事件（直接调用底层，避免 planner 重复建对象冲突）
+    for (rid, aid) in [(&run_a, "agent-a"), (&run_b, "agent-b")] {
+        for step in ["Goal", "Reasoning", "Planning", "Action"] {
+            kernel
+                .emit_cognitive(
+                    step,
+                    rid,
+                    aid,
+                    &["001".to_string()],
+                    Some("x"),
+                    Some(json!({})),
+                    Some(json!("ok")),
+                    Some(0.9),
+                )
+                .await
+                .unwrap();
+        }
+    }
+
+    let addr = spawn_server(kernel.clone()).await;
+    let path = format!("/api/v1/wb/agent/{run_b}/stream");
+    let msgs = collect_ws(&addr, &path).await;
+    assert!(!msgs.is_empty(), "应收到 run_b 的事件");
+    for m in &msgs {
+        assert_eq!(
+            m["runId"].as_str(),
+            Some(run_b.as_str()),
+            "只能收到 run_b 的事件"
+        );
+    }
+    assert!(!msgs.iter().any(|m| m["runId"] == run_a), "不应混入 run_a");
 }

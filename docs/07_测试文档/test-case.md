@@ -4,7 +4,7 @@
 |----|------|
 | 文档ID | WB-DOC-07-002 |
 | 所属模块 | WorkBuddy-Test |
-| 版本 | V2.5 |
+| 版本 | V2.6 |
 | 创建人 | lushaohui |
 | 创建时间 | 2026-08-11 |
 | 更新记录 | 见文末修订日志 |
@@ -50,6 +50,12 @@
 | TC-009 | REQ-009 | e2e | 一次 Agent 运行 | 三视图 + WebSocket | 三视图渲染；`WS /api/v1/wb/agent/{id}/stream` 推送 cognitive 事件；Timeline 展示 Goal→…→MemoryUpdate 链；断线重连补齐 | 通过（自动化 tests/v0_3.rs） |
 | TC-010 | REQ-010 | 集成 | mock 目标 "reduce churn" | Pi（AgentEngine）`reason()` | 每步认知产出 `TraceEvent(kind=cognitive)` 且绑定 `object_refs`；Observation UI 可回放认知过程 | 通过（自动化 tests/v0_3.rs） |
 | TC-011 | REQ-011 | 集成 | 一个 goal | OpenAIP Planner | 跑通 Goal→LLMGoalParser→Planner→PlanStep→Capability→Execute；PlanStep 经 Trace 回放且绑定 `object_refs` | 通过（自动化 tests/v0_3.rs） |
+| TC-014 | REQ-011 | 集成 | 3 个客户（001/002/003） | OpenAIP Planner | 每客户 1 个 `RetentionTask` + 1 条 `needs_retention` 边；闭环随候选数线性缩放 | 通过（自动化 tests/v0_3.rs） |
+| TC-015 | REQ-011 | 边界 | 空世界（无客户） | OpenAIP Planner | 全部认知事件兜底绑定 `world` 哨兵（`object_refs` 非空，WB2006 防护）；不创建任务 | 通过（自动化 tests/v0_3.rs） |
+| TC-016 | REQ-009 | 集成 | 一次 Agent 运行 | `TraceQuery` 过滤 + `?after` 游标 | `for_run`/`for_agent`/`with_object` 过滤正确；`with_after(first_id)` 返回其后全部（不含游标自身） | 通过（自动化 tests/v0_3.rs） |
+| TC-017 | REQ-009 | e2e | 运行完毕 | `GET /api/v1/wb/agent/trace?pageSize=2` / `GET /trace/:id` | 列表 `code=0` 含 total+分页；缺失 `id` 返回 `WB2002(code=2002)` | 通过（自动化 tests/v0_3.rs） |
+| TC-018 | REQ-009/010 | e2e | `POST /api/v1/wb/agent/run` | 缺 `agentId` → `WB1001`；有效 → `runId`+`streamUrl`；轮询 `/run/:id/timeline?view=executive` | 门禁正确；Executive 视图返回决策摘要（`decision`） | 通过（自动化 tests/v0_3.rs） |
+| TC-019 | REQ-009 | e2e | 两个 run 落同一 kernel | `WS /api/v1/wb/agent/{run_b}/stream` | 仅收 `run_b` 事件，不混入 `run_a`（按 run/agent 隔离） | 通过（自动化 tests/v0_3.rs） |
 
 ### 4.4 异常与边界用例（必须覆盖）
 | 用例ID | 关联 | 场景 | 预期 | 状态 |
@@ -81,3 +87,4 @@
 | V2.3 | lushaohui | 2026-08-11 | TC-012 事件枚举名 ObjectLinked → RelationLinked，对齐 data-dict.md / agent-observation-design.md / api-agent-trace.md 三份权威文档的事件类型枚举；同步代码 runtime.rs 与测试契约 |
 | V2.4 | lushaohui | 2026-08-12 | 新增 TC-005-b（旧 schema 打开拒 WB2101，对应 `oaip db reset` 迁移防护）；bin/oaip `db reset` 子命令落表 |
 | V2.5 | lushaohui | 2026-08-12 | V0.3=MVP 全绿：TC-009/010/011 + TC-010-b/011-b 状态置「通过（自动化 tests/v0_3.rs）」；补充 4.3/4.4 状态列 |
+| V2.6 | lushaohui | 2026-08-12 | V0.3 补充测试：新增 TC-014(多候选闭环缩放)/TC-015(空世界 world 哨兵)/TC-016(TraceQuery 过滤+游标)/TC-017(REST 列表+WB2002)/TC-018(POST /run 门禁+Executive 决策)/TC-019(WS 按 run 隔离)；全部 tests/v0_3.rs 通过 |
