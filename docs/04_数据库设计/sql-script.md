@@ -4,7 +4,7 @@
 |----|------|
 | 文档ID | WB-DOC-04-004 |
 | 所属模块 | WorkBuddy-DB |
-| 版本 | V1.4 |
+| 版本 | V1.5 |
 | 创建人 | lushaohui |
 | 创建时间 | 2026-08-11 |
 | 更新记录 | 见文末修订日志 |
@@ -22,7 +22,7 @@
 - [建议] 初始化数据区分「环境无关基础数据」与「环境相关种子数据」。
 
 ## 4. 详细设计/内容
-### 4.1 建表脚本（V1.3.0）
+### 4.1 建表脚本（V1.5.0）
 ```sql
 -- 系统账户（内部账号，数值自增主键）
 CREATE TABLE wb_user_account (
@@ -34,6 +34,12 @@ CREATE TABLE wb_user_account (
 );
 
 CREATE INDEX idx_create_time ON wb_user_account (create_time);
+
+-- 元数据：schema 版本（open 据此拦截旧库，避免 CREATE TABLE IF NOT EXISTS 不迁移的坑；V0.2 引入）
+CREATE TABLE wb_meta (
+  key    TEXT PRIMARY KEY,  -- 元数据键（如 schema_version）
+  value  TEXT  -- 元数据值
+);
 
 -- 本体对象实例（Everything is Object：每类业务对象统一存此表，禁止按业务建独立表；V0.1 引入）
 CREATE TABLE wb_ontology_object (
@@ -111,4 +117,5 @@ CREATE INDEX idx_create_time  ON wb_trace_event (create_time);
 | V1.2 | lushaohui | 2026-08-11 | DDL 方言统一为 Turso/SQLite（INTEGER/TEXT/REAL + AUTOINCREMENT，列注释改 -- 行注释） |
 | V1.3 | lushaohui | 2026-08-11 | 新增核心表 wb_ontology_object / wb_relation_edge（SQLite 方言，TEXT 语义ID）；wb_trace_event.id 改为 TEXT 与 DTO 对齐；补齐 idx_create_time 索引 |
 | V1.4 | lushaohui | 2026-08-11 | codegen(canonical_schema) 与 LibSQLStorage 字段/索引对齐本权威 DDL：object 表列 type、edge 表 source/relation/target；索引补全 idx_obj_create / idx_edge_source / idx_edge_target / idx_edge_rel（与文档一致），移除代码侧多余的 idx_rel_* |
+| V1.5 | lushaohui | 2026-08-12 | 新增 wb_meta 元数据表（schema_version），作为 open 旧 schema 拦截（WB2101）的唯一依据；canonical_schema 与文档 DDL 保持一致 |
 

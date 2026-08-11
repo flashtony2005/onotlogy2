@@ -201,3 +201,35 @@ async fn tc008_bus_publish_consistent() {
     assert_eq!(published, stored[0]);
     assert_eq!(published.event_type, "ObjectCreated");
 }
+
+// ── TC-005-b：旧 schema 检测（WB2101，root cause 防护） ─────────────────────
+#[tokio::test]
+async fn tc005b_open_rejects_legacy_schema() {
+    // 真实文件旧 schema（任意外部工具创建的旧列：object_type/from_id/to_id/edge_type，无 wb_meta）。
+    // open 必须返 WB2101，而非下游 cryptic 的 no such column。
+    let path = std::env::temp_dir().join(format!("oaip_legacy_{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+
+    // 用 libsql 造一个“旧库”，模拟外部创建的旧 schema 文件（含 WAL 刷盘）
+    {
+        let db = libsql::Builder::new_local(&path).build().await.unwrap();
+        let conn = db.connect().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE wb_ontology_object (id TEXT PRIMARY KEY, object_type TEXT, data TEXT);\
+             CREATE TABLE wb_relation_edge (id TEXT PRIMARY KEY, edge_type TEXT, from_id TEXT, to_id TEXT);",
+        )
+        .await
+        .unwrap();
+        let _ = conn
+            .query("PRAGMA wal_checkpoint(TRUNCATE)", libsql::params![])
+            .await;
+    } // db/conn drop，旧库落盘
+
+    let res = LibSQLStorage::open(path.to_str().unwrap()).await;
+    match res {
+        Ok(_) => panic!("旧 schema 应返回 WB2101，但实际打开成功"),
+        Err(StorageError::Constraint { code, .. }) => assert_eq!(code, "WB2101"),
+        Err(other) => panic!("旧 schema 应返回 WB2101，实际: {other:?}"),
+    }
+    let _ = std::fs::remove_file(&path);
+}

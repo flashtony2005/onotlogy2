@@ -82,7 +82,13 @@ fn gen_struct(ot: &ObjectType) -> Result<String, CodegenError> {
 
 /// 规范化核心表 DDL（与 sql-script.md 一致）。存储统一，不按类型分表。
 pub fn canonical_schema() -> String {
-    r#"-- 统一事件轨迹：world 生命周期事件 + cognitive 认知事件（见 agent-observation-design.md 4.3 / 4.7）
+    r#"-- 元数据：schema 版本（open 据此拦截旧库，避免 CREATE TABLE IF NOT EXISTS 不迁移的坑）
+CREATE TABLE IF NOT EXISTS wb_meta (
+  key    TEXT PRIMARY KEY,
+  value  TEXT
+);
+
+-- 统一事件轨迹：world 生命周期事件 + cognitive 认知事件（见 agent-observation-design.md 4.3 / 4.7）
 CREATE TABLE IF NOT EXISTS wb_ontology_object (
   id          TEXT PRIMARY KEY,            -- 语义ID（如 customer_001）
   create_time TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

@@ -36,6 +36,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: EventCmd,
     },
+    /// 数据库维护（schema 迁移 / 清理演示数据）
+    Db {
+        #[command(subcommand)]
+        cmd: DbCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -73,6 +78,12 @@ enum EventCmd {
     },
 }
 
+#[derive(Subcommand)]
+enum DbCmd {
+    /// 删除并重建本地数据库（schema 迁移 / 清理演示数据）
+    Reset,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -95,6 +106,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             EventCmd::Emit { event_type, refs } => {
                 cmd_event_emit(&cli.db, &event_type, &refs).await?
             }
+        },
+        Cmd::Db { cmd } => match cmd {
+            DbCmd::Reset => cmd_db_reset(&cli.db).await?,
         },
     }
     Ok(())
@@ -214,5 +228,18 @@ async fn cmd_event_emit(
         Ok(()) => println!("✅ 已发出领域事件 {}，绑定 refs={:?}", event_type, refs),
         Err(e) => println!("❌ 发出领域事件失败：{e}"),
     }
+    Ok(())
+}
+
+async fn cmd_db_reset(db: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // 删除库文件及其 WAL/SHM 伴生文件，再由 open 以 canonical_schema 重建新表。
+    for suffix in ["", "-wal", "-shm"] {
+        let p = format!("{db}{suffix}");
+        if std::path::Path::new(&p).exists() {
+            std::fs::remove_file(&p)?;
+        }
+    }
+    LibSQLStorage::open(db).await?;
+    println!("✅ 已重建数据库 {db}（新 schema：type / source / relation / target）");
     Ok(())
 }

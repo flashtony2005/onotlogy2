@@ -2,6 +2,7 @@
 //!
 //! 对象统一存 `wb_ontology_object`（语义ID）；TraceEvent 统一存 `wb_trace_event`。
 //! 使用 libSQL 0.9 异步 API。列名与 sql-script.md 权威 DDL 一致（type / source / relation / target）。
+//! 另用 `wb_meta.schema_version` 记录 schema 版本，open 据此拦截旧库（WB2101）。
 
 use crate::codegen;
 use crate::runtime::TraceEvent;
@@ -98,13 +99,81 @@ pub struct LibSQLStorage {
     conn: Connection,
 }
 
+/// 当前 schema 版本。每次 schema 变更（加列 / 改列名）递增；旧库 open 时据此拦截（WB2101）。
+const SCHEMA_VERSION: &str = "1";
+
+/// 判断 libsql 错误是否为 `no such table`（跨创建方稳定，优于 PRAGMA / sqlite_master 文本探测）。
+fn is_no_such_table(e: &libsql::Error) -> bool {
+    e.to_string().contains("no such table")
+}
+
 impl LibSQLStorage {
-    /// 打开（或创建）数据库并初始化核心表。
+    /// 打开（或创建）数据库并初始化核心表，含旧 schema 拦截（WB2101）。
     pub async fn open(path: &str) -> Result<Self, StorageError> {
         let db = libsql::Builder::new_local(path).build().await?;
         let conn = db.connect()?;
-        conn.execute_batch(&codegen::canonical_schema()).await?;
+        Self::ensure_schema(&conn).await?;
         Ok(Self { conn })
+    }
+
+    /// 初始化连接：先判定新 / 旧库，再建 / 刷 schema。
+    ///
+    /// 判定策略（规避 libsql 下 PRAGMA / sqlite_master 文本探测跨创建方不稳定的坑）：
+    /// 1. `SELECT id FROM wb_ontology_object LIMIT 0` 探针判断对象表是否存在
+    ///    （`id` 在新旧 schema 均存在，故只回答“表在不在”，不依赖具体列名）。
+    /// 2. 表不存在 → 全新库：建全套核心 schema + 写入 `wb_meta.schema_version`。
+    /// 3. 表存在 → 读 `wb_meta.schema_version`：
+    ///    - 无 `wb_meta` / 无版本行 / 版本不符 → 旧 schema，返 WB2101 引导 `oaip db reset`。
+    ///    - 版本匹配 → 幂等刷新 schema（未来增量列在此落地）。
+    async fn ensure_schema(conn: &Connection) -> Result<(), StorageError> {
+        let has_obj = match conn
+            .query("SELECT id FROM wb_ontology_object LIMIT 0", params![])
+            .await
+        {
+            Ok(_) => true,
+            Err(e) if is_no_such_table(&e) => false,
+            Err(e) => return Err(StorageError::Db(e)),
+        };
+
+        if !has_obj {
+            // 全新库：建全套核心表（含 wb_meta），写入版本
+            conn.execute_batch(&codegen::canonical_schema()).await?;
+            conn.execute(
+                "INSERT OR REPLACE INTO wb_meta (key, value) VALUES ('schema_version', ?1)",
+                params![SCHEMA_VERSION],
+            )
+            .await?;
+            return Ok(());
+        }
+
+        // 已有对象表 → 读版本（无 wb_meta / 版本不符 → 旧 schema）
+        let version = match conn
+            .query(
+                "SELECT value FROM wb_meta WHERE key='schema_version'",
+                params![],
+            )
+            .await
+        {
+            Ok(mut rows) => match rows.next().await? {
+                Some(r) => r.get::<String>(0).unwrap_or_default(),
+                None => String::new(),
+            },
+            Err(e) if is_no_such_table(&e) => String::new(),
+            Err(e) => return Err(StorageError::Db(e)),
+        };
+
+        if version != SCHEMA_VERSION {
+            return Err(StorageError::Constraint {
+                code: "WB2101",
+                message:
+                    "检测到旧 schema 或版本不匹配（列 object_type/from_id/to_id/edge_type）。请运行 `oaip db reset` 重建数据库"
+                        .into(),
+            });
+        }
+
+        // 版本匹配 → 幂等刷新 schema
+        conn.execute_batch(&codegen::canonical_schema()).await?;
+        Ok(())
     }
 
     /// 从已有连接构造（测试可用）。
@@ -419,4 +488,45 @@ fn row_to_trace(row: &libsql::Row) -> Result<TraceEvent, StorageError> {
         confidence,
         timestamp: row.get(10)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 旧 schema（有对象表但无 wb_meta / 版本）→ ensure_schema 拒绝 WB2101
+    #[tokio::test]
+    async fn ensure_schema_rejects_legacy() {
+        let db = libsql::Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap();
+        let conn = db.connect().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE wb_ontology_object (id TEXT PRIMARY KEY, object_type TEXT, data TEXT);\
+             CREATE TABLE wb_relation_edge (id TEXT PRIMARY KEY, edge_type TEXT, from_id TEXT, to_id TEXT);",
+        )
+        .await
+        .unwrap();
+        let err = LibSQLStorage::ensure_schema(&conn)
+            .await
+            .expect_err("应返回 WB2101");
+        match err {
+            StorageError::Constraint { code, .. } => assert_eq!(code, "WB2101"),
+            other => panic!("旧 schema 应返回 WB2101，实际: {other:?}"),
+        }
+    }
+
+    // 全新库 → open 成功建表并写入 schema 版本
+    #[tokio::test]
+    async fn open_creates_fresh_db_with_version() {
+        let path = std::env::temp_dir().join(format!("oaip_fresh_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let storage = LibSQLStorage::open(path.to_str().unwrap()).await.unwrap();
+        storage
+            .create("Customer", "x1", serde_json::json!({"name": "A"}))
+            .await
+            .unwrap();
+        let _ = std::fs::remove_file(&path);
+    }
 }

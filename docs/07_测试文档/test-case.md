@@ -4,7 +4,7 @@
 |----|------|
 | 文档ID | WB-DOC-07-002 |
 | 所属模块 | WorkBuddy-Test |
-| 版本 | V2.3 |
+| 版本 | V2.4 |
 | 创建人 | lushaohui |
 | 创建时间 | 2026-08-11 |
 | 更新记录 | 见文末修订日志 |
@@ -33,6 +33,7 @@
 | TC-003 | REQ-003 | 单元 | 合法 IR | codegen | 生成 `Customer.rs`(struct+`CUSTOMER_DEF`)/`schema.sql`/`ontology.json`，可编译且与 IR 一致 |
 | TC-004 | REQ-004 | 集成 | 空 `wb_ontology_object` | create/get/update/query | CRUD 生效；update 使 version 自增；query 支持按 type 过滤 |
 | TC-005 | REQ-005 | 集成 | LibSQLStorage | 读写 Turso | 落库数据可被 query 取回 |
+| TC-005-b | REQ-005 | 集成 | 旧 schema 文件（残留 object_type/from_id/to_id/edge_type，无 wb_meta） | `LibSQLStorage::open` | 打开即拒 WB2101，提示 `oaip db reset`；不出现 cryptic 的 no such column |
 | TC-006 | REQ-006 | e2e | customer.odl | `oaip compile/run/object list` | `oaip object list Customer` 输出 `001 Apple VIP` / `002 Tesla GOLD` |
 | TC-007 | REQ-007 | 集成 | Object CRUD 操作 | create/update/delete | 各产生 `TraceEvent(kind=world)`（ObjectCreated/Updated/Deleted），绑定 `object_refs` 并落 `wb_trace_event`；缺 `object_refs` 被拒 |
 | TC-008 | REQ-008 | 集成 | RuntimeEvent | Event Bus 分发 | `wb_trace_event` 写入与发布一致；`oaip event list` 可查看 world 事件 |
@@ -78,3 +79,4 @@
 | V2.1 | lushaohui | 2026-08-11 | 表名对齐 table-design 约束：`trace_event` → `wb_trace_event` |
 | V2.2 | lushaohui | 2026-08-11 | 补 V0.2 测试契约：TC-012(REQ-012 Relation)/TC-013(REQ-013 领域 Event)/TC-012-b(重复边 WB2007)；章节重排 4.2=V0.2 / 4.3=V0.3 / 4.4=异常 |
 | V2.3 | lushaohui | 2026-08-11 | TC-012 事件枚举名 ObjectLinked → RelationLinked，对齐 data-dict.md / agent-observation-design.md / api-agent-trace.md 三份权威文档的事件类型枚举；同步代码 runtime.rs 与测试契约 |
+| V2.4 | lushaohui | 2026-08-12 | 新增 TC-005-b（旧 schema 打开拒 WB2101，对应 `oaip db reset` 迁移防护）；bin/oaip `db reset` 子命令落表 |
