@@ -1,0 +1,354 @@
+:root {
+  --bg: #0e1117;
+  --panel: #161b22;
+  --panel-2: #1c232c;
+  --border: #2a313c;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --red: #f85149;
+  --amber: #d29922;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+}
+
+.app {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 20px 16px 60px;
+}
+
+/* ── Topbar ── */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.brand .logo {
+  font-size: 28px;
+  color: var(--accent);
+}
+.brand h1 {
+  font-size: 18px;
+  margin: 0;
+}
+.brand .sub {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.conn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.conn .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.conn.on .dot {
+  background: var(--green);
+  box-shadow: 0 0 8px var(--green);
+}
+.conn.on {
+  color: var(--green);
+}
+.conn.off {
+  color: var(--muted);
+}
+
+/* ── Controls ── */
+.controls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.controls .agent {
+  width: 160px;
+  flex: none;
+}
+.controls .goal {
+  flex: 1;
+}
+.controls input,
+.controls .run {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+.controls input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.controls .run {
+  flex: none;
+  background: var(--accent);
+  color: #06101f;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+}
+.controls .run:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.error {
+  background: rgba(248, 81, 73, 0.12);
+  border: 1px solid var(--red);
+  color: #ffb4ae;
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+
+/* ── Status ── */
+.status {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+.status .meta {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.status .meta code {
+  color: var(--text);
+  background: var(--panel-2);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.status .meta b.completed {
+  color: var(--green);
+}
+.status .meta b.running {
+  color: var(--amber);
+}
+.status .meta b.failed {
+  color: var(--red);
+}
+.progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.progress .bar {
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--accent), var(--green));
+  transition: width 0.3s ease;
+  min-width: 2px;
+}
+.progress::before {
+  content: '';
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--panel-2);
+}
+.progress span {
+  color: var(--muted);
+  font-size: 12px;
+  width: 36px;
+  text-align: right;
+}
+
+/* ── View tabs ── */
+.views {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.views button {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.views button b {
+  font-size: 14px;
+}
+.views button small {
+  font-size: 11px;
+}
+.views button.active {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--panel-2);
+}
+.views button.active b {
+  color: var(--accent);
+}
+
+/* ── Timeline ── */
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.empty {
+  color: var(--muted);
+  text-align: center;
+  padding: 40px 0;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+
+.decision {
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 14px;
+}
+.decision h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+.decision > div {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.decision span {
+  color: var(--muted);
+  font-size: 12px;
+  padding-top: 2px;
+}
+.decision p {
+  margin: 0;
+}
+
+.event {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.event.goal {
+  border-left-color: var(--accent);
+}
+.event.reasoning {
+  border-left-color: #bc8cff;
+}
+.event.planning {
+  border-left-color: var(--amber);
+}
+.event.policycheck {
+  border-left-color: var(--green);
+}
+.event.action {
+  border-left-color: var(--red);
+}
+.event.memoryupdate {
+  border-left-color: #39d0d8;
+}
+.ev-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ev-head .ic {
+  font-size: 16px;
+}
+.ev-head .et {
+  font-weight: 600;
+}
+.ev-head .ts {
+  color: var(--muted);
+  font-size: 12px;
+}
+.ev-head .cf {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+.refs {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chip {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 7px;
+  font-size: 12px;
+  color: var(--accent);
+}
+.reasoning {
+  margin: 8px 0 0;
+  color: var(--text);
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.io {
+  margin-top: 8px;
+}
+.io label {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 3px;
+}
+.io pre {
+  margin: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}

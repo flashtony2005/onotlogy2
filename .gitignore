@@ -13,3 +13,7 @@
 
 # 工具内部状态（agent memory 等，非项目源码）
 .workbuddy/
+
+# 前端（ui/）：依赖与构建产物
+/ui/node_modules/
+/ui/dist/

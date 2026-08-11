@@ -3,11 +3,13 @@
 //! TraceEvent 是「可解释性根基」：world 事件由 Object CRUD 产生，绑定 object_refs；
 //! EventBus 在落库同时向订阅者发布，保证「写入与发布一致」。
 
+use crate::agent::WorldSnapshot;
 use crate::storage::{
     LibSQLStorage, ObjectEngine, ObjectRecord, RelationEngine, RelationRecord, StorageError,
+    TraceQuery,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -174,9 +176,64 @@ impl RuntimeKernel {
         Ok(())
     }
 
+    /// 发一条 cognitive 认知事件（绑定 run/agent/object_refs），落库并发布（与 world 事件同源）。
+    /// [强制] object_refs 非空，否则落库被 WB2006 拦截（TC-007-b 同源约束）。
+    #[allow(clippy::too_many_arguments)]
+    pub async fn emit_cognitive(
+        &self,
+        event_type: &str,
+        run_id: &str,
+        agent_id: &str,
+        object_refs: &[String],
+        reasoning: Option<&str>,
+        input: Option<Value>,
+        output: Option<Value>,
+        confidence: Option<f64>,
+    ) -> Result<(), StorageError> {
+        let ev = TraceEvent {
+            id: new_trace_id(),
+            kind: TraceKind::Cognitive,
+            event_type: event_type.to_string(),
+            object_refs: object_refs.to_vec(),
+            run_id: Some(run_id.to_string()),
+            agent_id: Some(agent_id.to_string()),
+            reasoning: reasoning.map(|s| s.to_string()),
+            input,
+            output,
+            confidence,
+            timestamp: now_ts(),
+        };
+        self.emit(ev).await
+    }
+
+    /// 按条件查询 Trace 事件（认知/世界同源），供 timeline 与 WS 重连补齐（after_id）。
+    pub async fn list_events(&self, q: TraceQuery) -> Result<Vec<TraceEvent>, StorageError> {
+        self.storage.list_events(q).await
+    }
+
+    /// 按 ID 取单条 Trace 事件（缺失 → None，上层映射 WB2002）。
+    pub async fn get_trace(&self, id: &str) -> Result<Option<TraceEvent>, StorageError> {
+        self.storage.get_trace(id).await
+    }
+
     /// 列出已落库的 world 事件（对应 `oaip event list`）。
     pub async fn list_world_events(&self) -> Result<Vec<TraceEvent>, StorageError> {
         self.storage.list_world_events().await
+    }
+
+    /// 世界模型快照：全量对象 + 关系，作为认知引擎的最小必要上下文（prd 4.4）。
+    pub async fn snapshot_world(&self) -> Result<WorldSnapshot, StorageError> {
+        let objs = self.storage.list_all_objects().await?;
+        let rels = self.storage.list_all_relations().await?;
+        let objects: Vec<Value> = objs
+            .into_iter()
+            .map(|o| json!({"id": o.id, "type": o.r#type, "data": o.data}))
+            .collect();
+        let relations: Vec<Value> = rels
+            .into_iter()
+            .map(|r| json!({"source": r.source, "relation": r.relation, "target": r.target}))
+            .collect();
+        Ok(WorldSnapshot { objects, relations })
     }
 
     /// 按类型查询对象（对应 `oaip object list`）。

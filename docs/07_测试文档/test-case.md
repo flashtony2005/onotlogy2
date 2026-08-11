@@ -4,7 +4,7 @@
 |----|------|
 | 文档ID | WB-DOC-07-002 |
 | 所属模块 | WorkBuddy-Test |
-| 版本 | V2.4 |
+| 版本 | V2.5 |
 | 创建人 | lushaohui |
 | 创建时间 | 2026-08-11 |
 | 更新记录 | 见文末修订日志 |
@@ -45,20 +45,20 @@
 | TC-013 | REQ-013 | 集成 | 一次领域事件 | emit_domain_event(PaymentLate, [001]) | 落库 world 事件 PaymentLate；经 EventBus 发布，订阅者收到同一事件 |
 
 ### 4.3 V0.3 测试契约（Agent 闭环 = MVP）
-| 用例ID | REQ | 类型 | Given | When | Then（边界判定） |
-|--------|-----|------|-------|------|------------------|
-| TC-009 | REQ-009 | e2e | 一次 Agent 运行 | 三视图 + WebSocket | 三视图渲染；`WS /api/v1/wb/agent/{id}/stream` 推送 cognitive 事件；Timeline 展示 Goal→…→MemoryUpdate 链；断线重连补齐 |
-| TC-010 | REQ-010 | 集成 | mock 目标 "reduce churn" | Pi（AgentEngine）`reason()` | 每步认知产出 `TraceEvent(kind=cognitive)` 且绑定 `object_refs`；Observation UI 可回放认知过程 |
-| TC-011 | REQ-011 | 集成 | 一个 goal | OpenAIP Planner | 跑通 Goal→LLMGoalParser→Planner→PlanStep→Capability→Execute；PlanStep 经 Trace 回放且绑定 `object_refs` |
+| 用例ID | REQ | 类型 | Given | When | Then（边界判定） | 状态 |
+|--------|-----|------|-------|------|------------------|------|
+| TC-009 | REQ-009 | e2e | 一次 Agent 运行 | 三视图 + WebSocket | 三视图渲染；`WS /api/v1/wb/agent/{id}/stream` 推送 cognitive 事件；Timeline 展示 Goal→…→MemoryUpdate 链；断线重连补齐 | 通过（自动化 tests/v0_3.rs） |
+| TC-010 | REQ-010 | 集成 | mock 目标 "reduce churn" | Pi（AgentEngine）`reason()` | 每步认知产出 `TraceEvent(kind=cognitive)` 且绑定 `object_refs`；Observation UI 可回放认知过程 | 通过（自动化 tests/v0_3.rs） |
+| TC-011 | REQ-011 | 集成 | 一个 goal | OpenAIP Planner | 跑通 Goal→LLMGoalParser→Planner→PlanStep→Capability→Execute；PlanStep 经 Trace 回放且绑定 `object_refs` | 通过（自动化 tests/v0_3.rs） |
 
 ### 4.4 异常与边界用例（必须覆盖）
-| 用例ID | 关联 | 场景 | 预期 |
-|--------|------|------|------|
-| TC-001-b | REQ-001 | .odl 缺 property / 未知类型 | 返回明确错误码，不 panic |
-| TC-007-b | REQ-007 | 事件缺 `object_refs` | 写入拦截，返回 WB2006，不落库 |
-| TC-010-b | REQ-010 | Pi 进程未就绪 / 崩溃 | 触发运行返回 WB2004，运行置 Failed |
-| TC-011-b | REQ-011 | Policy 拒绝某 Action | 返回 WB2005，等待 Human Approval |
-| TC-012-b | REQ-012 | 重复建立相同边 (src, edge, dst) | 返回 WB2007，不重复落库 |
+| 用例ID | 关联 | 场景 | 预期 | 状态 |
+|--------|------|------|------|------|
+| TC-001-b | REQ-001 | .odl 缺 property / 未知类型 | 返回明确错误码，不 panic | 通过（自动化） |
+| TC-007-b | REQ-007 | 事件缺 `object_refs` | 写入拦截，返回 WB2006，不落库 | 通过（自动化） |
+| TC-010-b | REQ-010 | Pi 进程未就绪 / 崩溃 | 触发运行返回 WB2004，运行置 Failed | 通过（自动化 tests/v0_3.rs） |
+| TC-011-b | REQ-011 | Policy 拒绝某 Action | 返回 WB2005，等待 Human Approval | 通过（自动化 tests/v0_3.rs） |
+| TC-012-b | REQ-012 | 重复建立相同边 (src, edge, dst) | 返回 WB2007，不重复落库 | 通过（自动化） |
 
 ## 5. 风险点 & 注意事项
 - 异常分支遗漏是线上 bug 高发区，4.3 不得省略。
@@ -80,3 +80,4 @@
 | V2.2 | lushaohui | 2026-08-11 | 补 V0.2 测试契约：TC-012(REQ-012 Relation)/TC-013(REQ-013 领域 Event)/TC-012-b(重复边 WB2007)；章节重排 4.2=V0.2 / 4.3=V0.3 / 4.4=异常 |
 | V2.3 | lushaohui | 2026-08-11 | TC-012 事件枚举名 ObjectLinked → RelationLinked，对齐 data-dict.md / agent-observation-design.md / api-agent-trace.md 三份权威文档的事件类型枚举；同步代码 runtime.rs 与测试契约 |
 | V2.4 | lushaohui | 2026-08-12 | 新增 TC-005-b（旧 schema 打开拒 WB2101，对应 `oaip db reset` 迁移防护）；bin/oaip `db reset` 子命令落表 |
+| V2.5 | lushaohui | 2026-08-12 | V0.3=MVP 全绿：TC-009/010/011 + TC-010-b/011-b 状态置「通过（自动化 tests/v0_3.rs）」；补充 4.3/4.4 状态列 |

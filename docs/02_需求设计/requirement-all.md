@@ -4,7 +4,7 @@
 |----|------|
 | 文档ID | WB-DOC-02-001 |
 | 所属模块 | WorkBuddy-Requirement |
-| 版本 | V1.8 |
+| 版本 | V1.9 |
 | 创建人 | lushaohui |
 | 创建时间 | 2026-08-11 |
 | 更新记录 | 见文末修订日志 |
@@ -57,9 +57,9 @@
 | REQ-006 | CLI 支持 compile / run / object list / event list | lushaohui | Must | 已确认 | V0.1 |
 | REQ-007 | TraceEvent 模型 + `wb_trace_event` 存储（V0.1 承载 world 生命周期事件） | lushaohui | Must | 已确认 | V0.1 |
 | REQ-008 | Event Bus（RuntimeEvent 发布订阅） | lushaohui | Must | 已确认 | V0.1 |
-| REQ-009 | 三层观察界面（Executive/Operator/Developer）+ WebSocket 流 | lushaohui | Must | 已确认 | V0.3 |
-| REQ-010 | Agent 接入（Pi 作 Cognitive Engine，AgentEngine trait）：NLU/推理；OpenAIP 拥有 Planner/Policy/Trace | lushaohui | Must | 已确认 | V0.3 |
-| REQ-011 | Planner（OpenAIP 自有核心）：Goal→LLMGoalParser→Planner→PlanStep→Capability→Execute | lushaohui | Must | 已确认 | V0.3 |
+| REQ-009 | 三层观察界面（Executive/Operator/Developer）+ WebSocket 流 | lushaohui | Must | 已实现 | V0.3 |
+| REQ-010 | Agent 接入（Pi 作 Cognitive Engine，AgentEngine trait）：NLU/推理；OpenAIP 拥有 Planner/Policy/Trace | lushaohui | Must | 已实现 | V0.3 |
+| REQ-011 | Planner（OpenAIP 自有核心）：Goal→LLMGoalParser→Planner→PlanStep→Capability→Execute | lushaohui | Must | 已实现 | V0.3 |
 | REQ-012 | Relation 引擎：建边/图查询（neighbors/query_by_edge）/重复边拦截(WB2007) | lushaohui | Must | 已实现 | V0.2 |
 | REQ-013 | 领域 Event：PaymentLate 等业务事件经 `TraceEvent(kind=world)` 落库 + EventBus 发布 | lushaohui | Must | 已实现 | V0.2 |
 
@@ -122,3 +122,4 @@ oaip agent run "reduce churn"
 | V1.6 | lushaohui | 2026-08-11 | 表名对齐 table-design 约束：`trace_event` → `wb_trace_event` |
 | V1.7 | lushaohui | 2026-08-11 | ODL 属性语法定版：以 architecture-total 4.2.1 为准（`properties:` 块 + `name: type`） |
 | V1.8 | lushaohui | 2026-08-11 | V0.2 落地：补 REQ-012(Relation 引擎)/REQ-013(领域 Event)，状态已实现 |
+| V1.9 | lushaohui | 2026-08-12 | V0.3=MVP 落地：REQ-009/010/011 状态置「已实现」（三层观察 UI + WebSocket + Pi 作 Cognitive Engine + 自有 Planner 闭环，TC-009/010/011 全绿） |

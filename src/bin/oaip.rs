@@ -1,13 +1,19 @@
-//! `oaip` —— OpenAIP-OS 命令行（V0.1：compile / run / object list / event list；V0.2：relation / event emit）
+//! `oaip` —— OpenAIP-OS 命令行（V0.1：compile / run / object list / event list；V0.2：relation / event emit；V0.3：agent run / serve）
 
 use clap::{Parser, Subcommand};
+use openaip_os::agent::{AgentEngine, PiAgentEngine};
+use openaip_os::planner::{Planner, PlannerError, generate_run_id};
 use openaip_os::runtime::RuntimeKernel;
-use openaip_os::storage::{LibSQLStorage, ObjectEngine};
+use openaip_os::server;
+use openaip_os::storage::{LibSQLStorage, ObjectEngine, TraceQuery};
 use openaip_os::{codegen, parse_odl};
 use serde_json::json;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::net::TcpListener;
 
 #[derive(Parser)]
-#[command(name = "oaip", version, about = "OpenAIP-OS 可执行本体平台 CLI (V0.2)")]
+#[command(name = "oaip", version, about = "OpenAIP-OS 可执行本体平台 CLI (V0.3)")]
 struct Cli {
     #[arg(long, default_value = "openaip.db", global = true)]
     db: String,
@@ -36,10 +42,36 @@ enum Cmd {
         #[command(subcommand)]
         cmd: EventCmd,
     },
+    /// Agent 闭环（V0.3 = MVP）：Pi 作 Cognitive Engine，OpenAIP 拥有 Planner
+    Agent {
+        #[command(subcommand)]
+        cmd: AgentCmd,
+    },
+    /// 启动 Agent 观察服务（HTTP + WebSocket + 三层观察 UI）
+    Serve {
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long, default_value = "ui/dist")]
+        static_dir: String,
+    },
     /// 数据库维护（schema 迁移 / 清理演示数据）
     Db {
         #[command(subcommand)]
         cmd: DbCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum AgentCmd {
+    /// 触发 Agent 运行（Pi 作 Cognitive Engine）：oaip agent run "reduce churn"
+    Run {
+        /// 自然语言目标，经 Pi（Cognitive Engine）NLU 解析为 Intent
+        goal: String,
+        /// Agent ID
+        #[arg(long, default_value = "retention-agent")]
+        agent_id: String,
     },
 }
 
@@ -107,6 +139,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cmd_event_emit(&cli.db, &event_type, &refs).await?
             }
         },
+        Cmd::Agent { cmd } => match cmd {
+            AgentCmd::Run { goal, agent_id } => cmd_agent_run(&cli.db, &goal, &agent_id).await?,
+        },
+        Cmd::Serve {
+            port,
+            host,
+            static_dir,
+        } => cmd_serve(&cli.db, &host, port, &static_dir).await?,
         Cmd::Db { cmd } => match cmd {
             DbCmd::Reset => cmd_db_reset(&cli.db).await?,
         },
@@ -241,5 +281,76 @@ async fn cmd_db_reset(db: &str) -> Result<(), Box<dyn std::error::Error>> {
     }
     LibSQLStorage::open(db).await?;
     println!("✅ 已重建数据库 {db}（新 schema：type / source / relation / target）");
+    Ok(())
+}
+
+/// 触发 Agent 运行（V0.3）：Pi 作 Cognitive Engine，OpenAIP Planner 闭环。
+async fn cmd_agent_run(
+    db: &str,
+    goal: &str,
+    agent_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let storage = LibSQLStorage::open(db).await?;
+    let kernel = RuntimeKernel::new(storage);
+    let engine = PiAgentEngine::new(agent_id.to_string());
+
+    if !engine.health().await {
+        println!(
+            "❌ WB2004 认知引擎不可用：未找到 `pi` 可执行文件。请先安装 @earendil-works/pi-coding-agent 并配置 LLM Provider。"
+        );
+        return Ok(());
+    }
+
+    let run_id = generate_run_id();
+    match Planner::new(&kernel)
+        .run_goal(&engine, goal, agent_id, &run_id)
+        .await
+    {
+        Ok(res) => {
+            println!(
+                "✅ Agent 运行完成：run_id={} status={}",
+                res.run_id,
+                res.status.as_str()
+            );
+            let events = kernel.list_events(TraceQuery::for_run(&run_id)).await?;
+            for e in &events {
+                println!(
+                    "  [{}] refs={:?} conf={:?} — {}",
+                    e.event_type,
+                    e.object_refs,
+                    e.confidence,
+                    e.reasoning.clone().unwrap_or_default()
+                );
+            }
+        }
+        Err(PlannerError::EngineUnavailable(m)) => {
+            println!("❌ WB2004 认知引擎不可用（Pi 未就绪/崩溃/鉴权失败）：{m}");
+        }
+        Err(PlannerError::PolicyDenied(m)) => {
+            println!("❌ WB2005 Policy 拒绝（需 Human Approval）：{m}");
+        }
+        Err(PlannerError::Storage(e)) => {
+            println!("❌ 存储错误：{e}");
+        }
+    }
+    Ok(())
+}
+
+/// 启动 Agent 观察服务（HTTP + WebSocket + 三层观察 UI）。
+async fn cmd_serve(
+    db: &str,
+    host: &str,
+    port: u16,
+    static_dir: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let storage = LibSQLStorage::open(db).await?;
+    let kernel = Arc::new(RuntimeKernel::new(storage));
+    let engine: Arc<dyn AgentEngine> = Arc::new(PiAgentEngine::new("retention-agent"));
+    let addr: SocketAddr = format!("{host}:{port}").parse()?;
+    let listener = TcpListener::bind(addr).await?;
+    println!(
+        "🚀 OpenAIP-OS Agent Observation 服务已启动：\n  UI  → http://{addr}/\n  API → http://{addr}/api/v1/wb/agent\n  WS  → ws://{addr}/api/v1/wb/agent/{{runId}}/stream"
+    );
+    server::serve(kernel, engine, listener, static_dir).await?;
     Ok(())
 }

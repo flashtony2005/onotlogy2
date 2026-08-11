@@ -1,0 +1,324 @@
+//! 认知引擎接入层（对应 REQ-010 / prd-agent-integration.md / module-split.md 4.3）
+//!
+//! Pi 仅作 **Cognitive Engine**，经 `AgentEngine` trait 接入；OpenAIP 拥有 Planner / Policy /
+//! Ontology / World Model / Trace。引擎可替换：`PiAgentEngine`（MVP）未来可换
+//! `ClaudeAgentEngine` / `QwenAgentEngine` / `LocalLLMEngine`，Planner 不依赖其内部结构。
+//!
+//! [强制] 引擎任何不可用（pi 未安装 / 进程崩溃 / LLM 鉴权失败 / 超时）→ 返 `AgentError::Unavailable`
+//! → 上层映射 WB2004，运行安全失败（见 TC-010-b）。
+
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::process::Stdio;
+use std::time::Duration;
+
+/// 认知引擎错误。
+#[derive(Debug, thiserror::Error)]
+pub enum AgentError {
+    /// 认知引擎不可用（Pi 未就绪 / 崩溃 / LLM 鉴权失败 / 超时）→ 映射 WB2004。
+    #[error("认知引擎不可用（Pi 未就绪/崩溃/鉴权失败）: {0}")]
+    Unavailable(String),
+    /// 引擎输出无法解析为结构化决策。
+    #[error("认知引擎输出解析失败: {0}")]
+    Parse(String),
+}
+
+/// 世界快照：认知引擎仅基于此最小必要快照推理（prd 4.4：上下文裁剪，避免体积过大）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WorldSnapshot {
+    /// 对象摘要（含 id / type / data）。
+    pub objects: Vec<Value>,
+    /// 关系摘要（含 source / relation / target）。
+    pub relations: Vec<Value>,
+}
+
+/// 认知步输入上下文（Planner 在链路各步构造并传给引擎）。
+#[derive(Debug, Clone)]
+pub struct Context {
+    /// 自然语言目标。
+    pub goal: String,
+    /// 本次运行 ID。
+    pub run_id: String,
+    /// Agent ID。
+    pub agent_id: String,
+    /// 当前认知步类型（Goal / Intent / OntologyQuery / Reasoning / Planning / ...），用于引擎路由。
+    pub step: String,
+    /// 上一步的结构化输出，供链路传递。
+    pub prior_output: Value,
+    /// 世界模型快照。
+    pub world: WorldSnapshot,
+}
+
+/// 认知决策：引擎对每个步给出的结果，Planner 据此构造 cognitive `TraceEvent`。
+#[derive(Debug, Clone)]
+pub struct Decision {
+    /// 意图（如 "Customer Retention"）。
+    pub intent: String,
+    /// 推理过程（可解释性根基，映射到 TraceEvent.reasoning）。
+    pub reasoning: String,
+    /// 置信度 0~1（低于阈值默认 0.5 标记需 Human Approval，见 prd 4.4）。
+    pub confidence: f64,
+    /// 绑定 Ontology 对象（可解释性根基；映射到 object_refs）。
+    pub object_refs: Vec<String>,
+    /// 结构化输出（如解析后的 Goal / 生成的 PlanStep 列表）。
+    pub output: Value,
+}
+
+/// 可替换认知引擎（Cognitive Engine）。Pi 经此 trait 接入；未来可换其它引擎。
+#[async_trait]
+pub trait AgentEngine: Send + Sync {
+    /// 引擎名称（如 "pi"）。
+    fn name(&self) -> &str;
+    /// 基于上下文推理，返回结构化决策。
+    async fn reason(&self, ctx: &Context) -> Result<Decision, AgentError>;
+    /// 引擎是否可用（默认 true）。`PiAgentEngine` 覆写为探测 `pi` 二进制是否存在，
+    /// 供 `POST /run` 快速判定 WB2004，避免悬挂连接（pi-doc / prd 4.5）。
+    async fn health(&self) -> bool {
+        true
+    }
+}
+
+/// 以 `pi`（`@earendil-works/pi-coding-agent`）为认知引擎的实现（MVP 唯一生产引擎）。
+///
+/// 通过 `--mode json --print --no-session --no-tools` 非交互调用，禁用其文件工具
+/// （prd 3：Pi 禁止直接掌管文件系统），仅承担 NLU / 推理。任何失败 → `Unavailable`（WB2004）。
+pub struct PiAgentEngine {
+    agent_id: String,
+    provider: Option<String>,
+    model: Option<String>,
+    api_key_env: Option<String>,
+    timeout: Duration,
+}
+
+impl PiAgentEngine {
+    pub fn new(agent_id: impl Into<String>) -> Self {
+        Self {
+            agent_id: agent_id.into(),
+            provider: None,
+            model: None,
+            api_key_env: None,
+            timeout: Duration::from_secs(120),
+        }
+    }
+
+    /// 指定 LLM Provider（默认 google，经 pi 内置）。
+    pub fn with_provider(mut self, provider: impl Into<String>) -> Self {
+        self.provider = Some(provider.into());
+        self
+    }
+
+    /// 指定模型（支持 "provider/id" 形式）。
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
+    }
+
+    /// 从指定环境变量读取 API Key（默认走 pi 内置 env 解析）。
+    pub fn with_api_key_env(mut self, env: impl Into<String>) -> Self {
+        self.api_key_env = Some(env.into());
+        self
+    }
+
+    /// 组装系统提示：约束 Pi 仅作认知引擎、返回结构化 JSON，并标识当前 Agent。
+    fn system_prompt(&self) -> String {
+        format!(
+            "你是 OpenAIP-OS 的 Cognitive Engine（决策由 OpenAIP Planner 拥有）。\
+             你仅负责 NLU 与推理，禁止直接执行文件/数据库操作。\
+             当前 Agent 为 `{agent}`。针对给定认知步与目标，基于提供的世界模型快照推理，\
+             并以 JSON 返回：{{\"intent\":<str>,\"reasoning\":<str>,\"confidence\":<0~1 float>,\
+             \"object_refs\":[<对象id>],\"output\":<任意 JSON>}}。",
+            agent = self.agent_id
+        )
+    }
+
+    /// 组装用户提示：步类型 + 目标 + 上一步输出 + 世界快照。
+    fn user_prompt(&self, ctx: &Context) -> String {
+        let world = serde_json::to_string(&ctx.world).unwrap_or_else(|_| "{}".to_string());
+        format!(
+            "认知步: {step}\n目标: {goal}\n上一步输出: {prior}\n世界模型快照: {world}\n\
+             请基于快照给出本步决策（仅引用快照中存在的对象 id 作为 object_refs）。",
+            step = ctx.step,
+            goal = ctx.goal,
+            prior = ctx.prior_output,
+            world = world
+        )
+    }
+
+    /// 解析 pi 的 JSON 输出为 `Decision`；解析失败则 best-effort 兜底（不致命）。
+    fn parse_decision(&self, raw: &str, ctx: &Context) -> Decision {
+        // 优先整体解析为 JSON；否则在输出中尽力提取。
+        let parsed: Value = match serde_json::from_str(raw) {
+            Ok(v) => v,
+            Err(_) => {
+                // pi --mode json 可能包裹在 {message, content} 等结构；尽力下钻取文本。
+                let text = extract_text(raw);
+                return Decision {
+                    intent: ctx.step.clone(),
+                    reasoning: text,
+                    confidence: 0.5,
+                    object_refs: collect_refs(ctx),
+                    output: Value::Null,
+                };
+            }
+        };
+        let text = extract_text_from_value(&parsed);
+        Decision {
+            intent: parsed
+                .get("intent")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| ctx.step.clone()),
+            reasoning: text,
+            confidence: parsed
+                .get("confidence")
+                .and_then(|v| v.as_f64())
+                .filter(|c| (0.0..=1.0).contains(c))
+                .unwrap_or(0.5),
+            object_refs: parsed
+                .get("object_refs")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_else(|| collect_refs(ctx)),
+            output: parsed.get("output").cloned().unwrap_or(Value::Null),
+        }
+    }
+}
+
+#[async_trait]
+impl AgentEngine for PiAgentEngine {
+    fn name(&self) -> &str {
+        "pi"
+    }
+
+    async fn health(&self) -> bool {
+        which_pi().is_some()
+    }
+
+    async fn reason(&self, ctx: &Context) -> Result<Decision, AgentError> {
+        // 探测 pi 是否可用（未安装 → 直接 Unavailable，避免无效 spawn）。
+        let pi_bin = match which_pi() {
+            Some(p) => p,
+            None => {
+                return Err(AgentError::Unavailable(
+                    "未找到 `pi` 可执行文件（请先安装 @earendil-works/pi-coding-agent）".into(),
+                ));
+            }
+        };
+
+        let mut cmd = tokio::process::Command::new(&pi_bin);
+        cmd.arg("--mode")
+            .arg("json")
+            .arg("--print")
+            .arg("--no-session")
+            .arg("--no-tools") // 禁用文件工具：Pi 仅作认知引擎
+            .arg("--no-context-files") // 不自动注入项目指令，保持上下文受控
+            .arg("--system-prompt")
+            .arg(self.system_prompt())
+            .arg(self.user_prompt(ctx))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        if let Some(p) = &self.provider {
+            cmd.arg("--provider").arg(p);
+        }
+        if let Some(m) = &self.model {
+            cmd.arg("--model").arg(m);
+        }
+        if let Some(key) = self
+            .api_key_env
+            .as_ref()
+            .and_then(|e| std::env::var(e).ok())
+        {
+            cmd.arg("--api-key").arg(key);
+        }
+
+        let child = cmd
+            .spawn()
+            .map_err(|e| AgentError::Unavailable(format!("启动 pi 进程失败: {e}")))?;
+
+        let output = tokio::time::timeout(self.timeout, child.wait_with_output())
+            .await
+            .map_err(|_| AgentError::Unavailable("pi 推理超时".into()))?
+            .map_err(|e| AgentError::Unavailable(format!("等待 pi 输出失败: {e}")))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(AgentError::Unavailable(format!(
+                "pi 进程退出非 0：{}",
+                stderr.lines().next().unwrap_or("")
+            )));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(self.parse_decision(stdout.trim(), ctx))
+    }
+}
+
+/// 在 PATH 中查找 `pi` 可执行文件。
+fn which_pi() -> Option<String> {
+    if let Some(p) = std::env::var("PI_BIN").ok().filter(|p| !p.is_empty()) {
+        return Some(p);
+    }
+    // 简单 PATH 探测（避免引入 which crate）。
+    let paths = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&paths) {
+        let candidate = dir.join("pi");
+        if candidate.is_file() {
+            return Some(candidate.to_string_lossy().into_owned());
+        }
+        // Windows 兼容
+        let candidate_exe = dir.join("pi.exe");
+        if candidate_exe.is_file() {
+            return Some(candidate_exe.to_string_lossy().into_owned());
+        }
+    }
+    None
+}
+
+/// 从 pi 文本输出中尽力提取可读文本（剥离 JSON 包裹）。
+fn extract_text(raw: &str) -> String {
+    match serde_json::from_str::<Value>(raw) {
+        Ok(v) => extract_text_from_value(&v),
+        Err(_) => raw.trim().to_string(),
+    }
+}
+
+/// 从解析后的 JSON 值下钻提取推理文本（兼容 {message}/{content}/裸字符串）。
+fn extract_text_from_value(v: &Value) -> String {
+    if let Some(s) = v.as_str() {
+        return s.to_string();
+    }
+    for key in ["reasoning", "content", "message", "text"] {
+        if let Some(s) = v.get(key).and_then(|x| x.as_str()) {
+            return s.to_string();
+        }
+    }
+    if let Some(arr) = v.get("messages").and_then(|x| x.as_array()) {
+        let mut out = String::new();
+        for m in arr {
+            if let Some(s) = m.get("content").and_then(|x| x.as_str()) {
+                out.push_str(s);
+                out.push('\n');
+            }
+        }
+        if !out.is_empty() {
+            return out.trim().to_string();
+        }
+    }
+    serde_json::to_string(v).unwrap_or_default()
+}
+
+/// 从世界快照收集全部对象 id（兜底 object_refs）。
+fn collect_refs(ctx: &Context) -> Vec<String> {
+    ctx.world
+        .objects
+        .iter()
+        .filter_map(|o| o.get("id").and_then(|x| x.as_str()).map(|s| s.to_string()))
+        .collect()
+}

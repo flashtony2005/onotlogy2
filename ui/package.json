@@ -1,0 +1,24 @@
+{
+  "name": "openaip-os-agent-ui",
+  "private": true,
+  "version": "0.3.0",
+  "type": "module",
+  "description": "OpenAIP-OS Agent 认知观察 UI（三层视图 + WebSocket 实时流）",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}

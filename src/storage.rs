@@ -55,6 +55,47 @@ pub enum StorageError {
     Constraint { code: &'static str, message: String },
 }
 
+/// Trace 事件查询条件（run/agent/object/type 过滤 + 游标 after_id 断线重连补齐）。
+/// 列名取自固定白名单（run_id/agent_id/event_type/object_refs），值全部参数化绑定，防注入。
+#[derive(Debug, Clone, Default)]
+pub struct TraceQuery {
+    pub run_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub object_ref: Option<String>,
+    pub event_type: Option<String>,
+    pub after_id: Option<String>,
+    pub limit: usize,
+}
+
+impl TraceQuery {
+    /// 按 run 过滤（默认上限 200）。
+    pub fn for_run(run_id: impl Into<String>) -> Self {
+        Self {
+            run_id: Some(run_id.into()),
+            limit: 200,
+            ..Default::default()
+        }
+    }
+    /// 按 agent 过滤。
+    pub fn for_agent(agent_id: impl Into<String>) -> Self {
+        Self {
+            agent_id: Some(agent_id.into()),
+            limit: 200,
+            ..Default::default()
+        }
+    }
+    /// 设置断线重连游标：仅返回 after_id 之后的事件。
+    pub fn with_after(mut self, after_id: impl Into<String>) -> Self {
+        self.after_id = Some(after_id.into());
+        self
+    }
+    /// 按绑定对象过滤。
+    pub fn with_object(mut self, object_ref: impl Into<String>) -> Self {
+        self.object_ref = Some(object_ref.into());
+        self
+    }
+}
+
 /// 对象引擎抽象（V0.1 仅同步语义，async 由实现决定）。
 #[async_trait]
 pub trait ObjectEngine {
@@ -216,6 +257,81 @@ impl LibSQLStorage {
         Ok(())
     }
 
+    /// 按条件查询 Trace 事件（认知/世界同源）。
+    /// [强制] after_id 游标用于 WebSocket 断线重连补齐：返回该事件之后的全部匹配事件（按 timestamp,id 升序）。
+    pub async fn list_events(&self, q: TraceQuery) -> Result<Vec<TraceEvent>, StorageError> {
+        let mut sql = String::from(
+            "SELECT id, kind, event_type, object_refs, run_id, agent_id, reasoning, input, output, confidence, timestamp \
+             FROM wb_trace_event WHERE 1=1",
+        );
+        let mut params: Vec<libsql::Value> = Vec::new();
+
+        if let Some(v) = &q.run_id {
+            sql.push_str(" AND run_id = ?");
+            params.push(libsql::Value::Text(v.clone()));
+        }
+        if let Some(v) = &q.agent_id {
+            sql.push_str(" AND agent_id = ?");
+            params.push(libsql::Value::Text(v.clone()));
+        }
+        if let Some(v) = &q.event_type {
+            sql.push_str(" AND event_type = ?");
+            params.push(libsql::Value::Text(v.clone()));
+        }
+        if let Some(v) = &q.object_ref {
+            // object_refs 存 JSON 数组文本，按 `"id"` 子串匹配（反查经 wb_ontology_object.id）。
+            sql.push_str(" AND object_refs LIKE ?");
+            params.push(libsql::Value::Text(format!("%\"{}\"%", v)));
+        }
+        if let Some(after) = &q.after_id {
+            // 解析游标事件 (timestamp, id)，返回其后事件（断线重连补齐）。
+            let mut marker = self
+                .conn
+                .query(
+                    "SELECT timestamp, id FROM wb_trace_event WHERE id = ?",
+                    libsql::params![after.clone()],
+                )
+                .await?;
+            if let Some(row) = marker.next().await? {
+                let ts: String = row.get(0)?;
+                let id: String = row.get(1)?;
+                sql.push_str(" AND (timestamp > ? OR (timestamp = ? AND id > ?))");
+                params.push(libsql::Value::Text(ts.clone()));
+                params.push(libsql::Value::Text(ts));
+                params.push(libsql::Value::Text(id));
+            }
+        }
+        sql.push_str(" ORDER BY timestamp ASC, id ASC");
+        sql.push_str(&format!(" LIMIT {}", q.limit.clamp(1, 1000)));
+
+        let mut rows = self
+            .conn
+            .query(&sql, libsql::params_from_iter(params))
+            .await?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            out.push(row_to_trace(&row)?);
+        }
+        Ok(out)
+    }
+
+    /// 按 ID 取单条 Trace 事件（供 `GET /trace/{id}`，缺失返 None → WB2002）。
+    pub async fn get_trace(&self, id: &str) -> Result<Option<TraceEvent>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, kind, event_type, object_refs, run_id, agent_id, reasoning, input, output, confidence, timestamp \
+                 FROM wb_trace_event WHERE id = ?",
+                params![id],
+            )
+            .await?;
+        if let Some(row) = rows.next().await? {
+            Ok(Some(row_to_trace(&row)?))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// 列出 world 事件（按时间升序），供 `oaip event list` 与 TC-008 校验。
     pub async fn list_world_events(&self) -> Result<Vec<TraceEvent>, StorageError> {
         let mut rows = self
@@ -229,6 +345,38 @@ impl LibSQLStorage {
         let mut out = Vec::new();
         while let Some(row) = rows.next().await? {
             out.push(row_to_trace(&row)?);
+        }
+        Ok(out)
+    }
+
+    /// 列出全部对象（任意类型，is_delete=0），供世界模型快照。
+    pub async fn list_all_objects(&self) -> Result<Vec<ObjectRecord>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, type, data, version FROM wb_ontology_object WHERE is_delete=0",
+                params![],
+            )
+            .await?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            out.push(row_to_object(&row)?);
+        }
+        Ok(out)
+    }
+
+    /// 列出全部关系边（is_delete=0），供世界模型快照。
+    pub async fn list_all_relations(&self) -> Result<Vec<RelationRecord>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, relation, source, target, data FROM wb_relation_edge WHERE is_delete=0",
+                params![],
+            )
+            .await?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            out.push(row_to_relation(&row)?);
         }
         Ok(out)
     }
