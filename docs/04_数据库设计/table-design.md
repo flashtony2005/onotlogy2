@@ -1,0 +1,121 @@
+# 表结构设计
+## 基本信息
+| 项 | 内容 |
+|----|------|
+| 文档ID | WB-DOC-04-002 |
+| 所属模块 | WorkBuddy-DB |
+| 版本 | V1.2 |
+| 创建人 | lushaohui |
+| 创建时间 | 2026-08-11 |
+| 更新记录 | 见文末修订日志 |
+| 生效环境 | 开发/测试/预发/生产 |
+
+## 1. 文档目的
+定义所有表的字段、类型、索引、约束与注释，是建表与代码的权威依据。
+
+## 2. 业务/技术背景
+依赖 db-total-erd.md 与 data-dict.md。
+
+## 3. 核心规则 & 约束（重点）
+- [强制] 每张表必须包含：表中文名、用途、主键、索引、唯一约束、字段注释、数据类型、是否非空、默认值。
+- [强制] 表名规则：wb_模块名_表名，下划线分隔，全小写。示例：wb_user_account、wb_task_record。
+- [强制] 统一字段：id 主键（系统表 `INTEGER AUTOINCREMENT`；领域对象表 `TEXT` 语义ID，如 `customer_001` / `tr_xxx`）、create_time、update_time、is_delete 逻辑删除。
+- [强制] 枚举全部抽离到 data-dict.md，代码与文档枚举值完全一一对应。
+- [强制] 所有修改必须更新修订日志；DDL 脚本单独存放 sql-script.md，禁止直接在线改库。
+
+## 4. 详细设计/内容
+### 4.1 表清单
+| 表名 | 中文名 | 用途 |
+|------|--------|------|
+| wb_user_account | 用户账户 | 系统内部账号 |
+| wb_ontology_object | 本体对象实例 | Everything is Object：每类业务对象统一存储，禁止按业务建独立表（V0.1） |
+| wb_relation_edge | 关系边 | 世界连接，支撑图查询（V0.2） |
+| wb_trace_event | 统一事件轨迹 | 存储 TraceEvent（world 生命周期 + cognitive 认知），支撑三层观察界面与 Trace API |
+
+### 4.2 表结构示例：wb_user_account
+- 用途：
+- 主键：id
+- 唯一约束：uk_username(username)
+- 索引：idx_create_time(create_time)
+
+| 字段 | 类型 | 非空 | 默认 | 注释 | 枚举(若有) |
+|------|------|------|------|------|------------|
+| id | integer | 是 | - | 主键 | - |
+| create_time | text | 是 | CURRENT_TIMESTAMP | 创建时间 | - |
+| update_time | text | 是 | CURRENT_TIMESTAMP | 更新时间 | - |
+| is_delete | integer | 是 | 0 | 逻辑删除 | 见 data-dict |
+| username | text | 是 | - | 用户名 | - |
+
+### 4.3 表结构：wb_trace_event
+- 用途：统一事件轨迹存储，承接 Agent Runtime 经 Event Bus 写出的 `TraceEvent`（world 与 cognitive 同源），支撑三层观察界面（Executive / Operator / Developer View）与 Trace API（见 `api-agent-trace.md`）。
+- 主键：id
+- 唯一约束：无（事件可重复写入）
+- 索引：idx_trace_run(run_id)、idx_trace_agent(agent_id)、idx_trace_type(event_type)、idx_trace_time(timestamp)、idx_create_time(create_time)
+
+| 字段 | 类型 | 非空 | 默认 | 注释 | 枚举(若有) |
+|------|------|------|------|------|------------|
+| id | text | 是 | - | 语义轨迹ID（如 tr_abc123），与 API DTO.id 直接对应 | - |
+| create_time | text | 是 | CURRENT_TIMESTAMP | 记录创建时间 | - |
+| update_time | text | 是 | CURRENT_TIMESTAMP | 记录更新时间 | - |
+| is_delete | integer | 是 | 0 | 逻辑删除 | 见 data-dict |
+| kind | text | 是 | - | 事件大类 | world,cognitive（见 data-dict） |
+| run_id | text | 否 | - | 认知运行ID（kind=cognitive 必填） | - |
+| agent_id | text | 否 | - | Agent ID（kind=cognitive 必填） | - |
+| event_type | text | 是 | - | 事件类型 | 见 data-dict |
+| object_refs | text | 否 | - | 绑定的 Ontology 对象引用，JSON 数组，可解释性根基；反查经 wb_ontology_object.id | - |
+| reasoning | text | 否 | - | 推理过程（kind=cognitive 专有） | - |
+| input | text | 否 | - | 输入载荷 JSON | - |
+| output | text | 否 | - | 输出载荷 JSON | - |
+| confidence | real | 否 | - | 置信度 0~1 | - |
+| timestamp | text | 是 | - | 事件发生时间（业务时间） | - |
+
+### 4.4 表结构：wb_ontology_object
+- 用途：本体对象实例存储，Everything is Object 的落地；每类业务对象统一存此表，禁止按业务建独立表。
+- 主键：id
+- 唯一约束：无（id 即业务语义主键）
+- 索引：idx_obj_type(type)、idx_obj_create(create_time)
+
+| 字段 | 类型 | 非空 | 默认 | 注释 | 枚举(若有) |
+|------|------|------|------|------|------------|
+| id | text | 是 | - | 语义对象ID（如 customer_001） | - |
+| create_time | text | 是 | CURRENT_TIMESTAMP | 创建时间 | - |
+| update_time | text | 是 | CURRENT_TIMESTAMP | 更新时间 | - |
+| is_delete | integer | 是 | 0 | 逻辑删除 | 见 data-dict |
+| type | text | 是 | - | 对象类型（对应 ODL object 名，如 Customer） | - |
+| data | text | 是 | - | 对象数据 JSON（由 ObjectDef 驱动，禁止 match 硬编码） | - |
+| version | integer | 是 | 1 | 乐观锁版本号，update 自增 | - |
+
+### 4.5 表结构：wb_relation_edge
+- 用途：世界连接（关系边），支撑图查询；V0.2 引入。
+- 主键：id
+- 唯一约束：无
+- 索引：idx_edge_source(source)、idx_edge_target(target)、idx_edge_rel(relation)
+
+| 字段 | 类型 | 非空 | 默认 | 注释 | 枚举(若有) |
+|------|------|------|------|------|------------|
+| id | text | 是 | - | 语义边ID（如 e_001） | - |
+| create_time | text | 是 | CURRENT_TIMESTAMP | 创建时间 | - |
+| update_time | text | 是 | CURRENT_TIMESTAMP | 更新时间 | - |
+| is_delete | integer | 是 | 0 | 逻辑删除 | 见 data-dict |
+| source | text | 是 | - | 源对象ID（FK → wb_ontology_object.id） | - |
+| relation | text | 是 | - | 关系名（如 purchased / owns） | - |
+| target | text | 是 | - | 目标对象ID（FK → wb_ontology_object.id） | - |
+| data | text | 否 | - | 关系附载 JSON（可选） | - |
+
+
+## 5. 风险点 & 注意事项
+- 遗漏 is_delete 逻辑删除会导致物理删除风险。
+- 枚举值在代码与文档漂移会引发状态错乱。
+
+## 6. 关联文档
+- [../04_数据库设计/db-total-erd.md](../04_数据库设计/db-total-erd.md)
+- [../04_数据库设计/data-dict.md](../04_数据库设计/data-dict.md)
+- [../04_数据库设计/sql-script.md](../04_数据库设计/sql-script.md)
+
+## 修订日志
+| 版本 | 修改人 | 修改日期 | 修改内容 |
+|------|--------|----------|----------|
+| V1.0 | lushaohui | 2026-08-11 | 初稿完成 |
+| V1.1 | lushaohui | 2026-08-11 | 表清单新增 wb_trace_event，补充 4.3 表结构详情 |
+| V1.2 | lushaohui | 2026-08-11 | 新增 wb_ontology_object / wb_relation_edge 两张核心表（4.4/4.5）；4.3 类型对齐 SQLite + id 改 TEXT；id 统一字段规则改为「系统表 INTEGER / 领域表 TEXT」 |
+
