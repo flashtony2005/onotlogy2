@@ -86,6 +86,7 @@ impl From<TraceEvent> for TraceEventDto {
 
 /// 时间线中的单个事件（视图裁剪后的形态）。
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TimelineEvent {
     pub id: String,
     pub event_type: String,
@@ -113,6 +114,7 @@ pub struct DecisionSummary {
 
 /// 运行时间线（三层视图的统一响应结构，对应 api-agent-trace.md 4.4）。
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RunTimeline {
     pub run_id: String,
     pub agent_id: String,
@@ -245,5 +247,40 @@ impl DecisionText for TraceEvent {
             .map(|s| s.to_string())
             .or_else(|| self.reasoning.clone())
             .unwrap_or_else(|| self.event_type.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timeline_dto_is_camel_case() {
+        let tl = RunTimeline {
+            run_id: "run_1".into(),
+            agent_id: "retention-agent".into(),
+            status: "Completed".into(),
+            progress: 100,
+            human_approval: "None".into(),
+            events: vec![TimelineEvent {
+                id: "tr_1".into(),
+                event_type: "Goal".into(),
+                timestamp: "1".into(),
+                confidence: None,
+                object_refs: vec!["001".into()],
+                reasoning: None,
+                input: None,
+                output: None,
+            }],
+            decision: None,
+        };
+        let json = serde_json::to_value(tl).unwrap();
+        assert_eq!(json["runId"], "run_1");
+        assert_eq!(json["agentId"], "retention-agent");
+        assert_eq!(json["humanApproval"], "None");
+        assert_eq!(json["events"][0]["eventType"], "Goal");
+        assert_eq!(json["events"][0]["objectRefs"][0], "001");
+        assert!(json.get("run_id").is_none());
+        assert!(json.get("human_approval").is_none());
     }
 }

@@ -117,6 +117,10 @@ async fn tc010_cognitive_trace_with_refs() {
     ] {
         assert!(types.contains(&step), "缺少认知步 {step}");
     }
+
+    // Goal 只发射一次（LLMGoalParser 不再重复发事件）
+    let goal_count = events.iter().filter(|e| e.event_type == "Goal").count();
+    assert_eq!(goal_count, 1, "Goal 应只发一次，实际 {goal_count} 次");
 }
 
 // ── TC-011：Planner 全链路 + 最小闭环（创建对象）+ PlanStep 绑定 object_refs ─────────────

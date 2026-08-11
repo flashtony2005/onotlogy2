@@ -130,7 +130,8 @@ impl LLMGoalParser {
             prior_output: Value::Null,
             world: world.clone(),
         };
-        let dec = call_engine(kernel, engine, &ctx).await?;
+        // Goal 事件由 run_goal 显式发射一次（避免与后续结构化 Goal 事件重复）。
+        let dec = call_engine(kernel, engine, &ctx, false).await?;
         Ok(Goal {
             intent: dec.intent,
             confidence: dec.confidence,
@@ -350,7 +351,7 @@ impl<'a> Planner<'a> {
             prior_output: prior,
             world: world.clone(),
         };
-        call_engine(self.kernel, engine, &ctx).await
+        call_engine(self.kernel, engine, &ctx, true).await
     }
 
     /// 执行一个计划步的能力（经 Capability Registry 路由到 Ontology 操作）。
@@ -415,28 +416,31 @@ fn build_retention_plan(candidates: &[String]) -> Vec<PlanStep> {
     steps
 }
 
-/// 调用认知引擎并直接发认知事件（统一处理 WB2004 映射）。
+/// 调用认知引擎（统一处理 WB2004 映射）；`emit=true` 时发认知事件。
 async fn call_engine(
     kernel: &RuntimeKernel,
     engine: &dyn AgentEngine,
     ctx: &Context,
+    emit: bool,
 ) -> Result<Decision, PlannerError> {
     let dec = engine.reason(ctx).await.map_err(|e| match e {
         AgentError::Unavailable(m) | AgentError::Parse(m) => PlannerError::EngineUnavailable(m),
     })?;
-    let refs = non_empty(dec.object_refs.clone());
-    kernel
-        .emit_cognitive(
-            &ctx.step,
-            &ctx.run_id,
-            &ctx.agent_id,
-            &refs,
-            Some(&dec.reasoning),
-            Some(json!({ "intent": dec.intent })),
-            Some(dec.output.clone()),
-            Some(dec.confidence),
-        )
-        .await?;
+    if emit {
+        let refs = non_empty(dec.object_refs.clone());
+        kernel
+            .emit_cognitive(
+                &ctx.step,
+                &ctx.run_id,
+                &ctx.agent_id,
+                &refs,
+                Some(&dec.reasoning),
+                Some(json!({ "intent": dec.intent })),
+                Some(dec.output.clone()),
+                Some(dec.confidence),
+            )
+            .await?;
+    }
     Ok(dec)
 }
 

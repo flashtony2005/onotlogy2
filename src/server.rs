@@ -7,12 +7,13 @@
 //! 所有事件同源 `TraceEvent`，WS 与 timeline 共用 `TraceEventDto`（camelCase 单一真相源）。
 
 use crate::agent::AgentEngine;
-use crate::planner::{Planner, RunStatus, generate_run_id};
+use crate::planner::{Planner, PlannerError, RunStatus, generate_run_id};
 use crate::runtime::RuntimeKernel;
 use crate::storage::TraceQuery;
 use crate::trace::{RunTimeline, TraceEventDto, View, build_timeline};
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{OriginalUri, Path, Query, State, WebSocketUpgrade};
+use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -26,7 +27,8 @@ use tokio::net::TcpListener;
 /// 运行记录（内存态，供 timeline 状态覆盖与 WB2004/2005 快速反馈）。
 struct RunRecord {
     status: RunStatus,
-    error: Option<String>,
+    /// 仅 Policy 拒绝才要求 Human Approval（WB2005）。
+    human_approval: bool,
 }
 
 /// 共享应用状态。
@@ -123,6 +125,7 @@ struct TraceListDto {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct RunStartDto {
     run_id: String,
     status: String,
@@ -215,7 +218,7 @@ async fn timeline(
     // 用内存态运行记录覆盖状态（捕捉 WB2004/2005 失败）
     if let Some(rec) = st.runs.lock().unwrap().get(&run_id) {
         tl.status = rec.status.as_str().to_string();
-        if rec.error.is_some() {
+        if rec.human_approval {
             tl.human_approval = "Required".to_string();
         }
     }
@@ -242,7 +245,7 @@ async fn run_start(State(st): State<Arc<AppState>>, Json(body): Json<RunBody>) -
         run_id.clone(),
         RunRecord {
             status: RunStatus::Running,
-            error: None,
+            human_approval: false,
         },
     );
 
@@ -259,11 +262,15 @@ async fn run_start(State(st): State<Arc<AppState>>, Json(body): Json<RunBody>) -
         let rec = match res {
             Ok(_) => RunRecord {
                 status: RunStatus::Completed,
-                error: None,
+                human_approval: false,
             },
-            Err(e) => RunRecord {
+            Err(PlannerError::PolicyDenied(_)) => RunRecord {
                 status: RunStatus::Failed,
-                error: Some(e.to_string()),
+                human_approval: true,
+            },
+            Err(_) => RunRecord {
+                status: RunStatus::Failed,
+                human_approval: false,
             },
         };
         st2.runs.lock().unwrap().insert(rid, rec);
@@ -369,6 +376,10 @@ async fn collect_history(st: &AppState, id: &str, after: Option<&str>) -> Vec<Tr
 
 /// 静态文件托管（SPA 兜底 index.html）。作为 Router::fallback，保留原始请求路径。
 async fn serve_static(State(st): State<Arc<AppState>>, uri: OriginalUri) -> Response {
+    if uri.path().starts_with("/api/") {
+        let body = ApiResponse::<()>::error(404, "接口不存在");
+        return (StatusCode::NOT_FOUND, body).into_response();
+    }
     let path = uri.path().trim_start_matches('/');
     let rel = if path.is_empty() {
         "index.html".to_string()
@@ -427,4 +438,23 @@ fn content_type(path: &str) -> String {
         "application/octet-stream"
     }
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_start_dto_is_camel_case() {
+        let dto = RunStartDto {
+            run_id: "run_1".into(),
+            status: "Running".into(),
+            stream_url: "/api/v1/wb/agent/run_1/stream".into(),
+        };
+        let json = serde_json::to_value(dto).unwrap();
+        assert_eq!(json["runId"], "run_1");
+        assert_eq!(json["streamUrl"], "/api/v1/wb/agent/run_1/stream");
+        assert!(json.get("run_id").is_none());
+        assert!(json.get("stream_url").is_none());
+    }
 }
