@@ -1750,3 +1750,25 @@ async fn tc025h_server_evolution_endpoint() {
         "可追溯 proposal"
     );
 }
+
+// ── TC-025i：LearnedKnowledge 可撤销（revoke_learned 幂等删除） ──────────────────────────
+#[tokio::test]
+async fn tc025i_revoke_learned() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    for _ in 0..3 {
+        kernel
+            .record_memory("action.retain", json!({ "experience": "retain" }))
+            .await
+            .unwrap();
+    }
+    let state = kernel.run_evolution("RUN-REVOKE").await.unwrap();
+    assert_eq!(state.learned.len(), 1, "应沉淀 1 条 learned");
+
+    kernel.revoke_learned("learned.retain").await.unwrap();
+    let state2 = kernel.evolution_state().await.unwrap();
+    assert!(state2.learned.is_empty(), "撤销后 learned 应为空");
+
+    // 幂等：重复撤销不报错
+    kernel.revoke_learned("learned.retain").await.unwrap();
+}

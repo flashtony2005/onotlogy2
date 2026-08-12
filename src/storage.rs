@@ -655,6 +655,14 @@ impl LibSQLStorage {
         }
         Ok(out)
     }
+
+    /// 撤销/删除一条 LearnedKnowledge（幂等：不存在也返回 Ok）。
+    pub async fn delete_learned(&self, id: &str) -> Result<(), StorageError> {
+        self.conn
+            .execute("DELETE FROM wb_learned WHERE id = ?1", params![id])
+            .await?;
+        Ok(())
+    }
 }
 
 fn row_to_pattern(row: &libsql::Row) -> Result<crate::evolution::Pattern, StorageError> {

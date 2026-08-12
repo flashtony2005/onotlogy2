@@ -18,8 +18,11 @@ use std::io::{self, Write};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::oneshot;
+
+/// HTTP 审批挂起的最长等待时间；超时按拒绝处理（不授予权限）。
+pub const APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Planner 运行错误，映射到 WB 错误码。
 #[derive(Debug, thiserror::Error)]
@@ -353,8 +356,12 @@ impl PolicyApprover for ServerApprover {
                 Some(0.0),
             )
             .await;
-        // 挂起等待 HTTP 端点裁决（approve=true 放行 / false=WB2005 终止）
-        let decision = rx.await.unwrap_or(false);
+        // 挂起等待 HTTP 端点裁决（approve=true 放行 / false=WB2005 终止）。
+        // 超时或信道关闭均按拒绝处理，避免 run 永久挂起。
+        let decision = match tokio::time::timeout(APPROVAL_TIMEOUT, rx).await {
+            Ok(Ok(v)) => v,
+            _ => false,
+        };
         // 发 ApprovalDecision 事件（供 timeline / WS 实时反映结果）
         let _ = self
             .kernel
@@ -835,7 +842,22 @@ impl<'a> Planner<'a> {
         // 7'') Evolution（BL-003 · REQ-017）：把本轮经验提炼为 Knowledge（Experience→Pattern→
         //     Proposal→Validation→LearnedKnowledge）。**不修改 Policy、不绕过审批**（Learn≠Permission）；
         //     run_id 作为证据注入可追溯链。幂等，可重复运行。
-        self.kernel.run_evolution(&run_id).await?;
+        //     学习层 best-effort：失败不阻断本次 Agent 运行，仅发 Reflection 事件留痕。
+        if let Err(e) = self.kernel.run_evolution(&run_id).await {
+            let _ = self
+                .kernel
+                .emit_cognitive(
+                    "Reflection",
+                    &run_id,
+                    agent_id,
+                    &scope_refs,
+                    Some(&format!("Evolution 运行失败（不影响本次 run）: {e}")),
+                    Some(json!({ "phase": "evolution" })),
+                    Some(json!({ "error": e.to_string() })),
+                    Some(0.0),
+                )
+                .await;
+        }
 
         Ok(AgentRunResult {
             run_id,

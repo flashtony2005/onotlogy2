@@ -81,6 +81,9 @@ pub struct Pattern {
 
 impl Pattern {
     /// 由一条 Experience 计算置信度（确定性）。
+    ///
+    /// MVP 已知边界：`hits` 只增不减且无时间衰减，高频动作置信度最终趋满 1.0；
+    /// 后续需引入时间窗口、失败次数等信号，避免“学习”退化为执行次数计数。
     pub fn confidence_of(hits: i64) -> f64 {
         (hits as f64 / CONFIDENCE_DIVISOR).min(1.0)
     }

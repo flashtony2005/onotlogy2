@@ -4,7 +4,7 @@
 |----|------|
 | 文档ID | WB-DOC-04-004 |
 | 所属模块 | WorkBuddy-DB |
-| 版本 | V1.5 |
+| 版本 | V1.6 |
 | 创建人 | lushaohui |
 | 创建时间 | 2026-08-11 |
 | 更新记录 | 见文末修订日志 |
@@ -94,6 +94,51 @@ CREATE INDEX idx_trace_agent  ON wb_trace_event (agent_id);
 CREATE INDEX idx_trace_type   ON wb_trace_event (event_type);
 CREATE INDEX idx_trace_time   ON wb_trace_event (timestamp);
 CREATE INDEX idx_create_time  ON wb_trace_event (create_time);
+
+-- 记忆沉淀（Agent 自治基础；V0.5 · REQ-016）：经验按 label 去重累加 hits，下一轮 run 经 recall 复用
+CREATE TABLE wb_memory (
+  label      TEXT PRIMARY KEY,   -- 记忆标签（如 action.retain / #RetentionPattern）
+  payload    TEXT NOT NULL,      -- 经验载荷 JSON
+  hits       INTEGER NOT NULL DEFAULT 1,  -- 命中/复用次数，自学习沉淀指标
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_memory_hits ON wb_memory (hits);
+
+-- Evolution Engine（BL-003 · REQ-017）：Experience → Pattern → Proposal → Validation → LearnedKnowledge
+-- 全部带可追溯父引用（run_ids / pattern_label / proposal_id），保证 Learn≠Permission（不修改 Policy、不绕过审批）
+CREATE TABLE wb_pattern (
+  label      TEXT PRIMARY KEY,    -- pattern.action.retain
+  action     TEXT NOT NULL,       -- 关联动作名
+  support    INTEGER NOT NULL DEFAULT 0,  -- 支持度 = 来源记忆 hits
+  confidence REAL NOT NULL DEFAULT 0.0,   -- min(1, hits/5)
+  run_ids    TEXT NOT NULL DEFAULT '[]',  -- 贡献来源 run（可追溯至 AgentRun）
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE wb_proposal (
+  id          TEXT PRIMARY KEY,    -- proposal.<action>（幂等 upsert）
+  kind        TEXT NOT NULL,       -- ActionPattern
+  target      TEXT NOT NULL,       -- 目标动作名
+  confidence  REAL NOT NULL DEFAULT 0.0,
+  status      TEXT NOT NULL,       -- Proposed / Validated / Rejected
+  pattern_label TEXT NOT NULL,     -- 来源 Pattern（可追溯）
+  run_ids     TEXT NOT NULL DEFAULT '[]',
+  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE wb_learned (
+  id          TEXT PRIMARY KEY,    -- learned.<action>（幂等 upsert）
+  kind        TEXT NOT NULL,
+  action      TEXT NOT NULL,
+  confidence  REAL NOT NULL DEFAULT 0.0,
+  proposal_id TEXT NOT NULL,       -- 来源 Proposal（可追溯）
+  run_ids     TEXT NOT NULL DEFAULT '[]',
+  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 ```
 
 ### 4.2 初始化脚本
@@ -118,4 +163,5 @@ CREATE INDEX idx_create_time  ON wb_trace_event (create_time);
 | V1.3 | lushaohui | 2026-08-11 | 新增核心表 wb_ontology_object / wb_relation_edge（SQLite 方言，TEXT 语义ID）；wb_trace_event.id 改为 TEXT 与 DTO 对齐；补齐 idx_create_time 索引 |
 | V1.4 | lushaohui | 2026-08-11 | codegen(canonical_schema) 与 LibSQLStorage 字段/索引对齐本权威 DDL：object 表列 type、edge 表 source/relation/target；索引补全 idx_obj_create / idx_edge_source / idx_edge_target / idx_edge_rel（与文档一致），移除代码侧多余的 idx_rel_* |
 | V1.5 | lushaohui | 2026-08-12 | 新增 wb_meta 元数据表（schema_version），作为 open 旧 schema 拦截（WB2101）的唯一依据；canonical_schema 与文档 DDL 保持一致 |
+| V1.6 | lushaohui | 2026-08-12 | 新增 wb_memory（V0.5·REQ-016 记忆沉淀）+ wb_pattern / wb_proposal / wb_learned（BL-003·REQ-017 Evolution Engine）建表 DDL，与 codegen canonical_schema 完全一致 |
 

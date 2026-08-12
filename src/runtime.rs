@@ -372,6 +372,10 @@ impl RuntimeKernel {
                 let lk_clone = lk.clone();
                 self.storage.save_learned(&lk_clone).await?;
                 learned.push(lk_clone);
+            } else {
+                // Proposal 未通过/降级时，同步撤销已沉淀的 LearnedKnowledge，避免悬空引用。
+                let learned_id = crate::evolution::learned_id_of(&prop.target);
+                self.storage.delete_learned(&learned_id).await?;
             }
         }
 
@@ -389,5 +393,10 @@ impl RuntimeKernel {
             proposals: self.storage.list_proposals().await?,
             learned: self.storage.list_learned().await?,
         })
+    }
+
+    /// 撤销一条 LearnedKnowledge（可撤销承诺；幂等，不存在也返回 Ok）。
+    pub async fn revoke_learned(&self, id: &str) -> Result<(), StorageError> {
+        self.storage.delete_learned(id).await
     }
 }

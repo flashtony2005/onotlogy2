@@ -4,7 +4,7 @@
 |----|------|
 | 文档ID | WB-DOC-04-002 |
 | 所属模块 | WorkBuddy-DB |
-| 版本 | V1.2 |
+| 版本 | V1.3 |
 | 创建人 | lushaohui |
 | 创建时间 | 2026-08-11 |
 | 更新记录 | 见文末修订日志 |
@@ -31,6 +31,10 @@
 | wb_ontology_object | 本体对象实例 | Everything is Object：每类业务对象统一存储，禁止按业务建独立表（V0.1） |
 | wb_relation_edge | 关系边 | 世界连接，支撑图查询（V0.2） |
 | wb_trace_event | 统一事件轨迹 | 存储 TraceEvent（world 生命周期 + cognitive 认知），支撑三层观察界面与 Trace API |
+| wb_memory | 记忆沉淀 | Agent 自治基础（V0.5 · REQ-016）：经验按 `action.<name>` 去重累加 hits，下一轮 run 经 MemoryRecall 召回，形成 Action→Memory→下次 Plan 闭环 |
+| wb_pattern | 进化模式 | Evolution Engine（BL-003 · REQ-017）：由 wb_memory 经验提炼的 Pattern（hits≥2 才成 Pattern），携带可追溯 run_ids |
+| wb_proposal | 进化提案 | Evolution 提案（Pattern→Proposal），状态 Proposed/Validated/Rejected，携带来源 pattern_label |
+| wb_learned | 沉淀知识 | Evolution 最终知识（仅 Validated 才沉淀），携带来源 proposal_id，**不修改 Policy、不绕过审批**（Learn≠Permission） |
 
 ### 4.2 表结构示例：wb_user_account
 - 用途：
@@ -102,6 +106,70 @@
 | target | text | 是 | - | 目标对象ID（FK → wb_ontology_object.id） | - |
 | data | text | 否 | - | 关系附载 JSON（可选） | - |
 
+### 4.6 表结构：wb_memory
+- 用途：Agent 自治的记忆沉淀（V0.5 · REQ-016）；经验按 `label` 去重并累加 `hits`，下一轮 run 经 `recall_all` 召回复用，形成 Action→Memory→下次 Plan 闭环。
+- 主键：label
+- 唯一约束：无（label 即语义主键，幂等 upsert）
+- 索引：idx_memory_hits(hits)
+
+| 字段 | 类型 | 非空 | 默认 | 注释 | 枚举(若有) |
+|------|------|------|------|------|------------|
+| label | text | 是 | - | 记忆标签（如 action.retain / #RetentionPattern） | - |
+| payload | text | 是 | - | 经验载荷 JSON | - |
+| hits | integer | 是 | 1 | 命中/复用次数，自学习沉淀指标 | - |
+| created_at | text | 是 | CURRENT_TIMESTAMP | 创建时间 | - |
+| updated_at | text | 是 | CURRENT_TIMESTAMP | 更新时间 | - |
+
+### 4.7 表结构：wb_pattern
+- 用途：Evolution Engine（BL-003 · REQ-017）的模式层；由 wb_memory 经验经 `mine_patterns` 提炼，hits≥2（PATTERN_MIN_HITS）才成 Pattern，`confidence = min(1, hits/5)`。
+- 主键：label
+- 唯一约束：无
+- 索引：无（label 主键已覆盖）
+
+| 字段 | 类型 | 非空 | 默认 | 注释 | 枚举(若有) |
+|------|------|------|------|------|------------|
+| label | text | 是 | - | 模式标签（如 pattern.action.retain） | - |
+| action | text | 是 | - | 关联动作名 | - |
+| support | integer | 是 | 0 | 支持度 = 来源记忆 hits | - |
+| confidence | real | 是 | 0.0 | 置信度 min(1, hits/5) | - |
+| run_ids | text | 是 | '[]' | 贡献来源 run（JSON 数组，可追溯至 AgentRun） | - |
+| created_at | text | 是 | CURRENT_TIMESTAMP | 创建时间 | - |
+| updated_at | text | 是 | CURRENT_TIMESTAMP | 更新时间 | - |
+
+### 4.8 表结构：wb_proposal
+- 用途：Evolution 提案层；Pattern→Proposal（kind=ActionPattern），经 `validate` 校验（`confidence ≥ 0.6`（VALIDATE_THRESHOLD）→ Validated，否则 Rejected）。**Proposal 不改变 Agent 行为**。
+- 主键：id
+- 唯一约束：无（id 幂等 upsert，如 proposal.<action>）
+- 索引：无
+
+| 字段 | 类型 | 非空 | 默认 | 注释 | 枚举(若有) |
+|------|------|------|------|------|------------|
+| id | text | 是 | - | 提案ID（如 proposal.<action>） | - |
+| kind | text | 是 | - | 提案类型 | ActionPattern（见 data-dict） |
+| target | text | 是 | - | 目标动作名 | - |
+| confidence | real | 是 | 0.0 | 置信度 | - |
+| status | text | 是 | - | 提案状态 | Proposed / Validated / Rejected（见 data-dict） |
+| pattern_label | text | 是 | - | 来源 Pattern（可追溯） | - |
+| run_ids | text | 是 | '[]' | 贡献来源 run（JSON 数组） | - |
+| created_at | text | 是 | CURRENT_TIMESTAMP | 创建时间 | - |
+| updated_at | text | 是 | CURRENT_TIMESTAMP | 更新时间 | - |
+
+### 4.9 表结构：wb_learned
+- 用途：Evolution 最终知识层；**仅 Validated 的 Proposal 才沉淀为 LearnedKnowledge**。携带 `proposal_id` 可追溯。**Learn≠Permission：本表不写回 Policy、不修改 check_action、不自动绕过 Human Approval（WB2005）**。
+- 主键：id
+- 唯一约束：无（id 幂等 upsert，如 learned.<action>）
+- 索引：无
+
+| 字段 | 类型 | 非空 | 默认 | 注释 | 枚举(若有) |
+|------|------|------|------|------|------------|
+| id | text | 是 | - | 知识ID（如 learned.<action>） | - |
+| kind | text | 是 | - | 知识类型 | ActionPattern（见 data-dict） |
+| action | text | 是 | - | 关联动作名 | - |
+| confidence | real | 是 | 0.0 | 置信度 | - |
+| proposal_id | text | 是 | - | 来源 Proposal（可追溯） | - |
+| run_ids | text | 是 | '[]' | 贡献来源 run（JSON 数组） | - |
+| created_at | text | 是 | CURRENT_TIMESTAMP | 创建时间 | - |
+
 
 ## 5. 风险点 & 注意事项
 - 遗漏 is_delete 逻辑删除会导致物理删除风险。
@@ -118,4 +186,5 @@
 | V1.0 | lushaohui | 2026-08-11 | 初稿完成 |
 | V1.1 | lushaohui | 2026-08-11 | 表清单新增 wb_trace_event，补充 4.3 表结构详情 |
 | V1.2 | lushaohui | 2026-08-11 | 新增 wb_ontology_object / wb_relation_edge 两张核心表（4.4/4.5）；4.3 类型对齐 SQLite + id 改 TEXT；id 统一字段规则改为「系统表 INTEGER / 领域表 TEXT」 |
+| V1.3 | lushaohui | 2026-08-12 | 新增 Agent 自治四表：wb_memory（V0.5·REQ-016 记忆沉淀）、wb_pattern / wb_proposal / wb_learned（BL-003·REQ-017 Evolution Engine，Learn≠Permission）；表清单 4.1 补 4 行，新增 4.6~4.9 结构详情 |
 

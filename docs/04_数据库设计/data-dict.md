@@ -4,7 +4,7 @@
 |----|------|
 | 文档ID | WB-DOC-04-003 |
 | 所属模块 | WorkBuddy-DB |
-| 版本 | V1.1 |
+| 版本 | V1.2 |
 | 创建人 | lushaohui |
 | 创建时间 | 2026-08-11 |
 | 更新记录 | 见文末修订日志 |
@@ -42,6 +42,10 @@
 | trace_event_type | Action | 动作执行（cognitive） | wb_trace_event.event_type |
 | trace_event_type | MemoryUpdate | 记忆更新（cognitive） | wb_trace_event.event_type |
 | trace_event_type | Reflection | 反思（cognitive） | wb_trace_event.event_type |
+| proposal_status | Proposed | 提案初始态（Pattern→Proposal 后） | wb_proposal.status |
+| proposal_status | Validated | 校验通过（confidence≥0.6）→ 可沉淀为 LearnedKnowledge | wb_proposal.status |
+| proposal_status | Rejected | 校验未通过（confidence<0.6） | wb_proposal.status |
+| proposal_kind | ActionPattern | 动作模式提案/知识（Pattern 描述某动作的复现规律） | wb_proposal.kind / wb_learned.kind |
 
 ### 4.2 状态码
 | 状态码 | 含义 |
@@ -61,4 +65,5 @@
 |------|--------|----------|----------|
 | V1.0 | lushaohui | 2026-08-11 | 初稿完成 |
 | V1.1 | lushaohui | 2026-08-11 | 新增 trace_kind、trace_event_type 枚举（wb_trace_event 使用） |
+| V1.2 | lushaohui | 2026-08-12 | 新增 proposal_status（Proposed/Validated/Rejected）、proposal_kind（ActionPattern）枚举（wb_proposal / wb_learned 使用，BL-003·REQ-017） |
 

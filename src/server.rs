@@ -25,7 +25,7 @@ use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{OriginalUri, Path, Query, State, WebSocketUpgrade};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
@@ -219,6 +219,10 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/v1/wb/agent/run/:run_id/timeline", get(timeline))
         .route("/api/v1/wb/agent/memory", get(list_memory))
         .route("/api/v1/wb/agent/evolution", get(list_evolution))
+        .route(
+            "/api/v1/wb/agent/evolution/learned/:id",
+            delete(revoke_learned),
+        )
         .route("/api/v1/wb/agent/run", post(run_start))
         .route(
             "/api/v1/wb/agent/run/:run_id/approvals",
@@ -321,8 +325,11 @@ async fn timeline(
 }
 
 /// `GET /api/v1/wb/agent/memory`：记忆存储全量（V0.5 Memory 视图数据源，按 hits 降序）。
-async fn list_memory(State(st): State<Arc<AppState>>) -> Json<ApiResponse<MemoryListDto>> {
-    let records = st.kernel.recall_all().await.unwrap_or_default();
+async fn list_memory(State(st): State<Arc<AppState>>) -> Response {
+    let records = match st.kernel.recall_all().await {
+        Ok(r) => r,
+        Err(_) => return ApiResponse::error(5000, "存储错误").into_response(),
+    };
     let list = records
         .into_iter()
         .map(|m| MemoryRecordDto {
@@ -334,13 +341,16 @@ async fn list_memory(State(st): State<Arc<AppState>>) -> Json<ApiResponse<Memory
         })
         .collect::<Vec<_>>();
     let total = list.len();
-    ApiResponse::ok(MemoryListDto { total, list })
+    ApiResponse::ok(MemoryListDto { total, list }).into_response()
 }
 
 /// `GET /api/v1/wb/agent/evolution`：Evolution 聚合状态（BL-003 · REQ-017）。
 /// 返回 patterns / proposals / learned（含可追溯证据 run_ids 与 proposal_id）。
-async fn list_evolution(State(st): State<Arc<AppState>>) -> Json<ApiResponse<EvolutionDto>> {
-    let state: EvolutionState = st.kernel.evolution_state().await.unwrap_or_default();
+async fn list_evolution(State(st): State<Arc<AppState>>) -> Response {
+    let state: EvolutionState = match st.kernel.evolution_state().await {
+        Ok(s) => s,
+        Err(_) => return ApiResponse::error(5000, "存储错误").into_response(),
+    };
     let patterns = state
         .patterns
         .into_iter()
@@ -394,6 +404,15 @@ async fn list_evolution(State(st): State<Arc<AppState>>) -> Json<ApiResponse<Evo
         proposals,
         learned,
     })
+    .into_response()
+}
+
+/// `DELETE /api/v1/wb/agent/evolution/learned/:id`：撤销一条 LearnedKnowledge（可撤销承诺）。
+async fn revoke_learned(State(st): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    match st.kernel.revoke_learned(&id).await {
+        Ok(()) => ApiResponse::ok(json!({ "id": id, "revoked": true })).into_response(),
+        Err(_) => ApiResponse::error(5000, "存储错误").into_response(),
+    }
 }
 
 /// `GET /api/v1/wb/agent/run/:run_id/approvals`：列出该运行的全部审批请求（含历史裁决）。
@@ -413,9 +432,15 @@ struct ApprovalDecisionBody {
 /// `POST /api/v1/wb/agent/run/:run_id/approval/:req_id`：裁决一条待审批请求，唤醒挂起的运行。
 async fn resolve_approval(
     State(st): State<Arc<AppState>>,
-    Path((_run_id, req_id)): Path<(String, String)>,
+    Path((run_id, req_id)): Path<(String, String)>,
     Json(body): Json<ApprovalDecisionBody>,
 ) -> Response {
+    let Some(req) = st.store.get(&req_id) else {
+        return ApiResponse::error(404, "审批请求不存在或已裁决").into_response();
+    };
+    if req.run_id != run_id {
+        return ApiResponse::error(404, "审批请求不属于该运行").into_response();
+    }
     let approve = matches!(
         body.decision.to_ascii_lowercase().as_str(),
         "approve" | "yes" | "true"

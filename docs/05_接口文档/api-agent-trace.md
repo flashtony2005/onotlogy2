@@ -4,7 +4,7 @@
 |----|------|
 | 文档ID | WB-DOC-05-004 |
 | 所属模块 | WorkBuddy-API |
-| 版本 | V1.3 |
+| 版本 | V1.4 |
 | 创建人 | lushaohui |
 | 创建时间 | 2026-08-11 |
 | 更新记录 | 见文末修订日志 |
@@ -150,6 +150,51 @@
 
 ### 4.7 字段命名与序列化约定
 - [强制] 存储层（Rust 模型 / Turso）字段为 snake_case（`object_refs` / `run_id` / `event_type`）；API JSON 为 camelCase（`objectRefs` / `runId` / `eventType`），经 serde `rename_all = "camelCase"` 自动映射，禁止手写字面量。
+
+### 4.8 获取 Agent 记忆沉淀
+- [强制] 请求方式：GET
+- [强制] 接口路径：/api/v1/wb/agent/memory
+- [强制] 权限要求：登录用户（Operator / Developer 角色可读）
+- 请求参数：无
+- 响应成功示例：
+```json
+{
+  "code": 0, "msg": "success",
+  "data": {
+    "total": 2,
+    "list": [
+      { "label": "action.retain", "payload": "{\"hint\":\"offer discount\"}", "hits": 5, "createdAt": "2026-08-12T09:01:05Z", "updatedAt": "2026-08-12T09:01:05Z" }
+    ]
+  }
+}
+```
+- 响应失败错误码：WB1002（未登录）
+- 特殊逻辑：数据来源 `wb_memory`（V0.5·REQ-016 记忆沉淀）；`list` 按 `hits` 降序，是观察 UI Memory 视图的数据源；经验经 `MemoryRecall` 认知事件在下一轮 run 召回，形成 Action→Memory→下次 Plan 闭环
+
+### 4.9 获取 Evolution 状态（Agent 自学习）
+- [强制] 请求方式：GET
+- [强制] 接口路径：/api/v1/wb/agent/evolution
+- [强制] 权限要求：登录用户（Developer 角色可读，含可追溯证据链）
+- 请求参数：无
+- 响应成功示例：
+```json
+{
+  "code": 0, "msg": "success",
+  "data": {
+    "patterns": [
+      { "label": "pattern.action.retain", "action": "retain", "support": 5, "confidence": 1.0, "runIds": ["RUN-1","RUN-2"] }
+    ],
+    "proposals": [
+      { "id": "proposal.retain", "kind": "ActionPattern", "target": "retain", "confidence": 1.0, "status": "Validated", "patternLabel": "pattern.action.retain", "runIds": ["RUN-1","RUN-2"] }
+    ],
+    "learned": [
+      { "id": "learned.retain", "kind": "ActionPattern", "action": "retain", "confidence": 1.0, "proposalId": "proposal.retain", "runIds": ["RUN-1","RUN-2"], "createdAt": "2026-08-12T09:02:00Z" }
+    ]
+  }
+}
+```
+- 响应失败错误码：WB1002（未登录）
+- 特殊逻辑：数据来源 `wb_pattern` / `wb_proposal` / `wb_learned`（BL-003·REQ-017 Evolution Engine）；`run_evolution` 幂等（不重复产出知识），`run_ids` 跨 run 合并去重。**Learn≠Permission：本端点仅暴露知识，不提供任何改写 Policy / 绕过 Human Approval（WB2005）的能力**，AutoApprove 类「Knowledge→Permission」升级归第二阶段（需 Policy 显式允许学习 + 高置信 + 多次成功 + 无失败 + 低风险）。`runIds` / `patternLabel` / `proposalId` 构成可追溯证据链（LearnedKnowledge→Proposal→Pattern→Experience→AgentRun）
 - [强制] `id` 两端一致：DB 为 TEXT 语义ID（如 `tr_abc123` / `customer_001`），API DTO 的 `id` 即该值，无额外编码/解码映射。
 - [强制] `objectRefs`（API）/ `object_refs`（DB）存对象ID数组，反查经 `wb_ontology_object.id`；禁止引用不存在的表（原 `object_context` 已废弃）。
 
@@ -174,3 +219,4 @@
 | V1.1 | lushaohui | 2026-08-11 | 方案B对齐：DTO 泛化为 TraceEvent（补 kind，区分 world/cognitive）；表引用 agent_trace_event→trace_event |
 | V1.2 | lushaohui | 2026-08-11 | 表引用统一对齐 table-design 约束，改为 wb_trace_event |
 | V1.3 | lushaohui | 2026-08-11 | 修正 object_context 反查为 wb_ontology_object.id；新增 4.7 字段命名与序列化约定（snake_case↔camelCase + id 语义ID一致） |
+| V1.4 | lushaohui | 2026-08-12 | 新增 4.8 GET /api/v1/wb/agent/memory（wb_memory 记忆沉淀视图源）、4.9 GET /api/v1/wb/agent/evolution（wb_pattern/wb_proposal/wb_learned Evolution 状态，含可追溯证据链与 Learn≠Permission 约束） |

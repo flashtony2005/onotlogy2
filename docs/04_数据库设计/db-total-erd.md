@@ -4,7 +4,7 @@
 |----|------|
 | 文档ID | WB-DOC-04-001 |
 | 所属模块 | WorkBuddy-DB |
-| 版本 | V1.1 |
+| 版本 | V1.2 |
 | 创建人 | lushaohui |
 | 创建时间 | 2026-08-11 |
 | 更新记录 | 见文末修订日志 |
@@ -27,6 +27,9 @@ erDiagram
     WB_ONTOLOGY_OBJECT ||--o{ WB_RELATION_EDGE : "source/target"
     WB_ONTOLOGY_OBJECT ||--o{ WB_TRACE_EVENT : "object_refs"
     WB_USER_ACCOUNT ||--o{ WB_TRACE_EVENT : "触发运行(可选)"
+    WB_MEMORY ||--o{ WB_PATTERN : "经验→模式(hits≥2)"
+    WB_PATTERN ||--o{ WB_PROPOSAL : "模式→提案"
+    WB_PROPOSAL ||--o| WB_LEARNED : "Validated→知识"
 
     WB_ONTOLOGY_OBJECT {
         TEXT id PK "语义对象ID 如 customer_001"
@@ -70,6 +73,42 @@ erDiagram
         TEXT update_time
         INTEGER is_delete
     }
+    WB_MEMORY {
+        TEXT label PK "记忆标签 如 action.retain"
+        TEXT payload "经验载荷 JSON"
+        INTEGER hits "命中/复用次数"
+        TEXT created_at
+        TEXT updated_at
+    }
+    WB_PATTERN {
+        TEXT label PK "模式标签 如 pattern.action.retain"
+        TEXT action "关联动作名"
+        INTEGER support "支持度=hits"
+        REAL confidence "min(1,hits/5)"
+        TEXT run_ids "贡献来源 run JSON"
+        TEXT created_at
+        TEXT updated_at
+    }
+    WB_PROPOSAL {
+        TEXT id PK "提案ID 如 proposal.<action>"
+        TEXT kind "ActionPattern"
+        TEXT target "目标动作名"
+        REAL confidence "置信度"
+        TEXT status "Proposed/Validated/Rejected"
+        TEXT pattern_label "来源 Pattern"
+        TEXT run_ids "贡献来源 run JSON"
+        TEXT created_at
+        TEXT updated_at
+    }
+    WB_LEARNED {
+        TEXT id PK "知识ID 如 learned.<action>"
+        TEXT kind "ActionPattern"
+        TEXT action "关联动作名"
+        REAL confidence "置信度"
+        TEXT proposal_id "来源 Proposal"
+        TEXT run_ids "贡献来源 run JSON"
+        TEXT created_at
+    }
 ```
 
 ### 4.2 实体关系说明
@@ -78,6 +117,9 @@ erDiagram
 | wb_ontology_object | 1:N | wb_relation_edge | 一个对象可作 source / target 出现在多条边，构成世界图 |
 | wb_ontology_object | 1:N | wb_trace_event | 对象生命周期事件经 `object_refs` 绑定，可解释性根基 |
 | wb_user_account | 1:N | wb_trace_event | 触发 Agent 运行的用户（可选，经 `run_id` 关联） |
+| wb_memory | 1:N | wb_pattern | 经验（hits≥2）经 `mine_patterns` 提炼为 Pattern（Agent 自治·REQ-016→REQ-017） |
+| wb_pattern | 1:N | wb_proposal | Pattern 经 `propose` 生成 Proposal，携带来源 pattern_label |
+| wb_proposal | 1:1(条件) | wb_learned | 仅 Validated 的 Proposal 沉淀为 LearnedKnowledge（携 proposal_id），Learn≠Permission 不回写 Policy |
 
 
 ## 5. 风险点 & 注意事项
@@ -92,4 +134,5 @@ erDiagram
 |------|--------|----------|----------|
 | V1.0 | lushaohui | 2026-08-11 | 初稿完成 |
 | V1.1 | lushaohui | 2026-08-11 | 4.1 改为内联 Mermaid erDiagram（去不存在的 db-erd.png 绝对路径）；4.2 填充实体关系表 |
+| V1.2 | lushaohui | 2026-08-12 | ER 总图新增 WB_MEMORY / WB_PATTERN / WB_PROPOSAL / WB_LEARNED 四实体（V0.5 记忆沉淀 + BL-003 Evolution），4.2 补实体关系（Experience→Pattern→Proposal→LearnedKnowledge 可追溯链） |
 
