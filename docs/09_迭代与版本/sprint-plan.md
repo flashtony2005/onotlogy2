@@ -64,6 +64,7 @@ V0.5 Agent 自治      让系统能学习       自学习 / Evolution / Memory �
 
 **V0.5 Agent 自治**（让系统能学习）
 - Memory 沉淀（**已实现**）：经验按 `action.<name>` 沉淀至 `wb_memory`（hits 累加），下一轮 run 经 `MemoryRecall` 认知事件召回，形成 Action→Memory→下次 Plan 闭环；需求 REQ-016，TC-022a/b 全绿
+- 观察 UI 接入 Memory 视图（**已实现**）：三层认知导航新增 Memory 标签，前端经 `GET /api/v1/wb/agent/memory` 渲染沉淀列表（label/payload/hits/updatedAt），运行前载入、收到 MemoryUpdate/MemoryRecall 事件实时刷新；TC-024a 全绿
 - 自学习 / Evolution：归远期（BL-003，经验→Pattern→Proposal→Validation→Merge），本轮未做（MVP 连 Experience 积累都未就绪；V0.5 先落 Memory 地基）
 
 ### 4.3 范围与排期
@@ -107,3 +108,4 @@ V0.5 Agent 自治      让系统能学习       自学习 / Evolution / Memory �
 | V2.2 | lushaohui | 2026-08-12 | 交互式 Human Approval 落地：CLI `ConsoleApprover` + server `--auto-approve` 开关；TC-021a/b 全绿 |
 | V2.3 | lushaohui | 2026-08-12 | V0.5 Memory 沉淀落地：REQ-016 已实现（状态表 V0.5→已实现）；经验按 `action.<name>` 沉淀 `wb_memory` + `MemoryRecall` 闭环；Evolution 归远期；TC-022a/b 全绿 |
 | V2.4 | lushaohui | 2026-08-12 | V0.4 遗留项：server 挂起式 HTTP 审批端点落地；`PolicyApprover::approve` 升 async，新增 `ServerApprover`+`ApprovalStore`，server 暴露 `GET /run/:run_id/approvals` 与 `POST /run/:run_id/approval/:req_id`（approve→恢复 / reject→WB2005 终止）；TC-023a/b 全绿 |
+| V2.5 | lushaohui | 2026-08-12 | 观察 UI 接入 Memory 视图：后端新增 `GET /api/v1/wb/agent/memory`（`recall_all` 按 hits 降序）；前端三层导航加 Memory 标签渲染沉淀列表，运行前载入 + MemoryUpdate/MemoryRecall 事件实时刷新；TC-024a 全绿 |

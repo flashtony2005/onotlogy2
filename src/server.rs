@@ -145,6 +145,24 @@ struct RunStartDto {
     stream_url: String,
 }
 
+/// Memory 视图 DTO（V0.5 记忆沉淀 / BL-008）：与 `wb_memory` 同源。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MemoryRecordDto {
+    label: String,
+    payload: Value,
+    hits: i64,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MemoryListDto {
+    total: usize,
+    list: Vec<MemoryRecordDto>,
+}
+
 // ── 路由 ─────────────────────────────────────────────────────────────────
 /// 构建路由（API 优先，静态托管兜底）。
 fn router(state: Arc<AppState>) -> Router {
@@ -152,6 +170,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/v1/wb/agent/trace", get(list_trace))
         .route("/api/v1/wb/agent/trace/:id", get(get_trace))
         .route("/api/v1/wb/agent/run/:run_id/timeline", get(timeline))
+        .route("/api/v1/wb/agent/memory", get(list_memory))
         .route("/api/v1/wb/agent/run", post(run_start))
         .route(
             "/api/v1/wb/agent/run/:run_id/approvals",
@@ -251,6 +270,23 @@ async fn timeline(
         }
     }
     ApiResponse::ok(tl)
+}
+
+/// `GET /api/v1/wb/agent/memory`：记忆存储全量（V0.5 Memory 视图数据源，按 hits 降序）。
+async fn list_memory(State(st): State<Arc<AppState>>) -> Json<ApiResponse<MemoryListDto>> {
+    let records = st.kernel.recall_all().await.unwrap_or_default();
+    let list = records
+        .into_iter()
+        .map(|m| MemoryRecordDto {
+            label: m.label,
+            payload: m.payload,
+            hits: m.hits,
+            created_at: m.created_at,
+            updated_at: m.updated_at,
+        })
+        .collect::<Vec<_>>();
+    let total = list.len();
+    ApiResponse::ok(MemoryListDto { total, list })
 }
 
 /// `GET /api/v1/wb/agent/run/:run_id/approvals`：列出该运行的全部审批请求（含历史裁决）。

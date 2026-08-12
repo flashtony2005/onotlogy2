@@ -144,6 +144,7 @@ Kernel 永远稳定，能力外挂。
 | ✅ 完整 Action Engine（+ ActionRegistry / ActionEngine，ODL `actions:` 声明式） | V0.4 | 数据驱动解释执行 `updates`/`creates`/`link`（幂等），替代硬编码计划；Policy 审批在 V0.4 落地 |
 | ✅ Policy 审批约束（动作级 `policy:`：require_approval 闸门 + precondition 前置条件，拒 → WB2005） | V0.4 | 完整 Action 引擎 + Policy 均在 V0.4 落地；审批经 `PolicyApprover` 放行（CLI `ConsoleApprover` / `AutoApprover`），server 侧 `require_approval` 动作挂起并暴露 HTTP 审批端点（`ServerApprover`+`ApprovalStore`），浏览器点批准/拒绝后恢复或 WB2005 终止 |
 | ✅ Memory 沉淀（Agent 自治基础，REQ-016） | V0.5 | 经验按 `action.<name>` upsert 沉淀 `wb_memory`（hits 累加），下一轮 run 经 `MemoryRecall` 认知事件召回，形成 Action→Memory→下次 Plan 闭环 |
+| ✅ 观察 UI · Memory 视图 | V0.5 | 三层认知导航新增 Memory 标签，前端经 `GET /api/v1/wb/agent/memory` 渲染沉淀列表（label/payload/hits/updatedAt），运行前载入 + MemoryUpdate/MemoryRecall 事件实时刷新；TC-024a 全绿 |
 | ❌ 完整 GraphRAG | 世界模型成熟后 | 是 Ontology + Knowledge Graph + Embedding 的上层；没有 Object Graph 则无意义 |
 | ❌ Evolution Engine（自学习 / 自我进化） | 远期 | Memory 沉淀已在 V0.5 落地；Evolution 需 Experience→Pattern→Proposal→Validation→Merge（BL-003） |
 | ❌ Multi-Agent | V3 | 属 Agent Society（Protocol/Consensus/Delegation） |
@@ -233,3 +234,4 @@ Human → Agent UI → Decision Trace UI
 | V2.2 | lushaohui | 2026-08-12 | 交互式 Human Approval 落地：4.4「Policy 审批约束」补 CLI `ConsoleApprover`（stdin 交互）+ server `--auto-approve` 开关；TC-021a/b 全绿 |
 | V2.3 | lushaohui | 2026-08-12 | V0.5 Memory 沉淀落地：4.4 能力边界表新增「Memory 沉淀（REQ-016）」由 ❌ 改 ✅（Action→Memory→下次 Plan 闭环）；Evolution Engine 行改标「远期」；TC-022a/b 全绿 |
 | V2.4 | lushaohui | 2026-08-12 | server 挂起式 HTTP 审批端点（V0.4 遗留项）落地：4.4「Policy 审批约束」补 `ServerApprover`+`ApprovalStore` 与 `GET /run/:run_id/approvals` + `POST /run/:run_id/approval/:req_id`（挂起→浏览器批准恢复 / 拒绝→WB2005 终止）；`PolicyApprover::approve` 升 async；TC-023a/b 全绿 |
+| V2.5 | lushaohui | 2026-08-12 | 观察 UI 接入 Memory 视图：4.4 能力边界表新增「观察 UI · Memory 视图」由 ❌ 改 ✅；后端 `GET /api/v1/wb/agent/memory` + 前端 Memory 标签；TC-024a 全绿 |

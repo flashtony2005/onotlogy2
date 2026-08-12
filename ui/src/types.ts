@@ -1,6 +1,6 @@
 // 与 src/trace.rs / docs/05_接口文档/api-agent-trace.md 4.1 同源（camelCase，单一真相源）
 
-export type ViewKind = 'executive' | 'operator' | 'developer'
+export type ViewKind = 'executive' | 'operator' | 'developer' | 'memory'
 
 export interface TraceEventDto {
   id: string
@@ -53,4 +53,18 @@ export interface ApiResponse<T> {
   code: number
   msg: string
   data?: T
+}
+
+/// 一条记忆记录（对应后端 wb_memory / GET /memory）。
+export interface MemoryRecord {
+  label: string
+  payload: unknown
+  hits: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface MemoryListDto {
+  total: number
+  list: MemoryRecord[]
 }

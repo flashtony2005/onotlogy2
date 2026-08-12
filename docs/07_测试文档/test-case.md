@@ -81,6 +81,7 @@
 |--------|-----|------|-------|------|------------------|------|
 | TC-022a | REQ-016 | 单元 | `RuntimeKernel` / `LibSQLStorage` | `record_memory("action.retain", ...)` 调用两次同标签 | 首次 hits=1；再次 hits=2 且 payload 更新（upsert 累加）；`recall_all`/`recall_memory` 命中，`recall_memory("missing")` 为 None | 通过（自动化 tests/v0_3.rs::tc022a_memory_store_roundtrip） |
 | TC-022b | REQ-016 | e2e | `examples/crm.odl`（`Customer.actions.retain`）经 registry 跑两轮 | 第一轮跑通后 `recall_all` 含 `action.retain`；第二轮同 kernel 累加 hits≥2 并产出 `MemoryRecall` 认知事件 | Action→Memory→下次 Plan 闭环可见；hits 随轮次累加（自学习沉淀） | 通过（自动化 tests/v0_3.rs::tc022b_planner_memory_closed_loop） |
+| TC-024a | REQ-016 | e2e | server（`wb_memory` 沉淀 `action.retain`×2 + `action.refund`×1） | `GET /api/v1/wb/agent/memory` | code=0、`total=2`（按 label 去重）；`action.retain` hits=2 且按 hits 降序排首位、`action.refund` hits=1；payload 回传；作为观察 UI Memory 视图数据源 | 通过（自动化 tests/v0_3.rs::tc024a_server_memory_endpoint） |
 
 ### 4.4 异常与边界用例（必须覆盖）
 | 用例ID | 关联 | 场景 | 预期 | 状态 |
@@ -117,3 +118,4 @@
 | V2.8 | lushaohui | 2026-08-12 | Policy 引擎 + 交互式 Human Approval 落地：新增 4.3.2 节登记 TC-015a/b/c/d（REQ-015，policy 解析/审批闸门/前置条件/Planner 闭环）+ TC-021a/b（CLI `--auto-approve` 标志 + `ConsoleApprover` 导出）；全部 tests/v0_3.rs 通过 |
 | V2.9 | lushaohui | 2026-08-12 | V0.5 Memory 沉淀落地：新增 4.3.3 节登记 TC-022a/b（REQ-016，记忆存储 upsert 往返 / Planner 两轮闭环召回）；Action→Memory→下次 Plan 闭环可见，hits 随轮次累加；全部 tests/v0_3.rs 通过 |
 | V2.10 | lushaohui | 2026-08-12 | V0.4 遗留的 server 挂起式 HTTP 审批端点落地：新增 TC-023a/b（REQ-015，挂起→浏览器批准→Completed / 拒绝→Failed+WB2005）；`PolicyApprover::approve` 升为 async，新增 `ServerApprover`+`ApprovalStore`，server 暴露 `GET /run/:run_id/approvals` 与 `POST /run/:run_id/approval/:req_id`；全部 tests/v0_3.rs 通过 |
+| V2.11 | lushaohui | 2026-08-12 | 观察 UI 接入 Memory 视图：后端新增 `GET /api/v1/wb/agent/memory` 端点（`recall_all` 按 hits 降序）；前端三层导航新增 Memory 标签，渲染沉淀列表（label/payload/hits/updatedAt），运行前载入、收到 MemoryUpdate/MemoryRecall 事件实时刷新；新增 TC-024a（记忆端点 e2e）；UI `npm run build` 产物更新 |

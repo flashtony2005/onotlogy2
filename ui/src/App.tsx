@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react'
-import { postRun } from './api'
+import { getMemory, postRun } from './api'
 import { useTraceStream } from './hooks/useTraceStream'
 import { buildTimeline } from './view'
-import type { TraceEventDto, ViewKind } from './types'
+import type { MemoryRecord, TraceEventDto, ViewKind } from './types'
 
 const STEP_ICON: Record<string, string> = {
   Goal: '🎯',
@@ -13,12 +13,14 @@ const STEP_ICON: Record<string, string> = {
   PolicyCheck: '🔐',
   Action: '⚡',
   MemoryUpdate: '💾',
+  MemoryRecall: '🔎',
 }
 
 const VIEWS: { key: ViewKind; label: string; desc: string }[] = [
   { key: 'executive', label: 'Executive', desc: '管理者 · Mission/Decision/Risk' },
   { key: 'operator', label: 'Operator', desc: '管理员 · Pipeline 进度' },
   { key: 'developer', label: 'Developer', desc: '开发者 · 全量 IO' },
+  { key: 'memory', label: 'Memory', desc: '记忆沉淀 · Action→Memory 闭环' },
 ]
 
 function fmtTime(ts: string): string {
@@ -46,10 +48,30 @@ export default function App() {
   const [connected, setConnected] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
+  const [memories, setMemories] = useState<MemoryRecord[]>([])
+  const [memoryLoading, setMemoryLoading] = useState(false)
+
+  // Memory 视图刷新：从 REST /memory 拉取沉淀（hits 随轮次累加）。
+  const reloadMemory = async () => {
+    setMemoryLoading(true)
+    try {
+      const dto = await getMemory()
+      setMemories(dto.list)
+    } catch {
+      /* 后端无记忆或暂未就绪：保留上次结果 */
+    } finally {
+      setMemoryLoading(false)
+    }
+  }
 
   useTraceStream(runId, {
-    onEvent: (e) =>
-      setEvents((prev) => (prev.some((p) => p.id === e.id) ? prev : [...prev, e])),
+    onEvent: (e) => {
+      setEvents((prev) => (prev.some((p) => p.id === e.id) ? prev : [...prev, e]))
+      // 记忆沉淀/召回事件 → 实时刷新 Memory 视图（hits 累加可见）
+      if (e.eventType === 'MemoryUpdate' || e.eventType === 'MemoryRecall') {
+        void reloadMemory()
+      }
+    },
     onStatus: setConnected,
   })
 
@@ -69,6 +91,7 @@ export default function App() {
       const dto = await postRun(agentId, goal)
       setEvents([])
       setRunId(dto.runId)
+      void reloadMemory() // 运行前先载入已有记忆（MemoryRecall 起点）
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -136,7 +159,10 @@ export default function App() {
           <button
             key={v.key}
             className={view === v.key ? 'active' : ''}
-            onClick={() => setView(v.key)}
+            onClick={() => {
+              setView(v.key)
+              if (v.key === 'memory') void reloadMemory()
+            }}
             title={v.desc}
           >
             <b>{v.label}</b>
@@ -146,10 +172,14 @@ export default function App() {
       </nav>
 
       <main className="timeline">
-        {!runId && (
+        {!runId && view !== 'memory' && (
           <div className="empty">
             输入目标并点击「触发 Agent 运行」，实时观察 Agent 认知闭环。
           </div>
+        )}
+
+        {view === 'memory' && (
+          <MemoryPanel memories={memories} loading={memoryLoading} onReload={reloadMemory} />
         )}
 
         {runId && timeline.decision && (
@@ -170,7 +200,7 @@ export default function App() {
           </div>
         )}
 
-        {runId && timeline.events.length === 0 && (
+        {runId && view !== 'memory' && timeline.events.length === 0 && (
           <div className="empty">等待认知事件…</div>
         )}
 
@@ -209,6 +239,49 @@ export default function App() {
           </article>
         ))}
       </main>
+    </div>
+  )
+}
+
+// ── Memory 视图：记忆沉淀面板（V0.5 / BL-008）──────────────────────────────────
+function MemoryPanel({
+  memories,
+  loading,
+  onReload,
+}: {
+  memories: MemoryRecord[]
+  loading: boolean
+  onReload: () => void
+}) {
+  return (
+    <div className="memory">
+      <div className="memory-head">
+        <h3>💾 记忆沉淀（Action → Memory → 下次 Plan 闭环）</h3>
+        <button className="reload" onClick={onReload} disabled={loading}>
+          {loading ? '刷新中…' : '↻ 刷新'}
+        </button>
+      </div>
+      {memories.length === 0 ? (
+        <div className="empty">
+          暂无记忆。运行含动作执行的 Agent（如挽留计划）后，动作会按
+          <code>action.&lt;name&gt;</code> 沉淀为记忆，hits 随复用轮次累加。
+        </div>
+      ) : (
+        <div className="memory-list">
+          {memories.map((m) => (
+            <article key={m.label} className="memory-item">
+              <div className="mem-head">
+                <code className="mem-label">{m.label}</code>
+                <span className="mem-hits" title="复用次数（自学习指标）">
+                  复用 {m.hits}
+                </span>
+                <span className="mem-time">{fmtTime(m.updatedAt)}</span>
+              </div>
+              <pre className="mem-payload">{fmtJson(m.payload)}</pre>
+            </article>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
