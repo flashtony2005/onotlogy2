@@ -23,7 +23,7 @@
 - [强制] Metadata 驱动一切：运行时由 `ObjectDef` 驱动，禁止 `match object_type { "Customer" => .. }` 硬编码分支。
 - [强制] 所有高级能力（GraphRAG / Policy / Workflow / Evolution）必须作为插件挂到 Kernel 之上，Kernel 本身长期稳定。
 - [强制] 可观察性与内核同生：V0.1 落地 Event Bus + TraceEvent(world) + CLI 观察，V0.3 升级为三层图形 UI + CognitiveEvent。
-- [强制] V0.3（=MVP）**接入 Agent**：以 Pi（`@earendil-works/pi-coding-agent`）作 **Cognitive Engine**（经 `AgentEngine` trait 提供推理 / NLU / 工具调用）；OpenAIP 自身拥有 Agent Runtime（Planner / Policy / Trace）、Ontology Kernel 与 World Model，详见 `pi-agent-integration.md`；高级自治（Evolution / 自学习 / Multi-Agent）延至 V0.5。
+- [强制] V0.3（=MVP）**接入 Agent**：以 Pi（`@earendil-works/pi-coding-agent`）作 **Cognitive Engine**（经 `AgentEngine` trait 提供推理 / NLU / 工具调用）；OpenAIP 自身拥有 Agent Runtime（Planner / Policy / Trace）、Ontology Kernel 与 World Model，详见 `pi-agent-integration.md`；V0.5 先落 Memory 沉淀（Agent 自治基础），Evolution / 自学习合成 / Multi-Agent 更远（见 todo-backlog）。
 
 ## 4. 详细设计/内容
 
@@ -141,10 +141,11 @@ Kernel 永远稳定，能力外挂。
 | ✅ 可观察基建（Event Bus + TraceEvent(world) + CLI 观察） | V0.1 | 可观察性与内核同生，为 Agent 观察打地基 |
 | ✅ World Model（Relation + 领域 Event） | V0.2 | 三要素成型，Agent 的世界底座 |
 | ✅ Agent 接入（Pi Cognitive Engine + Planner + 最小 Action + 观察 UI） | V0.3（=MVP） | Pi 经 `AgentEngine` 提供认知；OpenAIP 拥有 Planner / Policy / Ontology / World Model / Trace，详见 `pi-agent-integration.md` |
-| ✅ 完整 Action Engine（+ ActionRegistry / ActionEngine，ODL `actions:` 声明式） | V0.4 | 数据驱动解释执行 `updates`/`creates`/`link`（幂等），替代硬编码计划；Policy 审批仍待办 |
+| ✅ 完整 Action Engine（+ ActionRegistry / ActionEngine，ODL `actions:` 声明式） | V0.4 | 数据驱动解释执行 `updates`/`creates`/`link`（幂等），替代硬编码计划；Policy 审批在 V0.4 落地 |
 | ✅ Policy 审批约束（动作级 `policy:`：require_approval 闸门 + precondition 前置条件，拒 → WB2005） | V0.4 | 完整 Action 引擎 + Policy 均在 V0.4 落地；审批经 `PolicyApprover` 放行，默认等待人工 |
+| ✅ Memory 沉淀（Agent 自治基础，REQ-016） | V0.5 | 经验按 `action.<name>` upsert 沉淀 `wb_memory`（hits 累加），下一轮 run 经 `MemoryRecall` 认知事件召回，形成 Action→Memory→下次 Plan 闭环 |
 | ❌ 完整 GraphRAG | 世界模型成熟后 | 是 Ontology + Knowledge Graph + Embedding 的上层；没有 Object Graph 则无意义 |
-| ❌ Evolution Engine（自学习 / 自我进化） | V0.5 | 需 Experience→Pattern→Proposal→Validation→Merge |
+| ❌ Evolution Engine（自学习 / 自我进化） | 远期 | Memory 沉淀已在 V0.5 落地；Evolution 需 Experience→Pattern→Proposal→Validation→Merge（BL-003） |
 | ❌ Multi-Agent | V3 | 属 Agent Society（Protocol/Consensus/Delegation） |
 
 ### 4.5 技术栈选型
@@ -230,3 +231,4 @@ Human → Agent UI → Decision Trace UI
 | V2.0 | lushaohui | 2026-08-12 | V0.4 完整 Action 引擎落地：4.4 能力边界表「完整 Action Engine」由 ❌ 改 ✅（数据驱动 ActionRegistry/ActionEngine）；Policy 审批单列待办 |
 | V2.1 | lushaohui | 2026-08-12 | V0.4 Policy 引擎落地：4.4 能力边界「Policy 审批约束」由 ❌ 改 ✅（动作级 policy: 审批闸门 + 前置条件，经 PolicyApprover 放行） |
 | V2.2 | lushaohui | 2026-08-12 | 交互式 Human Approval 落地：4.4「Policy 审批约束」补 CLI `ConsoleApprover`（stdin 交互）+ server `--auto-approve` 开关；TC-021a/b 全绿 |
+| V2.3 | lushaohui | 2026-08-12 | V0.5 Memory 沉淀落地：4.4 能力边界表新增「Memory 沉淀（REQ-016）」由 ❌ 改 ✅（Action→Memory→下次 Plan 闭环）；Evolution Engine 行改标「远期」；TC-022a/b 全绿 |

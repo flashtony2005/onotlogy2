@@ -74,6 +74,12 @@
 | TC-021a | REQ-015 | 契约 | `oaip` 二进制 | `agent run --help` / `serve --help` | 两个子命令均暴露 `--auto-approve` 开关（防回归） | 通过（自动化 tests/v0_3.rs::tc021a_cli_auto_approve_flag_exists） |
 | TC-021b | REQ-015 | 单元 | `ConsoleApprover` 公开导出 | 构造 `ConsoleApprover::new()` | 可构造（CLI 交互式 Human Approval 入口存在）；stdin 交互（y/N 按 `action@target` 缓存）属运行时行为，需人工验证 | 通过（自动化 tests/v0_3.rs::tc021b_console_approver_constructible） |
 
+### 4.3.3 V0.5 测试契约（Memory 沉淀 / Agent 自治基础，REQ-016）
+| 用例ID | REQ | 类型 | Given | When | Then（边界判定） | 状态 |
+|--------|-----|------|-------|------|------------------|------|
+| TC-022a | REQ-016 | 单元 | `RuntimeKernel` / `LibSQLStorage` | `record_memory("action.retain", ...)` 调用两次同标签 | 首次 hits=1；再次 hits=2 且 payload 更新（upsert 累加）；`recall_all`/`recall_memory` 命中，`recall_memory("missing")` 为 None | 通过（自动化 tests/v0_3.rs::tc022a_memory_store_roundtrip） |
+| TC-022b | REQ-016 | e2e | `examples/crm.odl`（`Customer.actions.retain`）经 registry 跑两轮 | 第一轮跑通后 `recall_all` 含 `action.retain`；第二轮同 kernel 累加 hits≥2 并产出 `MemoryRecall` 认知事件 | Action→Memory→下次 Plan 闭环可见；hits 随轮次累加（自学习沉淀） | 通过（自动化 tests/v0_3.rs::tc022b_planner_memory_closed_loop） |
+
 ### 4.4 异常与边界用例（必须覆盖）
 | 用例ID | 关联 | 场景 | 预期 | 状态 |
 |--------|------|------|------|------|
@@ -107,3 +113,4 @@
 | V2.6 | lushaohui | 2026-08-12 | V0.3 补充测试：新增 TC-014(多候选闭环缩放)/TC-015(空世界 world 哨兵)/TC-016(TraceQuery 过滤+游标)/TC-017(REST 列表+WB2002)/TC-018(POST /run 门禁+Executive 决策)/TC-019(WS 按 run 隔离)；全部 tests/v0_3.rs 通过 |
 | V2.7 | lushaohui | 2026-08-12 | V0.4 完整 Action 引擎落地：新增 4.3.1 节登记 TC-020a/b/c（REQ-014，tests/v0_3.rs::tc014a/b/c 全绿）；`self`/`self.field` 值表达式 + 幂等 creates/link + `action.<name>` 事件断言 |
 | V2.8 | lushaohui | 2026-08-12 | Policy 引擎 + 交互式 Human Approval 落地：新增 4.3.2 节登记 TC-015a/b/c/d（REQ-015，policy 解析/审批闸门/前置条件/Planner 闭环）+ TC-021a/b（CLI `--auto-approve` 标志 + `ConsoleApprover` 导出）；全部 tests/v0_3.rs 通过 |
+| V2.9 | lushaohui | 2026-08-12 | V0.5 Memory 沉淀落地：新增 4.3.3 节登记 TC-022a/b（REQ-016，记忆存储 upsert 往返 / Planner 两轮闭环召回）；Action→Memory→下次 Plan 闭环可见，hits 随轮次累加；全部 tests/v0_3.rs 通过 |

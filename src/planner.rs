@@ -471,6 +471,27 @@ impl<'a> Planner<'a> {
             )
             .await?;
 
+        // 3.5) MemoryRecall：召回历史沉淀（V0.5 记忆闭环起点）。
+        //      无记忆（首跑）→ 跳过；有记忆 → 发认知事件绑定候选对象，供本次计划复用。
+        let memories = self.kernel.recall_all().await?;
+        if !memories.is_empty() && !scope_refs.is_empty() {
+            self.kernel
+                .emit_cognitive(
+                    "MemoryRecall",
+                    &run_id,
+                    agent_id,
+                    &scope_refs,
+                    Some("召回历史沉淀经验，复用至本次计划"),
+                    Some(json!({ "memories": memories
+                        .iter()
+                        .map(|m| json!({ "label": m.label, "hits": m.hits }))
+                        .collect::<Vec<_>>() })),
+                    Some(json!({ "count": memories.len() })),
+                    Some(0.85),
+                )
+                .await?;
+        }
+
         // 4) Reasoning：引擎基于快照推理（为何存在流失风险）
         let reason_dec = self
             .reason(
@@ -512,6 +533,7 @@ impl<'a> Planner<'a> {
             .await?;
 
         // 6) PolicyCheck + Action：逐步经 Policy 校验后执行（最小闭环）
+        let mut executed_actions: Vec<String> = Vec::new();
         for step in &steps {
             // 声明式动作结合其自带 PolicyDef（前置条件 + 审批闸门）校验；
             // 其余能力走通用 Policy（破坏性动作默认拒）。
@@ -565,6 +587,9 @@ impl<'a> Planner<'a> {
                         )
                         .await?;
                     self.execute_step(step).await?;
+                    if let Capability::Action { action, .. } = &step.capability {
+                        executed_actions.push(action.clone());
+                    }
                     self.kernel
                         .emit_cognitive(
                             "Action",
@@ -594,6 +619,17 @@ impl<'a> Planner<'a> {
                 Some(0.8),
             )
             .await?;
+
+        // 7') Memory 沉淀（V0.5）：每个被执行动作按 `action.<name>` 沉淀为记忆（hits 累加）。
+        //     下一轮 run 的 MemoryRecall 会召回，形成 Action→Memory→下次 Plan 的闭环。
+        for name in &executed_actions {
+            self.kernel
+                .record_memory(
+                    &format!("action.{name}"),
+                    json!({ "experience": name, "kind": "action" }),
+                )
+                .await?;
+        }
 
         Ok(AgentRunResult {
             run_id,

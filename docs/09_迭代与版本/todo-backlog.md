@@ -26,7 +26,7 @@
 ### 4.1 被推迟 / 排除能力
 | 编号 | 能力 | 推迟理由 | 计划版本 |
 |------|------|----------|----------|
-| BL-001 | Agent 高级自治（自学习 / Evolution / Memory 沉淀） | 基础 Agent 接入（Pi Cognitive Engine + Planner）在 V0.3 落地（=MVP，REQ-010/011）；自治需 Experience 积累后生长 | V0.5 |
+| BL-001 | Agent 高级自治（自学习 / Evolution / Memory 沉淀） | 基础 Agent 接入（Pi Cognitive Engine + Planner）在 V0.3 落地（=MVP，REQ-010/011）；Memory 沉淀已在 V0.5 落地（REQ-016，wb_memory + MemoryRecall 闭环），Evolution 仍需 Experience 积累 | V0.5（Memory 已实现）/ 远期（Evolution） |
 | BL-002 | GraphRAG | 是 Ontology + Knowledge Graph + Embedding 的上层；无 Object Graph 无意义 | 世界模型成熟后 |
 | BL-003 | Evolution Engine | 需 Experience→Pattern→Proposal→Validation→Merge；MVP 连 Experience 都无 | 远期 |
 | BL-004 | Multi-Agent | 属 Agent Society（Protocol/Consensus/Delegation） | V3 |

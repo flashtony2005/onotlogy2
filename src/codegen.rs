@@ -28,7 +28,7 @@ impl CodegenError {
 pub struct CodegenOutput {
     /// 每个对象类型生成一个 Rust struct + `<TYPE>_DEF` 常量。
     pub rust: String,
-    /// 规范化核心表 DDL（wb_ontology_object / wb_relation_edge / wb_trace_event）。
+    /// 规范化核心表 DDL（wb_ontology_object / wb_relation_edge / wb_trace_event / wb_memory）。
     pub schema_sql: String,
     /// IR 的 JSON 序列化（ontology.json）。
     pub ontology_json: String,
@@ -137,6 +137,18 @@ CREATE INDEX IF NOT EXISTS idx_trace_agent  ON wb_trace_event (agent_id);
 CREATE INDEX IF NOT EXISTS idx_trace_type   ON wb_trace_event (event_type);
 CREATE INDEX IF NOT EXISTS idx_trace_time   ON wb_trace_event (timestamp);
 CREATE INDEX IF NOT EXISTS idx_create_time  ON wb_trace_event (create_time);
+
+-- V0.5 Agent 自治：记忆沉淀（Memory = Event 的积累；BL-008）。
+-- 经验按 label 去重并累加 hits，下一轮 run 经 recall 复用，形成 Action→Memory→下次 Plan 的闭环。
+CREATE TABLE IF NOT EXISTS wb_memory (
+  label      TEXT PRIMARY KEY,   -- 记忆标签（如 action.retain / #RetentionPattern）
+  payload    TEXT NOT NULL,      -- 经验载荷 JSON
+  hits       INTEGER NOT NULL DEFAULT 1,  -- 命中/复用次数，自学习沉淀指标
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_hits ON wb_memory (hits);
 "#
     .to_string()
 }

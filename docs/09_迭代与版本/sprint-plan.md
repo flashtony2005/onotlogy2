@@ -62,8 +62,8 @@ V0.5 Agent 自治      让系统能学习       自学习 / Evolution / Memory �
 - 交互式 Human Approval（**已实现**）：CLI `agent run` 默认 `ConsoleApprover`（stdin 交互 y/N，按 `action@target` 缓存决策）+ `--auto-approve` 开关；server `serve` 同步加 `--auto-approve`（`AutoApprover`）；TC-021a/b 全绿
 
 **V0.5 Agent 自治**（让系统能学习）
-- 自学习 / Evolution / Memory 沉淀
-- 生命周期（沿用 V1.1）：`Goal → Intent → Plan → Query → Reasoning → Policy → Action → Memory`
+- Memory 沉淀（**已实现**）：经验按 `action.<name>` 沉淀至 `wb_memory`（hits 累加），下一轮 run 经 `MemoryRecall` 认知事件召回，形成 Action→Memory→下次 Plan 闭环；需求 REQ-016，TC-022a/b 全绿
+- 自学习 / Evolution：归远期（BL-003，经验→Pattern→Proposal→Validation→Merge），本轮未做（MVP 连 Experience 积累都未就绪；V0.5 先落 Memory 地基）
 
 ### 4.3 范围与排期
 | 版本 | 目标 | 关联需求 | 状态 |
@@ -72,7 +72,7 @@ V0.5 Agent 自治      让系统能学习       自学习 / Evolution / Memory �
 | V0.2 | World Model（Relation + 领域 Event） | REQ-012/013 | 已实现 |
 | V0.3 | Agent 闭环（= MVP） | REQ-009~011 | 已实现 |
 | V0.4 | Action & Policy | REQ-014（Action 引擎）/ REQ-015（Policy 引擎） | 已实现 |
-| V0.5 | Agent 自治 | 待拆 | 未开始 |
+| V0.5 | Agent 自治（Memory 沉淀） | REQ-016（已实现）；Evolution 归远期 | 已实现 |
 
 ## 5. 风险点 & 注意事项
 - 范围蔓延：V0.3 的 Agent 极易被提前"顺手"塞进 V0.1/V0.2，须以本表为卡点。
@@ -104,3 +104,4 @@ V0.5 Agent 自治      让系统能学习       自学习 / Evolution / Memory �
 | V2.0 | lushaohui | 2026-08-12 | V0.4 完整 Action 引擎落地：REQ-014 已实现（状态表 V0.4→部分实现）；Policy 审批标记待办 |
 | V2.1 | lushaohui | 2026-08-12 | V0.4 Policy 引擎落地：REQ-015 已实现（状态表 V0.4→已实现）；动作级 `policy:` 审批闸门 + 前置条件；TC-015a/b/c/d 全绿 |
 | V2.2 | lushaohui | 2026-08-12 | 交互式 Human Approval 落地：CLI `ConsoleApprover` + server `--auto-approve` 开关；TC-021a/b 全绿 |
+| V2.3 | lushaohui | 2026-08-12 | V0.5 Memory 沉淀落地：REQ-016 已实现（状态表 V0.5→已实现）；经验按 `action.<name>` 沉淀 `wb_memory` + `MemoryRecall` 闭环；Evolution 归远期；TC-022a/b 全绿 |

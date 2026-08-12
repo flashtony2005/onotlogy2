@@ -1,4 +1,4 @@
-//! OpenAIP-OS —— 可执行本体平台内核（V0.1: Object Kernel + 观察基建；V0.2: World Model；V0.3: Agent 闭环 MVP）
+//! OpenAIP-OS —— 可执行本体平台内核（V0.1: Object Kernel + 观察基建；V0.2: World Model；V0.3: Agent 闭环 MVP；V0.4: Action & Policy 引擎；V0.5: Memory 沉淀闭环）
 //!
 //! 模块划分（对应 docs/03_架构设计/module-split.md）：
 //! - `ir`：语言无关的 Ontology IR（ObjectType / PropertyDef / ScalarType）
@@ -37,6 +37,7 @@ pub use planner::{
 };
 pub use runtime::{EventBus, RuntimeKernel, TraceEvent, TraceKind};
 pub use storage::{
-    LibSQLStorage, ObjectEngine, ObjectRecord, RelationEngine, RelationRecord, TraceQuery,
+    LibSQLStorage, MemoryRecord, ObjectEngine, ObjectRecord, RelationEngine, RelationRecord,
+    TraceQuery,
 };
 pub use trace::{RunTimeline, TraceEventDto, View};

@@ -914,6 +914,87 @@ async fn tc014c_planner_via_registry_closed_loop() {
     );
 }
 
+// ── TC-022a：记忆沉淀存储往返（V0.5 Memory = Event 积累；BL-008）──────────────────────
+#[tokio::test]
+async fn tc022a_memory_store_roundtrip() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    // 首沉淀
+    let m1 = kernel
+        .record_memory("action.retain", json!({ "experience": "retain" }))
+        .await
+        .unwrap();
+    assert_eq!(m1.hits, 1, "首次沉淀 hits=1");
+    // 再次沉淀同标签 → hits 累加 + payload 更新
+    let m2 = kernel
+        .record_memory("action.retain", json!({ "experience": "retain", "v": 2 }))
+        .await
+        .unwrap();
+    assert_eq!(m2.hits, 2, "重复沉淀应累加 hits");
+    assert_eq!(m2.payload["v"], json!(2), "应更新 payload");
+    // recall 全量 / 单条 / 缺失
+    let all = kernel.recall_all().await.unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].hits, 2);
+    let one = kernel.recall_memory("action.retain").await.unwrap();
+    assert!(one.is_some() && one.unwrap().hits == 2);
+    assert!(kernel.recall_memory("missing").await.unwrap().is_none());
+}
+
+// ── TC-022b：Planner 记忆闭环（Action→Memory→下次 Plan 召回）──────────────────────────
+#[tokio::test]
+async fn tc022b_planner_memory_closed_loop() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    kernel
+        .create_object("Customer", "001", json!({"name": "Apple", "level": "VIP"}))
+        .await
+        .unwrap();
+    kernel
+        .create_object("Customer", "002", json!({"name": "Tesla", "level": "GOLD"}))
+        .await
+        .unwrap();
+    let reg = ActionRegistry::from_ir(&parse_odl(ODL_RETAIN).unwrap());
+
+    // 第一轮：执行 retain → 沉淀 action.retain
+    let rid1 = generate_run_id();
+    let r1 = Planner::with_actions(&kernel, reg.clone())
+        .run_goal(&FakeEngine, "reduce churn", "retention-agent", &rid1)
+        .await
+        .expect("首轮应跑通");
+    assert_eq!(r1.status.as_str(), "Completed");
+    let mem1 = kernel.recall_all().await.unwrap();
+    assert!(
+        mem1.iter()
+            .any(|m| m.label == "action.retain" && m.hits >= 1),
+        "首轮应沉淀 action.retain"
+    );
+
+    // 第二轮：同 kernel 累加 hits，且应召回 MemoryRecall 事件（闭环可见）
+    let rid2 = generate_run_id();
+    let r2 = Planner::with_actions(&kernel, reg)
+        .run_goal(&FakeEngine, "reduce churn", "retention-agent", &rid2)
+        .await
+        .expect("次轮应跑通");
+    assert_eq!(r2.status.as_str(), "Completed");
+    let retain = kernel
+        .recall_all()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|m| m.label == "action.retain")
+        .expect("应存在 action.retain 记忆");
+    assert!(retain.hits >= 2, "两轮应累加 hits（自学习沉淀）");
+    let cev2 = kernel
+        .list_events(TraceQuery::for_run(&rid2))
+        .await
+        .unwrap();
+    assert!(
+        cev2.iter().any(|e| e.event_type == "MemoryRecall"),
+        "第二轮应召回 MemoryRecall 事件（Action→Memory→下次 Plan 闭环）"
+    );
+}
+
 // ── TC-015a：ODL `policy:` 块解析为 IR（require_approval + precondition 子句） ──────────
 #[test]
 fn tc015a_odl_parses_policy() {

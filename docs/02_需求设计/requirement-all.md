@@ -47,6 +47,7 @@
 | 最小 Action 执行（Planner 闭环） | Agent | Must | V0.3 |
 | 完整 Action 引擎（ODL `actions:` 声明 + ActionRegistry + ActionEngine 解释执行） | Agent | Should | V0.4 |
 | Policy 引擎（动作级 `policy:`：require_approval 审批闸门 + precondition 前置条件，拒 → WB2005） | Agent | Should | V0.4 |
+| Memory 沉淀（Agent 自治基础：经验按 `action.<name>` 沉淀至 `wb_memory`，hits 累加，下一轮 run 经 MemoryRecall 召回复用，闭环） | Agent | Should | V0.5 |
 
 ### 4.2 需求总表
 | 需求编号 | 需求名称 | 提出人 | 优先级 | 状态 | 关联版本 |
@@ -66,11 +67,12 @@
 | REQ-013 | 领域 Event：PaymentLate 等业务事件经 `TraceEvent(kind=world)` 落库 + EventBus 发布 | lushaohui | Must | 已实现 | V0.2 |
 | REQ-014 | 完整 Action 引擎：对象自有能力经 ODL `actions:` 声明 → ActionRegistry → ActionEngine 解释执行（updates/creates/link，幂等）；替代硬编码计划 | lushaohui | Should | 已实现 | V0.4 |
 | REQ-015 | Policy 引擎：动作级 `policy:` 约束（`require_approval` 审批闸门 + `precondition` 前置条件，AND）；需审批默认 Deny（WB2005）转 Human Approval，经 `PolicyApprover` 放行；落地形态：CLI `ConsoleApprover`（stdin 交互 y/N，决策缓存）+ server `--auto-approve` 开关（`AutoApprover`） | lushaohui | Should | 已实现 | V0.4 |
+| REQ-016 | Memory 沉淀（Agent 自治基础，BL-008）：经验按 `action.<name>` 沉淀至 `wb_memory`（label 去重、hits 累加），下一轮 run 经 `MemoryRecall` 认知事件召回归入 Plans，形成 Action→Memory→下次 Plan 闭环；Evolution Engine（BL-003）归远期 | lushaohui | Should | 已实现 | V0.5 |
 
 ### 4.3 核心模型需求
 - Object / Relation / Event 为世界模型三要素：Object（V0.1）、Relation 与领域 Event（V0.2）成型，MVP（V0.3）齐备。
 - Event 统一为 `TraceEvent`，`kind ∈ {world, cognitive}`：`world`（对象/关系生命周期，V0.1）、`cognitive`（Agent 认知，V0.3）；统一存 `wb_trace_event` 表。
-- Action 分两层：最小执行（V0.3，保证 Planner 闭环）、完整引擎（V0.4，已落地）；Policy（V0.4，已落地：动作级 `policy:` 审批 + 前置条件）；Memory / Agent 自治（V0.5）后生长（见 todo-backlog.md）。
+- Action 分两层：最小执行（V0.3，保证 Planner 闭环）、完整引擎（V0.4，已落地）；Policy（V0.4，已落地：动作级 `policy:` 审批 + 前置条件）；Memory 沉淀（V0.5，已落地：经验按 `action.<name>` 沉淀 + MemoryRecall 召回闭环，REQ-016）；Evolution Engine（BL-003，经验→Pattern→Proposal→Validation→Merge）归远期（见 todo-backlog.md）。
 - 对象存储统一为 `wb_ontology_object { id, type, data, version }`，禁止为每类业务建独立表。
 
 ### 4.4 端到端示例（验收参照）
@@ -130,3 +132,4 @@ oaip agent run "reduce churn"
 | V2.0 | lushaohui | 2026-08-12 | V0.4 完整 Action 引擎落地：登记 REQ-014（已实现）；ODL `actions:` 声明 → `ActionRegistry` → `ActionEngine` 数据驱动解释执行，替代硬编码挽留计划；新增 TC-014a/b/c 全绿 |
 | V2.1 | lushaohui | 2026-08-12 | V0.4 Policy 引擎落地：登记 REQ-015（已实现）；动作级 `policy:`（require_approval 审批闸门 + precondition 前置条件），默认 Deny（WB2005）转 Human Approval，经 `PolicyApprover` 放行；新增 TC-015a/b/c/d 全绿 |
 | V2.2 | lushaohui | 2026-08-12 | 交互式 Human Approval 落地：CLI `agent run` 默认 `ConsoleApprover`（stdin 交互 y/N，按 `action@target` 缓存决策）+ `--auto-approve` 开关；server `serve` 同步加 `--auto-approve`（`AutoApprover`）；新增 TC-021a/b 全绿 |
+| V2.3 | lushaohui | 2026-08-12 | V0.5 Memory 沉淀落地：登记 REQ-016（已实现）；经验按 `action.<name>` upsert 沉淀至 `wb_memory`（hits 累加），下一轮 run 经 `MemoryRecall` 认知事件召回（Action→Memory→下次 Plan 闭环）；新增 TC-022a/b 全绿；Evolution Engine 归远期 |

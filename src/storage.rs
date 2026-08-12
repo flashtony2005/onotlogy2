@@ -42,6 +42,17 @@ pub struct RelationRecord {
     pub data: Option<Value>,
 }
 
+/// 一条记忆记录（对应 `wb_memory`，V0.5 记忆沉淀 / BL-008）。
+/// 经验按 `label` 去重，重复沉淀累加 `hits`，作为自学习指标。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MemoryRecord {
+    pub label: String,
+    pub payload: Value,
+    pub hits: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 /// 存储错误。
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
@@ -391,6 +402,61 @@ impl LibSQLStorage {
         }
         lines.join("\n")
     }
+
+    // ---- V0.5 Agent 自治：记忆沉淀（Memory = Event 积累；BL-008） ----
+
+    /// 沉淀一条记忆：按 `label` upsert；已存在则累加 `hits` 并更新 `payload`，实现经验复用计数。
+    pub async fn record_memory(
+        &self,
+        label: &str,
+        payload: Value,
+    ) -> Result<MemoryRecord, StorageError> {
+        let payload_s = serde_json::to_string(&payload)?;
+        self.conn
+            .execute(
+                "INSERT INTO wb_memory (label, payload, hits, created_at, updated_at) \
+                 VALUES (?1, ?2, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) \
+                 ON CONFLICT(label) DO UPDATE SET \
+                   hits = hits + 1, payload = ?2, updated_at = CURRENT_TIMESTAMP",
+                params![label, payload_s],
+            )
+            .await?;
+        self.recall_memory(label)
+            .await?
+            .ok_or_else(|| StorageError::NotFound(format!("memory:{label}")))
+    }
+
+    /// 按标签召回单条记忆（缺失 → None）。
+    pub async fn recall_memory(&self, label: &str) -> Result<Option<MemoryRecord>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT label, payload, hits, created_at, updated_at FROM wb_memory WHERE label = ?1",
+                params![label],
+            )
+            .await?;
+        match rows.next().await? {
+            Some(row) => Ok(Some(row_to_memory(&row)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// 召回全部记忆（按 hits 降序，复用频次高的在前）。
+    pub async fn recall_all(&self) -> Result<Vec<MemoryRecord>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT label, payload, hits, created_at, updated_at FROM wb_memory \
+                 ORDER BY hits DESC, updated_at DESC",
+                params![],
+            )
+            .await?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            out.push(row_to_memory(&row)?);
+        }
+        Ok(out)
+    }
 }
 
 #[async_trait]
@@ -610,6 +676,17 @@ fn row_to_relation(row: &libsql::Row) -> Result<RelationRecord, StorageError> {
         source: row.get(2)?,
         target: row.get(3)?,
         data: data.map(|s| serde_json::from_str(&s)).transpose()?,
+    })
+}
+
+fn row_to_memory(row: &libsql::Row) -> Result<MemoryRecord, StorageError> {
+    let payload: String = row.get(1)?;
+    Ok(MemoryRecord {
+        label: row.get(0)?,
+        payload: serde_json::from_str(&payload)?,
+        hits: row.get(2)?,
+        created_at: row.get(3)?,
+        updated_at: row.get(4)?,
     })
 }
 

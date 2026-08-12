@@ -293,4 +293,28 @@ impl RuntimeKernel {
         let ev = TraceEvent::world_with_refs(event_type, &refs);
         self.emit(ev).await
     }
+
+    // ---- V0.5 Agent 自治：记忆沉淀（Memory = Event 积累；BL-008） ----
+
+    /// 沉淀一条记忆（upsert，hits 累加）。
+    pub async fn record_memory(
+        &self,
+        label: &str,
+        payload: Value,
+    ) -> Result<crate::storage::MemoryRecord, StorageError> {
+        self.storage.record_memory(label, payload).await
+    }
+
+    /// 按标签召回单条记忆。
+    pub async fn recall_memory(
+        &self,
+        label: &str,
+    ) -> Result<Option<crate::storage::MemoryRecord>, StorageError> {
+        self.storage.recall_memory(label).await
+    }
+
+    /// 召回全部记忆（hits 降序）。
+    pub async fn recall_all(&self) -> Result<Vec<crate::storage::MemoryRecord>, StorageError> {
+        self.storage.recall_all().await
+    }
 }
