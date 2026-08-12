@@ -4,7 +4,7 @@
 |----|------|
 | 文档ID | WB-DOC-03-006 |
 | 所属模块 | WorkBuddy-Architecture |
-| 版本 | V1.2 |
+| 版本 | V1.3 |
 | 创建人 | lushaohui |
 | 创建时间 | 2026-08-11 |
 | 更新记录 | 见文末修订日志 |
@@ -63,6 +63,38 @@ trait AgentEngine {
 ### 4.4 认证与配置
 Pi 的 LLM Provider 认证（API Key / 订阅）由运行环境提供，OpenAIP 不内置模型权重；Pi 启动上下文通过 `AGENTS.md` / `CLAUDE.md` 注入项目指令。
 
+`PiAgentEngine` 以 `--mode text --print --no-session --no-tools` 非交互调用 Pi（stdout 直接为模型文本，约定其返回 JSON 并由 `parse_decision` 解析）。LLM Provider 选择：
+- 不设置时回退到 Pi 内置默认 provider（`~/.pi/agent/settings.json` 的 `defaultProvider`）。
+- 可通过环境变量覆盖（便于接入本地网关，不改动代码）：`OPENAIP_PROVIDER` / `OPENAIP_MODEL` / `OPENAIP_API_KEY_ENV`。
+
+### 4.6 接入本地 OpenAI 兼容网关（如 cc switch）
+Pi 支持在 `~/.pi/agent/models.json` 中注册自定义 OpenAI 兼容 provider。以本地网关 `http://127.0.0.1:5000`（路径 `/v1`，免鉴权，模型 slug 如 `deepseek-v4-flash`）为例：
+
+```json
+{
+  "providers": {
+    "ccswitch": {
+      "name": "CC Switch (local OpenAI gateway @127.0.0.1:5000)",
+      "api": "openai-completions",
+      "baseUrl": "http://127.0.0.1:5000/v1",
+      "apiKey": "sk-noauth",
+      "models": [
+        { "id": "deepseek-v4-flash", "name": "Deepseek-v4-flash" }
+      ]
+    }
+  }
+}
+```
+> 注意：该 pi 版本注册的 api 名为 `openai-completions` / `openai-responses` / `openai-codex` / `anthropic` / `google` / `mistral` 等，**没有裸 `openai`**；标准 `/v1/chat/completions` 网关用 `openai-completions`。
+
+启动 OpenAIP 时指定该 provider 即可走本地网关：
+```bash
+OPENAIP_PROVIDER=ccswitch OPENAIP_MODEL=deepseek-v4-flash \
+  cargo run --bin oaip -- serve
+# 或 CLI 触发：OPENAIP_PROVIDER=ccswitch OPENAIP_MODEL=deepseek-v4-flash ./target/debug/oaip agent run "reduce churn"
+```
+验证：网关 `/v1/models` 返回 200（OpenAI 格式）即兼容；`oaip agent run` 跑通 8 步认知闭环即接入成功。
+
 ### 4.5 为什么这样切分
 OpenAIP 的核心资产是 **Ontology Kernel + World Model + Agent Runtime + Decision Trace**——这是 Palantir AIP 真正难复制的部分；Pi 是可替换的认知引擎，避免把 OpenAIP-OS 降级为"Pi 增强版"。
 
@@ -86,3 +118,4 @@ OpenAIP 的核心资产是 **Ontology Kernel + World Model + Agent Runtime + Dec
 | V1.0 | lushaohui | 2026-08-11 | 初稿完成：Pi 作 Cognitive Engine（AgentEngine trait），非 Agent 本体；分层定位、MVP 执行流、核心资产切分 |
 | V1.1 | lushaohui | 2026-08-11 | 待确认项指向 api-agent-trace.md 4.6；补充 PRD 与接口交叉引用 |
 | V1.2 | lushaohui | 2026-08-11 | 方案B对齐：4.3 执行流定位 V0.3（=MVP），依赖 V0.1 内核 + V0.2 世界模型 |
+| V1.3 | lushaohui | 2026-08-12 | 4.4 补充 `OPENAIP_PROVIDER`/`OPENAIP_MODEL` 环境变量覆盖；新增 4.6 接入本地 OpenAI 兼容网关（cc switch @127.0.0.1:5000，`api: openai-completions`） |

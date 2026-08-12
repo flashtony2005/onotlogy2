@@ -81,8 +81,10 @@ pub trait AgentEngine: Send + Sync {
 
 /// 以 `pi`（`@earendil-works/pi-coding-agent`）为认知引擎的实现（MVP 唯一生产引擎）。
 ///
-/// 通过 `--mode json --print --no-session --no-tools` 非交互调用，禁用其文件工具
-/// （prd 3：Pi 禁止直接掌管文件系统），仅承担 NLU / 推理。任何失败 → `Unavailable`（WB2004）。
+/// 通过 `--mode text --print --no-session --no-tools` 非交互调用，禁用其文件工具
+/// （prd 3：Pi 禁止直接掌管文件系统），仅承担 NLU / 推理。stdout 直接为模型文本
+/// （我们要求其返回 JSON），`parse_decision` 解析为结构化 `Decision`。任何失败 →
+/// `Unavailable`（WB2004）。
 pub struct PiAgentEngine {
     agent_id: String,
     provider: Option<String>,
@@ -92,14 +94,34 @@ pub struct PiAgentEngine {
 }
 
 impl PiAgentEngine {
+    /// 构造引擎。可选通过环境变量指定 LLM Provider（便于接入本地 OpenAI 兼容网关，
+    /// 如 cc switch）：`OPENAIP_PROVIDER` / `OPENAIP_MODEL` / `OPENAIP_API_KEY_ENV`。
+    /// 未设置时回退到 pi 内置默认 provider（settings.json 的 defaultProvider）。
     pub fn new(agent_id: impl Into<String>) -> Self {
-        Self {
-            agent_id: agent_id.into(),
+        let agent_id = agent_id.into();
+        let mut s = Self {
+            agent_id: agent_id.clone(),
             provider: None,
             model: None,
             api_key_env: None,
             timeout: Duration::from_secs(120),
+        };
+        if let Ok(p) = std::env::var("OPENAIP_PROVIDER")
+            && !p.is_empty()
+        {
+            s.provider = Some(p);
         }
+        if let Ok(m) = std::env::var("OPENAIP_MODEL")
+            && !m.is_empty()
+        {
+            s.model = Some(m);
+        }
+        if let Ok(k) = std::env::var("OPENAIP_API_KEY_ENV")
+            && !k.is_empty()
+        {
+            s.api_key_env = Some(k);
+        }
+        s
     }
 
     /// 指定 LLM Provider（默认 google，经 pi 内置）。
@@ -147,11 +169,12 @@ impl PiAgentEngine {
 
     /// 解析 pi 的 JSON 输出为 `Decision`；解析失败则 best-effort 兜底（不致命）。
     fn parse_decision(&self, raw: &str, ctx: &Context) -> Decision {
-        // 优先整体解析为 JSON；否则在输出中尽力提取。
-        let parsed: Value = match serde_json::from_str(raw) {
+        // 优先整体解析为 JSON（剥离 ```json 围栏后）；否则在输出中尽力提取。
+        let cleaned = strip_code_fence(raw);
+        let parsed: Value = match serde_json::from_str(&cleaned) {
             Ok(v) => v,
             Err(_) => {
-                // pi --mode json 可能包裹在 {message, content} 等结构；尽力下钻取文本。
+                // 模型可能未严格返回 JSON；尽力下钻取文本。
                 let text = extract_text(raw);
                 return Decision {
                     intent: ctx.step.clone(),
@@ -212,7 +235,7 @@ impl AgentEngine for PiAgentEngine {
 
         let mut cmd = tokio::process::Command::new(&pi_bin);
         cmd.arg("--mode")
-            .arg("json")
+            .arg("text")
             .arg("--print")
             .arg("--no-session")
             .arg("--no-tools") // 禁用文件工具：Pi 仅作认知引擎
@@ -287,6 +310,18 @@ fn extract_text(raw: &str) -> String {
         Ok(v) => extract_text_from_value(&v),
         Err(_) => raw.trim().to_string(),
     }
+}
+
+/// 剥离 ```` ```json ... ``` ```` 代码围栏（真实 LLM 常包裹 JSON），便于解析。
+fn strip_code_fence(raw: &str) -> String {
+    let s = raw.trim();
+    if let Some(stripped) = s.strip_prefix("```json").or_else(|| s.strip_prefix("```")) {
+        if let Some(end) = stripped.rfind("```") {
+            return stripped[..end].trim().to_string();
+        }
+        return stripped.trim().to_string();
+    }
+    s.to_string()
 }
 
 /// 从解析后的 JSON 值下钻提取推理文本（兼容 {message}/{content}/裸字符串）。
