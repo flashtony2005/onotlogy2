@@ -12,6 +12,7 @@ use crate::runtime::RuntimeKernel;
 use crate::storage::StorageError;
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::io::{self, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -121,6 +122,62 @@ impl PolicyApprover for AutoApprover {
     fn approve(&self, _step: &PlanStep) -> bool {
         self.allow
     }
+}
+
+/// 交互式审批器：经 stdin 询问 y/n（CLI `agent run` 默认使用）。
+///
+/// 同一动作（按 `action@target_id`）只询问一次（决策缓存），避免对多个同类目标
+/// 重复打断用户。非 Action 步用 description 作 key。
+pub struct ConsoleApprover {
+    cache: std::sync::Mutex<HashMap<String, bool>>,
+}
+impl ConsoleApprover {
+    pub fn new() -> Self {
+        Self {
+            cache: std::sync::Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// 取审批 key：声明式动作用 `action@target_id`，其余用 description。
+    fn key_of(step: &PlanStep) -> String {
+        match &step.capability {
+            Capability::Action {
+                action, target_id, ..
+            } => format!("{action}@{target_id}"),
+            _ => step.description.clone(),
+        }
+    }
+}
+impl Default for ConsoleApprover {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl PolicyApprover for ConsoleApprover {
+    fn approve(&self, step: &PlanStep) -> bool {
+        let key = Self::key_of(step);
+        if let Some(v) = self.cache.lock().unwrap().get(&key) {
+            return *v;
+        }
+        let ans = prompt(&format!(
+            "⚠️ 需 Human Approval：{}？[y/N] ",
+            step.description
+        ));
+        self.cache.lock().unwrap().insert(key, ans);
+        ans
+    }
+}
+
+/// 向 stdout 打印提示并从 stdin 读一行，解析 y/yes（忽略大小写）为批准。
+/// `run_goal` 在 async 上下文同步调用本函数，用 `block_in_place` 避免阻塞 event loop。
+fn prompt(question: &str) -> bool {
+    print!("{question}");
+    let _ = io::stdout().flush();
+    let mut buf = String::new();
+    tokio::task::block_in_place(|| {
+        let _ = io::stdin().read_line(&mut buf);
+    });
+    matches!(buf.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
 impl Policy {

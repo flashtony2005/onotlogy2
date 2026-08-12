@@ -229,3 +229,4 @@ Human → Agent UI → Decision Trace UI
 | V1.9 | lushaohui | 2026-08-12 | V0.3=MVP 能力边界标记已实现 |
 | V2.0 | lushaohui | 2026-08-12 | V0.4 完整 Action 引擎落地：4.4 能力边界表「完整 Action Engine」由 ❌ 改 ✅（数据驱动 ActionRegistry/ActionEngine）；Policy 审批单列待办 |
 | V2.1 | lushaohui | 2026-08-12 | V0.4 Policy 引擎落地：4.4 能力边界「Policy 审批约束」由 ❌ 改 ✅（动作级 policy: 审批闸门 + 前置条件，经 PolicyApprover 放行） |
+| V2.2 | lushaohui | 2026-08-12 | 交互式 Human Approval 落地：4.4「Policy 审批约束」补 CLI `ConsoleApprover`（stdin 交互）+ server `--auto-approve` 开关；TC-021a/b 全绿 |

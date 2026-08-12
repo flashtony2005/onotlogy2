@@ -65,7 +65,7 @@
 | REQ-012 | Relation 引擎：建边/图查询（neighbors/query_by_edge）/重复边拦截(WB2007) | lushaohui | Must | 已实现 | V0.2 |
 | REQ-013 | 领域 Event：PaymentLate 等业务事件经 `TraceEvent(kind=world)` 落库 + EventBus 发布 | lushaohui | Must | 已实现 | V0.2 |
 | REQ-014 | 完整 Action 引擎：对象自有能力经 ODL `actions:` 声明 → ActionRegistry → ActionEngine 解释执行（updates/creates/link，幂等）；替代硬编码计划 | lushaohui | Should | 已实现 | V0.4 |
-| REQ-015 | Policy 引擎：动作级 `policy:` 约束（`require_approval` 审批闸门 + `precondition` 前置条件，AND）；需审批默认 Deny（WB2005）转 Human Approval，经 `PolicyApprover` 放行 | lushaohui | Should | 已实现 | V0.4 |
+| REQ-015 | Policy 引擎：动作级 `policy:` 约束（`require_approval` 审批闸门 + `precondition` 前置条件，AND）；需审批默认 Deny（WB2005）转 Human Approval，经 `PolicyApprover` 放行；落地形态：CLI `ConsoleApprover`（stdin 交互 y/N，决策缓存）+ server `--auto-approve` 开关（`AutoApprover`） | lushaohui | Should | 已实现 | V0.4 |
 
 ### 4.3 核心模型需求
 - Object / Relation / Event 为世界模型三要素：Object（V0.1）、Relation 与领域 Event（V0.2）成型，MVP（V0.3）齐备。
@@ -129,3 +129,4 @@ oaip agent run "reduce churn"
 | V1.9 | lushaohui | 2026-08-12 | V0.3=MVP 落地：REQ-009/010/011 状态置「已实现」（三层观察 UI + WebSocket + Pi 作 Cognitive Engine + 自有 Planner 闭环，TC-009/010/011 全绿） |
 | V2.0 | lushaohui | 2026-08-12 | V0.4 完整 Action 引擎落地：登记 REQ-014（已实现）；ODL `actions:` 声明 → `ActionRegistry` → `ActionEngine` 数据驱动解释执行，替代硬编码挽留计划；新增 TC-014a/b/c 全绿 |
 | V2.1 | lushaohui | 2026-08-12 | V0.4 Policy 引擎落地：登记 REQ-015（已实现）；动作级 `policy:`（require_approval 审批闸门 + precondition 前置条件），默认 Deny（WB2005）转 Human Approval，经 `PolicyApprover` 放行；新增 TC-015a/b/c/d 全绿 |
+| V2.2 | lushaohui | 2026-08-12 | 交互式 Human Approval 落地：CLI `agent run` 默认 `ConsoleApprover`（stdin 交互 y/N，按 `action@target` 缓存决策）+ `--auto-approve` 开关；server `serve` 同步加 `--auto-approve`（`AutoApprover`）；新增 TC-021a/b 全绿 |

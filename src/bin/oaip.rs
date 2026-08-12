@@ -3,7 +3,9 @@
 use clap::{Parser, Subcommand};
 use openaip_os::action::ActionRegistry;
 use openaip_os::agent::{AgentEngine, PiAgentEngine};
-use openaip_os::planner::{Planner, PlannerError, generate_run_id};
+use openaip_os::planner::{
+    AutoApprover, ConsoleApprover, Planner, PlannerError, PolicyApprover, generate_run_id,
+};
 use openaip_os::runtime::RuntimeKernel;
 use openaip_os::server;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine, TraceQuery};
@@ -59,6 +61,9 @@ enum Cmd {
         /// 可选 ODL 文件：声明对象自有动作（V0.4 完整 Action Engine）；缺省走 legacy 兜底。
         #[arg(long)]
         odl: Option<String>,
+        /// 自动批准所有需审批动作（跳过 Human Approval）；默认 false → require_approval 动作被拒（WB2005）。
+        #[arg(long, default_value_t = false)]
+        auto_approve: bool,
     },
     /// 数据库维护（schema 迁移 / 清理演示数据）
     Db {
@@ -79,6 +84,9 @@ enum AgentCmd {
         /// 可选 ODL 文件：声明对象自有动作（V0.4 完整 Action Engine）；缺省走 legacy 兜底。
         #[arg(long)]
         odl: Option<String>,
+        /// 自动批准所有需审批动作（跳过交互式 Human Approval）；默认 false → 经 stdin 交互确认。
+        #[arg(long, default_value_t = false)]
+        auto_approve: bool,
     },
 }
 
@@ -151,14 +159,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 goal,
                 agent_id,
                 odl,
-            } => cmd_agent_run(&cli.db, &goal, &agent_id, odl.as_deref()).await?,
+                auto_approve,
+            } => cmd_agent_run(&cli.db, &goal, &agent_id, odl.as_deref(), auto_approve).await?,
         },
         Cmd::Serve {
             port,
             host,
             static_dir,
             odl,
-        } => cmd_serve(&cli.db, &host, port, &static_dir, odl.as_deref()).await?,
+            auto_approve,
+        } => {
+            cmd_serve(
+                &cli.db,
+                &host,
+                port,
+                &static_dir,
+                odl.as_deref(),
+                auto_approve,
+            )
+            .await?
+        }
         Cmd::Db { cmd } => match cmd {
             DbCmd::Reset => cmd_db_reset(&cli.db).await?,
         },
@@ -302,6 +322,7 @@ async fn cmd_agent_run(
     goal: &str,
     agent_id: &str,
     odl: Option<&str>,
+    auto_approve: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage = LibSQLStorage::open(db).await?;
     let kernel = RuntimeKernel::new(storage);
@@ -315,8 +336,16 @@ async fn cmd_agent_run(
         return Ok(());
     }
 
+    // Human Approval 闸门：默认 ConsoleApprover（stdin 交互确认）；--auto-approve 直接放行。
+    let approver: Arc<dyn PolicyApprover> = if auto_approve {
+        Arc::new(AutoApprover { allow: true })
+    } else {
+        Arc::new(ConsoleApprover::new())
+    };
+
     let run_id = generate_run_id();
     match Planner::with_actions(&kernel, registry)
+        .with_approver(approver)
         .run_goal(&engine, goal, agent_id, &run_id)
         .await
     {
@@ -360,6 +389,7 @@ async fn cmd_serve(
     port: u16,
     static_dir: &str,
     odl: Option<&str>,
+    auto_approve: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage = LibSQLStorage::open(db).await?;
     let kernel = Arc::new(RuntimeKernel::new(storage));
@@ -370,7 +400,7 @@ async fn cmd_serve(
     println!(
         "🚀 OpenAIP-OS Agent Observation 服务已启动：\n  UI  → http://{addr}/\n  API → http://{addr}/api/v1/wb/agent\n  WS  → ws://{addr}/api/v1/wb/agent/{{runId}}/stream"
     );
-    server::serve(kernel, engine, listener, static_dir, registry).await?;
+    server::serve(kernel, engine, listener, static_dir, registry, auto_approve).await?;
     Ok(())
 }
 

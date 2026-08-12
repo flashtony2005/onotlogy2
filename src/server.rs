@@ -8,7 +8,9 @@
 
 use crate::action::ActionRegistry;
 use crate::agent::AgentEngine;
-use crate::planner::{Planner, PlannerError, RunStatus, generate_run_id};
+use crate::planner::{
+    AutoApprover, Planner, PlannerError, PolicyApprover, RunStatus, generate_run_id,
+};
 use crate::runtime::RuntimeKernel;
 use crate::storage::TraceQuery;
 use crate::trace::{RunTimeline, TraceEventDto, View, build_timeline};
@@ -38,6 +40,8 @@ pub struct AppState {
     pub engine: Arc<dyn AgentEngine>,
     /// 动作注册表（V0.4）：对象自有动作的声明式来源；空 → legacy 兜底。
     pub registry: ActionRegistry,
+    /// 是否自动批准需审批动作（Human Approval）：默认 false → require_approval 动作被拒（WB2005）。
+    auto_approve: bool,
     runs: Mutex<HashMap<String, RunRecord>>,
     pub static_dir: String,
 }
@@ -149,17 +153,20 @@ fn router(state: Arc<AppState>) -> Router {
 }
 
 /// 启动 HTTP + WS 服务（绑定已就绪的 listener，返回绑定地址供测试使用）。
+/// `auto_approve`：是否自动批准需审批动作（Human Approval）；false → 默认拒（WB2005）。
 pub async fn serve(
     kernel: Arc<RuntimeKernel>,
     engine: Arc<dyn AgentEngine>,
     listener: TcpListener,
     static_dir: impl Into<String>,
     registry: ActionRegistry,
+    auto_approve: bool,
 ) -> std::io::Result<()> {
     let state = Arc::new(AppState {
         kernel,
         engine,
         registry,
+        auto_approve,
         runs: Mutex::new(HashMap::new()),
         static_dir: static_dir.into(),
     });
@@ -257,11 +264,20 @@ async fn run_start(State(st): State<Arc<AppState>>, Json(body): Json<RunBody>) -
     let kernel = st.kernel.clone();
     let engine = st.engine.clone();
     let st2 = st.clone();
+    let auto_approve = st.auto_approve;
     let goal = body.goal.clone();
     let ag = agent_id.clone();
     let rid = run_id.clone();
     tokio::spawn(async move {
+        // Human Approval 闸门：auto_approve → 直接放行；否则默认拒（WB2005），
+        // 由客户端/人工在外部裁决（CLI 用 ConsoleApprover 交互；HTTP 审批端点见后续迭代）。
+        let approver: Arc<dyn PolicyApprover> = if auto_approve {
+            Arc::new(AutoApprover { allow: true })
+        } else {
+            Arc::new(AutoApprover { allow: false })
+        };
         let res = Planner::with_actions(&kernel, st.registry.clone())
+            .with_approver(approver)
             .run_goal(engine.as_ref(), &goal, &ag, &rid)
             .await;
         let rec = match res {

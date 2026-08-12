@@ -272,7 +272,15 @@ async fn tc009_ws_stream_and_reconnect() {
     let addr: SocketAddr = listener.local_addr().unwrap();
     let ks = kernel.clone();
     tokio::spawn(async move {
-        let _ = server::serve(ks, engine, listener, "ui/dist", ActionRegistry::empty()).await;
+        let _ = server::serve(
+            ks,
+            engine,
+            listener,
+            "ui/dist",
+            ActionRegistry::empty(),
+            false,
+        )
+        .await;
     });
 
     // 先跑完 Planner（事件已落库，WS 连接时由 history 补齐）
@@ -383,7 +391,15 @@ async fn spawn_server(kernel: std::sync::Arc<RuntimeKernel>) -> SocketAddr {
     let addr = listener.local_addr().unwrap();
     let ks = kernel.clone();
     tokio::spawn(async move {
-        let _ = server::serve(ks, engine, listener, "ui/dist", ActionRegistry::empty()).await;
+        let _ = server::serve(
+            ks,
+            engine,
+            listener,
+            "ui/dist",
+            ActionRegistry::empty(),
+            false,
+        )
+        .await;
     });
     tokio::time::sleep(Duration::from_millis(150)).await; // 等绑定就绪
     addr
@@ -1076,3 +1092,41 @@ async fn tc015d_planner_policy_gate() {
         "自动批准后动作应被执行"
     );
 }
+
+// ── TC-021a：CLI `agent run` 与 `serve` 暴露 `--auto-approve` 开关（防回归） ─────────────
+#[test]
+fn tc021a_cli_auto_approve_flag_exists() {
+    use std::process::Command;
+    let bin = env!("CARGO_BIN_EXE_oaip");
+    // agent run --help 应含 --auto-approve
+    let out = Command::new(bin)
+        .args(["agent", "run", "--help"])
+        .output()
+        .unwrap();
+    let help = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        help.contains("--auto-approve"),
+        "agent run 应暴露 --auto-approve 开关"
+    );
+    // serve --help 应含 --auto-approve
+    let out2 = Command::new(bin)
+        .args(["serve", "--help"])
+        .output()
+        .unwrap();
+    let help2 = String::from_utf8_lossy(&out2.stdout);
+    assert!(
+        help2.contains("--auto-approve"),
+        "serve 应暴露 --auto-approve 开关"
+    );
+}
+
+// ── TC-021b：ConsoleApprover 公开导出且可构造（交互式 Human Approval 入口） ───────────
+#[test]
+fn tc021b_console_approver_constructible() {
+    use openaip_os::planner::ConsoleApprover;
+    let _ = ConsoleApprover::new();
+}
+
+// 注：ConsoleApprover 的 stdin 交互（y/N）属 CLI 运行时行为，需人工验证：
+//   `oaip agent run --odl examples/crm.odl "reduce churn"`（含 require_approval 动作时
+//   每动作交互询问一次，y 放行 / N 拒=WB2005 终止）；`--auto-approve` 直接放行。

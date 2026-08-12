@@ -64,6 +64,16 @@
 | TC-020b | REQ-014 | 集成 | ActionRegistry + ActionEngine + 已存在目标对象（含 updateLevel / createOrder 声明） | `invoke`（updateLevel 改写 level / createOrder 建 Order+places 边+customer=self） | level 被改写；新 Order 创建且 `places` 边去重（幂等）；产生 `action.createOrder` world 事件并绑定 `object_refs` | 通过（自动化 tests/v0_3.rs::tc014b_action_engine_executes） |
 | TC-020c | REQ-014 | e2e | `examples/crm.odl`（`Customer.actions.retain` → 建 RetentionTask + needs_retention 边）经 registry | Planner 经 `ActionRegistry` 闭环（替代硬编码挽留计划） | 每客户 1 个 RetentionTask + 1 条 `needs_retention` 边；`action.retain` world 事件发出；Policy Allow 放行 | 通过（自动化 tests/v0_3.rs::tc014c_planner_via_registry_closed_loop） |
 
+### 4.3.2 V0.4 测试契约（Policy 引擎 + 交互式 Human Approval，REQ-015）
+| 用例ID | REQ | 类型 | Given | When | Then（边界判定） | 状态 |
+|--------|-----|------|-------|------|------------------|------|
+| TC-015a | REQ-015 | 单元 | ODL 含 `actions.<name>.policy:` 块（`require_approval` + `precondition` 子句） | `parse_odl` → IR | `PolicyDef.require_approval` 解析正确；`precondition` 子句（field/op/value，含 `self.field` 与字面量）全部解析，无信息丢失 | 通过（自动化 tests/v0_3.rs::tc015a_odl_parses_policy） |
+| TC-015b | REQ-015 | 单元 | 含 `require_approval` 动作的 `ActionDef` + `PlanStep::Action` | `Policy::check_action`（AutoApprover allow=false/true） | allow=false → Deny（WB2005）；allow=true → Allow | 通过（自动化 tests/v0_3.rs::tc015b_approval_gate） |
+| TC-015c | REQ-015 | 单元 | refund 动作（precondition：amount≤1000 且 level≠BLACKLIST）+ 参数/目标值 | `Policy::check_action`（前置条件求值） | amount=500 & 非黑名单 → Allow；amount=2000 → Deny；level=BLACKLIST → Deny | 通过（自动化 tests/v0_3.rs::tc015c_precondition_eval） |
+| TC-015d | REQ-015 | e2e | 含 `require_approval` 动作的对象 + Planner 闭环 | `run_goal`（默认拒 / 注入 AutoApprover{allow:true}） | 默认 → WB2005 PolicyDenied（提示需 Human Approval）；自动批准 → Completed 且产出 `action.<name>` world 事件 | 通过（自动化 tests/v0_3.rs::tc015d_planner_policy_gate） |
+| TC-021a | REQ-015 | 契约 | `oaip` 二进制 | `agent run --help` / `serve --help` | 两个子命令均暴露 `--auto-approve` 开关（防回归） | 通过（自动化 tests/v0_3.rs::tc021a_cli_auto_approve_flag_exists） |
+| TC-021b | REQ-015 | 单元 | `ConsoleApprover` 公开导出 | 构造 `ConsoleApprover::new()` | 可构造（CLI 交互式 Human Approval 入口存在）；stdin 交互（y/N 按 `action@target` 缓存）属运行时行为，需人工验证 | 通过（自动化 tests/v0_3.rs::tc021b_console_approver_constructible） |
+
 ### 4.4 异常与边界用例（必须覆盖）
 | 用例ID | 关联 | 场景 | 预期 | 状态 |
 |--------|------|------|------|------|
@@ -96,3 +106,4 @@
 | V2.5 | lushaohui | 2026-08-12 | V0.3=MVP 全绿：TC-009/010/011 + TC-010-b/011-b 状态置「通过（自动化 tests/v0_3.rs）」；补充 4.3/4.4 状态列 |
 | V2.6 | lushaohui | 2026-08-12 | V0.3 补充测试：新增 TC-014(多候选闭环缩放)/TC-015(空世界 world 哨兵)/TC-016(TraceQuery 过滤+游标)/TC-017(REST 列表+WB2002)/TC-018(POST /run 门禁+Executive 决策)/TC-019(WS 按 run 隔离)；全部 tests/v0_3.rs 通过 |
 | V2.7 | lushaohui | 2026-08-12 | V0.4 完整 Action 引擎落地：新增 4.3.1 节登记 TC-020a/b/c（REQ-014，tests/v0_3.rs::tc014a/b/c 全绿）；`self`/`self.field` 值表达式 + 幂等 creates/link + `action.<name>` 事件断言 |
+| V2.8 | lushaohui | 2026-08-12 | Policy 引擎 + 交互式 Human Approval 落地：新增 4.3.2 节登记 TC-015a/b/c/d（REQ-015，policy 解析/审批闸门/前置条件/Planner 闭环）+ TC-021a/b（CLI `--auto-approve` 标志 + `ConsoleApprover` 导出）；全部 tests/v0_3.rs 通过 |
