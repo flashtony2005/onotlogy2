@@ -5,10 +5,12 @@
 //! 每步产出 cognitive `TraceEvent` 并绑定 `object_refs`（可解释性根基）；Policy 拒 → WB2005；
 //! 认知引擎不可用 → WB2004。
 
+use crate::action::{ActionEngine, ActionError, ActionRegistry};
 use crate::agent::{AgentEngine, AgentError, Context, Decision, WorldSnapshot};
 use crate::runtime::RuntimeKernel;
 use crate::storage::StorageError;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -23,6 +25,9 @@ pub enum PlannerError {
     /// Policy 拒绝 → WB2005（TC-011-b），等待 Human Approval。
     #[error("Policy 拒绝（需 Human Approval）: {0}")]
     PolicyDenied(String),
+    /// 动作执行失败（V0.4 Action Engine）。
+    #[error("动作执行失败: {0}")]
+    Action(#[from] ActionError),
 }
 
 /// 运行状态码（与 timeline.status 对齐）。
@@ -77,6 +82,13 @@ pub enum Capability {
     },
     /// 删除对象（破坏性，MVP 默认需 Human Approval → Policy 拒绝，见 TC-011-b）。
     DeleteObject { id: String },
+    /// 声明式动作执行（V0.4 完整 Action Engine）：经 ActionRegistry 路由到对象自有动作。
+    Action {
+        object_type: String,
+        action: String,
+        target_id: String,
+        args: Value,
+    },
 }
 
 /// 计划步：一个能力 + 绑定对象 + 描述。
@@ -151,11 +163,70 @@ pub struct Goal {
 /// Planner：OpenAIP 自有决策编排核心。
 pub struct Planner<'a> {
     kernel: &'a RuntimeKernel,
+    /// 动作注册表（V0.4）：对象自有动作的声明式来源；空 → legacy 兜底。
+    registry: ActionRegistry,
 }
 
 impl<'a> Planner<'a> {
+    /// 无动作注册表（legacy 兜底：硬编码挽留计划）。
     pub fn new(kernel: &'a RuntimeKernel) -> Self {
-        Self { kernel }
+        Self {
+            kernel,
+            registry: ActionRegistry::empty(),
+        }
+    }
+
+    /// 带动作注册表（V0.4 完整 Action Engine）：候选对象经声明式动作执行。
+    pub fn with_actions(kernel: &'a RuntimeKernel, registry: ActionRegistry) -> Self {
+        Self { kernel, registry }
+    }
+
+    /// 候选对象选择：注册表非空 → 声明了 actions 的对象；否则 legacy 仅 Customer。
+    /// 均排除派生对象（如 RetentionTask），二次运行保持幂等。
+    fn select_candidates(&self, world: &WorldSnapshot) -> Vec<String> {
+        world
+            .objects
+            .iter()
+            .filter(|o| {
+                let t = o.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if self.registry.is_empty() {
+                    t == "Customer"
+                } else {
+                    self.registry.has_actions(t)
+                }
+            })
+            .filter_map(|o| o.get("id").and_then(|x| x.as_str()).map(|s| s.to_string()))
+            .collect()
+    }
+
+    /// 计划构建：候选对象声明了动作 → `Capability::Action`（经 ActionEngine 执行）；
+    /// 否则 legacy 挽留计划（无 ODL 时保持 V0.3 行为）。
+    fn build_plan(&self, world: &WorldSnapshot, candidates: &[String]) -> Vec<PlanStep> {
+        if self.registry.is_empty() {
+            return build_retention_plan(candidates);
+        }
+        let mut steps = Vec::new();
+        for c in candidates {
+            let otype = world
+                .objects
+                .iter()
+                .find(|o| o.get("id").and_then(|v| v.as_str()) == Some(c.as_str()))
+                .and_then(|o| o.get("type").and_then(|v| v.as_str()))
+                .unwrap_or("");
+            for act in self.registry.actions_of(otype) {
+                steps.push(PlanStep {
+                    capability: Capability::Action {
+                        object_type: otype.to_string(),
+                        action: act.name.clone(),
+                        target_id: c.clone(),
+                        args: json!({}),
+                    },
+                    object_refs: vec![c.clone()],
+                    description: format!("对 {c} 执行声明式动作 {}", act.name),
+                });
+            }
+        }
+        steps
     }
 
     /// 运行一个目标，跑通完整认知闭环并返回运行结果。
@@ -201,12 +272,10 @@ impl<'a> Planner<'a> {
             .await?;
         let _ = intent_dec;
 
-        // 3) OntologyQuery：从世界模型找出目标作用对象（MVP：全部客户）
-        let candidates: Vec<String> = world
-            .objects
-            .iter()
-            .filter_map(|o| o.get("id").and_then(|x| x.as_str()).map(|s| s.to_string()))
-            .collect();
+        // 3) OntologyQuery：从世界模型找出目标作用对象。
+        //    V0.4：若注册表非空，候选 = 声明了 actions 的对象（避免把派生对象再当候选）；
+        //    legacy 兜底：仅 Customer（保持 V0.3 行为幂等）。
+        let candidates = self.select_candidates(&world);
         let scope_refs = non_empty(candidates.clone());
         self.kernel
             .emit_cognitive(
@@ -246,7 +315,8 @@ impl<'a> Planner<'a> {
                 &world,
             )
             .await?;
-        let steps = build_retention_plan(&candidates);
+        // 5') 计划构建：注册表驱动的声明式动作 → Capability::Action；否则 legacy 挽留计划。
+        let steps = self.build_plan(&world, &candidates);
         self.kernel
             .emit_cognitive(
                 "Planning",
@@ -365,16 +435,30 @@ impl<'a> Planner<'a> {
                 id,
                 data,
             } => {
-                self.kernel
-                    .create_object(object_type, id, data.clone())
-                    .await?;
+                // 幂等：先查再建；已存在则更新（upsert），避免同一库二次运行主键冲突。
+                if self.kernel.get_object(id).await?.is_some() {
+                    self.kernel.update_object(id, data.clone()).await?;
+                } else {
+                    self.kernel
+                        .create_object(object_type, id, data.clone())
+                        .await?;
+                }
             }
             Capability::LinkRelation {
                 source,
                 edge,
                 target,
             } => {
-                self.kernel.link_relation(source, edge, target).await?;
+                // 幂等：同一边已存在则跳过，避免二次运行触发 WB2007。
+                let exists = self
+                    .kernel
+                    .neighbors(source)
+                    .await?
+                    .iter()
+                    .any(|r| r.relation == *edge && r.target == *target);
+                if !exists {
+                    self.kernel.link_relation(source, edge, target).await?;
+                }
             }
             Capability::EmitEvent { event_type, refs } => {
                 let r: Vec<&str> = refs.iter().map(|s| s.as_str()).collect();
@@ -383,6 +467,29 @@ impl<'a> Planner<'a> {
             Capability::DeleteObject { id } => {
                 // 正常流程不会到达（Policy 已拒），保留为能力注册表一项。
                 self.kernel.delete_object(id).await?;
+            }
+            Capability::Action {
+                object_type,
+                action,
+                target_id,
+                args,
+            } => {
+                // V0.4 完整 Action Engine：经注册表取声明式动作定义并解释执行。
+                let def = self
+                    .registry
+                    .get(object_type, action)
+                    .cloned()
+                    .ok_or_else(|| {
+                        PlannerError::Action(ActionError::TargetNotFound(format!(
+                            "动作 {action}@{object_type} 未注册"
+                        )))
+                    })?;
+                let args_map: HashMap<String, Value> = args
+                    .as_object()
+                    .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                    .unwrap_or_default();
+                let engine = ActionEngine::new(self.kernel);
+                engine.invoke(&def, target_id, &args_map).await?;
             }
         }
         Ok(())

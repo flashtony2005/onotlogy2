@@ -3,7 +3,10 @@
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
+use openaip_os::action::{ActionEngine, ActionRegistry};
 use openaip_os::agent::{AgentEngine, AgentError, Context, Decision};
+use openaip_os::ir::ValueExpr;
+use openaip_os::parse_odl;
 use openaip_os::planner::{
     Capability, PlanStep, Planner, PlannerError, Policy, PolicyDecision, generate_run_id,
 };
@@ -12,6 +15,7 @@ use openaip_os::server;
 use openaip_os::storage::{LibSQLStorage, TraceQuery};
 use openaip_os::trace::{View, build_timeline};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -266,7 +270,7 @@ async fn tc009_ws_stream_and_reconnect() {
     let addr: SocketAddr = listener.local_addr().unwrap();
     let ks = kernel.clone();
     tokio::spawn(async move {
-        let _ = server::serve(ks, engine, listener, "ui/dist").await;
+        let _ = server::serve(ks, engine, listener, "ui/dist", ActionRegistry::empty()).await;
     });
 
     // 先跑完 Planner（事件已落库，WS 连接时由 history 补齐）
@@ -377,7 +381,7 @@ async fn spawn_server(kernel: std::sync::Arc<RuntimeKernel>) -> SocketAddr {
     let addr = listener.local_addr().unwrap();
     let ks = kernel.clone();
     tokio::spawn(async move {
-        let _ = server::serve(ks, engine, listener, "ui/dist").await;
+        let _ = server::serve(ks, engine, listener, "ui/dist", ActionRegistry::empty()).await;
     });
     tokio::time::sleep(Duration::from_millis(150)).await; // 等绑定就绪
     addr
@@ -662,4 +666,196 @@ async fn tc_ws_run_scoped() {
         );
     }
     assert!(!msgs.iter().any(|m| m["runId"] == run_a), "不应混入 run_a");
+}
+
+// ── TC-011 衍生：同一库二次运行幂等（CreateObject upsert + LinkRelation 跳过） ─────────
+#[tokio::test]
+async fn tc011_repeated_run_is_idempotent() {
+    let (kernel, _) = seed_and_run(&FakeEngine).await;
+    let run_id = generate_run_id();
+    Planner::new(&kernel)
+        .run_goal(&FakeEngine, "reduce churn", "retention-agent", &run_id)
+        .await
+        .expect("同一库二次运行应幂等成功");
+
+    let tasks = kernel.query_objects("RetentionTask").await.unwrap();
+    assert_eq!(tasks.len(), 1, "task_001 应复用而非重复创建");
+    assert_eq!(tasks[0].version, 2, "二次运行应更新 version");
+
+    let edges = kernel.neighbors("001").await.unwrap();
+    assert_eq!(edges.len(), 1, "关系边应复用而非重复建边");
+}
+
+// ── V0.4 完整 Action Engine（REQ-014）───────────────────────────────────────
+const ODL_ACTIONS: &str = r#"
+object Customer:
+  properties:
+    name: string
+    level: string
+  actions:
+    updateLevel:
+      params:
+        level: string
+      updates:
+        - field: level
+          value: level
+    createOrder:
+      params:
+        amount: float
+      creates:
+        - type: Order
+          data:
+            amount: amount
+            customer: self
+          link: places
+"#;
+
+const ODL_RETAIN: &str = r#"
+object Customer:
+  properties:
+    name: string
+    level: string
+  actions:
+    retain:
+      creates:
+        - type: RetentionTask
+          data:
+            title: "客户挽留计划"
+            customer: self
+          link: needs_retention
+"#;
+
+// TC-014a：ODL `actions:` 块解析为 IR（params / updates / creates / data / link / self）
+#[tokio::test]
+async fn tc014a_odl_parses_actions() {
+    let ir = parse_odl(ODL_ACTIONS).expect("ODL 应解析");
+    let cust = ir.find("Customer").expect("应有 Customer");
+    assert_eq!(cust.actions.len(), 2, "应解析出 2 个动作");
+
+    let upd = cust
+        .actions
+        .iter()
+        .find(|a| a.name == "updateLevel")
+        .expect("updateLevel");
+    assert_eq!(upd.params.len(), 1);
+    assert_eq!(upd.params[0].name, "level");
+    assert_eq!(upd.updates.len(), 1);
+    assert_eq!(upd.updates[0].field, "level");
+    assert!(matches!(upd.updates[0].value, ValueExpr::Param(ref p) if p == "level"));
+
+    let create = cust
+        .actions
+        .iter()
+        .find(|a| a.name == "createOrder")
+        .expect("createOrder");
+    assert_eq!(create.creates.len(), 1);
+    let c = &create.creates[0];
+    assert_eq!(c.object_type, "Order");
+    assert_eq!(c.link_edge.as_deref(), Some("places"));
+    assert!(
+        c.data
+            .iter()
+            .any(|(k, v)| k == "amount" && matches!(v, ValueExpr::Param(p) if p == "amount"))
+    );
+    assert!(
+        c.data
+            .iter()
+            .any(|(k, v)| k == "customer" && matches!(v, ValueExpr::SelfId))
+    );
+}
+
+// TC-014b：ActionEngine 解释执行 updates + creates + link（幂等、发 world 事件）
+#[tokio::test]
+async fn tc014b_action_engine_executes() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    kernel
+        .create_object("Customer", "001", json!({"name": "Apple", "level": "VIP"}))
+        .await
+        .unwrap();
+    let reg = ActionRegistry::from_ir(&parse_odl(ODL_ACTIONS).unwrap());
+    let engine = ActionEngine::new(&kernel);
+
+    // updateLevel：level -> GOLD
+    let upd = reg.get("Customer", "updateLevel").unwrap();
+    let mut args = HashMap::new();
+    args.insert("level".to_string(), json!("GOLD"));
+    engine.invoke(upd, "001", &args).await.unwrap();
+    let c = kernel.get_object("001").await.unwrap().unwrap();
+    assert_eq!(c.data["level"], json!("GOLD"), "updateLevel 应改写 level");
+
+    // createOrder：创建 Order 并连边 places（customer=self）
+    let ord = reg.get("Customer", "createOrder").unwrap();
+    let mut args2 = HashMap::new();
+    args2.insert("amount".to_string(), json!(100));
+    let eff = engine.invoke(ord, "001", &args2).await.unwrap();
+    assert_eq!(eff.created.len(), 1);
+    let oid = &eff.created[0];
+    let o = kernel.get_object(oid).await.unwrap().unwrap();
+    assert_eq!(o.data["amount"], json!(100));
+    assert_eq!(o.data["customer"], json!("001"), "customer 应为 self ID");
+    let edges = kernel.neighbors("001").await.unwrap();
+    assert!(
+        edges
+            .iter()
+            .any(|e| e.relation == "places" && e.target == *oid)
+    );
+
+    // 动作执行 world 事件
+    let wevents = kernel.list_world_events().await.unwrap();
+    assert!(wevents.iter().any(|e| e.event_type == "action.createOrder"));
+}
+
+// TC-014c：Planner 经 ActionRegistry 跑通闭环（声明式 retain 替代硬编码挽留计划）
+#[tokio::test]
+async fn tc014c_planner_via_registry_closed_loop() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    kernel
+        .create_object("Customer", "001", json!({"name": "Apple", "level": "VIP"}))
+        .await
+        .unwrap();
+    kernel
+        .create_object("Customer", "002", json!({"name": "Tesla", "level": "GOLD"}))
+        .await
+        .unwrap();
+    let reg = ActionRegistry::from_ir(&parse_odl(ODL_RETAIN).unwrap());
+    let run_id = generate_run_id();
+    let res = Planner::with_actions(&kernel, reg)
+        .run_goal(&FakeEngine, "reduce churn", "retention-agent", &run_id)
+        .await
+        .expect("经注册表应跑通");
+    assert_eq!(res.status.as_str(), "Completed");
+
+    // 每客户一个 RetentionTask（customer=self），一条 needs_retention 边
+    let tasks = kernel.query_objects("RetentionTask").await.unwrap();
+    assert_eq!(tasks.len(), 2, "应为 2 个客户各建 1 个挽留任务");
+    for t in &tasks {
+        let cid = t.data["customer"].as_str().unwrap();
+        assert!(cid == "001" || cid == "002");
+        let edges = kernel.neighbors(cid).await.unwrap();
+        assert!(
+            edges
+                .iter()
+                .any(|e| e.relation == "needs_retention" && e.target == t.id),
+            "应建立 needs_retention 边"
+        );
+    }
+
+    // 动作执行 world 事件 + Policy Allow（非 Deny）
+    let wevents = kernel.list_world_events().await.unwrap();
+    assert!(wevents.iter().any(|e| e.event_type == "action.retain"));
+    let cevents = kernel
+        .list_events(TraceQuery::for_run(&run_id))
+        .await
+        .unwrap();
+    let policy: Vec<&str> = cevents
+        .iter()
+        .filter(|e| e.event_type == "PolicyCheck")
+        .map(|e| e.output.as_ref().and_then(|o| o.as_str()).unwrap_or(""))
+        .collect();
+    assert!(
+        policy.iter().all(|p| *p == "Allow"),
+        "Policy 应 Allow 声明式动作"
+    );
 }

@@ -30,7 +30,7 @@
 V0.1 Object Kernel   让对象有生命      .odl→IR→Rust→Turso→CRUD + 生命周期事件
 V0.2 World Model     让世界成型        + Relation + 领域 Event（三要素闭环）
 V0.3 Agent 闭环(MVP) 让 Agent 住进世界  + Pi Cognitive Engine + Planner + 最小 Action + 观察 UI
-V0.4 Action & Policy 让行为可编排       完整 Action Engine + Policy 约束
+V0.4 Action & Policy 让行为可编排       完整 Action Engine（已实现）+ Policy 约束（待办）
 V0.5 Agent 自治      让系统能学习       自学习 / Evolution / Memory 沉淀
 ```
 
@@ -50,15 +50,15 @@ V0.5 Agent 自治      让系统能学习       自学习 / Evolution / Memory �
 
 **V0.3 Agent 闭环（= MVP，让 Agent 住进世界并被人理解）**
 - 接入 **Pi 作 Cognitive Engine**（`AgentEngine` trait）+ OpenAIP 自有 **Planner**（Goal→LLMGoalParser→Planner→PlanStep→Capability→Execute）
-- 最小 **Action 执行**（让 Planner 闭环不断裂；完整 Action Engine 在 V0.4）
+- 最小 **Action 执行**（让 Planner 闭环不断裂；完整 Action Engine 已在 V0.4 落地）
 - `TraceEvent(kind=cognitive)`：Agent 认知事件（Goal/Intent/Reasoning/Planning/...），绑定 `object_refs`
 - 三层图形 **Observation UI**（Executive/Operator/Developer）+ WebSocket 流（详设 `agent-observation-design.md`）
 - 端到端：用户输入 → Pi(NLU) → Intent → Ontology Query → Planner → Action → Executor → Trace UI
 - 需求：REQ-009/010/011
 
 **V0.4 Action & Policy**（让行为可编排）
-- Action 从"最小执行"升级为完整引擎：对象自有能力 `Customer actions: createOrder / updateLevel`
-- Policy 约束与审批（Human Approval）
+- Action 从"最小执行"升级为完整引擎（**已实现**）：对象自有能力经 ODL `actions:` 声明 → `ActionRegistry` → `ActionEngine` 数据驱动解释执行（`updates` / `creates` / `link`，幂等），替代硬编码挽留计划；需求 REQ-014，TC-014a/b/c 全绿
+- Policy 约束与审批（Human Approval）：**待办**，归后续版本（V0.5 或单独 Policy 迭代）
 
 **V0.5 Agent 自治**（让系统能学习）
 - 自学习 / Evolution / Memory 沉淀
@@ -67,10 +67,10 @@ V0.5 Agent 自治      让系统能学习       自学习 / Evolution / Memory �
 ### 4.3 范围与排期
 | 版本 | 目标 | 关联需求 | 状态 |
 |------|------|----------|------|
-| V0.1 | Object Kernel + 生命周期事件 + CLI 观察 | REQ-001~008 | 规划中 |
+| V0.1 | Object Kernel + 生命周期事件 + CLI 观察 | REQ-001~008 | 已实现 |
 | V0.2 | World Model（Relation + 领域 Event） | REQ-012/013 | 已实现 |
-| V0.3 | Agent 闭环（= MVP） | REQ-009~011 | 未开始 |
-| V0.4 | Action & Policy | 待拆 | 未开始 |
+| V0.3 | Agent 闭环（= MVP） | REQ-009~011 | 已实现 |
+| V0.4 | Action & Policy | REQ-014（Action 引擎已实现；Policy 待办） | 部分实现 |
 | V0.5 | Agent 自治 | 待拆 | 未开始 |
 
 ## 5. 风险点 & 注意事项
@@ -99,3 +99,5 @@ V0.5 Agent 自治      让系统能学习       自学习 / Evolution / Memory �
 | V1.6 | lushaohui | 2026-08-11 | 关联补 task-spec-template（TDD 闭环打通） |
 | V1.7 | lushaohui | 2026-08-11 | 表名对齐 table-design 约束：`trace_event` → `wb_trace_event` |
 | V1.8 | lushaohui | 2026-08-11 | V0.2 落地：范围补 REQ-012/013；状态 未开始→已实现 |
+| V1.9 | lushaohui | 2026-08-12 | V0.3=MVP 落地：状态 未开始→已实现 |
+| V2.0 | lushaohui | 2026-08-12 | V0.4 完整 Action 引擎落地：REQ-014 已实现（状态表 V0.4→部分实现）；Policy 审批标记待办 |

@@ -141,7 +141,8 @@ Kernel 永远稳定，能力外挂。
 | ✅ 可观察基建（Event Bus + TraceEvent(world) + CLI 观察） | V0.1 | 可观察性与内核同生，为 Agent 观察打地基 |
 | ✅ World Model（Relation + 领域 Event） | V0.2 | 三要素成型，Agent 的世界底座 |
 | ✅ Agent 接入（Pi Cognitive Engine + Planner + 最小 Action + 观察 UI） | V0.3（=MVP） | Pi 经 `AgentEngine` 提供认知；OpenAIP 拥有 Planner / Policy / Ontology / World Model / Trace，详见 `pi-agent-integration.md` |
-| ❌ 完整 Action Engine + Policy | V0.4 | 最小 Action 执行已在 V0.3；完整引擎与约束在 V0.4 |
+| ✅ 完整 Action Engine（+ ActionRegistry / ActionEngine，ODL `actions:` 声明式） | V0.4 | 数据驱动解释执行 `updates`/`creates`/`link`（幂等），替代硬编码计划；Policy 审批仍待办 |
+| ❌ Policy 审批约束（Human Approval） | V0.4（待办） | 完整 Action 引擎已在 V0.4 落地；Policy 审批归后续迭代 |
 | ❌ 完整 GraphRAG | 世界模型成熟后 | 是 Ontology + Knowledge Graph + Embedding 的上层；没有 Object Graph 则无意义 |
 | ❌ Evolution Engine（自学习 / 自我进化） | V0.5 | 需 Experience→Pattern→Proposal→Validation→Merge |
 | ❌ Multi-Agent | V3 | 属 Agent Society（Protocol/Consensus/Delegation） |
@@ -225,3 +226,5 @@ Human → Agent UI → Decision Trace UI
 | V1.6 | lushaohui | 2026-08-11 | 表名对齐 table-design 约束：`trace_event` → `wb_trace_event` |
 | V1.7 | lushaohui | 2026-08-11 | ODL 属性语法定版：统一 `properties:` 块 + `name: type`，禁止 `property:` 单条形式 |
 | V1.8 | lushaohui | 2026-08-11 | 明确 codegen 产物：生成 `pub const X_DEF: ObjectDef`（新增 ObjectDef 类型，内部持 &'static str JSON，编译期合法、运行时 serde 解析驱动，杜绝 match 硬编码），与 4.2.1 及原则2（metadata-as-const）一致 |
+| V1.9 | lushaohui | 2026-08-12 | V0.3=MVP 能力边界标记已实现 |
+| V2.0 | lushaohui | 2026-08-12 | V0.4 完整 Action 引擎落地：4.4 能力边界表「完整 Action Engine」由 ❌ 改 ✅（数据驱动 ActionRegistry/ActionEngine）；Policy 审批单列待办 |

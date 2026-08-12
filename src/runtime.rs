@@ -163,6 +163,11 @@ impl RuntimeKernel {
         Ok(rec)
     }
 
+    /// 按语义 ID 读取单个对象（供 Planner 幂等能力判断）。
+    pub async fn get_object(&self, id: &str) -> Result<Option<ObjectRecord>, StorageError> {
+        self.storage.get(id).await
+    }
+
     pub async fn delete_object(&self, id: &str) -> Result<(), StorageError> {
         self.storage.delete(id).await?;
         self.emit(TraceEvent::world("ObjectDeleted", id)).await?;

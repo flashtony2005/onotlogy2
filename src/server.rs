@@ -6,6 +6,7 @@
 //!
 //! 所有事件同源 `TraceEvent`，WS 与 timeline 共用 `TraceEventDto`（camelCase 单一真相源）。
 
+use crate::action::ActionRegistry;
 use crate::agent::AgentEngine;
 use crate::planner::{Planner, PlannerError, RunStatus, generate_run_id};
 use crate::runtime::RuntimeKernel;
@@ -35,6 +36,8 @@ struct RunRecord {
 pub struct AppState {
     pub kernel: Arc<RuntimeKernel>,
     pub engine: Arc<dyn AgentEngine>,
+    /// 动作注册表（V0.4）：对象自有动作的声明式来源；空 → legacy 兜底。
+    pub registry: ActionRegistry,
     runs: Mutex<HashMap<String, RunRecord>>,
     pub static_dir: String,
 }
@@ -151,10 +154,12 @@ pub async fn serve(
     engine: Arc<dyn AgentEngine>,
     listener: TcpListener,
     static_dir: impl Into<String>,
+    registry: ActionRegistry,
 ) -> std::io::Result<()> {
     let state = Arc::new(AppState {
         kernel,
         engine,
+        registry,
         runs: Mutex::new(HashMap::new()),
         static_dir: static_dir.into(),
     });
@@ -256,7 +261,7 @@ async fn run_start(State(st): State<Arc<AppState>>, Json(body): Json<RunBody>) -
     let ag = agent_id.clone();
     let rid = run_id.clone();
     tokio::spawn(async move {
-        let res = Planner::new(&kernel)
+        let res = Planner::with_actions(&kernel, st.registry.clone())
             .run_goal(engine.as_ref(), &goal, &ag, &rid)
             .await;
         let rec = match res {

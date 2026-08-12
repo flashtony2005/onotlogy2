@@ -1,0 +1,18 @@
+# OpenAIP-OS 示例本体（CRM）—— 演示 V0.4 完整 Action Engine
+#
+# 对象自有动作写在 `actions:` 块：动作由通用 ActionEngine 解释执行，
+# 而非 Planner 硬编码。运行：oaip agent run --odl examples/crm.odl "reduce churn"
+
+object Customer:
+  properties:
+    name: string
+    level: string
+  actions:
+    # 挽留动作：为每个客户创建挽留任务并与之连边（替代 V0.3 硬编码 build_retention_plan）
+    retain:
+      creates:
+        - type: RetentionTask
+          data:
+            title: "客户挽留计划"
+            customer: self        # self → 目标客户 ID
+          link: needs_retention   # 建立 Customer -needs_retention-> RetentionTask

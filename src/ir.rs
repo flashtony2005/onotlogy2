@@ -67,15 +67,78 @@ pub struct PropertyDef {
     pub ty: ScalarType,
 }
 
-/// 对象类型（对应 ODL `object X:`）。
+/// 动作参数定义（对应 ODL `actions.<name>.params`）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParamDef {
+    pub name: String,
+    pub ty: ScalarType,
+}
+
+/// 值表达式：Action 的 effects 中引用参数 / 自身 / 字面量（V0.4 完整 Action Engine）。
+///
+/// 纯数据、可序列化，由 `ActionEngine` 解释执行，杜绝每动作写专属 Rust 分支。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ValueExpr {
+    /// 字面量（字符串/数字/布尔/null）。
+    Literal(serde_json::Value),
+    /// 引用动作参数（按名）。
+    Param(String),
+    /// 目标对象自身 ID（`self`）。
+    SelfId,
+    /// 目标对象的某字段值（`self.<field>`）。
+    SelfField(String),
+}
+
+/// 字段更新：把目标对象的 `field` 改写为求值后的 `value`（对应 `updates:`）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FieldUpdate {
+    pub field: String,
+    pub value: ValueExpr,
+}
+
+/// 创建效应：新建一个对象，可选地经 `link_edge` 与目标对象连边（对应 `creates:`）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CreateEffect {
+    /// 新对象类型。
+    pub object_type: String,
+    /// 显式 ID；缺省自动生成 `<target>_<action>`（幂等 upsert）。
+    #[serde(default)]
+    pub id: Option<String>,
+    /// 新对象字段 → 值表达式。
+    #[serde(default)]
+    pub data: Vec<(String, ValueExpr)>,
+    /// 若设置，建立 `target --edge--> new` 关系边。
+    #[serde(default)]
+    pub link_edge: Option<String>,
+}
+
+/// 动作定义（对应 ODL `actions.<name>`）：对象自有能力，声明式描述其效应。
+///
+/// 这是 V0.4 把"最小 Action 执行"升级为"完整 Action Engine"的核心：
+/// 动作写在对象上，由通用 `ActionEngine` 解释执行，而非 Planner 硬编码。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActionDef {
+    pub name: String,
+    #[serde(default)]
+    pub params: Vec<ParamDef>,
+    #[serde(default)]
+    pub updates: Vec<FieldUpdate>,
+    #[serde(default)]
+    pub creates: Vec<CreateEffect>,
+}
+
+/// 对象类型（对应 ODL `object X:`）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObjectType {
     pub name: String,
     pub properties: Vec<PropertyDef>,
+    /// 对象自有动作（V0.4）；ODL 未声明时为空。
+    #[serde(default)]
+    pub actions: Vec<ActionDef>,
 }
 
 /// 整份 ODL 解析出的 IR。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct OntologyIR {
     pub object_types: Vec<ObjectType>,
 }

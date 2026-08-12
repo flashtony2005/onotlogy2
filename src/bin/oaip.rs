@@ -1,6 +1,7 @@
 //! `oaip` —— OpenAIP-OS 命令行（V0.1：compile / run / object list / event list；V0.2：relation / event emit；V0.3：agent run / serve）
 
 use clap::{Parser, Subcommand};
+use openaip_os::action::ActionRegistry;
 use openaip_os::agent::{AgentEngine, PiAgentEngine};
 use openaip_os::planner::{Planner, PlannerError, generate_run_id};
 use openaip_os::runtime::RuntimeKernel;
@@ -55,6 +56,9 @@ enum Cmd {
         host: String,
         #[arg(long, default_value = "ui/dist")]
         static_dir: String,
+        /// 可选 ODL 文件：声明对象自有动作（V0.4 完整 Action Engine）；缺省走 legacy 兜底。
+        #[arg(long)]
+        odl: Option<String>,
     },
     /// 数据库维护（schema 迁移 / 清理演示数据）
     Db {
@@ -72,6 +76,9 @@ enum AgentCmd {
         /// Agent ID
         #[arg(long, default_value = "retention-agent")]
         agent_id: String,
+        /// 可选 ODL 文件：声明对象自有动作（V0.4 完整 Action Engine）；缺省走 legacy 兜底。
+        #[arg(long)]
+        odl: Option<String>,
     },
 }
 
@@ -140,13 +147,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         },
         Cmd::Agent { cmd } => match cmd {
-            AgentCmd::Run { goal, agent_id } => cmd_agent_run(&cli.db, &goal, &agent_id).await?,
+            AgentCmd::Run {
+                goal,
+                agent_id,
+                odl,
+            } => cmd_agent_run(&cli.db, &goal, &agent_id, odl.as_deref()).await?,
         },
         Cmd::Serve {
             port,
             host,
             static_dir,
-        } => cmd_serve(&cli.db, &host, port, &static_dir).await?,
+            odl,
+        } => cmd_serve(&cli.db, &host, port, &static_dir, odl.as_deref()).await?,
         Cmd::Db { cmd } => match cmd {
             DbCmd::Reset => cmd_db_reset(&cli.db).await?,
         },
@@ -289,10 +301,12 @@ async fn cmd_agent_run(
     db: &str,
     goal: &str,
     agent_id: &str,
+    odl: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage = LibSQLStorage::open(db).await?;
     let kernel = RuntimeKernel::new(storage);
     let engine = PiAgentEngine::new(agent_id.to_string());
+    let registry = load_registry(odl)?;
 
     if !engine.health().await {
         println!(
@@ -302,7 +316,7 @@ async fn cmd_agent_run(
     }
 
     let run_id = generate_run_id();
-    match Planner::new(&kernel)
+    match Planner::with_actions(&kernel, registry)
         .run_goal(&engine, goal, agent_id, &run_id)
         .await
     {
@@ -332,6 +346,9 @@ async fn cmd_agent_run(
         Err(PlannerError::Storage(e)) => {
             println!("❌ 存储错误：{e}");
         }
+        Err(PlannerError::Action(e)) => {
+            println!("❌ 动作执行失败（V0.4 Action Engine）：{e}");
+        }
     }
     Ok(())
 }
@@ -342,15 +359,29 @@ async fn cmd_serve(
     host: &str,
     port: u16,
     static_dir: &str,
+    odl: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage = LibSQLStorage::open(db).await?;
     let kernel = Arc::new(RuntimeKernel::new(storage));
     let engine: Arc<dyn AgentEngine> = Arc::new(PiAgentEngine::new("retention-agent"));
+    let registry = load_registry(odl)?;
     let addr: SocketAddr = format!("{host}:{port}").parse()?;
     let listener = TcpListener::bind(addr).await?;
     println!(
         "🚀 OpenAIP-OS Agent Observation 服务已启动：\n  UI  → http://{addr}/\n  API → http://{addr}/api/v1/wb/agent\n  WS  → ws://{addr}/api/v1/wb/agent/{{runId}}/stream"
     );
-    server::serve(kernel, engine, listener, static_dir).await?;
+    server::serve(kernel, engine, listener, static_dir, registry).await?;
     Ok(())
+}
+
+/// 从 ODL 文件构建动作注册表（V0.4）；缺省返回空注册表（legacy 兜底）。
+fn load_registry(odl: Option<&str>) -> Result<ActionRegistry, Box<dyn std::error::Error>> {
+    match odl {
+        Some(path) => {
+            let src = std::fs::read_to_string(path)?;
+            let ir = parse_odl(&src)?;
+            Ok(ActionRegistry::from_ir(&ir))
+        }
+        None => Ok(ActionRegistry::empty()),
+    }
 }
