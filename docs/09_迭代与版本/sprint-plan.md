@@ -65,7 +65,7 @@ V0.5 Agent 自治      让系统能学习       自学习 / Evolution / Memory �
 **V0.5 Agent 自治**（让系统能学习）
 - Memory 沉淀（**已实现**）：经验按 `action.<name>` 沉淀至 `wb_memory`（hits 累加），下一轮 run 经 `MemoryRecall` 认知事件召回，形成 Action→Memory→下次 Plan 闭环；需求 REQ-016，TC-022a/b 全绿
 - 观察 UI 接入 Memory 视图（**已实现**）：三层认知导航新增 Memory 标签，前端经 `GET /api/v1/wb/agent/memory` 渲染沉淀列表（label/payload/hits/updatedAt），运行前载入、收到 MemoryUpdate/MemoryRecall 事件实时刷新；TC-024a 全绿
-- 自学习 / Evolution：归远期（BL-003，经验→Pattern→Proposal→Validation→Merge），本轮未做（MVP 连 Experience 积累都未就绪；V0.5 先落 Memory 地基）
+- Evolution Engine MVP（**已实现**）：BL-003，确立第一原则 **Learn≠Permission**（Evolution 不修改 Policy、不绕过 Human Approval）。`wb_memory` 经验 → Pattern(hits≥2, confidence=min(1,hits/5)) → Proposal(kind=ActionPattern, status=Proposed) → Validation(阈值≥0.6→Validated) → LearnedKnowledge，全程可追溯（run_ids/proposal_id/pattern_label）；`run_evolution` 幂等，server 暴露 `GET /api/v1/wb/agent/evolution`；TC-025a~h 全绿。AutoApprove 类「Knowledge→Permission」升级归第二阶段（需 Policy 显式允许学习 + 高置信 + 多次成功 + 无失败 + 低风险）
 
 ### 4.3 范围与排期
 | 版本 | 目标 | 关联需求 | 状态 |
@@ -74,7 +74,7 @@ V0.5 Agent 自治      让系统能学习       自学习 / Evolution / Memory �
 | V0.2 | World Model（Relation + 领域 Event） | REQ-012/013 | 已实现 |
 | V0.3 | Agent 闭环（= MVP） | REQ-009~011 | 已实现 |
 | V0.4 | Action & Policy | REQ-014（Action 引擎）/ REQ-015（Policy 引擎） | 已实现 |
-| V0.5 | Agent 自治（Memory 沉淀） | REQ-016（已实现）；Evolution 归远期 | 已实现 |
+| V0.5 | Agent 自治（Memory 沉淀 + Evolution MVP） | REQ-016（已实现）；REQ-017 Evolution Engine MVP（已实现，Learn≠Permission） | 已实现 |
 
 ## 5. 风险点 & 注意事项
 - 范围蔓延：V0.3 的 Agent 极易被提前"顺手"塞进 V0.1/V0.2，须以本表为卡点。
@@ -109,3 +109,4 @@ V0.5 Agent 自治      让系统能学习       自学习 / Evolution / Memory �
 | V2.3 | lushaohui | 2026-08-12 | V0.5 Memory 沉淀落地：REQ-016 已实现（状态表 V0.5→已实现）；经验按 `action.<name>` 沉淀 `wb_memory` + `MemoryRecall` 闭环；Evolution 归远期；TC-022a/b 全绿 |
 | V2.4 | lushaohui | 2026-08-12 | V0.4 遗留项：server 挂起式 HTTP 审批端点落地；`PolicyApprover::approve` 升 async，新增 `ServerApprover`+`ApprovalStore`，server 暴露 `GET /run/:run_id/approvals` 与 `POST /run/:run_id/approval/:req_id`（approve→恢复 / reject→WB2005 终止）；TC-023a/b 全绿 |
 | V2.5 | lushaohui | 2026-08-12 | 观察 UI 接入 Memory 视图：后端新增 `GET /api/v1/wb/agent/memory`（`recall_all` 按 hits 降序）；前端三层导航加 Memory 标签渲染沉淀列表，运行前载入 + MemoryUpdate/MemoryRecall 事件实时刷新；TC-024a 全绿 |
+| V2.6 | lushaohui | 2026-08-12 | Evolution Engine MVP（REQ-017）落地：Learn≠Permission；`src/evolution.rs` + storage 三表 `wb_pattern/wb_proposal/wb_learned` + RuntimeKernel `run_evolution` + server `GET /api/v1/wb/agent/evolution`；TC-025a~h 全绿（含 Isolation 不绕过审批、幂等、可追溯） |

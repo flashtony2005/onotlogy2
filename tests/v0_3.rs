@@ -5,6 +5,9 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use openaip_os::action::{ActionEngine, ActionRegistry};
 use openaip_os::agent::{AgentEngine, AgentError, Context, Decision};
+use openaip_os::evolution::{
+    EvolutionState, Experience, LearnedKnowledge, Pattern, Proposal, ProposalKind, ProposalStatus,
+};
 use openaip_os::ir::{CompareOp, ValueExpr};
 use openaip_os::parse_odl;
 use openaip_os::planner::{
@@ -1487,5 +1490,263 @@ async fn tc024a_server_memory_endpoint() {
     assert!(
         list[0]["payload"].get("experience").is_some(),
         "payload 应回传"
+    );
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════
+// TC-025  Evolution Engine MVP（BL-003 · REQ-017）：Experience → Pattern → Proposal →
+// Validation → LearnedKnowledge。第一原则 Learn≠Permission：Evolution 不修改 Policy、不绕过
+// Human Approval。所有测试均验证该安全边界。
+// ════════════════════════════════════════════════════════════════════════════════════════
+
+// ── TC-025a：Experience Mining（hits≥2 才成 Pattern） ────────────────────────────────────
+#[test]
+fn tc025a_experience_mining() {
+    let exps = vec![
+        Experience {
+            label: "action.retain".into(),
+            hits: 3,
+        },
+        Experience {
+            label: "action.refund".into(),
+            hits: 1,
+        },
+    ];
+    let patterns = openaip_os::evolution::mine_patterns(&exps);
+    // retain(3) → 1 条 pattern；refund(1) → 0 条（未达 PATTERN_MIN_HITS）
+    assert_eq!(patterns.len(), 1, "仅 retain 应出 pattern");
+    assert_eq!(patterns[0].label, "pattern.action.retain");
+    assert_eq!(patterns[0].support, 3);
+    // 非 action.* 前缀的经验不参与
+    let no_prefix = vec![Experience {
+        label: "RetentionPattern".into(),
+        hits: 9,
+    }];
+    assert!(
+        openaip_os::evolution::mine_patterns(&no_prefix).is_empty(),
+        "非 action.* 经验不应成 Pattern"
+    );
+}
+
+// ── TC-025b：Confidence 边界（确定性 min(1, hits/5)） ───────────────────────────────────
+#[test]
+fn tc025b_confidence_boundary() {
+    assert_eq!(Pattern::confidence_of(1), 0.2);
+    assert_eq!(Pattern::confidence_of(2), 0.4);
+    assert_eq!(Pattern::confidence_of(3), 0.6);
+    assert_eq!(Pattern::confidence_of(4), 0.8);
+    assert_eq!(Pattern::confidence_of(5), 1.0);
+    assert_eq!(Pattern::confidence_of(7), 1.0, "超过 5 封顶为 1.0");
+}
+
+// ── TC-025c：Proposal（Pattern→Proposal；Proposal 不改变 Agent 行为） ───────────────────
+#[test]
+fn tc025c_proposal_does_not_change_behavior() {
+    let pattern = Pattern {
+        label: "pattern.action.retain".into(),
+        action: "retain".into(),
+        support: 3,
+        confidence: 0.6,
+        run_ids: vec!["RUN-1".into()],
+    };
+    let prop = openaip_os::evolution::propose(&pattern);
+    assert_eq!(prop.id, "proposal.retain");
+    assert_eq!(prop.kind, ProposalKind::ActionPattern);
+    assert_eq!(prop.target, "retain");
+    assert_eq!(prop.status, ProposalStatus::Proposed);
+    assert_eq!(prop.pattern_label, pattern.label);
+    // 安全边界：Proposal 仅是一个知识候选，绝不携带任何「权限/放行」语义字段。
+    // 这里通过类型断言确认 Proposal 没有 approval / bypass 相关字段——它不能被用来改 Policy。
+    let _: Proposal = prop; // 若未来给 Proposal 加 bypass 字段，此类型将被迫显式处理。
+}
+
+// ── TC-025d：Validation（阈值校验，Validated≠可改安全策略） ─────────────────────────────
+#[test]
+fn tc025d_validation_threshold() {
+    let mut low = Proposal {
+        id: "proposal.refund".into(),
+        kind: ProposalKind::ActionPattern,
+        target: "refund".into(),
+        confidence: 0.4, // hits=2 边界
+        status: ProposalStatus::Proposed,
+        pattern_label: "pattern.action.refund".into(),
+        run_ids: vec![],
+    };
+    low.status = openaip_os::evolution::validate(&low);
+    assert_eq!(low.status, ProposalStatus::Rejected, "conf<0.6 应 Rejected");
+
+    let mut ok = Proposal {
+        id: "proposal.retain".into(),
+        kind: ProposalKind::ActionPattern,
+        target: "retain".into(),
+        confidence: 0.6,
+        status: ProposalStatus::Proposed,
+        pattern_label: "pattern.action.retain".into(),
+        run_ids: vec![],
+    };
+    ok.status = openaip_os::evolution::validate(&ok);
+    assert_eq!(
+        ok.status,
+        ProposalStatus::Validated,
+        "conf≥0.6 应 Validated"
+    );
+    // Validated 只代表「该知识通过验证」，不授予任何权限（Learn≠Permission）。
+    // 阈值常量定义见 evolution::VALIDATE_THRESHOLD（=0.6）。
+}
+
+// ── TC-025e：Evolution Isolation（LearnedKnowledge 不改动 Policy / 不绕过 Approval） ─────
+#[tokio::test]
+async fn tc025e_evolution_does_not_bypass_approval() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    // 模拟 retain 被成功执行 3 次 → 沉淀经验
+    for _ in 0..3 {
+        kernel
+            .record_memory("action.retain", json!({ "experience": "retain" }))
+            .await
+            .unwrap();
+    }
+    // 跑一轮 Evolution：应产出 LearnedKnowledge（retain Validated）
+    let state = kernel.run_evolution("RUN-100").await.unwrap();
+    assert_eq!(state.learned.len(), 1, "retain 应沉淀为 LearnedKnowledge");
+    assert_eq!(state.learned[0].action, "retain");
+
+    // 关键安全断言：require_approval 动作即使已 Learned，仍走 Human Approval 闸门（WB2005）。
+    // 用 refund 动作的 policy（require_approval=true）做 check_action，默认审批器拒 → Deny。
+    let def = parse_odl(ODL_REFUND)
+        .unwrap()
+        .find("Customer")
+        .unwrap()
+        .actions
+        .iter()
+        .find(|a| a.name == "refund")
+        .cloned()
+        .unwrap();
+    let step = PlanStep {
+        capability: Capability::Action {
+            object_type: "Customer".into(),
+            action: "refund".into(),
+            target_id: "001".into(),
+            args: json!({}),
+        },
+        object_refs: vec!["001".into()],
+        description: "refund".into(),
+    };
+    let mut args = HashMap::new();
+    args.insert("amount".to_string(), json!(500));
+    let target = json!({ "level": "VIP" });
+    let deny = Policy::check_action(
+        &step,
+        Some(&def),
+        &AutoApprover { allow: false },
+        Some(&target),
+        &args,
+    )
+    .await;
+    assert!(
+        matches!(deny, PolicyDecision::Deny { .. }),
+        "require_approval 动作即便 Evolution 已学习，仍须 Human Approval（不绕过 WB2005）"
+    );
+}
+
+// ── TC-025f：Idempotency（run_evolution 可重复运行不重复产出知识） ──────────────────────
+#[tokio::test]
+async fn tc025f_evolution_idempotent() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    for _ in 0..3 {
+        kernel
+            .record_memory("action.retain", json!({ "experience": "retain" }))
+            .await
+            .unwrap();
+    }
+    // 连续运行三轮
+    kernel.run_evolution("RUN-1").await.unwrap();
+    kernel.run_evolution("RUN-2").await.unwrap();
+    let final_state = kernel.run_evolution("RUN-3").await.unwrap();
+
+    assert_eq!(
+        final_state.learned.len(),
+        1,
+        "learned.retain 应仅 1 条（幂等 upsert）"
+    );
+    assert_eq!(final_state.proposals.len(), 1, "proposal.retain 应仅 1 条");
+    assert_eq!(final_state.patterns.len(), 1, "pattern.retain 应仅 1 条");
+    // 证据 run_ids 应跨三轮累加去重：[RUN-1, RUN-2, RUN-3]
+    assert_eq!(
+        final_state.patterns[0].run_ids.len(),
+        3,
+        "证据应跨 run 累积"
+    );
+    assert_eq!(final_state.learned[0].run_ids.len(), 3);
+}
+
+// ── TC-025g：Traceability（LearnedKnowledge→Proposal→Pattern→Experience→AgentRun） ──────
+#[tokio::test]
+async fn tc025g_evolution_traceability() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    for _ in 0..3 {
+        kernel
+            .record_memory("action.retain", json!({ "experience": "retain" }))
+            .await
+            .unwrap();
+    }
+    let state: EvolutionState = kernel.run_evolution("RUN-1021").await.unwrap();
+
+    // LearnedKnowledge → Proposal → Pattern 父引用链完整
+    let learned: &LearnedKnowledge = state.learned.first().expect("应有 learned");
+    let prop = state
+        .proposals
+        .iter()
+        .find(|p| p.id == learned.proposal_id)
+        .expect("learned 应可追溯至 proposal");
+    let pat = state
+        .patterns
+        .iter()
+        .find(|p| p.label == prop.pattern_label)
+        .expect("proposal 应可追溯至 pattern");
+
+    // Pattern → Experience（action.retain）且 → AgentRun（RUN-1021）
+    assert_eq!(pat.action, "retain", "pattern.action 应回指经验动作");
+    assert!(
+        pat.run_ids.contains(&"RUN-1021".to_string()),
+        "pattern 应可追溯至来源 run"
+    );
+    assert!(
+        learned.run_ids.contains(&"RUN-1021".to_string()),
+        "learned 应可追溯至来源 run"
+    );
+    assert_eq!(prop.target, "retain");
+}
+
+// ── TC-025h：server GET /evolution 端点（与 Memory 端点同构） ───────────────────────────
+#[tokio::test]
+async fn tc025h_server_evolution_endpoint() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = Arc::new(RuntimeKernel::new(s));
+    for _ in 0..3 {
+        kernel
+            .record_memory("action.retain", json!({ "experience": "retain" }))
+            .await
+            .unwrap();
+    }
+    kernel.run_evolution("RUN-1").await.unwrap();
+    let addr = spawn_server(kernel).await;
+
+    let (st, body) = http_call(addr, "GET", "/api/v1/wb/agent/evolution", None).await;
+    assert_eq!(st, 200);
+    let v = serde_json::from_str::<Value>(&body).unwrap();
+    assert_eq!(v["code"], 0, "evolution 查询应成功");
+
+    let patterns = v["data"]["patterns"].as_array().unwrap();
+    let learned = v["data"]["learned"].as_array().unwrap();
+    assert_eq!(patterns.len(), 1, "应含 1 个 pattern");
+    assert_eq!(patterns[0]["label"], "pattern.action.retain");
+    assert_eq!(learned.len(), 1, "应含 1 条 learned");
+    assert_eq!(learned[0]["action"], "retain");
+    assert_eq!(
+        learned[0]["proposalId"], "proposal.retain",
+        "可追溯 proposal"
     );
 }

@@ -11,6 +11,9 @@
 
 use crate::action::ActionRegistry;
 use crate::agent::AgentEngine;
+use crate::evolution::{
+    EvolutionState, LearnedKnowledge, Pattern, Proposal, ProposalKind, ProposalStatus,
+};
 use crate::planner::{
     ApprovalRequest, ApprovalStore, AutoApprover, Planner, PlannerError, PolicyApprover, RunStatus,
     ServerApprover, generate_run_id,
@@ -163,6 +166,50 @@ struct MemoryListDto {
     list: Vec<MemoryRecordDto>,
 }
 
+// ── Evolution Engine（BL-003 · REQ-017）：Experience → Knowledge ────────────────────────
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PatternDto {
+    label: String,
+    action: String,
+    support: i64,
+    confidence: f64,
+    run_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProposalDto {
+    id: String,
+    kind: String,
+    target: String,
+    confidence: f64,
+    status: String,
+    pattern_label: String,
+    run_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LearnedDto {
+    id: String,
+    kind: String,
+    action: String,
+    confidence: f64,
+    proposal_id: String,
+    run_ids: Vec<String>,
+    created_at: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvolutionDto {
+    patterns: Vec<PatternDto>,
+    proposals: Vec<ProposalDto>,
+    learned: Vec<LearnedDto>,
+}
+
 // ── 路由 ─────────────────────────────────────────────────────────────────
 /// 构建路由（API 优先，静态托管兜底）。
 fn router(state: Arc<AppState>) -> Router {
@@ -171,6 +218,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/v1/wb/agent/trace/:id", get(get_trace))
         .route("/api/v1/wb/agent/run/:run_id/timeline", get(timeline))
         .route("/api/v1/wb/agent/memory", get(list_memory))
+        .route("/api/v1/wb/agent/evolution", get(list_evolution))
         .route("/api/v1/wb/agent/run", post(run_start))
         .route(
             "/api/v1/wb/agent/run/:run_id/approvals",
@@ -287,6 +335,65 @@ async fn list_memory(State(st): State<Arc<AppState>>) -> Json<ApiResponse<Memory
         .collect::<Vec<_>>();
     let total = list.len();
     ApiResponse::ok(MemoryListDto { total, list })
+}
+
+/// `GET /api/v1/wb/agent/evolution`：Evolution 聚合状态（BL-003 · REQ-017）。
+/// 返回 patterns / proposals / learned（含可追溯证据 run_ids 与 proposal_id）。
+async fn list_evolution(State(st): State<Arc<AppState>>) -> Json<ApiResponse<EvolutionDto>> {
+    let state: EvolutionState = st.kernel.evolution_state().await.unwrap_or_default();
+    let patterns = state
+        .patterns
+        .into_iter()
+        .map(|p: Pattern| PatternDto {
+            label: p.label,
+            action: p.action,
+            support: p.support,
+            confidence: p.confidence,
+            run_ids: p.run_ids,
+        })
+        .collect::<Vec<_>>();
+    let proposals = state
+        .proposals
+        .into_iter()
+        .map(|p: Proposal| ProposalDto {
+            id: p.id,
+            kind: match p.kind {
+                ProposalKind::ActionPattern => "ActionPattern",
+            }
+            .to_string(),
+            target: p.target,
+            confidence: p.confidence,
+            status: match p.status {
+                ProposalStatus::Proposed => "Proposed",
+                ProposalStatus::Validated => "Validated",
+                ProposalStatus::Rejected => "Rejected",
+            }
+            .to_string(),
+            pattern_label: p.pattern_label,
+            run_ids: p.run_ids,
+        })
+        .collect::<Vec<_>>();
+    let learned = state
+        .learned
+        .into_iter()
+        .map(|l: LearnedKnowledge| LearnedDto {
+            id: l.id,
+            kind: match l.kind {
+                ProposalKind::ActionPattern => "ActionPattern",
+            }
+            .to_string(),
+            action: l.action,
+            confidence: l.confidence,
+            proposal_id: l.proposal_id,
+            run_ids: l.run_ids,
+            created_at: l.created_at,
+        })
+        .collect::<Vec<_>>();
+    ApiResponse::ok(EvolutionDto {
+        patterns,
+        proposals,
+        learned,
+    })
 }
 
 /// `GET /api/v1/wb/agent/run/:run_id/approvals`：列出该运行的全部审批请求（含历史裁决）。

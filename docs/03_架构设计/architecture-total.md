@@ -23,7 +23,7 @@
 - [强制] Metadata 驱动一切：运行时由 `ObjectDef` 驱动，禁止 `match object_type { "Customer" => .. }` 硬编码分支。
 - [强制] 所有高级能力（GraphRAG / Policy / Workflow / Evolution）必须作为插件挂到 Kernel 之上，Kernel 本身长期稳定。
 - [强制] 可观察性与内核同生：V0.1 落地 Event Bus + TraceEvent(world) + CLI 观察，V0.3 升级为三层图形 UI + CognitiveEvent。
-- [强制] V0.3（=MVP）**接入 Agent**：以 Pi（`@earendil-works/pi-coding-agent`）作 **Cognitive Engine**（经 `AgentEngine` trait 提供推理 / NLU / 工具调用）；OpenAIP 自身拥有 Agent Runtime（Planner / Policy / Trace）、Ontology Kernel 与 World Model，详见 `pi-agent-integration.md`；V0.5 先落 Memory 沉淀（Agent 自治基础），Evolution / 自学习合成 / Multi-Agent 更远（见 todo-backlog）。
+- [强制] V0.3（=MVP）**接入 Agent**：以 Pi（`@earendil-works/pi-coding-agent`）作 **Cognitive Engine**（经 `AgentEngine` trait 提供推理 / NLU / 工具调用）；OpenAIP 自身拥有 Agent Runtime（Planner / Policy / Trace）、Ontology Kernel 与 World Model，详见 `pi-agent-integration.md`；V0.5 落地 Memory 沉淀（Agent 自治基础）与 Evolution Engine MVP（REQ-017，Learn≠Permission：不修改 Policy、不绕过审批），自学习合成 / Multi-Agent 更远（见 todo-backlog）。
 
 ## 4. 详细设计/内容
 
@@ -146,7 +146,7 @@ Kernel 永远稳定，能力外挂。
 | ✅ Memory 沉淀（Agent 自治基础，REQ-016） | V0.5 | 经验按 `action.<name>` upsert 沉淀 `wb_memory`（hits 累加），下一轮 run 经 `MemoryRecall` 认知事件召回，形成 Action→Memory→下次 Plan 闭环 |
 | ✅ 观察 UI · Memory 视图 | V0.5 | 三层认知导航新增 Memory 标签，前端经 `GET /api/v1/wb/agent/memory` 渲染沉淀列表（label/payload/hits/updatedAt），运行前载入 + MemoryUpdate/MemoryRecall 事件实时刷新；TC-024a 全绿 |
 | ❌ 完整 GraphRAG | 世界模型成熟后 | 是 Ontology + Knowledge Graph + Embedding 的上层；没有 Object Graph 则无意义 |
-| ❌ Evolution Engine（自学习 / 自我进化） | 远期 | Memory 沉淀已在 V0.5 落地；Evolution 需 Experience→Pattern→Proposal→Validation→Merge（BL-003） |
+| ✅ Evolution Engine MVP（REQ-017 · Learn≠Permission） | V0.5 | Experience→Pattern→Proposal→Validation→LearnedKnowledge 闭环，可观察/可验证/可撤销，**不修改 Policy、不绕过审批**；`run_evolution` 幂等；`GET /api/v1/wb/agent/evolution` 暴露状态；AutoApprove 类「Knowledge→Permission」升级归第二阶段 |
 | ❌ Multi-Agent | V3 | 属 Agent Society（Protocol/Consensus/Delegation） |
 
 ### 4.5 技术栈选型
@@ -235,3 +235,4 @@ Human → Agent UI → Decision Trace UI
 | V2.3 | lushaohui | 2026-08-12 | V0.5 Memory 沉淀落地：4.4 能力边界表新增「Memory 沉淀（REQ-016）」由 ❌ 改 ✅（Action→Memory→下次 Plan 闭环）；Evolution Engine 行改标「远期」；TC-022a/b 全绿 |
 | V2.4 | lushaohui | 2026-08-12 | server 挂起式 HTTP 审批端点（V0.4 遗留项）落地：4.4「Policy 审批约束」补 `ServerApprover`+`ApprovalStore` 与 `GET /run/:run_id/approvals` + `POST /run/:run_id/approval/:req_id`（挂起→浏览器批准恢复 / 拒绝→WB2005 终止）；`PolicyApprover::approve` 升 async；TC-023a/b 全绿 |
 | V2.5 | lushaohui | 2026-08-12 | 观察 UI 接入 Memory 视图：4.4 能力边界表新增「观察 UI · Memory 视图」由 ❌ 改 ✅；后端 `GET /api/v1/wb/agent/memory` + 前端 Memory 标签；TC-024a 全绿 |
+| V2.6 | lushaohui | 2026-08-12 | Evolution Engine MVP（REQ-017）落地：4.4 能力边界表「Evolution Engine（自学习/自我进化）」由 ❌ 改 ✅（MVP，Learn≠Permission）；新增 `src/evolution.rs` + storage 三表 + RuntimeKernel `run_evolution` + server `GET /api/v1/wb/agent/evolution`；TC-025a~h 全绿 |

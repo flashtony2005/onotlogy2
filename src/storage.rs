@@ -457,6 +457,266 @@ impl LibSQLStorage {
         }
         Ok(out)
     }
+
+    // ---- Evolution Engine（BL-003 · REQ-017）：Experience → Knowledge，不修改 Policy ----
+
+    /// 写入/合并一条 Pattern（按 label 幂等 upsert；run_ids 合并去重，沉淀跨 run 证据）。
+    pub async fn save_pattern(
+        &self,
+        pattern: &crate::evolution::Pattern,
+        run_ids: &[String],
+    ) -> Result<(), StorageError> {
+        // 读取已有 run_ids 以合并（证据跨 run 累加）
+        let existing: Vec<String> = match self.read_pattern_run_ids(&pattern.label).await? {
+            Some(s) => crate::evolution::parse_run_ids(&s),
+            None => Vec::new(),
+        };
+        let merged = crate::evolution::merge_run_ids(existing, run_ids);
+        let run_ids_s = crate::evolution::encode_run_ids(&merged);
+        self.conn
+            .execute(
+                "INSERT INTO wb_pattern (label, action, support, confidence, run_ids, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) \
+                 ON CONFLICT(label) DO UPDATE SET \
+                   support = ?3, confidence = ?4, run_ids = ?5, updated_at = CURRENT_TIMESTAMP",
+                params![
+                    pattern.label.as_str(),
+                    pattern.action.as_str(),
+                    pattern.support,
+                    pattern.confidence,
+                    run_ids_s
+                ],
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn read_pattern_run_ids(&self, label: &str) -> Result<Option<String>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT run_ids FROM wb_pattern WHERE label = ?1",
+                params![label],
+            )
+            .await?;
+        match rows.next().await? {
+            Some(row) => Ok(Some(row.get(0)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn read_proposal_run_ids(&self, id: &str) -> Result<Option<String>, StorageError> {
+        let mut rows = self
+            .conn
+            .query("SELECT run_ids FROM wb_proposal WHERE id = ?1", params![id])
+            .await?;
+        match rows.next().await? {
+            Some(row) => Ok(Some(row.get(0)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn read_learned_run_ids(&self, id: &str) -> Result<Option<String>, StorageError> {
+        let mut rows = self
+            .conn
+            .query("SELECT run_ids FROM wb_learned WHERE id = ?1", params![id])
+            .await?;
+        match rows.next().await? {
+            Some(row) => Ok(Some(row.get(0)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// 列出全部 Pattern（按 support 降序）。
+    pub async fn list_patterns(&self) -> Result<Vec<crate::evolution::Pattern>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT label, action, support, confidence, run_ids FROM wb_pattern \
+                 ORDER BY support DESC, updated_at DESC",
+                params![],
+            )
+            .await?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            out.push(row_to_pattern(&row)?);
+        }
+        Ok(out)
+    }
+
+    /// 写入一条 Proposal（按 id 幂等 upsert）。
+    pub async fn save_proposal(
+        &self,
+        proposal: &crate::evolution::Proposal,
+    ) -> Result<(), StorageError> {
+        let status = match proposal.status {
+            crate::evolution::ProposalStatus::Proposed => "Proposed",
+            crate::evolution::ProposalStatus::Validated => "Validated",
+            crate::evolution::ProposalStatus::Rejected => "Rejected",
+        };
+        let kind = match proposal.kind {
+            crate::evolution::ProposalKind::ActionPattern => "ActionPattern",
+        };
+        // 合并已有 run_ids（证据跨 run 累加）
+        let existing = self
+            .read_proposal_run_ids(&proposal.id)
+            .await?
+            .map(|s| crate::evolution::parse_run_ids(&s))
+            .unwrap_or_default();
+        let merged = crate::evolution::merge_run_ids(existing, &proposal.run_ids);
+        let run_ids_s = crate::evolution::encode_run_ids(&merged);
+        self.conn
+            .execute(
+                "INSERT INTO wb_proposal (id, kind, target, confidence, status, pattern_label, run_ids, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) \
+                 ON CONFLICT(id) DO UPDATE SET \
+                   confidence = ?4, status = ?5, run_ids = ?7, updated_at = CURRENT_TIMESTAMP",
+                params![
+                    proposal.id.as_str(),
+                    kind,
+                    proposal.target.as_str(),
+                    proposal.confidence,
+                    status,
+                    proposal.pattern_label.as_str(),
+                    run_ids_s
+                ],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// 列出全部 Proposal（按置信度降序）。
+    pub async fn list_proposals(&self) -> Result<Vec<crate::evolution::Proposal>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, kind, target, confidence, status, pattern_label, run_ids FROM wb_proposal \
+                 ORDER BY confidence DESC, updated_at DESC",
+                params![],
+            )
+            .await?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            out.push(row_to_proposal(&row)?);
+        }
+        Ok(out)
+    }
+
+    /// 写入一条 LearnedKnowledge（按 id 幂等 upsert）。仅在 Proposal Validated 后调用。
+    pub async fn save_learned(
+        &self,
+        learned: &crate::evolution::LearnedKnowledge,
+    ) -> Result<(), StorageError> {
+        let kind = match learned.kind {
+            crate::evolution::ProposalKind::ActionPattern => "ActionPattern",
+        };
+        // 合并已有 run_ids（证据跨 run 累加）
+        let existing = self
+            .read_learned_run_ids(&learned.id)
+            .await?
+            .map(|s| crate::evolution::parse_run_ids(&s))
+            .unwrap_or_default();
+        let merged = crate::evolution::merge_run_ids(existing, &learned.run_ids);
+        let run_ids_s = crate::evolution::encode_run_ids(&merged);
+        self.conn
+            .execute(
+                "INSERT INTO wb_learned (id, kind, action, confidence, proposal_id, run_ids, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP) \
+                 ON CONFLICT(id) DO UPDATE SET \
+                   confidence = ?4, proposal_id = ?5, run_ids = ?6",
+                params![
+                    learned.id.as_str(),
+                    kind,
+                    learned.action.as_str(),
+                    learned.confidence,
+                    learned.proposal_id.as_str(),
+                    run_ids_s
+                ],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// 列出全部 LearnedKnowledge（按置信度降序）。
+    pub async fn list_learned(
+        &self,
+    ) -> Result<Vec<crate::evolution::LearnedKnowledge>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, kind, action, confidence, proposal_id, run_ids, created_at FROM wb_learned \
+                 ORDER BY confidence DESC, created_at DESC",
+                params![],
+            )
+            .await?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            out.push(row_to_learned(&row)?);
+        }
+        Ok(out)
+    }
+}
+
+fn row_to_pattern(row: &libsql::Row) -> Result<crate::evolution::Pattern, StorageError> {
+    let run_ids: String = row.get(4)?;
+    Ok(crate::evolution::Pattern {
+        label: row.get(0)?,
+        action: row.get(1)?,
+        support: row.get(2)?,
+        confidence: row.get(3)?,
+        run_ids: crate::evolution::parse_run_ids(&run_ids),
+    })
+}
+
+fn row_to_proposal(row: &libsql::Row) -> Result<crate::evolution::Proposal, StorageError> {
+    let id: String = row.get(0)?;
+    let kind_s: String = row.get(1)?;
+    let target: String = row.get(2)?;
+    let confidence: f64 = row.get(3)?;
+    let status_s: String = row.get(4)?;
+    let pattern_label: String = row.get(5)?;
+    let run_ids: String = row.get(6)?;
+    let kind = match kind_s.as_str() {
+        "ActionPattern" => crate::evolution::ProposalKind::ActionPattern,
+        _ => crate::evolution::ProposalKind::ActionPattern,
+    };
+    let status = match status_s.as_str() {
+        "Validated" => crate::evolution::ProposalStatus::Validated,
+        "Rejected" => crate::evolution::ProposalStatus::Rejected,
+        _ => crate::evolution::ProposalStatus::Proposed,
+    };
+    Ok(crate::evolution::Proposal {
+        id,
+        kind,
+        target,
+        confidence,
+        status,
+        pattern_label,
+        run_ids: crate::evolution::parse_run_ids(&run_ids),
+    })
+}
+
+fn row_to_learned(row: &libsql::Row) -> Result<crate::evolution::LearnedKnowledge, StorageError> {
+    let id: String = row.get(0)?;
+    let kind_s: String = row.get(1)?;
+    let action: String = row.get(2)?;
+    let confidence: f64 = row.get(3)?;
+    let proposal_id: String = row.get(4)?;
+    let run_ids: String = row.get(5)?;
+    let created_at: String = row.get(6)?;
+    let kind = match kind_s.as_str() {
+        "ActionPattern" => crate::evolution::ProposalKind::ActionPattern,
+        _ => crate::evolution::ProposalKind::ActionPattern,
+    };
+    Ok(crate::evolution::LearnedKnowledge {
+        id,
+        kind,
+        action,
+        confidence,
+        proposal_id,
+        run_ids: crate::evolution::parse_run_ids(&run_ids),
+        created_at,
+    })
 }
 
 #[async_trait]

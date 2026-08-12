@@ -317,4 +317,77 @@ impl RuntimeKernel {
     pub async fn recall_all(&self) -> Result<Vec<crate::storage::MemoryRecord>, StorageError> {
         self.storage.recall_all().await
     }
+
+    // ---- Evolution Engine（BL-003 · REQ-017）：Experience → Knowledge，不修改 Policy ----
+
+    /// 运行一轮 Evolution：把当前 `wb_memory` 经验提炼为 Pattern→Proposal→Validation→LearnedKnowledge。
+    ///
+    /// - 幂等：按稳定 id upsert，可重复调用不重复产出知识（TC-025f）；
+    /// - 不修改 Policy、不绕过 Human Approval（Learn≠Permission）；
+    /// - `run_id` 作为证据注入每条 Pattern/Proposal/LearnedKnowledge 的 `run_ids`。
+    pub async fn run_evolution(
+        &self,
+        run_id: &str,
+    ) -> Result<crate::evolution::EvolutionState, StorageError> {
+        // 1) Experience：读取记忆（Experience = V0.5 的 wb_memory）
+        let memories = self.storage.recall_all().await?;
+        let experiences: Vec<crate::evolution::Experience> = memories
+            .into_iter()
+            .map(|m| crate::evolution::Experience {
+                label: m.label.clone(),
+                hits: m.hits,
+            })
+            .collect();
+
+        // 2) Pattern：挖掘高频模式
+        let patterns = crate::evolution::mine_patterns(&experiences);
+        for p in &patterns {
+            self.storage.save_pattern(p, &[run_id.to_string()]).await?;
+        }
+
+        // 3) Proposal + 4) Validation
+        let mut proposals = Vec::new();
+        let mut learned = Vec::new();
+        for p in &patterns {
+            let mut prop = crate::evolution::propose(p);
+            prop.run_ids =
+                crate::evolution::merge_run_ids(prop.run_ids.clone(), &[run_id.to_string()]);
+            let status = crate::evolution::validate(&prop);
+            prop.status = status;
+            let prop_clone = prop.clone();
+            self.storage.save_proposal(&prop_clone).await?;
+            proposals.push(prop_clone.clone());
+
+            // 5) LearnedKnowledge：仅 Validated 才沉淀
+            if status == crate::evolution::ProposalStatus::Validated {
+                let lk = crate::evolution::LearnedKnowledge {
+                    id: crate::evolution::learned_id_of(&prop.target),
+                    kind: prop.kind,
+                    action: prop.target.clone(),
+                    confidence: prop.confidence,
+                    proposal_id: prop.id.clone(),
+                    run_ids: prop.run_ids.clone(),
+                    created_at: now_ts(),
+                };
+                let lk_clone = lk.clone();
+                self.storage.save_learned(&lk_clone).await?;
+                learned.push(lk_clone);
+            }
+        }
+
+        Ok(crate::evolution::EvolutionState {
+            patterns: self.storage.list_patterns().await?,
+            proposals: self.storage.list_proposals().await?,
+            learned: self.storage.list_learned().await?,
+        })
+    }
+
+    /// 读取当前 Evolution 聚合状态（供 HTTP API / UI）。
+    pub async fn evolution_state(&self) -> Result<crate::evolution::EvolutionState, StorageError> {
+        Ok(crate::evolution::EvolutionState {
+            patterns: self.storage.list_patterns().await?,
+            proposals: self.storage.list_proposals().await?,
+            learned: self.storage.list_learned().await?,
+        })
+    }
 }

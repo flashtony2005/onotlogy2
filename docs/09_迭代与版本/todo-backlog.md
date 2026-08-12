@@ -26,9 +26,9 @@
 ### 4.1 被推迟 / 排除能力
 | 编号 | 能力 | 推迟理由 | 计划版本 |
 |------|------|----------|----------|
-| BL-001 | Agent 高级自治（自学习 / Evolution / Memory 沉淀） | 基础 Agent 接入（Pi Cognitive Engine + Planner）在 V0.3 落地（=MVP，REQ-010/011）；Memory 沉淀已在 V0.5 落地（REQ-016，wb_memory + MemoryRecall 闭环），Evolution 仍需 Experience 积累 | V0.5（Memory 已实现）/ 远期（Evolution） |
+| BL-001 | Agent 高级自治（自学习 / Evolution / Memory 沉淀） | 基础 Agent 接入（Pi Cognitive Engine + Planner）在 V0.3 落地（=MVP，REQ-010/011）；Memory 沉淀已在 V0.5 落地（REQ-016，wb_memory + MemoryRecall 闭环）；Evolution Engine MVP 已在 V0.5 落地（REQ-017，Learn≠Permission）。第二阶段：AutoApprove 类「Knowledge→Permission」升级（需 Policy 显式允许学习 + 高置信 + 多次成功 + 无失败 + 低风险） | V0.5（Memory + Evolution MVP 已实现）/ 第二阶段（AutoApprove 升级） |
 | BL-002 | GraphRAG | 是 Ontology + Knowledge Graph + Embedding 的上层；无 Object Graph 无意义 | 世界模型成熟后 |
-| BL-003 | Evolution Engine | 需 Experience→Pattern→Proposal→Validation→Merge；MVP 连 Experience 都无 | 远期 |
+| BL-003 | Evolution Engine | MVP 已实现（REQ-017）：Experience→Pattern→Proposal→Validation→LearnedKnowledge，Learn≠Permission（不修改 Policy、不绕过审批）；`run_evolution` 幂等 + 可追溯 | 已实现（MVP）/ 第二阶段（AutoApprove 类 Permission 升级） |
 | BL-004 | Multi-Agent | 属 Agent Society（Protocol/Consensus/Delegation） | V3 |
 | BL-005 | 完整 Action Engine（对象自有能力 actions） | 最小 Action 执行已在 V0.3 随 Planner 闭环落地；完整引擎=Object 的未来行为，需先有稳定世界模型 | V0.4 |
 | BL-006 | Policy Engine | = Action 的约束，依赖 Action | V0.4 已实现（动作级 `policy:` 审批闸门 + 前置条件 + CLI 交互审批 + server 挂起式 HTTP 审批端点，V0.4 遗留项已收口） |
@@ -58,3 +58,4 @@
 | V1.3 | lushaohui | 2026-08-11 | 纠正：基础 Agent 接入（Pi Cognitive Engine）已纳入 MVP（REQ-010）；BL-001 改为仅指高级自治（自学习/Evolution） |
 | V1.4 | lushaohui | 2026-08-11 | Pi 降级为 Cognitive Engine；BL-001 描述同步（基础接入=Pi Cognitive Engine） |
 | V1.5 | lushaohui | 2026-08-11 | 方案B对齐：BL-001 基础接入归 V0.3（=MVP）；BL-005 Action 分两层（V0.3 最小执行 / V0.4 完整引擎）；BL-008 Memory 归 V0.5 |
+| V1.6 | lushaohui | 2026-08-12 | Evolution Engine MVP（BL-003）已实现（REQ-017，Learn≠Permission）：Experience→Pattern→Proposal→Validation→LearnedKnowledge 闭环，不修改 Policy、不绕过审批；AutoApprove 类 Permission 升级归第二阶段 |

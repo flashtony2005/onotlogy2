@@ -832,6 +832,11 @@ impl<'a> Planner<'a> {
                 .await?;
         }
 
+        // 7'') Evolution（BL-003 · REQ-017）：把本轮经验提炼为 Knowledge（Experience→Pattern→
+        //     Proposal→Validation→LearnedKnowledge）。**不修改 Policy、不绕过审批**（Learn≠Permission）；
+        //     run_id 作为证据注入可追溯链。幂等，可重复运行。
+        self.kernel.run_evolution(&run_id).await?;
+
         Ok(AgentRunResult {
             run_id,
             agent_id: agent_id.to_string(),

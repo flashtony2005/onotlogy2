@@ -10,11 +10,13 @@
 //! - `planner`：Goal→LLMGoalParser→Planner→PlanStep→Capability→Execute（OpenAIP 自有核心）
 //! - `action`：完整 Action Engine（V0.4）—— ActionRegistry + ActionEngine，解释执行对象自有动作
 //! - `trace`：三层观察时间线 + TraceEventDto（Executive/Operator/Developer）
+//! - `evolution`：Evolution Engine（BL-003 · REQ-017，运行在 Kernel 之上的 Extension）—— Experience→Pattern→Proposal→Validation→LearnedKnowledge，可观察/可验证/可撤销，**不修改 Policy、不绕过审批**
 //! - `server`：axum REST + WebSocket 流 + 三层观察 UI 静态托管
 
 pub mod action;
 pub mod agent;
 pub mod codegen;
+pub mod evolution;
 pub mod ir;
 pub mod odl;
 pub mod planner;
@@ -26,6 +28,10 @@ pub mod trace;
 pub use action::{ActionEffect, ActionEngine, ActionError, ActionRegistry};
 pub use agent::{AgentEngine, AgentError, Context, Decision, PiAgentEngine, WorldSnapshot};
 pub use codegen::{CodegenOutput, ObjectDef, codegen};
+pub use evolution::{
+    EvolutionState, Experience, LearnedKnowledge, PATTERN_MIN_HITS, Pattern, Proposal,
+    ProposalKind, ProposalStatus, VALIDATE_THRESHOLD,
+};
 pub use ir::{
     ActionDef, Clause, CompareOp, CreateEffect, FieldUpdate, ObjectType, OntologyIR, ParamDef,
     PolicyDef, PropertyDef, ScalarType, ValueExpr,

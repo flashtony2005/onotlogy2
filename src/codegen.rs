@@ -149,6 +149,40 @@ CREATE TABLE IF NOT EXISTS wb_memory (
 );
 
 CREATE INDEX IF NOT EXISTS idx_memory_hits ON wb_memory (hits);
+
+-- Evolution Engine（BL-003 · REQ-017）：Experience → Pattern → Proposal → Validation → LearnedKnowledge
+-- 全部带可追溯父引用（run_ids / pattern_label / proposal_id），保证 Learn≠Permission（不修改 Policy、不绕过审批）。
+CREATE TABLE IF NOT EXISTS wb_pattern (
+  label      TEXT PRIMARY KEY,    -- pattern.action.retain
+  action     TEXT NOT NULL,       -- 关联动作名
+  support    INTEGER NOT NULL DEFAULT 0,  -- 支持度 = 来源记忆 hits
+  confidence REAL NOT NULL DEFAULT 0.0,   -- min(1, hits/5)
+  run_ids    TEXT NOT NULL DEFAULT '[]',  -- 贡献来源 run（可追溯至 AgentRun）
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS wb_proposal (
+  id          TEXT PRIMARY KEY,    -- proposal.<action>（幂等 upsert）
+  kind        TEXT NOT NULL,       -- ActionPattern
+  target      TEXT NOT NULL,       -- 目标动作名
+  confidence  REAL NOT NULL DEFAULT 0.0,
+  status      TEXT NOT NULL,       -- Proposed / Validated / Rejected
+  pattern_label TEXT NOT NULL,     -- 来源 Pattern（可追溯）
+  run_ids     TEXT NOT NULL DEFAULT '[]',
+  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS wb_learned (
+  id          TEXT PRIMARY KEY,    -- learned.<action>（幂等 upsert）
+  kind        TEXT NOT NULL,
+  action      TEXT NOT NULL,
+  confidence  REAL NOT NULL DEFAULT 0.0,
+  proposal_id TEXT NOT NULL,       -- 来源 Proposal（可追溯）
+  run_ids     TEXT NOT NULL DEFAULT '[]',
+  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 "#
     .to_string()
 }
