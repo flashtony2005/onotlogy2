@@ -181,6 +181,17 @@ CREATE TABLE IF NOT EXISTS wb_learned (
   confidence  REAL NOT NULL DEFAULT 0.0,
   proposal_id TEXT NOT NULL,       -- 来源 Proposal（可追溯）
   run_ids     TEXT NOT NULL DEFAULT '[]',
+  auto_approve_enabled INTEGER NOT NULL DEFAULT 1,  -- REQ-018：自动放行资格（可撤销，默认开）
+  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS wb_approval_audit (
+  id          TEXT PRIMARY KEY,    -- 审计行稳定 id
+  run_id      TEXT,                -- 触发自动放行的运行（可追溯）
+  action      TEXT NOT NULL,       -- 被自动放行的动作
+  learned_id  TEXT NOT NULL,       -- 依据哪条 LearnedKnowledge
+  decision    TEXT NOT NULL,       -- auto_approve | revoke_disabled | fallback_human
+  reason      TEXT,                -- 决策说明（如「5 道闸门全过」/「审计写库失败回退」）
   created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 "#

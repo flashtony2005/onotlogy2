@@ -28,7 +28,7 @@
 |------|------|----------|----------|
 | BL-001 | Agent 高级自治（自学习 / Evolution / Memory 沉淀） | 基础 Agent 接入（Pi Cognitive Engine + Planner）在 V0.3 落地（=MVP，REQ-010/011）；Memory 沉淀已在 V0.5 落地（REQ-016，wb_memory + MemoryRecall 闭环）；Evolution Engine MVP 已在 V0.5 落地（REQ-017，Learn≠Permission）。第二阶段：AutoApprove 类「Knowledge→Permission」升级（需 Policy 显式允许学习 + 高置信 + 多次成功 + 无失败 + 低风险） | V0.5（Memory + Evolution MVP 已实现）/ 第二阶段（AutoApprove 升级） |
 | BL-002 | GraphRAG | 是 Ontology + Knowledge Graph + Embedding 的上层；无 Object Graph 无意义 | 世界模型成熟后 |
-| BL-003 | Evolution Engine | MVP 已实现（REQ-017）：Experience→Pattern→Proposal→Validation→LearnedKnowledge，Learn≠Permission（不修改 Policy、不绕过审批）；`run_evolution` 幂等 + 可追溯。第二阶段 AutoApprove（REQ-018）TDD Contract 已出：5 道闸门（显式允许+高置信≥0.8+多次成功≥3+无失败+低风险）、默认关闭、可审计(wb_approval_audit)、可撤销；新增 ActionFailed 埋点 | 已实现（MVP）/ 第二阶段（REQ-018 规划中，契约已出未动工） |
+| BL-003 | Evolution Engine | MVP 已实现（REQ-017）：Experience→Pattern→Proposal→Validation→LearnedKnowledge，Learn≠Permission（不修改 Policy、不绕过审批）；`run_evolution` 幂等 + 可追溯。第二阶段 AutoApprove（REQ-018）**已实现**：5 道闸门（显式允许+高置信≥0.8+多次成功≥3+无失败+低风险）、默认关闭、可审计(wb_approval_audit)、可撤销；新增 ActionFailed 埋点；TC-026a~h 全绿 | 已实现（MVP + 第二阶段 AutoApprove） |
 | BL-004 | Multi-Agent | 属 Agent Society（Protocol/Consensus/Delegation） | V3 |
 | BL-005 | 完整 Action Engine（对象自有能力 actions） | 最小 Action 执行已在 V0.3 随 Planner 闭环落地；完整引擎=Object 的未来行为，需先有稳定世界模型 | V0.4 |
 | BL-006 | Policy Engine | = Action 的约束，依赖 Action | V0.4 已实现（动作级 `policy:` 审批闸门 + 前置条件 + CLI 交互审批 + server 挂起式 HTTP 审批端点，V0.4 遗留项已收口） |
@@ -60,3 +60,4 @@
 | V1.5 | lushaohui | 2026-08-11 | 方案B对齐：BL-001 基础接入归 V0.3（=MVP）；BL-005 Action 分两层（V0.3 最小执行 / V0.4 完整引擎）；BL-008 Memory 归 V0.5 |
 | V1.6 | lushaohui | 2026-08-12 | Evolution Engine MVP（BL-003）已实现（REQ-017，Learn≠Permission）：Experience→Pattern→Proposal→Validation→LearnedKnowledge 闭环，不修改 Policy、不绕过审批；AutoApprove 类 Permission 升级归第二阶段 |
 | V1.7 | lushaohui | 2026-08-12 | BL-003 第二阶段 AutoApprove 规划（REQ-018）：TDD Contract 已出（task-spec-evolution-autoapprove.md），5 道闸门 + 默认关闭 + 可审计 + 可撤销；低风险用现有 PolicyDef、无失败用 ActionFailed 埋点 |
+| V1.8 | lushaohui | 2026-08-12 | BL-003 第二阶段 AutoApprove（REQ-018）落地：LearnedKnowledge 加 auto_approve_enabled（可撤销），wb_approval_audit 审计表，ActionFailed 埋点；Policy::check_action 接入 5 道闸门（上游替代 approver，异常回退 Human）；--auto-approve-evolution 开关 + auto-approve 撤销 API；TC-026a~h 全绿 |

@@ -7,7 +7,8 @@
 
 use crate::action::{ActionEngine, ActionError, ActionRegistry};
 use crate::agent::{AgentEngine, AgentError, Context, Decision, WorldSnapshot};
-use crate::ir::{ActionDef, CompareOp, ValueExpr};
+use crate::evolution::LearnedKnowledge;
+use crate::ir::{ActionDef, CompareOp, PolicyDef, ValueExpr};
 use crate::runtime::RuntimeKernel;
 use crate::storage::StorageError;
 use async_trait::async_trait;
@@ -23,6 +24,65 @@ use tokio::sync::oneshot;
 
 /// HTTP 审批挂起的最长等待时间；超时按拒绝处理（不授予权限）。
 pub const APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// REQ-018 运行时配置：Evolution 第二阶段 AutoApprove 的全局开关。
+/// **默认关闭**——不显式开启，行为等同 MVP（require_approval 动作仍走 Human Approval）。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RuntimeConfig {
+    /// 允许基于已验证 LearnedKnowledge 对 require_approval 动作自动放行（替代一次 Human Approval）。
+    pub auto_approve_from_evolution: bool,
+}
+
+/// REQ-018 自动放行审计器：在 `check_action` 判定自动放行时记录审计。
+/// 返回 Err → 调用方必须回退 Human Approval（绝不静默放行）。
+#[async_trait]
+pub trait ApprovalAuditor: Send + Sync {
+    async fn record(&self, learned_id: &str, action: &str) -> Result<(), String>;
+}
+
+/// REQ-018 `may_auto_approve`：5 道闸门全过 + 开关开启 + 存在已验证 LearnedKnowledge → 允许自动放行。
+/// 任一闸门不满足返回 false（调用方回退 Human Approval）。纯函数，便于单测（TC-026b/c/d/f）。
+pub fn may_auto_approve(
+    config: &RuntimeConfig,
+    learned: Option<&LearnedKnowledge>,
+    success_runs: usize,
+    failure_count: usize,
+    policy: &PolicyDef,
+) -> bool {
+    /// 高置信阈值（建议 0.8，取自 VALIDATE_THRESHOLD 之上）。
+    const AUTO_APPROVE_CONFIDENCE: f64 = 0.8;
+    /// 多次成功阈值（去重 run 数，建议 3）。
+    const AUTO_APPROVE_MIN_RUNS: usize = 3;
+
+    // 1) 显式允许开关
+    if !config.auto_approve_from_evolution {
+        return false;
+    }
+    // 2) 已验证知识（存在且未撤销）
+    let Some(lk) = learned else {
+        return false;
+    };
+    if !lk.auto_approve_enabled {
+        return false;
+    }
+    // 3) 高置信
+    if lk.confidence < AUTO_APPROVE_CONFIDENCE {
+        return false;
+    }
+    // 4) 多次成功（去重 run 数）
+    if success_runs < AUTO_APPROVE_MIN_RUNS {
+        return false;
+    }
+    // 5) 无失败（强判定：依赖 ActionFailed 埋点）
+    if failure_count > 0 {
+        return false;
+    }
+    // 6) 低风险（已有 require_approval + 非空 precondition；采用现有 PolicyDef 判定）
+    if !(policy.require_approval && !policy.precondition.is_empty()) {
+        return false;
+    }
+    true
+}
 
 /// Planner 运行错误，映射到 WB 错误码。
 #[derive(Debug, thiserror::Error)]
@@ -191,6 +251,36 @@ fn prompt(question: &str) -> bool {
         let _ = io::stdin().read_line(&mut buf);
     });
     matches!(buf.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+/// REQ-018 运行级审计器：把自动放行审计写入内核存储（绑定当前 run_id）。
+/// 写库失败 → 返回 Err，使 `check_action` 回退 Human Approval（绝不静默放行）。
+pub struct RunAuditor<'a> {
+    kernel: &'a RuntimeKernel,
+    run_id: String,
+}
+impl<'a> RunAuditor<'a> {
+    pub fn new(kernel: &'a RuntimeKernel, run_id: &str) -> Self {
+        Self {
+            kernel,
+            run_id: run_id.to_string(),
+        }
+    }
+}
+#[async_trait]
+impl ApprovalAuditor for RunAuditor<'_> {
+    async fn record(&self, learned_id: &str, action: &str) -> Result<(), String> {
+        self.kernel
+            .record_approval_audit(
+                &self.run_id,
+                action,
+                learned_id,
+                "auto_approve",
+                "5 道闸门全过，替代一次 Human Approval",
+            )
+            .await
+            .map_err(|e| e.to_string())
+    }
 }
 
 /// 待审批请求状态（与 timeline / HTTP 响应对齐）。
@@ -460,13 +550,20 @@ impl Policy {
     ///
     /// - `def` 为 None（动作未注册）→ 放行；
     /// - `precondition` 全部满足才放行（AND）；任一不满足 → Deny；
-    /// - `require_approval=true` 默认 Deny（WB2005），须经 `approver` 放行。
+    /// - `require_approval=true` 默认 Deny（WB2005）：
+    ///   - 若满足 REQ-018 自动放行 5 道闸门，经 `auditor` 记录审计后替代 Human Approval（Allow）；
+    ///   - 否则仍须经 `approver` 放行（Human Approval）；审计失败/无知识 → 回退 Human（绝不静默放行）。
+    #[allow(clippy::too_many_arguments)]
     pub async fn check_action(
         step: &PlanStep,
         def: Option<&ActionDef>,
         approver: &dyn PolicyApprover,
         target: Option<&Value>,
         args: &HashMap<String, Value>,
+        config: &RuntimeConfig,
+        learned: Option<&LearnedKnowledge>,
+        failure_count: usize,
+        auditor: Option<&dyn ApprovalAuditor>,
     ) -> PolicyDecision {
         let Some(def) = def else {
             return PolicyDecision::Allow;
@@ -486,10 +583,26 @@ impl Policy {
         }
         // 审批闸门：require_approval 默认 Deny，需 approver 放行（Human Approval）。
         // approver.approve 为 async：ConsoleApprover 同步返回；ServerApprover 挂起等待 HTTP 裁决。
-        if def.policy.require_approval && !approver.approve(step).await {
-            return PolicyDecision::Deny {
-                reason: format!("动作 {} 需 Human Approval（WB2005）", def.name),
-            };
+        if def.policy.require_approval {
+            // REQ-018 自动放行：5 道闸门全过 → 替代一次 Human Approval（须先写审计）。
+            let success_runs = learned.map(|l| l.run_ids.len()).unwrap_or(0);
+            if may_auto_approve(config, learned, success_runs, failure_count, &def.policy) {
+                match auditor {
+                    // 审计成功 → 自动放行（替代 Human Approval）
+                    Some(a) => match a.record(learned.unwrap().id.as_str(), &def.name).await {
+                        Ok(()) => return PolicyDecision::Allow,
+                        // 审计写库失败 → 回退 Human Approval（绝不静默放行）
+                        Err(_) => { /* fall through to approver */ }
+                    },
+                    // 纯单元测试无 auditor：直接放行（审计留待集成层）
+                    None => return PolicyDecision::Allow,
+                }
+            }
+            if !approver.approve(step).await {
+                return PolicyDecision::Deny {
+                    reason: format!("动作 {} 需 Human Approval（WB2005）", def.name),
+                };
+            }
         }
         PolicyDecision::Allow
     }
@@ -601,6 +714,8 @@ pub struct Planner<'a> {
     registry: ActionRegistry,
     /// Policy 审批器（Human Approval 闸门）；默认 `AutoApprover { allow: false }`（拒，等待人工）。
     approver: Arc<dyn PolicyApprover>,
+    /// REQ-018 运行时配置：Evolution 第二阶段 AutoApprove 全局开关（默认关闭）。
+    config: RuntimeConfig,
 }
 
 impl<'a> Planner<'a> {
@@ -610,6 +725,7 @@ impl<'a> Planner<'a> {
             kernel,
             registry: ActionRegistry::empty(),
             approver: Arc::new(AutoApprover { allow: false }),
+            config: RuntimeConfig::default(),
         }
     }
 
@@ -619,7 +735,14 @@ impl<'a> Planner<'a> {
             kernel,
             registry,
             approver: Arc::new(AutoApprover { allow: false }),
+            config: RuntimeConfig::default(),
         }
+    }
+
+    /// 注入 REQ-018 运行时配置（Evolution 第二阶段 AutoApprove 开关）。
+    pub fn with_config(mut self, config: RuntimeConfig) -> Self {
+        self.config = config;
+        self
     }
 
     /// 注入 Policy 审批器（如服务侧自动批准 / CLI 交互式审批）。
@@ -803,26 +926,45 @@ impl<'a> Planner<'a> {
         for step in &steps {
             // 声明式动作结合其自带 PolicyDef（前置条件 + 审批闸门）校验；
             // 其余能力走通用 Policy（破坏性动作默认拒）。
-            let decision = match &step.capability {
-                Capability::Action {
-                    object_type,
-                    action,
-                    target_id,
-                    args,
-                } => {
-                    let def = self.registry.get(object_type, action);
-                    let target = world
-                        .objects
-                        .iter()
-                        .find(|o| o.get("id").and_then(|v| v.as_str()) == Some(target_id.as_str()));
-                    let args_map: HashMap<String, Value> = args
-                        .as_object()
-                        .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-                        .unwrap_or_default();
-                    Policy::check_action(step, def, self.approver.as_ref(), target, &args_map).await
-                }
-                _ => Policy::check(step),
-            };
+            let decision =
+                match &step.capability {
+                    Capability::Action {
+                        object_type,
+                        action,
+                        target_id,
+                        args,
+                    } => {
+                        let def = self.registry.get(object_type, action);
+                        let target = world.objects.iter().find(|o| {
+                            o.get("id").and_then(|v| v.as_str()) == Some(target_id.as_str())
+                        });
+                        let args_map: HashMap<String, Value> = args
+                            .as_object()
+                            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                            .unwrap_or_default();
+                        // REQ-018：取该 action 已沉淀知识 + 历史失败数，供自动放行判定（异常→视为无知识→回退 Human）。
+                        let learned =
+                            self.kernel.evolution_state().await.ok().and_then(|st| {
+                                st.learned.into_iter().find(|l| l.action == *action)
+                            });
+                        let failure_count =
+                            self.kernel.count_action_failed(action).await.unwrap_or(0);
+                        let auditor = RunAuditor::new(self.kernel, &run_id);
+                        Policy::check_action(
+                            step,
+                            def,
+                            self.approver.as_ref(),
+                            target,
+                            &args_map,
+                            &self.config,
+                            learned.as_ref(),
+                            failure_count,
+                            Some(&auditor),
+                        )
+                        .await
+                    }
+                    _ => Policy::check(step),
+                };
             match decision {
                 PolicyDecision::Deny { reason } => {
                     self.kernel
@@ -852,7 +994,7 @@ impl<'a> Planner<'a> {
                             Some(0.95),
                         )
                         .await?;
-                    self.execute_step(step).await?;
+                    self.execute_step(step, &run_id, agent_id).await?;
                     if let Capability::Action { action, .. } = &step.capability {
                         executed_actions.push(action.clone());
                     }
@@ -950,7 +1092,12 @@ impl<'a> Planner<'a> {
     }
 
     /// 执行一个计划步的能力（经 Capability Registry 路由到 Ontology 操作）。
-    async fn execute_step(&self, step: &PlanStep) -> Result<(), PlannerError> {
+    async fn execute_step(
+        &self,
+        step: &PlanStep,
+        run_id: &str,
+        agent_id: &str,
+    ) -> Result<(), PlannerError> {
         match &step.capability {
             Capability::QueryObjects { object_type } => {
                 self.kernel.query_objects(object_type).await?;
@@ -1014,7 +1161,27 @@ impl<'a> Planner<'a> {
                     .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
                     .unwrap_or_default();
                 let engine = ActionEngine::new(self.kernel);
-                engine.invoke(&def, target_id, &args_map).await?;
+                match engine.invoke(&def, target_id, &args_map).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        // REQ-018 埋点：动作执行失败 → 发 ActionFailed 认知事件（强判定「无失败」闸门）。
+                        // 绑定目标对象，避免 WB2006 拦截；action 名写入 input 供精确计数。
+                        let _ = self
+                            .kernel
+                            .emit_cognitive(
+                                "ActionFailed",
+                                run_id,
+                                agent_id,
+                                std::slice::from_ref(target_id),
+                                Some(&format!("动作 {action}@{object_type} 执行失败：{e}")),
+                                Some(json!({ "action": action })),
+                                Some(json!({ "error": e.to_string() })),
+                                Some(0.0),
+                            )
+                            .await;
+                        return Err(PlannerError::Action(e));
+                    }
+                }
             }
         }
         Ok(())

@@ -16,6 +16,22 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// 关系边自增序列（用于语义ID）。
 static REL_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// 审计行自增序列（REQ-018 自动放行审计 id）。
+static TRACE_SEQ_AUDIT: AtomicU64 = AtomicU64::new(0);
+
+/// REQ-018：一条自动放行审计记录（可追溯至 LearnedKnowledge + run）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ApprovalAudit {
+    pub id: String,
+    pub run_id: String,
+    pub action: String,
+    pub learned_id: String,
+    /// `auto_approve` | `revoke_disabled` | `fallback_human`
+    pub decision: String,
+    pub reason: String,
+    pub created_at: String,
+}
+
 fn now_ts() -> String {
     let d = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -225,6 +241,14 @@ impl LibSQLStorage {
 
         // 版本匹配 → 幂等刷新 schema
         conn.execute_batch(&codegen::canonical_schema()).await?;
+        // REQ-018 迁移：为已有 wb_learned 补 auto_approve_enabled 列（新库已由 canonical_schema 包含）；
+        // 列已存在则 ALTER 报错，忽略即可（幂等）。
+        let _ = conn
+            .execute(
+                "ALTER TABLE wb_learned ADD COLUMN auto_approve_enabled INTEGER NOT NULL DEFAULT 1",
+                params![],
+            )
+            .await;
         Ok(())
     }
 
@@ -620,17 +644,18 @@ impl LibSQLStorage {
         let run_ids_s = crate::evolution::encode_run_ids(&merged);
         self.conn
             .execute(
-                "INSERT INTO wb_learned (id, kind, action, confidence, proposal_id, run_ids, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP) \
+                "INSERT INTO wb_learned (id, kind, action, confidence, proposal_id, run_ids, auto_approve_enabled, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP) \
                  ON CONFLICT(id) DO UPDATE SET \
-                   confidence = ?4, proposal_id = ?5, run_ids = ?6",
+                   confidence = ?4, proposal_id = ?5, run_ids = ?6, auto_approve_enabled = ?7",
                 params![
                     learned.id.as_str(),
                     kind,
                     learned.action.as_str(),
                     learned.confidence,
                     learned.proposal_id.as_str(),
-                    run_ids_s
+                    run_ids_s,
+                    learned.auto_approve_enabled as i64,
                 ],
             )
             .await?;
@@ -644,7 +669,7 @@ impl LibSQLStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, kind, action, confidence, proposal_id, run_ids, created_at FROM wb_learned \
+                "SELECT id, kind, action, confidence, proposal_id, run_ids, auto_approve_enabled, created_at FROM wb_learned \
                  ORDER BY confidence DESC, created_at DESC",
                 params![],
             )
@@ -662,6 +687,105 @@ impl LibSQLStorage {
             .execute("DELETE FROM wb_learned WHERE id = ?1", params![id])
             .await?;
         Ok(())
+    }
+
+    /// REQ-018：翻转一条 LearnedKnowledge 的自动放行资格（可撤销承诺，幂等）。
+    /// 置 false 后该 action 即使满足其余 4 道闸门也回退 Human Approval（决不静默放行）。
+    pub async fn set_learned_auto_approve(
+        &self,
+        id: &str,
+        enabled: bool,
+    ) -> Result<(), StorageError> {
+        self.conn
+            .execute(
+                "UPDATE wb_learned SET auto_approve_enabled = ?2 WHERE id = ?1",
+                params![id, enabled as i64],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// REQ-018：写入一条自动放行审计（可追溯至 LearnedKnowledge + run）。
+    pub async fn record_approval_audit(
+        &self,
+        run_id: &str,
+        action: &str,
+        learned_id: &str,
+        decision: &str,
+        reason: &str,
+    ) -> Result<(), StorageError> {
+        let id = format!(
+            "audit_{}_{}",
+            now_ts(),
+            TRACE_SEQ_AUDIT.fetch_add(1, Ordering::SeqCst)
+        );
+        self.conn
+            .execute(
+                "INSERT INTO wb_approval_audit (id, run_id, action, learned_id, decision, reason) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![id, run_id, action, learned_id, decision, reason],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// REQ-018：列出自动放行审计（按 id 过滤单条 LearnedKnowledge，或全量）。
+    pub async fn list_approval_audit(
+        &self,
+        learned_id: Option<&str>,
+    ) -> Result<Vec<ApprovalAudit>, StorageError> {
+        let mut rows = match learned_id {
+            Some(lid) => {
+                self.conn
+                    .query(
+                        "SELECT id, run_id, action, learned_id, decision, reason, created_at \
+                         FROM wb_approval_audit WHERE learned_id = ?1 \
+                         ORDER BY created_at DESC, id DESC",
+                        params![lid],
+                    )
+                    .await?
+            }
+            None => {
+                self.conn
+                    .query(
+                        "SELECT id, run_id, action, learned_id, decision, reason, created_at \
+                         FROM wb_approval_audit ORDER BY created_at DESC, id DESC",
+                        params![],
+                    )
+                    .await?
+            }
+        };
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            out.push(ApprovalAudit {
+                id: row.get(0)?,
+                run_id: row.get(1)?,
+                action: row.get(2)?,
+                learned_id: row.get(3)?,
+                decision: row.get(4)?,
+                reason: row.get(5)?,
+                created_at: row.get(6)?,
+            });
+        }
+        Ok(out)
+    }
+
+    /// REQ-018：统计某动作的历史 ActionFailed 事件数（强判定「无失败」闸门）。
+    /// ActionFailed 事件的 `input` 存 `{"action":"<动作>"}`，据此精确匹配（避免误伤同名）。
+    pub async fn count_action_failed(&self, action: &str) -> Result<usize, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT COUNT(*) FROM wb_trace_event \
+                 WHERE event_type = 'ActionFailed' AND input LIKE ?1",
+                params![format!("%\"action\":\"{action}\"%")],
+            )
+            .await?;
+        let cnt: i64 = match rows.next().await? {
+            Some(row) => row.get(0)?,
+            None => 0,
+        };
+        Ok(cnt.max(0) as usize)
     }
 }
 
@@ -711,7 +835,9 @@ fn row_to_learned(row: &libsql::Row) -> Result<crate::evolution::LearnedKnowledg
     let confidence: f64 = row.get(3)?;
     let proposal_id: String = row.get(4)?;
     let run_ids: String = row.get(5)?;
-    let created_at: String = row.get(6)?;
+    // wb_learned.auto_approve_enabled 为 INTEGER（0/1），libsql 不自动转 bool，需手动映射。
+    let auto_approve_enabled: bool = row.get::<i64>(6)? != 0;
+    let created_at: String = row.get(7)?;
     let kind = match kind_s.as_str() {
         "ActionPattern" => crate::evolution::ProposalKind::ActionPattern,
         _ => crate::evolution::ProposalKind::ActionPattern,
@@ -723,6 +849,7 @@ fn row_to_learned(row: &libsql::Row) -> Result<crate::evolution::LearnedKnowledg
         confidence,
         proposal_id,
         run_ids: crate::evolution::parse_run_ids(&run_ids),
+        auto_approve_enabled,
         created_at,
     })
 }

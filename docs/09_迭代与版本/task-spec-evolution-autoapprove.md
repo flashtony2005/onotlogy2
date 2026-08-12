@@ -3,10 +3,10 @@
 | 项 | 值 |
 |----|----|
 | TaskID | WB-TASK-018 |
-| 版本 | V0.6（规划中，未动工） |
+| 版本 | V0.6（已实现） |
 | REQ | REQ-018 |
 | Test | TC-026a ~ TC-026h |
-| 状态 | 待认领（契约已出，待评审确认后动工） |
+| 状态 | 已实现（TC-026a~h 全绿，门禁 fmt/clippy/test 全绿，已提交） |
 
 ## 0. 设计红线（不可动摇）
 **第一原则 Learn ≠ Permission 仍然成立，本 Task 是它被显式、受控、可撤销地放开，而非废弃。**
@@ -119,3 +119,4 @@ fn may_auto_approve(
 | 版本 | 修改人 | 修改日期 | 修改内容 |
 |------|--------|----------|----------|
 | V0.1 | lushaohui | 2026-08-12 | 初稿契约：5 道闸门 + 默认关闭 + 可审计 + 可撤销；登记 REQ-018；TC-026a~h 矩阵；决策：ActionFailed 强判定 + 现有 PolicyDef 弱判定低风险 |
+| V0.2 | lushaohui | 2026-08-12 | 落地：状态 待认领→已实现；`may_auto_approve` 纯函数 + `RuntimeConfig.auto_approve_from_evolution` 默认关闭；`Policy::check_action` 接入（上游替代 approver，异常回退 Human）；`wb_approval_audit` + `LearnedKnowledge.auto_approve_enabled` 可撤销 + `ActionFailed` 埋点；`--auto-approve-evolution` + `POST /evolution/learned/:id/auto-approve` 撤销 API；TC-026a~h 全绿 |

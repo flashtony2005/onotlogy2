@@ -38,13 +38,14 @@ pub use ir::{
 };
 pub use odl::parse_odl;
 pub use planner::{
-    AgentRunResult, ApprovalRequest, ApprovalState, ApprovalStore, AutoApprover, Capability,
-    ConsoleApprover, LLMGoalParser, PlanStep, Planner, PlannerError, Policy, PolicyApprover,
-    PolicyDecision, RunStatus, ServerApprover,
+    AgentRunResult, ApprovalAuditor, ApprovalRequest, ApprovalState, ApprovalStore, AutoApprover,
+    Capability, ConsoleApprover, LLMGoalParser, PlanStep, Planner, PlannerError, Policy,
+    PolicyApprover, PolicyDecision, RunAuditor, RunStatus, RuntimeConfig, ServerApprover,
+    may_auto_approve,
 };
 pub use runtime::{EventBus, RuntimeKernel, TraceEvent, TraceKind};
 pub use storage::{
-    LibSQLStorage, MemoryRecord, ObjectEngine, ObjectRecord, RelationEngine, RelationRecord,
-    TraceQuery,
+    ApprovalAudit, LibSQLStorage, MemoryRecord, ObjectEngine, ObjectRecord, RelationEngine,
+    RelationRecord, TraceQuery,
 };
 pub use trace::{RunTimeline, TraceEventDto, View};

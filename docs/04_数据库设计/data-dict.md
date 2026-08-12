@@ -46,6 +46,9 @@
 | proposal_status | Validated | 校验通过（confidence≥0.6）→ 可沉淀为 LearnedKnowledge | wb_proposal.status |
 | proposal_status | Rejected | 校验未通过（confidence<0.6） | wb_proposal.status |
 | proposal_kind | ActionPattern | 动作模式提案/知识（Pattern 描述某动作的复现规律） | wb_proposal.kind / wb_learned.kind |
+| audit_decision | auto_approve | 自动放行（替代一次 Human Approval，5 道闸门全过） | wb_approval_audit.decision（REQ-018） |
+| audit_decision | auto_approve_enabled | 恢复自动放行资格（切换 auto_approve_enabled=1） | wb_approval_audit.decision（REQ-018） |
+| audit_decision | revoke_disabled | 撤销自动放行资格（切换 auto_approve_enabled=0） | wb_approval_audit.decision（REQ-018） |
 
 ### 4.2 状态码
 | 状态码 | 含义 |
@@ -66,4 +69,5 @@
 | V1.0 | lushaohui | 2026-08-11 | 初稿完成 |
 | V1.1 | lushaohui | 2026-08-11 | 新增 trace_kind、trace_event_type 枚举（wb_trace_event 使用） |
 | V1.2 | lushaohui | 2026-08-12 | 新增 proposal_status（Proposed/Validated/Rejected）、proposal_kind（ActionPattern）枚举（wb_proposal / wb_learned 使用，BL-003·REQ-017） |
+| V1.3 | lushaohui | 2026-08-12 | REQ-018 新增 audit_decision 枚举（auto_approve / auto_approve_enabled / revoke_disabled，wb_approval_audit.decision 使用） |
 

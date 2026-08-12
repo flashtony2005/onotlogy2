@@ -75,7 +75,7 @@ V0.5 Agent 自治      让系统能学习       自学习 / Evolution / Memory �
 | V0.3 | Agent 闭环（= MVP） | REQ-009~011 | 已实现 |
 | V0.4 | Action & Policy | REQ-014（Action 引擎）/ REQ-015（Policy 引擎） | 已实现 |
 | V0.5 | Agent 自治（Memory 沉淀 + Evolution MVP） | REQ-016（已实现）；REQ-017 Evolution Engine MVP（已实现，Learn≠Permission） | 已实现 |
-| V0.6 | Evolution 第二阶段 AutoApprove（受控 Knowledge→Permission） | REQ-018（规划中：5 道闸门 + 默认关闭 + 可审计 + 可撤销；新增 ActionFailed 埋点） | 规划中（TDD Contract 已出） |
+| V0.6 | Evolution 第二阶段 AutoApprove（受控 Knowledge→Permission） | REQ-018（已实现：5 道闸门 + 默认关闭 + 可审计(wb_approval_audit) + 可撤销 + ActionFailed 埋点；TC-026a~h 全绿） | 已实现 |
 
 ## 5. 风险点 & 注意事项
 - 范围蔓延：V0.3 的 Agent 极易被提前"顺手"塞进 V0.1/V0.2，须以本表为卡点。
@@ -113,3 +113,4 @@ V0.5 Agent 自治      让系统能学习       自学习 / Evolution / Memory �
 | V2.6 | lushaohui | 2026-08-12 | Evolution Engine MVP（REQ-017）落地：Learn≠Permission；`src/evolution.rs` + storage 三表 `wb_pattern/wb_proposal/wb_learned` + RuntimeKernel `run_evolution` + server `GET /api/v1/wb/agent/evolution`；TC-025a~h 全绿（含 Isolation 不绕过审批、幂等、可追溯） |
 | V2.7 | lushaohui | 2026-08-12 | 规划 Evolution 第二阶段 AutoApprove（REQ-018）：范围表（4.3）加 V0.6 行；TDD Contract 见 task-spec-evolution-autoapprove.md；5 道闸门 + 默认关闭 + 可审计 + 可撤销，TC-026a~h 验收矩阵同步 |
 | V2.8 | lushaohui | 2026-08-12 | 修复 server 挂起式 HTTP 审批超时残留（Critical-1/2/3）：`ApprovalState` 加 `Expired`；`ApprovalStore::expire` 超时回收 + `resolve` 对 Expired 返回 false；`ServerApprover` 超时 emit Expired（与 Rejected 区分）；新增 TC-023c/d 全绿 |
+| V2.9 | lushaohui | 2026-08-12 | REQ-018 Evolution 第二阶段 AutoApprove 落地（V0.6 已实现）：`may_auto_approve` 5 道闸门纯函数 + `RuntimeConfig.auto_approve_from_evolution` 默认关闭；`Policy::check_action` 接入（上游替代 approver，异常/闸门缺失回退 Human）；`wb_approval_audit` 审计表 + `LearnedKnowledge.auto_approve_enabled` 可撤销 + `ActionFailed` 埋点；`--auto-approve-evolution` 开关 + `POST /evolution/learned/:id/auto-approve` 撤销 API；TC-026a~h 全绿；门禁 fmt/clippy/test 全绿 |

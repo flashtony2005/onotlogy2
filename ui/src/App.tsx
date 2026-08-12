@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
-import { getEvolution, getMemory, postRun } from './api'
+import { getApprovalAudit, getEvolution, getMemory, postAutoApproveToggle, postRun } from './api'
 import { useTraceStream } from './hooks/useTraceStream'
 import { buildTimeline } from './view'
 import type {
+  ApprovalAuditDto,
   EvolutionStateDto,
   MemoryRecord,
   TraceEventDto,
@@ -314,7 +315,7 @@ function MemoryPanel({
   )
 }
 
-// ── Evolution 视图：自学习知识面板（V0.5 / BL-003 · REQ-017，Learn≠Permission）──
+// ── Evolution 视图：自学习知识面板（V0.5 / BL-003 · REQ-017，Learn≠Permission；V0.6 / REQ-018 AutoApprove）──
 function EvolutionPanel({
   state,
   loading,
@@ -324,10 +325,32 @@ function EvolutionPanel({
   loading: boolean
   onReload: () => void
 }) {
+  const [audits, setAudits] = useState<ApprovalAuditDto[] | null>(null)
+  const [busyId, setBusyId] = useState<string | null>(null)
+
   const total =
     (state?.patterns.length ?? 0) +
     (state?.proposals.length ?? 0) +
     (state?.learned.length ?? 0)
+
+  // 切换自动放行资格（REQ-018 可撤销，幂等）；成功后刷新 Evolution + 审计。
+  const toggleAutoApprove = async (id: string, enabled: boolean) => {
+    setBusyId(id)
+    try {
+      await postAutoApproveToggle(id, enabled)
+      await onReload()
+      const a = await getApprovalAudit()
+      setAudits(a)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const showAudit = async () => {
+    const a = await getApprovalAudit()
+    setAudits(a)
+  }
+
   return (
     <div className="evolution">
       <div className="evo-head">
@@ -395,6 +418,16 @@ function EvolutionPanel({
                   <code className="evo-label">{l.id}</code>
                   <span className="evo-tag action">action: {l.action}</span>
                   <span className="evo-tag conf">conf {l.confidence.toFixed(2)}</span>
+                  <span className={`evo-tag ${l.autoApproveEnabled ? 'aa-on' : 'aa-off'}`}>
+                    {l.autoApproveEnabled ? '自动放行:开' : '自动放行:关'}
+                  </span>
+                  <button
+                    className="evo-toggle"
+                    disabled={busyId === l.id}
+                    onClick={() => toggleAutoApprove(l.id, !l.autoApproveEnabled)}
+                  >
+                    {l.autoApproveEnabled ? '撤销' : '恢复'}
+                  </button>
                 </div>
                 <div className="evo-evidence">
                   来源 Proposal：{l.proposalId} · run：
@@ -402,6 +435,29 @@ function EvolutionPanel({
                 </div>
               </article>
             ))}
+            <button className="reload" onClick={showAudit} style={{ marginTop: 8 }}>
+              查看自动放行审计
+            </button>
+            {audits && (
+              <div className="evo-audit">
+                {audits.length === 0 ? (
+                  <div className="empty">暂无自动放行审计</div>
+                ) : (
+                  audits.map((a) => (
+                    <article key={a.id} className="evo-item">
+                      <div className="evo-line">
+                        <code className="evo-label">{a.action}</code>
+                        <span className={`evo-tag decision ${a.decision}`}>{a.decision}</span>
+                        <span className="evo-tag">run: {a.runId || '—'}</span>
+                      </div>
+                      <div className="evo-evidence">
+                        {a.reason} · {a.createdAt}
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
+            )}
           </section>
         </div>
       )}

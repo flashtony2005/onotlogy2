@@ -196,7 +196,37 @@
 }
 ```
 - 响应失败错误码：WB1002（未登录）
-- 特殊逻辑：数据来源 `wb_pattern` / `wb_proposal` / `wb_learned`（BL-003·REQ-017 Evolution Engine）；`run_evolution` 幂等（不重复产出知识），`run_ids` 跨 run 合并去重。**Learn≠Permission：本端点仅暴露知识，不提供任何改写 Policy / 绕过 Human Approval（WB2005）的能力**，AutoApprove 类「Knowledge→Permission」升级归第二阶段（需 Policy 显式允许学习 + 高置信 + 多次成功 + 无失败 + 低风险）。`runIds` / `patternLabel` / `proposalId` 构成可追溯证据链（LearnedKnowledge→Proposal→Pattern→Experience→AgentRun）
+- 特殊逻辑：数据来源 `wb_pattern` / `wb_proposal` / `wb_learned`（BL-003·REQ-017 Evolution Engine）；`run_evolution` 幂等（不重复产出知识），`run_ids` 跨 run 合并去重。**Learn≠Permission：本端点仅暴露知识，不提供任何改写 Policy / 绕过 Human Approval（WB2005）的能力**。AutoApprove 类「Knowledge→Permission」升级由 **REQ-018** 落地（5 道闸门 + 默认关闭 + 可审计 + 可撤销，详见 4.9.1 / 4.9.2）。`runIds` / `patternLabel` / `proposalId` 构成可追溯证据链（LearnedKnowledge→Proposal→Pattern→Experience→AgentRun）
+
+### 4.9.1 切换 LearnedKnowledge 自动放行资格（REQ-018 · 可撤销）
+- [强制] 请求方式：POST
+- [强制] 接口路径：/api/v1/wb/agent/evolution/learned/{id}/auto-approve
+- [强制] 权限要求：登录用户（Developer 角色可写）
+- 请求体（JSON）：
+```json
+{ "enabled": true }
+```
+- 响应成功示例：
+```json
+{ "code": 0, "msg": "success", "data": { "id": "learned.refund", "autoApproveEnabled": true } }
+```
+- 特殊逻辑：REQ-018 可撤销——**幂等**切换 `LearnedKnowledge.auto_approve_enabled`（不删除知识）；`enabled=false` 后该 action 下次命中 5 道闸门时因 `auto_approve_enabled=false` 立即回退 Human Approval；切换同时写 `wb_approval_audit`（decision=`auto_approve_enabled` | `revoke_disabled`）。需先经 `--auto-approve-evolution` 开启全局开关，否则 `auto_approve_enabled` 不会被 `may_auto_approve` 采纳
+
+### 4.9.2 列出自动放行审计（REQ-018 · 可审计）
+- [强制] 请求方式：GET
+- [强制] 接口路径：/api/v1/wb/agent/evolution/audit
+- [强制] 权限要求：登录用户（Developer 角色可读）
+- 响应成功示例：
+```json
+{
+  "code": 0, "msg": "success",
+  "data": [
+    { "id": "audit_2026-08-12T09:02:00Z_0", "runId": "run_001", "action": "refund",
+      "learnedId": "learned.refund", "decision": "auto_approve", "reason": "5 道闸门全过，替代一次 Human Approval", "createdAt": "2026-08-12T09:02:00Z" }
+  ]
+}
+```
+- 特殊逻辑：数据来源 `wb_approval_audit`（REQ-018 新增）；每次自动放行（decision=`auto_approve`）或资格切换（decision=`auto_approve_enabled` | `revoke_disabled`）均落库，可追溯至 `LearnedKnowledge` + `runId`
 
 ### 4.10 列出某运行的审批请求
 - [强制] 请求方式：GET
@@ -254,4 +284,5 @@
 | V1.2 | lushaohui | 2026-08-11 | 表引用统一对齐 table-design 约束，改为 wb_trace_event |
 | V1.3 | lushaohui | 2026-08-11 | 修正 object_context 反查为 wb_ontology_object.id；新增 4.7 字段命名与序列化约定（snake_case↔camelCase + id 语义ID一致） |
 | V1.4 | lushaohui | 2026-08-12 | 新增 4.8 GET /api/v1/wb/agent/memory（wb_memory 记忆沉淀视图源）、4.9 GET /api/v1/wb/agent/evolution（wb_pattern/wb_proposal/wb_learned Evolution 状态，含可追溯证据链与 Learn≠Permission 约束） |
+| V1.5 | lushaohui | 2026-08-12 | REQ-018 Evolution 第二阶段 AutoApprove 接口：4.9.1 POST /evolution/learned/{id}/auto-approve（可撤销切换 auto_approve_enabled，幂等）；4.9.2 GET /evolution/audit（wb_approval_audit 审计列表，可追溯至 LearnedKnowledge+run）；4.9 特殊逻辑补 REQ-018 升级已落地说明 |
 | V1.5 | lushaohui | 2026-08-12 | 新增 4.10 GET /run/:run_id/approvals 与 4.11 POST /run/:run_id/approval/:req_id（V0.4 挂起式 HTTP 审批端点，Human-in-the-loop 三态之一；重复裁决返回 404 code） |

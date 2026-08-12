@@ -96,6 +96,19 @@ export interface LearnedDto {
   confidence: number
   proposalId: string
   runIds: string[]
+  /// REQ-018 自动放行资格（可撤销）
+  autoApproveEnabled: boolean
+  createdAt: string
+}
+
+/// REQ-018 自动放行审计（对应 wb_approval_audit）
+export interface ApprovalAuditDto {
+  id: string
+  runId: string
+  action: string
+  learnedId: string
+  decision: 'auto_approve' | 'auto_approve_enabled' | 'revoke_disabled'
+  reason: string
   createdAt: string
 }
 

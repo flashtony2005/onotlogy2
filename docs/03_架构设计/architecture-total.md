@@ -147,6 +147,7 @@ Kernel 永远稳定，能力外挂。
 | ✅ 观察 UI · Memory 视图 | V0.5 | 三层认知导航新增 Memory 标签，前端经 `GET /api/v1/wb/agent/memory` 渲染沉淀列表（label/payload/hits/updatedAt），运行前载入 + MemoryUpdate/MemoryRecall 事件实时刷新；TC-024a 全绿 |
 | ❌ 完整 GraphRAG | 世界模型成熟后 | 是 Ontology + Knowledge Graph + Embedding 的上层；没有 Object Graph 则无意义 |
 | ✅ Evolution Engine MVP（REQ-017 · Learn≠Permission） | V0.5 | Experience→Pattern→Proposal→Validation→LearnedKnowledge 闭环，可观察/可验证/可撤销，**不修改 Policy、不绕过审批**；`run_evolution` 幂等；`GET /api/v1/wb/agent/evolution` 暴露状态；AutoApprove 类「Knowledge→Permission」升级归第二阶段 |
+| ✅ Evolution 第二阶段 AutoApprove（REQ-018） | V0.6 | 在 Learn≠Permission 红线仍成立前提下受控放开：`may_auto_approve` 5 道闸门（显式允许开关 + 已 Validated 知识 + 高置信≥0.8 + 多次成功≥3 去重 run + 无失败 + 低风险），满足时经 `Policy::check_action` **替代一次 Human Approval**（上游可替代放行）；**默认关闭**（`RuntimeConfig.auto_approve_from_evolution=false`）；**可审计**（`wb_approval_audit`）；**可撤销**（`LearnedKnowledge.auto_approve_enabled` + `POST /evolution/learned/:id/auto-approve`）；任何异常/闸门缺失一律回退 Human Approval；新增 `ActionFailed` 埋点支撑「无失败」强判定；TC-026a~h 全绿 |
 | ❌ Multi-Agent | V3 | 属 Agent Society（Protocol/Consensus/Delegation） |
 
 ### 4.5 技术栈选型
@@ -236,3 +237,4 @@ Human → Agent UI → Decision Trace UI
 | V2.4 | lushaohui | 2026-08-12 | server 挂起式 HTTP 审批端点（V0.4 遗留项）落地：4.4「Policy 审批约束」补 `ServerApprover`+`ApprovalStore` 与 `GET /run/:run_id/approvals` + `POST /run/:run_id/approval/:req_id`（挂起→浏览器批准恢复 / 拒绝→WB2005 终止）；`PolicyApprover::approve` 升 async；TC-023a/b 全绿 |
 | V2.5 | lushaohui | 2026-08-12 | 观察 UI 接入 Memory 视图：4.4 能力边界表新增「观察 UI · Memory 视图」由 ❌ 改 ✅；后端 `GET /api/v1/wb/agent/memory` + 前端 Memory 标签；TC-024a 全绿 |
 | V2.6 | lushaohui | 2026-08-12 | Evolution Engine MVP（REQ-017）落地：4.4 能力边界表「Evolution Engine（自学习/自我进化）」由 ❌ 改 ✅（MVP，Learn≠Permission）；新增 `src/evolution.rs` + storage 三表 + RuntimeKernel `run_evolution` + server `GET /api/v1/wb/agent/evolution`；TC-025a~h 全绿 |
+| V2.7 | lushaohui | 2026-08-12 | REQ-018 Evolution 第二阶段 AutoApprove 落地：4.4 能力边界表新增「Evolution 第二阶段 AutoApprove（REQ-018）」由 ❌ 改 ✅；5 道闸门（`may_auto_approve`）+ `RuntimeConfig.auto_approve_from_evolution` 默认关闭 + `wb_approval_audit` 审计 + `LearnedKnowledge.auto_approve_enabled` 可撤销 + `ActionFailed` 埋点；`Policy::check_action` 上游替代 approver（异常回退 Human）；`--auto-approve-evolution` + `POST /evolution/learned/:id/auto-approve`；TC-026a~h 全绿 |

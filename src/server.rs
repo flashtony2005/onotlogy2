@@ -16,10 +16,10 @@ use crate::evolution::{
 };
 use crate::planner::{
     ApprovalRequest, ApprovalStore, AutoApprover, Planner, PlannerError, PolicyApprover, RunStatus,
-    ServerApprover, generate_run_id,
+    RuntimeConfig, ServerApprover, generate_run_id,
 };
 use crate::runtime::RuntimeKernel;
-use crate::storage::TraceQuery;
+use crate::storage::{ApprovalAudit, TraceQuery};
 use crate::trace::{RunTimeline, TraceEventDto, View, build_timeline};
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{OriginalUri, Path, Query, State, WebSocketUpgrade};
@@ -50,6 +50,8 @@ pub struct AppState {
     pub registry: ActionRegistry,
     /// 是否自动批准需审批动作（Human Approval）：默认 false → require_approval 动作挂起等待 HTTP 审批。
     auto_approve: bool,
+    /// REQ-018 Evolution 第二阶段 AutoApprove 全局开关：默认 false → 行为等同 MVP（仍走 Human Approval）。
+    auto_approve_evolution: bool,
     /// 挂起审批超时（None → 默认 APPROVAL_TIMEOUT 300s）；测试注入极短超时触发 Expired 回收路径。
     approval_timeout: Option<Duration>,
     /// 待审批请求存储（V0.4 遗留的 server 挂起式 HTTP 审批端点）；连接 Planner 挂起点与审批 API。
@@ -202,6 +204,8 @@ struct LearnedDto {
     confidence: f64,
     proposal_id: String,
     run_ids: Vec<String>,
+    /// REQ-018 自动放行资格（可撤销）
+    auto_approve_enabled: bool,
     created_at: String,
 }
 
@@ -225,6 +229,14 @@ fn router(state: Arc<AppState>) -> Router {
         .route(
             "/api/v1/wb/agent/evolution/learned/:id",
             delete(revoke_learned),
+        )
+        .route(
+            "/api/v1/wb/agent/evolution/learned/:id/auto-approve",
+            post(toggle_auto_approve),
+        )
+        .route(
+            "/api/v1/wb/agent/evolution/audit",
+            get(list_approval_audit_handler),
         )
         .route("/api/v1/wb/agent/run", post(run_start))
         .route(
@@ -250,6 +262,7 @@ pub async fn serve(
     static_dir: impl Into<String>,
     registry: ActionRegistry,
     auto_approve: bool,
+    auto_approve_evolution: bool,
 ) -> std::io::Result<()> {
     serve_with_timeout(
         kernel,
@@ -258,6 +271,7 @@ pub async fn serve(
         static_dir,
         registry,
         auto_approve,
+        auto_approve_evolution,
         None,
     )
     .await
@@ -266,6 +280,7 @@ pub async fn serve(
 /// `serve` 的可测试变体：允许注入挂起审批超时（测试触发 Expired 回收路径）。
 /// `approval_timeout=None` 时使用默认 `APPROVAL_TIMEOUT`（300s）。
 #[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
 pub async fn serve_with_timeout(
     kernel: Arc<RuntimeKernel>,
     engine: Arc<dyn AgentEngine>,
@@ -273,6 +288,7 @@ pub async fn serve_with_timeout(
     static_dir: impl Into<String>,
     registry: ActionRegistry,
     auto_approve: bool,
+    auto_approve_evolution: bool,
     approval_timeout: Option<Duration>,
 ) -> std::io::Result<()> {
     let state = Arc::new(AppState {
@@ -280,6 +296,7 @@ pub async fn serve_with_timeout(
         engine,
         registry,
         auto_approve,
+        auto_approve_evolution,
         approval_timeout,
         store: Arc::new(ApprovalStore::new()),
         runs: Mutex::new(HashMap::new()),
@@ -424,6 +441,7 @@ async fn list_evolution(State(st): State<Arc<AppState>>) -> Response {
             confidence: l.confidence,
             proposal_id: l.proposal_id,
             run_ids: l.run_ids,
+            auto_approve_enabled: l.auto_approve_enabled,
             created_at: l.created_at,
         })
         .collect::<Vec<_>>();
@@ -439,6 +457,84 @@ async fn list_evolution(State(st): State<Arc<AppState>>) -> Response {
 async fn revoke_learned(State(st): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
     match st.kernel.revoke_learned(&id).await {
         Ok(()) => ApiResponse::ok(json!({ "id": id, "revoked": true })).into_response(),
+        Err(_) => ApiResponse::error(5000, "存储错误").into_response(),
+    }
+}
+
+/// `POST /api/v1/wb/agent/evolution/learned/:id/auto-approve`：REV-018 可撤销——
+/// 切换某条 LearnedKnowledge 的自动放行资格（`enabled=true|false`），幂等，仅翻转
+/// `auto_approve_enabled` + 记 audit，不删除知识。撤销后该 action 下次命中即回退 Human Approval。
+#[derive(serde::Deserialize)]
+struct AutoApproveBody {
+    #[serde(default)]
+    enabled: bool,
+}
+
+async fn toggle_auto_approve(
+    State(st): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(body): Json<AutoApproveBody>,
+) -> Response {
+    if st
+        .kernel
+        .set_learned_auto_approve(&id, body.enabled)
+        .await
+        .is_err()
+    {
+        return ApiResponse::error(5000, "存储错误").into_response();
+    }
+    let (decision, reason) = if body.enabled {
+        ("auto_approve_enabled", "恢复自动放行资格")
+    } else {
+        (
+            "revoke_disabled",
+            "撤销自动放行资格（下次该 action 回退 Human Approval）",
+        )
+    };
+    // 配置态切换也入审计（可追溯谁/何时撤销），run_id/action 以 id 占位（非 run 触发）。
+    let _ = st
+        .kernel
+        .record_approval_audit(&id, &id, &id, decision, reason)
+        .await;
+    ApiResponse::ok(json!({ "id": id, "autoApproveEnabled": body.enabled })).into_response()
+}
+
+/// `wb_approval_audit` 审计 DTO（REQ-018）：每次自动放行/撤销可追溯至 LearnedKnowledge + run。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApprovalAuditDto {
+    id: String,
+    run_id: String,
+    action: String,
+    learned_id: String,
+    decision: String,
+    reason: String,
+    created_at: String,
+}
+
+impl From<ApprovalAudit> for ApprovalAuditDto {
+    fn from(a: ApprovalAudit) -> Self {
+        Self {
+            id: a.id,
+            run_id: a.run_id,
+            action: a.action,
+            learned_id: a.learned_id,
+            decision: a.decision,
+            reason: a.reason,
+            created_at: a.created_at,
+        }
+    }
+}
+
+/// `GET /api/v1/wb/agent/evolution/audit`：列出全部自动放行审计（REQ-018 可审计）。
+async fn list_approval_audit_handler(State(st): State<Arc<AppState>>) -> Response {
+    match st.kernel.list_approval_audit(None).await {
+        Ok(rows) => ApiResponse::ok(
+            rows.into_iter()
+                .map(ApprovalAuditDto::from)
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
         Err(_) => ApiResponse::error(5000, "存储错误").into_response(),
     }
 }
@@ -532,6 +628,9 @@ async fn run_start(State(st): State<Arc<AppState>>, Json(body): Json<RunBody>) -
         };
         let res = Planner::with_actions(&kernel, st.registry.clone())
             .with_approver(approver)
+            .with_config(RuntimeConfig {
+                auto_approve_from_evolution: st.auto_approve_evolution,
+            })
             .run_goal(engine.as_ref(), &goal, &ag, &rid)
             .await;
         let rec = match res {

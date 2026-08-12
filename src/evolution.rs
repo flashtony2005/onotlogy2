@@ -133,7 +133,15 @@ pub struct LearnedKnowledge {
     pub proposal_id: String,
     /// 贡献来源 run 列表（可追溯至 AgentRun）。
     pub run_ids: Vec<String>,
+    /// REQ-018：自动放行资格（可撤销）。默认 true；撤销即置 false，
+    /// 此后该 action 即使满足其余 4 道闸门也回退 Human Approval（决不静默放行）。
+    #[serde(default = "default_true")]
+    pub auto_approve_enabled: bool,
     pub created_at: String,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Evolution 的聚合状态（供 HTTP API / UI 读取）。

@@ -34,7 +34,8 @@
 | wb_memory | 记忆沉淀 | Agent 自治基础（V0.5 · REQ-016）：经验按 `action.<name>` 去重累加 hits，下一轮 run 经 MemoryRecall 召回，形成 Action→Memory→下次 Plan 闭环 |
 | wb_pattern | 进化模式 | Evolution Engine（BL-003 · REQ-017）：由 wb_memory 经验提炼的 Pattern（hits≥2 才成 Pattern），携带可追溯 run_ids |
 | wb_proposal | 进化提案 | Evolution 提案（Pattern→Proposal），状态 Proposed/Validated/Rejected，携带来源 pattern_label |
-| wb_learned | 沉淀知识 | Evolution 最终知识（仅 Validated 才沉淀），携带来源 proposal_id，**不修改 Policy、不绕过审批**（Learn≠Permission） |
+| wb_learned | 沉淀知识 | Evolution 最终知识（仅 Validated 才沉淀），携来源 proposal_id 与 `auto_approve_enabled`（可撤销资格），**不修改 Policy、不绕过审批**（Learn≠Permission）；REQ-018 自动放行资格存于此 |
+| wb_approval_audit | 放行审计 | REQ-018 自动放行审计：每次自动放行/资格切换落库（decision=`auto_approve`/`auto_approve_enabled`/`revoke_disabled`），可追溯至 LearnedKnowledge + run |
 
 ### 4.2 表结构示例：wb_user_account
 - 用途：
@@ -168,6 +169,23 @@
 | confidence | real | 是 | 0.0 | 置信度 | - |
 | proposal_id | text | 是 | - | 来源 Proposal（可追溯） | - |
 | run_ids | text | 是 | '[]' | 贡献来源 run（JSON 数组） | - |
+| auto_approve_enabled | integer | 是 | 1 | REQ-018 自动放行资格（可撤销，默认开）；撤销即置 0，下次该 action 命中 5 道闸门时回退 Human Approval | 0/1 |
+| created_at | text | 是 | CURRENT_TIMESTAMP | 创建时间 | - |
+
+### 4.10 表结构：wb_approval_audit
+- 用途：REQ-018 自动放行审计；每次自动放行（`decision=auto_approve`）或资格切换（`decision=auto_approve_enabled` / `revoke_disabled`）落库，可追溯至 `LearnedKnowledge` + `run_id`；支撑「可审计」铁律。
+- 主键：id
+- 唯一约束：无
+- 索引：无
+
+| 字段 | 类型 | 非空 | 默认 | 注释 | 枚举(若有) |
+|------|------|------|------|------|------------|
+| id | text | 是 | - | 审计行稳定 id（audit_{ts}_{seq}） | - |
+| run_id | text | 否 | - | 触发自动放行的运行（可追溯） | - |
+| action | text | 是 | - | 被自动放行的动作 | - |
+| learned_id | text | 是 | - | 依据哪条 LearnedKnowledge | - |
+| decision | text | 是 | - | 决策类型 | auto_approve / auto_approve_enabled / revoke_disabled |
+| reason | text | 否 | - | 决策说明（如「5 道闸门全过」/「撤销自动放行资格」） | - |
 | created_at | text | 是 | CURRENT_TIMESTAMP | 创建时间 | - |
 
 
@@ -187,4 +205,5 @@
 | V1.1 | lushaohui | 2026-08-11 | 表清单新增 wb_trace_event，补充 4.3 表结构详情 |
 | V1.2 | lushaohui | 2026-08-11 | 新增 wb_ontology_object / wb_relation_edge 两张核心表（4.4/4.5）；4.3 类型对齐 SQLite + id 改 TEXT；id 统一字段规则改为「系统表 INTEGER / 领域表 TEXT」 |
 | V1.3 | lushaohui | 2026-08-12 | 新增 Agent 自治四表：wb_memory（V0.5·REQ-016 记忆沉淀）、wb_pattern / wb_proposal / wb_learned（BL-003·REQ-017 Evolution Engine，Learn≠Permission）；表清单 4.1 补 4 行，新增 4.6~4.9 结构详情 |
+| V1.4 | lushaohui | 2026-08-12 | REQ-018 Evolution 第二阶段 AutoApprove：wb_learned 加 `auto_approve_enabled`（integer 0/1，可撤销资格，默认 1）；新增 wb_approval_audit 审计表（4.10，decision=auto_approve/auto_approve_enabled/revoke_disabled，可追溯至 LearnedKnowledge+run） |
 

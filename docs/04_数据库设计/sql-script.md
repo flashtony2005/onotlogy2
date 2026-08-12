@@ -137,6 +137,17 @@ CREATE TABLE wb_learned (
   confidence  REAL NOT NULL DEFAULT 0.0,
   proposal_id TEXT NOT NULL,       -- 来源 Proposal（可追溯）
   run_ids     TEXT NOT NULL DEFAULT '[]',
+  auto_approve_enabled INTEGER NOT NULL DEFAULT 1,  -- REQ-018 自动放行资格（可撤销，默认开）
+  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE wb_approval_audit (
+  id          TEXT PRIMARY KEY,    -- 审计行稳定 id（audit_{ts}_{seq}）
+  run_id      TEXT,                -- 触发自动放行的运行（可追溯）
+  action      TEXT NOT NULL,       -- 被自动放行的动作
+  learned_id  TEXT NOT NULL,       -- 依据哪条 LearnedKnowledge
+  decision    TEXT NOT NULL,       -- auto_approve | auto_approve_enabled | revoke_disabled
+  reason      TEXT,                -- 决策说明（如「5 道闸门全过」/「撤销自动放行资格」）
   created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```
@@ -164,4 +175,5 @@ CREATE TABLE wb_learned (
 | V1.4 | lushaohui | 2026-08-11 | codegen(canonical_schema) 与 LibSQLStorage 字段/索引对齐本权威 DDL：object 表列 type、edge 表 source/relation/target；索引补全 idx_obj_create / idx_edge_source / idx_edge_target / idx_edge_rel（与文档一致），移除代码侧多余的 idx_rel_* |
 | V1.5 | lushaohui | 2026-08-12 | 新增 wb_meta 元数据表（schema_version），作为 open 旧 schema 拦截（WB2101）的唯一依据；canonical_schema 与文档 DDL 保持一致 |
 | V1.6 | lushaohui | 2026-08-12 | 新增 wb_memory（V0.5·REQ-016 记忆沉淀）+ wb_pattern / wb_proposal / wb_learned（BL-003·REQ-017 Evolution Engine）建表 DDL，与 codegen canonical_schema 完全一致 |
+| V1.7 | lushaohui | 2026-08-12 | REQ-018 Evolution 第二阶段 AutoApprove：wb_learned 加 `auto_approve_enabled INTEGER NOT NULL DEFAULT 1`；新增 wb_approval_audit 审计表（decision=auto_approve/auto_approve_enabled/revoke_disabled），与 codegen canonical_schema 完全一致 |
 

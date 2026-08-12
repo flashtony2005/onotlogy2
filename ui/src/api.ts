@@ -3,6 +3,7 @@
 
 import type {
   ApiResponse,
+  ApprovalAuditDto,
   EvolutionStateDto,
   MemoryListDto,
   RunStartDto,
@@ -44,4 +45,24 @@ export async function getMemory(): Promise<MemoryListDto> {
 export async function getEvolution(): Promise<EvolutionStateDto> {
   const res = await fetch('/api/v1/wb/agent/evolution')
   return unwrap<EvolutionStateDto>(res)
+}
+
+/// REQ-018：切换某条 LearnedKnowledge 的自动放行资格（可撤销，幂等）。
+/// `enabled=true` 恢复、`false` 撤销（下次该 action 回退 Human Approval）。
+export async function postAutoApproveToggle(
+  id: string,
+  enabled: boolean,
+): Promise<{ id: string; autoApproveEnabled: boolean }> {
+  const res = await fetch(`/api/v1/wb/agent/evolution/learned/${id}/auto-approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  })
+  return unwrap<{ id: string; autoApproveEnabled: boolean }>(res)
+}
+
+/// REQ-018：列出自动放行审计（wb_approval_audit，可追溯至 LearnedKnowledge + run）。
+export async function getApprovalAudit(): Promise<ApprovalAuditDto[]> {
+  const res = await fetch('/api/v1/wb/agent/evolution/audit')
+  return unwrap<ApprovalAuditDto[]>(res)
 }

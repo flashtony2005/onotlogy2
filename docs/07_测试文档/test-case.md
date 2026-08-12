@@ -86,7 +86,7 @@
 | TC-025g | REQ-017 | e2e | retain×3 → `run_evolution("RUN-1021")` | 可追溯父引用链 | `LearnedKnowledge.proposal_id → Proposal`；`Proposal.pattern_label → Pattern`；`Pattern.action=retain` 且 `run_ids` 含 RUN-1021（→Experience→AgentRun 全链） | 通过（自动化 tests/v0_3.rs::tc025g_evolution_traceability） |
 | TC-025h | REQ-017 | e2e | server `GET /api/v1/wb/agent/evolution` | HTTP 端点（与 Memory 同构） | 返回 patterns/proposals/learned；`learned[0].proposalId="proposal.retain"`（可追溯） | 通过（自动化 tests/v0_3.rs::tc025h_server_evolution_endpoint） |
 
-### 4.3.2.1 V0.6 测试契约（Evolution 第二阶段 AutoApprove，REQ-018）
+### 4.3.2.1 V0.6 测试契约（Evolution 第二阶段 AutoApprove，REQ-018）✅ 已实现（TC-026a~h 全绿，V0.6 提交）
 | 用例ID | REQ | 类型 | Given | When | Then（边界判定） |
 |--------|-----|------|-------|------|------------------|
 | TC-026a | REQ-018 | e2e | `auto_approve_from_evolution=false`（默认） | `require_approval` 动作 `check_action` + 该 action 已存在 Validated LearnedKnowledge | **仍 Deny（WB2005）**，行为等同 MVP，不回归（默认关闭铁律） |
@@ -143,4 +143,5 @@
 | V2.11 | lushaohui | 2026-08-12 | 观察 UI 接入 Memory 视图：后端新增 `GET /api/v1/wb/agent/memory` 端点（`recall_all` 按 hits 降序）；前端三层导航新增 Memory 标签，渲染沉淀列表（label/payload/hits/updatedAt），运行前载入、收到 MemoryUpdate/MemoryRecall 事件实时刷新；新增 TC-024a（记忆端点 e2e）；UI `npm run build` 产物更新 |
 | V2.12 | lushaohui | 2026-08-12 | Evolution Engine MVP（BL-003 · REQ-017）落地，确立**第一原则 Learn≠Permission**：新增 `src/evolution.rs`（mine_patterns/propose/validate 纯函数 + Pattern/Proposal/LearnedKnowledge 类型，全部带可追溯父引用），storage 三表 `wb_pattern/wb_proposal/wb_learned`，RuntimeKernel `run_evolution`/`evolution_state`，Planner `run_goal` 末尾驱动且**不绕过 Policy**，server `GET /api/v1/wb/agent/evolution`；新增 TC-025a~h（8 项：经验挖掘/置信度边界/Proposal 安全边界/校验/Isolation 不绕过审批/幂等/可追溯/HTTP 端点）；全工程 36 测试全绿 |
 | V2.14 | lushaohui | 2026-08-12 | 修复 server 挂起式 HTTP 审批超时残留缺陷（Critical-1/2/3）：`ApprovalState` 加 `Expired` 变体；`ApprovalStore::expire` 超时回收翻 Expired+清 tx；`resolve` 对 Expired/已裁决/不存在均返回 false（404）；`ServerApprover` 超时调 `expire` 并 emit `Expired` outcome（与人工 Rejected 区分）；新增 TC-023c（超时→Expired 无幽灵 Pending、resolve 404）+ TC-023d（Expired 与 Rejected 可区分）；`serve_with_timeout` 注入超时供测试 |
+| V2.15 | lushaohui | 2026-08-12 | REQ-018 Evolution 第二阶段 AutoApprove 落地（TC-026a~h 全绿）：`may_auto_approve` 5 道闸门纯函数（显式允许开关+高置信≥0.8+多次成功≥3+无失败+低风险）；`RuntimeConfig.auto_approve_from_evolution` 默认关闭；`Policy::check_action` 接入（上游替代 approver，审计失败/闸门缺失/learned 缺失一律回退 Human）；`wb_approval_audit` 审计 + `LearnedKnowledge.auto_approve_enabled` 可撤销 + `ActionFailed` 埋点；`--auto-approve-evolution` 开关 + `POST /evolution/learned/:id/auto-approve` 撤销 API |
 | V2.13 | lushaohui | 2026-08-12 | 规划 Evolution 第二阶段 AutoApprove（REQ-018）：新增 4.3.2.1 节登记 TC-026a~h（8 项验收矩阵），设计 5 道闸门（显式允许+高置信≥0.8+多次成功≥3+无失败+低风险）、默认关闭、可审计(wb_approval_audit)、可撤销；无失败采用 ActionFailed 埋点强判定（TC-026f）、低风险采用现有 PolicyDef 判定（TC-026e）；TDD Contract 见 task-spec-evolution-autoapprove.md |

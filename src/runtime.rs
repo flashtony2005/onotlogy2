@@ -367,6 +367,7 @@ impl RuntimeKernel {
                     confidence: prop.confidence,
                     proposal_id: prop.id.clone(),
                     run_ids: prop.run_ids.clone(),
+                    auto_approve_enabled: true,
                     created_at: now_ts(),
                 };
                 let lk_clone = lk.clone();
@@ -398,5 +399,52 @@ impl RuntimeKernel {
     /// 撤销一条 LearnedKnowledge（可撤销承诺；幂等，不存在也返回 Ok）。
     pub async fn revoke_learned(&self, id: &str) -> Result<(), StorageError> {
         self.storage.delete_learned(id).await
+    }
+
+    // ---- REQ-018 Evolution 第二阶段 AutoApprove：受控自动放行（Learn≠Permission 受控放开） ----
+
+    /// 沉淀一条 LearnedKnowledge（供测试/外部驱动；生产由 `run_evolution` 内部调用）。
+    pub async fn save_learned(
+        &self,
+        learned: &crate::evolution::LearnedKnowledge,
+    ) -> Result<(), StorageError> {
+        self.storage.save_learned(learned).await
+    }
+
+    /// 翻转某条 LearnedKnowledge 的自动放行资格（可撤销承诺，幂等）。
+    /// 置 false → 该 action 回退 Human Approval（决不静默放行）。
+    pub async fn set_learned_auto_approve(
+        &self,
+        id: &str,
+        enabled: bool,
+    ) -> Result<(), StorageError> {
+        self.storage.set_learned_auto_approve(id, enabled).await
+    }
+
+    /// 写入一条自动放行审计（可追溯至 LearnedKnowledge + run）。
+    pub async fn record_approval_audit(
+        &self,
+        run_id: &str,
+        action: &str,
+        learned_id: &str,
+        decision: &str,
+        reason: &str,
+    ) -> Result<(), StorageError> {
+        self.storage
+            .record_approval_audit(run_id, action, learned_id, decision, reason)
+            .await
+    }
+
+    /// 列出自动放行审计（按 LearnedKnowledge 过滤或全量）。
+    pub async fn list_approval_audit(
+        &self,
+        learned_id: Option<&str>,
+    ) -> Result<Vec<crate::storage::ApprovalAudit>, StorageError> {
+        self.storage.list_approval_audit(learned_id).await
+    }
+
+    /// 统计某动作的历史 ActionFailed 事件数（REQ-018「无失败」闸门强判定）。
+    pub async fn count_action_failed(&self, action: &str) -> Result<usize, StorageError> {
+        self.storage.count_action_failed(action).await
     }
 }

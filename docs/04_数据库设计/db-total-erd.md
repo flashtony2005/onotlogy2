@@ -30,6 +30,7 @@ erDiagram
     WB_MEMORY ||--o{ WB_PATTERN : "经验→模式(hits≥2)"
     WB_PATTERN ||--o{ WB_PROPOSAL : "模式→提案"
     WB_PROPOSAL ||--o| WB_LEARNED : "Validated→知识"
+    WB_LEARNED ||--o{ WB_APPROVAL_AUDIT : "自动放行审计(REQ-018)"
 
     WB_ONTOLOGY_OBJECT {
         TEXT id PK "语义对象ID 如 customer_001"
@@ -107,6 +108,16 @@ erDiagram
         REAL confidence "置信度"
         TEXT proposal_id "来源 Proposal"
         TEXT run_ids "贡献来源 run JSON"
+        INTEGER auto_approve_enabled "REQ-018 自动放行资格(可撤销,默认1)"
+        TEXT created_at
+    }
+    WB_APPROVAL_AUDIT {
+        TEXT id PK "审计行ID audit_{ts}_{seq}"
+        TEXT run_id "触发运行(可追溯)"
+        TEXT action "被自动放行的动作"
+        TEXT learned_id "依据 LearnedKnowledge"
+        TEXT decision "auto_approve|auto_approve_enabled|revoke_disabled"
+        TEXT reason "决策说明"
         TEXT created_at
     }
 ```
@@ -120,6 +131,7 @@ erDiagram
 | wb_memory | 1:N | wb_pattern | 经验（hits≥2）经 `mine_patterns` 提炼为 Pattern（Agent 自治·REQ-016→REQ-017） |
 | wb_pattern | 1:N | wb_proposal | Pattern 经 `propose` 生成 Proposal，携带来源 pattern_label |
 | wb_proposal | 1:1(条件) | wb_learned | 仅 Validated 的 Proposal 沉淀为 LearnedKnowledge（携 proposal_id），Learn≠Permission 不回写 Policy |
+| wb_learned | 1:N | wb_approval_audit | REQ-018 自动放行审计：每次自动放行/资格切换落库（decision=auto_approve/auto_approve_enabled/revoke_disabled），经 learned_id 关联 |
 
 
 ## 5. 风险点 & 注意事项
@@ -135,4 +147,5 @@ erDiagram
 | V1.0 | lushaohui | 2026-08-11 | 初稿完成 |
 | V1.1 | lushaohui | 2026-08-11 | 4.1 改为内联 Mermaid erDiagram（去不存在的 db-erd.png 绝对路径）；4.2 填充实体关系表 |
 | V1.2 | lushaohui | 2026-08-12 | ER 总图新增 WB_MEMORY / WB_PATTERN / WB_PROPOSAL / WB_LEARNED 四实体（V0.5 记忆沉淀 + BL-003 Evolution），4.2 补实体关系（Experience→Pattern→Proposal→LearnedKnowledge 可追溯链） |
+| V1.3 | lushaohui | 2026-08-12 | REQ-018 新增 WB_APPROVAL_AUDIT 实体（4.2 补 wb_learned 1:N wb_approval_audit 关系，经 learned_id 关联，支撑自动放行可审计） |
 

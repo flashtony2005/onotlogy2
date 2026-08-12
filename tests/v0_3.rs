@@ -8,11 +8,11 @@ use openaip_os::agent::{AgentEngine, AgentError, Context, Decision};
 use openaip_os::evolution::{
     EvolutionState, Experience, LearnedKnowledge, Pattern, Proposal, ProposalKind, ProposalStatus,
 };
-use openaip_os::ir::{CompareOp, ValueExpr};
+use openaip_os::ir::{ActionDef, CompareOp, ValueExpr};
 use openaip_os::parse_odl;
 use openaip_os::planner::{
-    AutoApprover, Capability, PlanStep, Planner, PlannerError, Policy, PolicyDecision,
-    generate_run_id,
+    ApprovalAuditor, AutoApprover, Capability, PlanStep, Planner, PlannerError, Policy,
+    PolicyDecision, RunAuditor, RuntimeConfig, generate_run_id, may_auto_approve,
 };
 use openaip_os::runtime::RuntimeKernel;
 use openaip_os::server;
@@ -282,6 +282,7 @@ async fn tc009_ws_stream_and_reconnect() {
             "ui/dist",
             ActionRegistry::empty(),
             false,
+            false,
         )
         .await;
     });
@@ -400,6 +401,7 @@ async fn spawn_server(kernel: std::sync::Arc<RuntimeKernel>) -> SocketAddr {
             listener,
             "ui/dist",
             ActionRegistry::empty(),
+            false,
             false,
         )
         .await;
@@ -1058,6 +1060,10 @@ async fn tc015b_approval_gate() {
         &AutoApprover { allow: false },
         Some(&target),
         &args,
+        &RuntimeConfig::default(),
+        None,
+        0,
+        None,
     )
     .await;
     assert!(matches!(deny, PolicyDecision::Deny { .. }), "未批准应 Deny");
@@ -1069,6 +1075,10 @@ async fn tc015b_approval_gate() {
         &AutoApprover { allow: true },
         Some(&target),
         &args,
+        &RuntimeConfig::default(),
+        None,
+        0,
+        None,
     )
     .await;
     assert_eq!(allow, PolicyDecision::Allow, "批准后应 Allow");
@@ -1103,7 +1113,18 @@ async fn tc015c_precondition_eval() {
     args.insert("amount".to_string(), json!(500));
     let target = json!({ "id": "001", "level": "VIP" });
     assert_eq!(
-        Policy::check_action(&step, Some(&def), &approver, Some(&target), &args).await,
+        Policy::check_action(
+            &step,
+            Some(&def),
+            &approver,
+            Some(&target),
+            &args,
+            &RuntimeConfig::default(),
+            None,
+            0,
+            None
+        )
+        .await,
         PolicyDecision::Allow,
         "金额 500 且非黑名单应 Allow"
     );
@@ -1113,7 +1134,18 @@ async fn tc015c_precondition_eval() {
     args2.insert("amount".to_string(), json!(2000));
     assert!(
         matches!(
-            Policy::check_action(&step, Some(&def), &approver, Some(&target), &args2).await,
+            Policy::check_action(
+                &step,
+                Some(&def),
+                &approver,
+                Some(&target),
+                &args2,
+                &RuntimeConfig::default(),
+                None,
+                0,
+                None
+            )
+            .await,
             PolicyDecision::Deny { .. }
         ),
         "金额 2000 超阈值应 Deny"
@@ -1125,7 +1157,18 @@ async fn tc015c_precondition_eval() {
     args3.insert("amount".to_string(), json!(500));
     assert!(
         matches!(
-            Policy::check_action(&step, Some(&def), &approver, Some(&blacklisted), &args3).await,
+            Policy::check_action(
+                &step,
+                Some(&def),
+                &approver,
+                Some(&blacklisted),
+                &args3,
+                &RuntimeConfig::default(),
+                None,
+                0,
+                None
+            )
+            .await,
             PolicyDecision::Deny { .. }
         ),
         "黑名单客户应 Deny"
@@ -1235,7 +1278,7 @@ async fn tc023a_server_http_approval_suspend_and_approve() {
     let ks = kernel.clone();
     let es = engine.clone();
     tokio::spawn(async move {
-        let _ = server::serve(ks, es, listener, "ui/dist", reg, false).await;
+        let _ = server::serve(ks, es, listener, "ui/dist", reg, false, false).await;
     });
     tokio::time::sleep(Duration::from_millis(150)).await;
 
@@ -1343,7 +1386,7 @@ async fn tc023b_server_http_approval_reject() {
     let ks = kernel.clone();
     let es = engine.clone();
     tokio::spawn(async move {
-        let _ = server::serve(ks, es, listener, "ui/dist", reg, false).await;
+        let _ = server::serve(ks, es, listener, "ui/dist", reg, false, false).await;
     });
     tokio::time::sleep(Duration::from_millis(150)).await;
 
@@ -1480,6 +1523,7 @@ async fn tc023c_server_http_approval_timeout_expired() {
             listener,
             "ui/dist",
             reg,
+            false,
             false,
             Some(Duration::from_millis(50)),
         )
@@ -1629,7 +1673,7 @@ async fn tc023e_approval_wrong_run_id_rejected() {
     let ks = kernel.clone();
     let es = engine.clone();
     tokio::spawn(async move {
-        let _ = server::serve(ks, es, listener, "ui/dist", reg, false).await;
+        let _ = server::serve(ks, es, listener, "ui/dist", reg, false, false).await;
     });
     tokio::time::sleep(Duration::from_millis(150)).await;
 
@@ -1887,6 +1931,10 @@ async fn tc025e_evolution_does_not_bypass_approval() {
         &AutoApprover { allow: false },
         Some(&target),
         &args,
+        &RuntimeConfig::default(),
+        None,
+        0,
+        None,
     )
     .await;
     assert!(
@@ -2017,4 +2065,445 @@ async fn tc025i_revoke_learned() {
 
     // 幂等：重复撤销不报错
     kernel.revoke_learned("learned.retain").await.unwrap();
+}
+
+// ══ REQ-018 AutoApprove（TC-026a~h）══════════════════════════════════════════════════════
+// 设计红线：Learn≠Permission 仍成立；AutoApprove 仅在 5 道闸门全过 + 开关开启时，
+// 替代一次 Human Approval；任一闸门缺失 / 审计失败 / learned 缺失 → 严格回退 Human Approval。
+
+/// 构造一条「已验证」的 LearnedKnowledge（模拟 Evolution 沉淀；ProposalKind=ActionPattern 即 Validated）。
+fn mk_learned(action: &str, confidence: f64, runs: usize, enabled: bool) -> LearnedKnowledge {
+    LearnedKnowledge {
+        id: format!("learned.{action}"),
+        kind: ProposalKind::ActionPattern,
+        action: action.to_string(),
+        confidence,
+        proposal_id: format!("proposal.{action}"),
+        run_ids: (0..runs).map(|i| format!("run-{i}")).collect(),
+        auto_approve_enabled: enabled,
+        created_at: "2026-08-12T00:00:00Z".into(),
+    }
+}
+
+/// refund 动作的 PlanStep（require_approval=true + 非空 precondition → 满足低风险闸门）。
+fn refund_step() -> PlanStep {
+    PlanStep {
+        capability: Capability::Action {
+            object_type: "Customer".into(),
+            action: "refund".into(),
+            target_id: "001".into(),
+            args: json!({}),
+        },
+        object_refs: vec!["001".into()],
+        description: "refund".into(),
+    }
+}
+
+/// refund 动作定义（从 ODL_REFUND 取，policy 满足低风险闸门）。
+fn refund_def() -> ActionDef {
+    parse_odl(ODL_REFUND)
+        .unwrap()
+        .find("Customer")
+        .unwrap()
+        .actions
+        .iter()
+        .find(|a| a.name == "refund")
+        .cloned()
+        .unwrap()
+}
+
+// ── TC-026a：默认关闭（auto_approve_from_evolution=false）→ 仍 Deny，等同 MVP，不回归 ──
+#[tokio::test]
+async fn tc026a_default_off_still_deny() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    kernel
+        .save_learned(&mk_learned("refund", 0.9, 3, true))
+        .await
+        .unwrap();
+    let auditor = RunAuditor::new(&kernel, "run-a");
+    let step = refund_step();
+    let def = refund_def();
+    let mut args = HashMap::new();
+    args.insert("amount".to_string(), json!(500));
+    let target = json!({ "level": "VIP" });
+    // 默认配置（开关关闭）→ 即便有 learned 也回退 Human Approval（approver 拒）→ Deny
+    let decision = Policy::check_action(
+        &step,
+        Some(&def),
+        &AutoApprover { allow: false },
+        Some(&target),
+        &args,
+        &RuntimeConfig::default(),
+        Some(&mk_learned("refund", 0.9, 3, true)),
+        0,
+        Some(&auditor),
+    )
+    .await;
+    assert!(
+        matches!(decision, PolicyDecision::Deny { .. }),
+        "默认关闭：require_approval 仍 Deny（等同 MVP，不回归）"
+    );
+    // 未触发自动放行 → 审计表不应有记录
+    let audit = kernel.list_approval_audit(None).await.unwrap();
+    assert!(audit.is_empty(), "默认关闭不应写自动放行审计");
+}
+
+// ── TC-026b：显式允许闸门未过（开关 false）→ 强制回退 Human ──
+#[tokio::test]
+async fn tc026b_switch_off_falls_back() {
+    let lk = mk_learned("refund", 0.9, 3, true);
+    let def = refund_def();
+    let off = RuntimeConfig {
+        auto_approve_from_evolution: false,
+    };
+    assert!(
+        !may_auto_approve(&off, Some(&lk), 3, 0, &def.policy),
+        "开关关闭必须回退"
+    );
+    let on = RuntimeConfig {
+        auto_approve_from_evolution: true,
+    };
+    assert!(
+        may_auto_approve(&on, Some(&lk), 3, 0, &def.policy),
+        "开关开启且其余闸门全过应放行"
+    );
+}
+
+// ── TC-026c：高置信闸门边界（confidence <0.8 / =0.8 / >0.8）──
+#[tokio::test]
+async fn tc026c_confidence_boundary() {
+    let def = refund_def();
+    let cfg = RuntimeConfig {
+        auto_approve_from_evolution: true,
+    };
+    assert!(
+        !may_auto_approve(
+            &cfg,
+            Some(&mk_learned("refund", 0.7, 3, true)),
+            3,
+            0,
+            &def.policy
+        ),
+        "0.7 < 0.8 应回退"
+    );
+    assert!(
+        may_auto_approve(
+            &cfg,
+            Some(&mk_learned("refund", 0.8, 3, true)),
+            3,
+            0,
+            &def.policy
+        ),
+        "0.8 == 阈值应放行"
+    );
+    assert!(
+        may_auto_approve(
+            &cfg,
+            Some(&mk_learned("refund", 0.85, 3, true)),
+            3,
+            0,
+            &def.policy
+        ),
+        "0.85 > 阈值应放行"
+    );
+}
+
+// ── TC-026d：多次成功闸门边界（success_runs <3 / =3 / >3）──
+#[tokio::test]
+async fn tc026d_runs_boundary() {
+    let def = refund_def();
+    let cfg = RuntimeConfig {
+        auto_approve_from_evolution: true,
+    };
+    assert!(
+        !may_auto_approve(
+            &cfg,
+            Some(&mk_learned("refund", 0.9, 2, true)),
+            2,
+            0,
+            &def.policy
+        ),
+        "2 < 3 应回退"
+    );
+    assert!(
+        may_auto_approve(
+            &cfg,
+            Some(&mk_learned("refund", 0.9, 3, true)),
+            3,
+            0,
+            &def.policy
+        ),
+        "3 == 阈值应放行"
+    );
+    assert!(
+        may_auto_approve(
+            &cfg,
+            Some(&mk_learned("refund", 0.9, 4, true)),
+            4,
+            0,
+            &def.policy
+        ),
+        "4 > 阈值应放行"
+    );
+}
+
+// ── TC-026e：开关开启 + 全闸门过 → 自动放行 Allow（替代 Human Approval），并写审计 ──
+#[tokio::test]
+async fn tc026e_all_gates_pass_auto_approve() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    let lk = mk_learned("refund", 0.9, 3, true);
+    kernel.save_learned(&lk).await.unwrap();
+    let run_id = "run-e";
+    let auditor = RunAuditor::new(&kernel, run_id);
+    let step = refund_step();
+    let def = refund_def();
+    let mut args = HashMap::new();
+    args.insert("amount".to_string(), json!(500));
+    let target = json!({ "level": "VIP" });
+    // 开关开启 + 全闸门过；approver 用「拒」证明走的是 auto-approve 替代路径，而非 approver 放行
+    let decision = Policy::check_action(
+        &step,
+        Some(&def),
+        &AutoApprover { allow: false },
+        Some(&target),
+        &args,
+        &RuntimeConfig {
+            auto_approve_from_evolution: true,
+        },
+        Some(&lk),
+        0,
+        Some(&auditor),
+    )
+    .await;
+    assert_eq!(
+        decision,
+        PolicyDecision::Allow,
+        "全闸门过应自动放行 Allow（替代 Human Approval）"
+    );
+    // 审计应记录本次自动放行（可追溯至 LearnedKnowledge + run）
+    let audit = kernel
+        .list_approval_audit(Some("learned.refund"))
+        .await
+        .unwrap();
+    assert_eq!(audit.len(), 1, "应写 1 条自动放行审计");
+    assert_eq!(audit[0].decision, "auto_approve");
+    assert_eq!(audit[0].learned_id, "learned.refund");
+    assert_eq!(audit[0].run_id, run_id);
+}
+
+// ── TC-026f：无失败闸门未过（failure_count>=1）→ 回退 Deny；ActionFailed 埋点可被精确计数 ──
+#[tokio::test]
+async fn tc026f_failure_blocks_auto_approve() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    let lk = mk_learned("refund", 0.9, 3, true);
+    kernel.save_learned(&lk).await.unwrap();
+    let run_id = "run-f";
+    let auditor = RunAuditor::new(&kernel, run_id);
+    let step = refund_step();
+    let def = refund_def();
+    let mut args = HashMap::new();
+    args.insert("amount".to_string(), json!(500));
+    let target = json!({ "level": "VIP" });
+    // failure_count=1 → 无失败闸门未过 → 回退 Human Approval（approver 拒）→ Deny
+    let decision = Policy::check_action(
+        &step,
+        Some(&def),
+        &AutoApprover { allow: false },
+        Some(&target),
+        &args,
+        &RuntimeConfig {
+            auto_approve_from_evolution: true,
+        },
+        Some(&lk),
+        1,
+        Some(&auditor),
+    )
+    .await;
+    assert!(
+        matches!(decision, PolicyDecision::Deny { .. }),
+        "有失败（failure_count=1）应回退 Deny"
+    );
+    // 验证 ActionFailed 埋点可被 count_action_failed 精确捕获（强判定数据源）
+    kernel
+        .emit_cognitive(
+            "ActionFailed",
+            run_id,
+            "agent",
+            &["001".to_string()],
+            Some("refund 执行失败"),
+            Some(json!({ "action": "refund" })),
+            Some(json!({ "error": "boom" })),
+            Some(0.0),
+        )
+        .await
+        .unwrap();
+    let cnt = kernel.count_action_failed("refund").await.unwrap();
+    assert_eq!(cnt, 1, "ActionFailed 埋点应被精确计数");
+}
+
+/// 审计写库必败的 Auditor：用于验证「审计失败 → 回退 Human」铁律。
+struct FailingAuditor;
+#[async_trait]
+impl ApprovalAuditor for FailingAuditor {
+    async fn record(&self, _learned_id: &str, _action: &str) -> Result<(), String> {
+        Err("audit write failed".into())
+    }
+}
+
+// ── TC-026g：异常一律回退 Human Approval，绝不静默放行 ──
+#[tokio::test]
+async fn tc026g_audit_failure_falls_back() {
+    let lk = mk_learned("refund", 0.9, 3, true);
+    let def = refund_def();
+    let step = refund_step();
+    let mut args = HashMap::new();
+    args.insert("amount".to_string(), json!(500));
+    let target = json!({ "level": "VIP" });
+    // 全闸门过，但 auditor 写库失败 → 回退 approver（拒）→ Deny，绝不 Allow
+    let decision = Policy::check_action(
+        &step,
+        Some(&def),
+        &AutoApprover { allow: false },
+        Some(&target),
+        &args,
+        &RuntimeConfig {
+            auto_approve_from_evolution: true,
+        },
+        Some(&lk),
+        0,
+        Some(&FailingAuditor),
+    )
+    .await;
+    assert!(
+        matches!(decision, PolicyDecision::Deny { .. }),
+        "审计失败必须回退 Human Approval"
+    );
+    // learned 读取异常（传入 None）→ 回退 Deny
+    let decision2 = Policy::check_action(
+        &step,
+        Some(&def),
+        &AutoApprover { allow: false },
+        Some(&target),
+        &args,
+        &RuntimeConfig {
+            auto_approve_from_evolution: true,
+        },
+        None,
+        0,
+        Some(&FailingAuditor),
+    )
+    .await;
+    assert!(
+        matches!(decision2, PolicyDecision::Deny { .. }),
+        "learned 缺失必须回退 Human Approval"
+    );
+}
+
+// ── TC-026h：审计含该次放行；撤销后下次命中即回退 Human（可观察不可删）；可重新开启 ──
+#[tokio::test]
+async fn tc026h_audit_and_revoke_reversible() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    let lk = mk_learned("refund", 0.9, 3, true);
+    kernel.save_learned(&lk).await.unwrap();
+    let run_id = "run-h";
+    let auditor = RunAuditor::new(&kernel, run_id);
+    let step = refund_step();
+    let def = refund_def();
+    let mut args = HashMap::new();
+    args.insert("amount".to_string(), json!(500));
+    let target = json!({ "level": "VIP" });
+
+    // 1) 全闸门过 → 自动放行，写审计
+    let d1 = Policy::check_action(
+        &step,
+        Some(&def),
+        &AutoApprover { allow: false },
+        Some(&target),
+        &args,
+        &RuntimeConfig {
+            auto_approve_from_evolution: true,
+        },
+        Some(&lk),
+        0,
+        Some(&auditor),
+    )
+    .await;
+    assert_eq!(d1, PolicyDecision::Allow, "初次应自动放行");
+    let audit = kernel
+        .list_approval_audit(Some("learned.refund"))
+        .await
+        .unwrap();
+    assert_eq!(audit.len(), 1);
+    assert_eq!(audit[0].decision, "auto_approve");
+
+    // 2) 撤销自动放行资格
+    kernel
+        .set_learned_auto_approve("learned.refund", false)
+        .await
+        .unwrap();
+    let lk2 = kernel
+        .evolution_state()
+        .await
+        .unwrap()
+        .learned
+        .into_iter()
+        .find(|l| l.id == "learned.refund")
+        .expect("应有 learned");
+    assert!(
+        !lk2.auto_approve_enabled,
+        "撤销后 auto_approve_enabled 应为 false"
+    );
+
+    // 3) 撤销后再次命中 → 回退 Human Approval（approver 拒）→ Deny
+    let d2 = Policy::check_action(
+        &step,
+        Some(&def),
+        &AutoApprover { allow: false },
+        Some(&target),
+        &args,
+        &RuntimeConfig {
+            auto_approve_from_evolution: true,
+        },
+        Some(&lk2),
+        0,
+        Some(&auditor),
+    )
+    .await;
+    assert!(
+        matches!(d2, PolicyDecision::Deny { .. }),
+        "撤销后该 action 应回退 Human Approval"
+    );
+
+    // 4) 可恢复：重新开启资格 → 再次自动放行
+    kernel
+        .set_learned_auto_approve("learned.refund", true)
+        .await
+        .unwrap();
+    let lk3 = kernel
+        .evolution_state()
+        .await
+        .unwrap()
+        .learned
+        .into_iter()
+        .find(|l| l.id == "learned.refund")
+        .expect("应有 learned");
+    let d3 = Policy::check_action(
+        &step,
+        Some(&def),
+        &AutoApprover { allow: false },
+        Some(&target),
+        &args,
+        &RuntimeConfig {
+            auto_approve_from_evolution: true,
+        },
+        Some(&lk3),
+        0,
+        Some(&auditor),
+    )
+    .await;
+    assert_eq!(d3, PolicyDecision::Allow, "恢复资格后应再次自动放行");
 }
