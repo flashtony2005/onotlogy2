@@ -27,13 +27,13 @@ pub use action::{ActionEffect, ActionEngine, ActionError, ActionRegistry};
 pub use agent::{AgentEngine, AgentError, Context, Decision, PiAgentEngine, WorldSnapshot};
 pub use codegen::{CodegenOutput, ObjectDef, codegen};
 pub use ir::{
-    ActionDef, CreateEffect, FieldUpdate, ObjectType, OntologyIR, ParamDef, PropertyDef,
-    ScalarType, ValueExpr,
+    ActionDef, Clause, CompareOp, CreateEffect, FieldUpdate, ObjectType, OntologyIR, ParamDef,
+    PolicyDef, PropertyDef, ScalarType, ValueExpr,
 };
 pub use odl::parse_odl;
 pub use planner::{
-    AgentRunResult, Capability, LLMGoalParser, PlanStep, Planner, PlannerError, Policy,
-    PolicyDecision, RunStatus,
+    AgentRunResult, AutoApprover, Capability, LLMGoalParser, PlanStep, Planner, PlannerError,
+    Policy, PolicyApprover, PolicyDecision, RunStatus,
 };
 pub use runtime::{EventBus, RuntimeKernel, TraceEvent, TraceKind};
 pub use storage::{

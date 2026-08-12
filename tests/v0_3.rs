@@ -5,10 +5,11 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use openaip_os::action::{ActionEngine, ActionRegistry};
 use openaip_os::agent::{AgentEngine, AgentError, Context, Decision};
-use openaip_os::ir::ValueExpr;
+use openaip_os::ir::{CompareOp, ValueExpr};
 use openaip_os::parse_odl;
 use openaip_os::planner::{
-    Capability, PlanStep, Planner, PlannerError, Policy, PolicyDecision, generate_run_id,
+    AutoApprover, Capability, PlanStep, Planner, PlannerError, Policy, PolicyDecision,
+    generate_run_id,
 };
 use openaip_os::runtime::RuntimeKernel;
 use openaip_os::server;
@@ -17,6 +18,7 @@ use openaip_os::trace::{View, build_timeline};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -725,6 +727,42 @@ object Customer:
           link: needs_retention
 "#;
 
+// 带 Policy 的动作：退款需人工审批（require_approval），且金额须 <= 1000（precondition）。
+const ODL_REFUND: &str = r#"
+object Customer:
+  properties:
+    name: string
+    level: string
+  actions:
+    refund:
+      params:
+        amount: float
+      updates:
+        - field: balance
+          value: amount
+      policy:
+        require_approval: true
+        precondition:
+          - field: amount
+            op: le
+            value: 1000
+          - field: self.level
+            op: ne
+            value: "BLACKLIST"
+"#;
+
+// 仅含审批闸门的动作（无前置条件），用于 Planner 闭环验证 Human Approval 门禁。
+const ODL_APPROVE: &str = r#"
+object Customer:
+  properties:
+    name: string
+    level: string
+  actions:
+    closeAccount:
+      policy:
+        require_approval: true
+"#;
+
 // TC-014a：ODL `actions:` 块解析为 IR（params / updates / creates / data / link / self）
 #[tokio::test]
 async fn tc014a_odl_parses_actions() {
@@ -857,5 +895,184 @@ async fn tc014c_planner_via_registry_closed_loop() {
     assert!(
         policy.iter().all(|p| *p == "Allow"),
         "Policy 应 Allow 声明式动作"
+    );
+}
+
+// ── TC-015a：ODL `policy:` 块解析为 IR（require_approval + precondition 子句） ──────────
+#[test]
+fn tc015a_odl_parses_policy() {
+    let ir = parse_odl(ODL_REFUND).expect("ODL 应解析");
+    let cust = ir.find("Customer").expect("应有 Customer");
+    let refund = cust
+        .actions
+        .iter()
+        .find(|a| a.name == "refund")
+        .expect("refund");
+    assert!(refund.policy.require_approval, "refund 应需审批");
+
+    assert_eq!(refund.policy.precondition.len(), 2, "应有 2 条前置条件");
+    let c0 = &refund.policy.precondition[0];
+    assert_eq!(c0.field, "amount");
+    assert_eq!(c0.op, CompareOp::Le);
+    assert_eq!(
+        c0.value,
+        ValueExpr::Literal(json!(1000)),
+        "比较右值应为字面量 1000"
+    );
+    let c1 = &refund.policy.precondition[1];
+    assert_eq!(c1.field, "self.level");
+    assert_eq!(c1.op, CompareOp::Ne);
+    assert!(matches!(c1.value, ValueExpr::Literal(Value::String(ref s)) if s == "BLACKLIST"));
+}
+
+// ── TC-015b：审批闸门 — require_approval + AutoApprover 放行/拒绝 ───────────────────────
+#[test]
+fn tc015b_approval_gate() {
+    let def = parse_odl(ODL_REFUND)
+        .unwrap()
+        .find("Customer")
+        .unwrap()
+        .actions
+        .iter()
+        .find(|a| a.name == "refund")
+        .cloned()
+        .unwrap();
+    let step = PlanStep {
+        capability: Capability::Action {
+            object_type: "Customer".into(),
+            action: "refund".into(),
+            target_id: "001".into(),
+            args: json!({}),
+        },
+        object_refs: vec!["001".into()],
+        description: "refund".into(),
+    };
+
+    // 默认审批器（allow=false）→ 需 Human Approval，Deny（WB2005）
+    let mut args = HashMap::new();
+    args.insert("amount".to_string(), json!(500));
+    let target = json!({ "level": "VIP" });
+    let deny = Policy::check_action(
+        &step,
+        Some(&def),
+        &AutoApprover { allow: false },
+        Some(&target),
+        &args,
+    );
+    assert!(matches!(deny, PolicyDecision::Deny { .. }), "未批准应 Deny");
+
+    // 自动批准（allow=true）→ Allow
+    let allow = Policy::check_action(
+        &step,
+        Some(&def),
+        &AutoApprover { allow: true },
+        Some(&target),
+        &args,
+    );
+    assert_eq!(allow, PolicyDecision::Allow, "批准后应 Allow");
+}
+
+// ── TC-015c：前置条件 — 参数/self 字段比较满足或拒绝 ───────────────────────────────────
+#[test]
+fn tc015c_precondition_eval() {
+    let def = parse_odl(ODL_REFUND)
+        .unwrap()
+        .find("Customer")
+        .unwrap()
+        .actions
+        .iter()
+        .find(|a| a.name == "refund")
+        .cloned()
+        .unwrap();
+    let step = PlanStep {
+        capability: Capability::Action {
+            object_type: "Customer".into(),
+            action: "refund".into(),
+            target_id: "001".into(),
+            args: json!({}),
+        },
+        object_refs: vec!["001".into()],
+        description: "refund".into(),
+    };
+    let approver = AutoApprover { allow: true };
+
+    // amount=500 <= 1000 且 level != BLACKLIST → Allow
+    let mut args = HashMap::new();
+    args.insert("amount".to_string(), json!(500));
+    let target = json!({ "id": "001", "level": "VIP" });
+    assert_eq!(
+        Policy::check_action(&step, Some(&def), &approver, Some(&target), &args),
+        PolicyDecision::Allow,
+        "金额 500 且非黑名单应 Allow"
+    );
+
+    // amount=2000 > 1000 → Deny（不满足 precondition）
+    let mut args2 = HashMap::new();
+    args2.insert("amount".to_string(), json!(2000));
+    assert!(
+        matches!(
+            Policy::check_action(&step, Some(&def), &approver, Some(&target), &args2),
+            PolicyDecision::Deny { .. }
+        ),
+        "金额 2000 超阈值应 Deny"
+    );
+
+    // level=BLACKLIST → Deny（self.level 不满足 ne）
+    let blacklisted = json!({ "id": "001", "level": "BLACKLIST" });
+    let mut args3 = HashMap::new();
+    args3.insert("amount".to_string(), json!(500));
+    assert!(
+        matches!(
+            Policy::check_action(&step, Some(&def), &approver, Some(&blacklisted), &args3),
+            PolicyDecision::Deny { .. }
+        ),
+        "黑名单客户应 Deny"
+    );
+}
+
+// ── TC-015d：Planner 闭环 — require_approval 动作默认拒（WB2005）；自动批准则跑通 ───────
+#[tokio::test]
+async fn tc015d_planner_policy_gate() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    kernel
+        .create_object("Customer", "001", json!({"name": "Apple", "level": "VIP"}))
+        .await
+        .unwrap();
+    let reg = ActionRegistry::from_ir(&parse_odl(ODL_APPROVE).unwrap());
+
+    // 默认（无自动批准）→ 应因 Policy 拒绝而返回 WB2005
+    let run_id = generate_run_id();
+    let res = Planner::with_actions(&kernel, reg.clone())
+        .run_goal(&FakeEngine, "close account", "retention-agent", &run_id)
+        .await;
+    match res {
+        Err(PlannerError::PolicyDenied(msg)) => {
+            assert!(msg.contains("Human Approval"), "应提示需人工审批: {msg}")
+        }
+        other => panic!("require_approval 动作应被 Policy 拒绝（WB2005），得到 {other:?}"),
+    }
+
+    // 注入自动批准 → 闭环跑通（Completed），动作被实际执行
+    let s2 = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel2 = RuntimeKernel::new(s2);
+    kernel2
+        .create_object("Customer", "001", json!({"name": "Apple", "level": "VIP"}))
+        .await
+        .unwrap();
+    let run_id2 = generate_run_id();
+    let res2 = Planner::with_actions(&kernel2, reg)
+        .with_approver(Arc::new(AutoApprover { allow: true }))
+        .run_goal(&FakeEngine, "close account", "retention-agent", &run_id2)
+        .await
+        .expect("自动批准后应跑通");
+    assert_eq!(res2.status.as_str(), "Completed");
+    // 动作在自动批准后被执行：产出 action.closeAccount world 事件
+    let wevents = kernel2.list_world_events().await.unwrap();
+    assert!(
+        wevents
+            .iter()
+            .any(|e| e.event_type == "action.closeAccount"),
+        "自动批准后动作应被执行"
     );
 }

@@ -112,10 +112,43 @@ pub struct CreateEffect {
     pub link_edge: Option<String>,
 }
 
-/// 动作定义（对应 ODL `actions.<name>`）：对象自有能力，声明式描述其效应。
+/// 比较运算符（Policy precondition 子句使用）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CompareOp {
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Eq,
+    Ne,
+}
+
+/// Policy 前置条件子句：把目标字段或参数与值表达式比较（多条子句为 AND）。
+///
+/// `field` 支持 `self.<字段>`（目标对象字段）或直接参数名（动作参数）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Clause {
+    pub field: String,
+    pub op: CompareOp,
+    pub value: ValueExpr,
+}
+
+/// 动作的 Policy 约束（对应 ODL `actions.<name>.policy`）：审批闸门 + 前置条件。
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct PolicyDef {
+    /// 需人工审批（Human Approval）：为 true 时默认 Deny（WB2005），经 approver 放行才执行。
+    #[serde(default)]
+    pub require_approval: bool,
+    /// 前置条件：全部满足才允许执行（AND）；空表示无条件。
+    #[serde(default)]
+    pub precondition: Vec<Clause>,
+}
+
+/// 动作定义（对应 ODL `actions.<name>`）：对象自有能力，声明式描述其效应与约束。
 ///
 /// 这是 V0.4 把"最小 Action 执行"升级为"完整 Action Engine"的核心：
-/// 动作写在对象上，由通用 `ActionEngine` 解释执行，而非 Planner 硬编码。
+/// 动作写在对象上，由通用 `ActionEngine` 解释执行，而非 Planner 硬编码；
+/// 约束写在 `policy`，由 `Policy` 引擎在编排期校验。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActionDef {
     pub name: String,
@@ -125,6 +158,9 @@ pub struct ActionDef {
     pub updates: Vec<FieldUpdate>,
     #[serde(default)]
     pub creates: Vec<CreateEffect>,
+    /// 动作的 Policy 约束（审批 / 前置条件）；ODL 未声明时为空（无约束，默认允许）。
+    #[serde(default)]
+    pub policy: PolicyDef,
 }
 
 /// 对象类型（对应 ODL `object X:`）。

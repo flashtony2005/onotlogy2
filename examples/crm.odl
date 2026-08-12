@@ -7,6 +7,7 @@ object Customer:
   properties:
     name: string
     level: string
+    balance: float
   actions:
     # 挽留动作：为每个客户创建挽留任务并与之连边（替代 V0.3 硬编码 build_retention_plan）
     retain:
@@ -16,3 +17,20 @@ object Customer:
             title: "客户挽留计划"
             customer: self        # self → 目标客户 ID
           link: needs_retention   # 建立 Customer -needs_retention-> RetentionTask
+    # 退款动作：需人工审批（Human Approval），且金额须 <= 1000、非黑名单客户
+    refund:
+      params:
+        amount: float
+      updates:
+        - field: balance
+          value: amount
+      policy:
+        require_approval: true
+        precondition:
+          - field: amount
+            op: le
+            value: 1000
+          - field: self.level
+            op: ne
+            value: "BLACKLIST"
+

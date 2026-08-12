@@ -26,8 +26,8 @@
 //! 不支持 Relation / Event 顶层语法（归 V0.2+）；actions 内的 effects 已是声明式表达。
 
 use crate::ir::{
-    ActionDef, CreateEffect, FieldUpdate, ObjectType, OntologyIR, ParamDef, PropertyDef,
-    ScalarType, ValueExpr,
+    ActionDef, Clause, CompareOp, CreateEffect, FieldUpdate, ObjectType, OntologyIR, ParamDef,
+    PolicyDef, PropertyDef, ScalarType, ValueExpr,
 };
 use std::str::FromStr;
 
@@ -71,6 +71,8 @@ enum Section {
     ActionUpdates,
     ActionCreates,
     CreateData,
+    ActionPolicy,
+    ActionPrecondition,
 }
 
 /// 解析 .odl 源文本为 IR。
@@ -83,6 +85,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     let mut cur_action: Option<(u32, ActionDef)> = None;
     let mut cur_update: Option<FieldUpdate> = None;
     let mut cur_create: Option<CreateEffect> = None;
+    let mut cur_clause: Option<Clause> = None;
 
     let indent_of = |raw: &str| raw.len() - raw.trim_start().len();
 
@@ -128,6 +131,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             match section.last().unwrap().0 {
                 Section::ActionUpdates => flush_update(&mut cur_update, &mut cur_action),
                 Section::ActionCreates => flush_create(&mut cur_create, &mut cur_action),
+                Section::ActionPrecondition => flush_clause(&mut cur_clause, &mut cur_action),
                 Section::Action => flush_action(&mut cur_action, &mut current),
                 _ => {}
             }
@@ -164,6 +168,19 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         });
                     }
                 }
+                Section::ActionPrecondition => {
+                    flush_clause(&mut cur_clause, &mut cur_action);
+                    // 列表项语法：`- field: <字段或参数>`（field 为关键字，值为目标字段/参数）
+                    if let Some((k, v)) = content.split_once(':')
+                        && k.trim() == "field"
+                    {
+                        cur_clause = Some(Clause {
+                            field: v.trim().to_string(),
+                            op: CompareOp::Eq,
+                            value: ValueExpr::Literal(serde_json::Value::Null),
+                        });
+                    }
+                }
                 _ => {
                     return Err(OdlError::new(
                         E_NO_PROP_BLOCK,
@@ -190,6 +207,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                             params: Vec::new(),
                             updates: Vec::new(),
                             creates: Vec::new(),
+                            policy: PolicyDef::default(),
                         },
                     ));
                     section.push((Section::Action, indent));
@@ -197,7 +215,11 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                 (Section::Action, "params") => section.push((Section::ActionParams, indent)),
                 (Section::Action, "updates") => section.push((Section::ActionUpdates, indent)),
                 (Section::Action, "creates") => section.push((Section::ActionCreates, indent)),
+                (Section::Action, "policy") => section.push((Section::ActionPolicy, indent)),
                 (Section::ActionCreates, "data") => section.push((Section::CreateData, indent)),
+                (Section::ActionPolicy, "precondition") => {
+                    section.push((Section::ActionPrecondition, indent))
+                }
                 _ => {
                     return Err(OdlError::new(
                         E_NO_PROP_BLOCK,
@@ -271,6 +293,24 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         c.id = Some(v.to_string());
                     }
                 }
+                Section::ActionPolicy => {
+                    if k == "require_approval"
+                        && let Some((_, a)) = cur_action.as_mut()
+                    {
+                        a.policy.require_approval = v == "true";
+                    }
+                }
+                Section::ActionPrecondition => {
+                    if k == "op"
+                        && let Some(c) = cur_clause.as_mut()
+                    {
+                        c.op = parse_compare_op(v);
+                    } else if k == "value"
+                        && let Some(c) = cur_clause.as_mut()
+                    {
+                        c.value = parse_value_expr(v, &param_names);
+                    }
+                }
                 _ => {
                     return Err(OdlError::new(
                         E_NO_PROP_BLOCK,
@@ -294,6 +334,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     // 冲刷尾部临时态
     flush_update(&mut cur_update, &mut cur_action);
     flush_create(&mut cur_create, &mut cur_action);
+    flush_clause(&mut cur_clause, &mut cur_action);
     flush_action(&mut cur_action, &mut current);
     if let Some(obj) = current.take() {
         declared.push(obj);
@@ -375,5 +416,24 @@ fn flush_create(c: &mut Option<CreateEffect>, a: &mut Option<(u32, ActionDef)>) 
 fn flush_action(a: &mut Option<(u32, ActionDef)>, o: &mut Option<(u32, ObjectType)>) {
     if let (Some((_, act)), Some((_, obj))) = (a.take(), o.as_mut()) {
         obj.actions.push(act);
+    }
+}
+
+/// 冲刷当前 Policy 前置条件子句到动作。
+fn flush_clause(c: &mut Option<Clause>, a: &mut Option<(u32, ActionDef)>) {
+    if let (Some(cl), Some((_, act))) = (c.take(), a.as_mut()) {
+        act.policy.precondition.push(cl);
+    }
+}
+
+/// 把 ODL 比较运算符文本解析为 `CompareOp`（未知 → `Eq` 兜底）。
+fn parse_compare_op(v: &str) -> CompareOp {
+    match v.trim() {
+        "lt" => CompareOp::Lt,
+        "le" => CompareOp::Le,
+        "gt" => CompareOp::Gt,
+        "ge" => CompareOp::Ge,
+        "ne" => CompareOp::Ne,
+        _ => CompareOp::Eq,
     }
 }

@@ -57,8 +57,8 @@ V0.5 Agent 自治      让系统能学习       自学习 / Evolution / Memory �
 - 需求：REQ-009/010/011
 
 **V0.4 Action & Policy**（让行为可编排）
-- Action 从"最小执行"升级为完整引擎（**已实现**）：对象自有能力经 ODL `actions:` 声明 → `ActionRegistry` → `ActionEngine` 数据驱动解释执行（`updates` / `creates` / `link`，幂等），替代硬编码挽留计划；需求 REQ-014，TC-020a/b/c 全绿
-- Policy 约束与审批（Human Approval）：**待办**，归后续版本（V0.5 或单独 Policy 迭代）
+- Action 从"最小执行"升级为完整引擎（**已实现**）：对象自有能力经 ODL `actions:` 声明 → `ActionRegistry` → `ActionEngine` 数据驱动解释执行（`updates` / `creates` / `link`，幂等），替代硬编码挽留计划；需求 REQ-014，TC-014a/b/c 全绿
+- Policy 引擎（**已实现**）：动作级 `policy:` 约束 —— `require_approval` 审批闸门（默认 Deny→WB2005，转 Human Approval，经 `PolicyApprover` 放行）+ `precondition` 前置条件（字段/参数比较，AND）；需求 REQ-015，TC-015a/b/c/d 全绿
 
 **V0.5 Agent 自治**（让系统能学习）
 - 自学习 / Evolution / Memory 沉淀
@@ -70,7 +70,7 @@ V0.5 Agent 自治      让系统能学习       自学习 / Evolution / Memory �
 | V0.1 | Object Kernel + 生命周期事件 + CLI 观察 | REQ-001~008 | 已实现 |
 | V0.2 | World Model（Relation + 领域 Event） | REQ-012/013 | 已实现 |
 | V0.3 | Agent 闭环（= MVP） | REQ-009~011 | 已实现 |
-| V0.4 | Action & Policy | REQ-014（Action 引擎已实现；Policy 待办） | 部分实现 |
+| V0.4 | Action & Policy | REQ-014（Action 引擎）/ REQ-015（Policy 引擎） | 已实现 |
 | V0.5 | Agent 自治 | 待拆 | 未开始 |
 
 ## 5. 风险点 & 注意事项
@@ -101,3 +101,4 @@ V0.5 Agent 自治      让系统能学习       自学习 / Evolution / Memory �
 | V1.8 | lushaohui | 2026-08-11 | V0.2 落地：范围补 REQ-012/013；状态 未开始→已实现 |
 | V1.9 | lushaohui | 2026-08-12 | V0.3=MVP 落地：状态 未开始→已实现 |
 | V2.0 | lushaohui | 2026-08-12 | V0.4 完整 Action 引擎落地：REQ-014 已实现（状态表 V0.4→部分实现）；Policy 审批标记待办 |
+| V2.1 | lushaohui | 2026-08-12 | V0.4 Policy 引擎落地：REQ-015 已实现（状态表 V0.4→已实现）；动作级 `policy:` 审批闸门 + 前置条件；TC-015a/b/c/d 全绿 |

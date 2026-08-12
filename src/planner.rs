@@ -7,10 +7,12 @@
 
 use crate::action::{ActionEngine, ActionError, ActionRegistry};
 use crate::agent::{AgentEngine, AgentError, Context, Decision, WorldSnapshot};
+use crate::ir::{ActionDef, CompareOp, ValueExpr};
 use crate::runtime::RuntimeKernel;
 use crate::storage::StorageError;
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -99,8 +101,27 @@ pub struct PlanStep {
     pub description: String,
 }
 
-/// Policy 引擎：对 Action（PlanStep）做约束与审批。MVP 仅做基础规则；拒 → WB2005。
+/// Policy 引擎：对 Action（PlanStep）做约束与审批。破坏性动作默认拒；声明式动作经
+/// 自带 `PolicyDef`（前置条件 + 审批闸门）校验；拒 → WB2005，等待 Human Approval。
 pub struct Policy;
+
+/// Human Approval 审批器：决定 `require_approval` 的动作是否被放行。
+/// 默认 `AutoApprover { allow: false }`（拒，等待人工）；服务/测试可注入自动批准。
+pub trait PolicyApprover: Send + Sync {
+    /// 返回 true 表示该步已获人工/自动批准，可越过审批闸门执行。
+    fn approve(&self, step: &PlanStep) -> bool;
+}
+
+/// 自动审批器：无人工场景（测试 / 服务）使用；`allow=true` 直接放行。
+#[derive(Debug, Clone, Copy)]
+pub struct AutoApprover {
+    pub allow: bool,
+}
+impl PolicyApprover for AutoApprover {
+    fn approve(&self, _step: &PlanStep) -> bool {
+        self.allow
+    }
+}
 
 impl Policy {
     /// 校验计划步：破坏性动作（删对象）默认拒，转 Human Approval；其余允许。
@@ -111,6 +132,96 @@ impl Policy {
             },
             _ => PolicyDecision::Allow,
         }
+    }
+
+    /// 校验声明式动作：结合动作自带 `PolicyDef`（前置条件 + 审批闸门）。
+    ///
+    /// - `def` 为 None（动作未注册）→ 放行；
+    /// - `precondition` 全部满足才放行（AND）；任一不满足 → Deny；
+    /// - `require_approval=true` 默认 Deny（WB2005），须经 `approver` 放行。
+    pub fn check_action(
+        step: &PlanStep,
+        def: Option<&ActionDef>,
+        approver: &dyn PolicyApprover,
+        target: Option<&Value>,
+        args: &HashMap<String, Value>,
+    ) -> PolicyDecision {
+        let Some(def) = def else {
+            return PolicyDecision::Allow;
+        };
+        // 前置条件：全部满足才放行
+        for clause in &def.policy.precondition {
+            let lhs = resolve_policy_field(&clause.field, args, target);
+            let rhs = resolve_value(&clause.value, args, target, "");
+            if !compare_values(&lhs, &rhs, clause.op) {
+                return PolicyDecision::Deny {
+                    reason: format!(
+                        "动作 {} 不满足前置条件 {}={:?} {:?} {:?}",
+                        def.name, clause.field, lhs, clause.op, rhs
+                    ),
+                };
+            }
+        }
+        // 审批闸门：require_approval 默认 Deny，需 approver 放行（Human Approval）
+        if def.policy.require_approval && !approver.approve(step) {
+            return PolicyDecision::Deny {
+                reason: format!("动作 {} 需 Human Approval（WB2005）", def.name),
+            };
+        }
+        PolicyDecision::Allow
+    }
+}
+
+/// 把 Policy 字段引用解析为值：`self.<f>` → 目标字段；参数名 → 参数；否则 → 目标字段。
+fn resolve_policy_field(
+    field: &str,
+    args: &HashMap<String, Value>,
+    target: Option<&Value>,
+) -> Value {
+    let ve = if let Some(rest) = field.strip_prefix("self.") {
+        ValueExpr::SelfField(rest.to_string())
+    } else if args.contains_key(field) {
+        ValueExpr::Param(field.to_string())
+    } else {
+        ValueExpr::SelfField(field.to_string())
+    };
+    resolve_value(&ve, args, target, "")
+}
+
+/// 解析值表达式（与 ActionEngine 同源逻辑，供 Policy 比较使用）。
+fn resolve_value(
+    v: &ValueExpr,
+    args: &HashMap<String, Value>,
+    target: Option<&Value>,
+    target_id: &str,
+) -> Value {
+    match v {
+        ValueExpr::Literal(l) => l.clone(),
+        ValueExpr::Param(p) => args.get(p).cloned().unwrap_or(Value::Null),
+        ValueExpr::SelfId => Value::String(target_id.to_string()),
+        ValueExpr::SelfField(f) => target
+            .and_then(|t| t.get(f))
+            .cloned()
+            .unwrap_or(Value::Null),
+    }
+}
+
+/// 按运算符比较两个 JSON 值：Eq/Ne 走全相等；其余按数值（f64）比较，非数则 false。
+fn compare_values(a: &Value, b: &Value, op: CompareOp) -> bool {
+    use CompareOp::*;
+    match op {
+        Eq => a == b,
+        Ne => a != b,
+        _ => match (a.as_f64(), b.as_f64()) {
+            (Some(x), Some(y)) => match op {
+                Lt => x < y,
+                Le => x <= y,
+                Gt => x > y,
+                Ge => x >= y,
+                _ => false,
+            },
+            _ => false,
+        },
     }
 }
 
@@ -165,6 +276,8 @@ pub struct Planner<'a> {
     kernel: &'a RuntimeKernel,
     /// 动作注册表（V0.4）：对象自有动作的声明式来源；空 → legacy 兜底。
     registry: ActionRegistry,
+    /// Policy 审批器（Human Approval 闸门）；默认 `AutoApprover { allow: false }`（拒，等待人工）。
+    approver: Arc<dyn PolicyApprover>,
 }
 
 impl<'a> Planner<'a> {
@@ -173,12 +286,23 @@ impl<'a> Planner<'a> {
         Self {
             kernel,
             registry: ActionRegistry::empty(),
+            approver: Arc::new(AutoApprover { allow: false }),
         }
     }
 
     /// 带动作注册表（V0.4 完整 Action Engine）：候选对象经声明式动作执行。
     pub fn with_actions(kernel: &'a RuntimeKernel, registry: ActionRegistry) -> Self {
-        Self { kernel, registry }
+        Self {
+            kernel,
+            registry,
+            approver: Arc::new(AutoApprover { allow: false }),
+        }
+    }
+
+    /// 注入 Policy 审批器（如服务侧自动批准 / CLI 交互式审批）。
+    pub fn with_approver(mut self, approver: Arc<dyn PolicyApprover>) -> Self {
+        self.approver = approver;
+        self
     }
 
     /// 候选对象选择：注册表非空 → 声明了 actions 的对象；否则 legacy 仅 Customer。
@@ -332,7 +456,29 @@ impl<'a> Planner<'a> {
 
         // 6) PolicyCheck + Action：逐步经 Policy 校验后执行（最小闭环）
         for step in &steps {
-            match Policy::check(step) {
+            // 声明式动作结合其自带 PolicyDef（前置条件 + 审批闸门）校验；
+            // 其余能力走通用 Policy（破坏性动作默认拒）。
+            let decision = match &step.capability {
+                Capability::Action {
+                    object_type,
+                    action,
+                    target_id,
+                    args,
+                } => {
+                    let def = self.registry.get(object_type, action);
+                    let target = world
+                        .objects
+                        .iter()
+                        .find(|o| o.get("id").and_then(|v| v.as_str()) == Some(target_id.as_str()));
+                    let args_map: HashMap<String, Value> = args
+                        .as_object()
+                        .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                        .unwrap_or_default();
+                    Policy::check_action(step, def, self.approver.as_ref(), target, &args_map)
+                }
+                _ => Policy::check(step),
+            };
+            match decision {
                 PolicyDecision::Deny { reason } => {
                     self.kernel
                         .emit_cognitive(
