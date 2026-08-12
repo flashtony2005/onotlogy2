@@ -4,7 +4,7 @@
 |----|------|
 | 文档ID | WB-DOC-05-004 |
 | 所属模块 | WorkBuddy-API |
-| 版本 | V1.4 |
+| 版本 | V1.5 |
 | 创建人 | lushaohui |
 | 创建时间 | 2026-08-11 |
 | 更新记录 | 见文末修订日志 |
@@ -150,6 +150,8 @@
 
 ### 4.7 字段命名与序列化约定
 - [强制] 存储层（Rust 模型 / Turso）字段为 snake_case（`object_refs` / `run_id` / `event_type`）；API JSON 为 camelCase（`objectRefs` / `runId` / `eventType`），经 serde `rename_all = "camelCase"` 自动映射，禁止手写字面量。
+- [强制] `id` 两端一致：DB 为 TEXT 语义ID（如 `tr_abc123` / `customer_001`），API DTO 的 `id` 即该值，无额外编码/解码映射。
+- [强制] `objectRefs`（API）/ `object_refs`（DB）存对象ID数组，反查经 `wb_ontology_object.id`；禁止引用不存在的表（原 `object_context` 已废弃）。
 
 ### 4.8 获取 Agent 记忆沉淀
 - [强制] 请求方式：GET
@@ -195,8 +197,40 @@
 ```
 - 响应失败错误码：WB1002（未登录）
 - 特殊逻辑：数据来源 `wb_pattern` / `wb_proposal` / `wb_learned`（BL-003·REQ-017 Evolution Engine）；`run_evolution` 幂等（不重复产出知识），`run_ids` 跨 run 合并去重。**Learn≠Permission：本端点仅暴露知识，不提供任何改写 Policy / 绕过 Human Approval（WB2005）的能力**，AutoApprove 类「Knowledge→Permission」升级归第二阶段（需 Policy 显式允许学习 + 高置信 + 多次成功 + 无失败 + 低风险）。`runIds` / `patternLabel` / `proposalId` 构成可追溯证据链（LearnedKnowledge→Proposal→Pattern→Experience→AgentRun）
-- [强制] `id` 两端一致：DB 为 TEXT 语义ID（如 `tr_abc123` / `customer_001`），API DTO 的 `id` 即该值，无额外编码/解码映射。
-- [强制] `objectRefs`（API）/ `object_refs`（DB）存对象ID数组，反查经 `wb_ontology_object.id`；禁止引用不存在的表（原 `object_context` 已废弃）。
+
+### 4.10 列出某运行的审批请求
+- [强制] 请求方式：GET
+- [强制] 接口路径：/api/v1/wb/agent/run/{runId}/approvals
+- [强制] 权限要求：登录用户（Operator / Developer 可读）
+- 请求参数（Path）：`runId`
+- 响应成功示例：
+```json
+{
+  "code": 0, "msg": "success",
+  "data": [
+    { "reqId": "apr_001", "runId": "run_001", "agentId": "retention-agent",
+      "stepId": "action.retain@customer_001", "description": "需审批：retain@customer_001", "state": "Pending" }
+  ]
+}
+```
+- 响应失败错误码：WB1002（未登录）、WB2003（运行不存在）
+- 特殊逻辑：返回该运行全部审批请求（含历史裁决，state=Pending/Approved/Rejected）；动作经 `require_approval` 闸门触发时由 `ServerApprover` 挂起运行并写入一条 Pending 请求，前端轮询本接口渲染审批列表（V0.4 遗留项：server 挂起式 HTTP 审批）
+
+### 4.11 裁决一条审批请求
+- [强制] 请求方式：POST
+- [强制] 接口路径：/api/v1/wb/agent/run/{runId}/approval/{reqId}
+- [强制] 权限要求：登录用户（Operator / Developer 可裁决）
+- 请求参数（Path）：`runId`、`reqId`；请求体（JSON）：
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| decision | string | 是 | `approve`/`yes`/`true` → 批准并恢复挂起运行；其余值 → 拒绝，触发 WB2005 终止 |
+
+- 响应成功示例（批准）：
+```json
+{ "code": 0, "msg": "success", "data": { "reqId": "apr_001", "decision": "Approved" } }
+```
+- 响应失败错误码：WB1001（参数错误）、WB1002（未登录）、WB2003（运行不存在）、**404（审批请求不存在或已裁决，重复裁决被拒）**
+- 特殊逻辑：裁决后置 `ApprovalStore` 中状态为 Approved/Rejected 并唤醒挂起的 Planner；批准 → 运行继续，拒绝 → 动作以 WB2005 终止该运行。**同一 reqId 仅可裁决一次**，重复裁决返回 404（code 字段，非 HTTP status）。与 CLI `ConsoleApprover`、server `--auto-approve` 开关等价，是 Human-in-the-loop 的三态之一
 
 ## 5. 风险点 & 注意事项
 - Trace 缺失 `objectRefs` 会破坏可解释性承诺，写入侧须评审卡点（见 `agent-observation-design.md` 5）。
@@ -220,3 +254,4 @@
 | V1.2 | lushaohui | 2026-08-11 | 表引用统一对齐 table-design 约束，改为 wb_trace_event |
 | V1.3 | lushaohui | 2026-08-11 | 修正 object_context 反查为 wb_ontology_object.id；新增 4.7 字段命名与序列化约定（snake_case↔camelCase + id 语义ID一致） |
 | V1.4 | lushaohui | 2026-08-12 | 新增 4.8 GET /api/v1/wb/agent/memory（wb_memory 记忆沉淀视图源）、4.9 GET /api/v1/wb/agent/evolution（wb_pattern/wb_proposal/wb_learned Evolution 状态，含可追溯证据链与 Learn≠Permission 约束） |
+| V1.5 | lushaohui | 2026-08-12 | 新增 4.10 GET /run/:run_id/approvals 与 4.11 POST /run/:run_id/approval/:req_id（V0.4 挂起式 HTTP 审批端点，Human-in-the-loop 三态之一；重复裁决返回 404 code） |

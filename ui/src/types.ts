@@ -1,6 +1,6 @@
 // 与 src/trace.rs / docs/05_接口文档/api-agent-trace.md 4.1 同源（camelCase，单一真相源）
 
-export type ViewKind = 'executive' | 'operator' | 'developer' | 'memory'
+export type ViewKind = 'executive' | 'operator' | 'developer' | 'memory' | 'evolution'
 
 export interface TraceEventDto {
   id: string
@@ -67,4 +67,40 @@ export interface MemoryRecord {
 export interface MemoryListDto {
   total: number
   list: MemoryRecord[]
+}
+
+/// Evolution 产物类型（对应 src/evolution.rs；由 GET /evolution 暴露）。
+/// 全程可追溯：Pattern.runIds → Proposal.patternLabel → Learned.proposalId。
+export interface PatternDto {
+  label: string
+  action: string
+  support: number
+  confidence: number
+  runIds: string[]
+}
+
+export interface ProposalDto {
+  id: string
+  kind: string
+  target: string
+  confidence: number
+  status: 'Proposed' | 'Validated' | 'Rejected'
+  patternLabel: string
+  runIds: string[]
+}
+
+export interface LearnedDto {
+  id: string
+  kind: string
+  action: string
+  confidence: number
+  proposalId: string
+  runIds: string[]
+  createdAt: string
+}
+
+export interface EvolutionStateDto {
+  patterns: PatternDto[]
+  proposals: ProposalDto[]
+  learned: LearnedDto[]
 }

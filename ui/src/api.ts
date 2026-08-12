@@ -1,7 +1,13 @@
 // REST 客户端：与 api-agent-trace.md 对齐（{ code, msg, data } 信封，前缀 /api/v1/wb/agent）。
 // BASE 留空 → 同源（生产由 Rust 服务托管，开发由 Vite 代理转发）。
 
-import type { ApiResponse, MemoryListDto, RunStartDto, RunTimeline } from './types'
+import type {
+  ApiResponse,
+  EvolutionStateDto,
+  MemoryListDto,
+  RunStartDto,
+  RunTimeline,
+} from './types'
 
 async function unwrap<T>(res: Response): Promise<T> {
   const json = (await res.json()) as ApiResponse<T>
@@ -31,4 +37,11 @@ export async function getTimeline(runId: string, view: string): Promise<RunTimel
 export async function getMemory(): Promise<MemoryListDto> {
   const res = await fetch('/api/v1/wb/agent/memory')
   return unwrap<MemoryListDto>(res)
+}
+
+/// `GET /api/v1/wb/agent/evolution`：Evolution 聚合状态（BL-003 · REQ-017）。
+/// 仅暴露知识，不含任何改写 Policy / 绕过 Human Approval 的能力（Learn≠Permission）。
+export async function getEvolution(): Promise<EvolutionStateDto> {
+  const res = await fetch('/api/v1/wb/agent/evolution')
+  return unwrap<EvolutionStateDto>(res)
 }

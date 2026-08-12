@@ -432,3 +432,123 @@ body {
   overflow-x: auto;
   white-space: pre-wrap;
 }
+
+/* ── Evolution 视图（V0.5 / BL-003 · REQ-017）────────────────────────── */
+.evolution {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.evo-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.evo-head h3 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--accent);
+}
+.evo-head .reload {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.evo-head .reload:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.evo-note {
+  margin: 0;
+  padding: 8px 12px;
+  background: rgba(210, 153, 34, 0.1);
+  border: 1px solid var(--amber);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--amber);
+  line-height: 1.5;
+}
+.evo-note b {
+  color: var(--text);
+}
+.evo-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.evo-section h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.evo-count {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--text);
+}
+.evo-item {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.evo-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.evo-label {
+  color: var(--accent);
+  background: var(--panel-2);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+.evo-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.evo-tag.action {
+  color: var(--green);
+  border-color: rgba(63, 185, 80, 0.4);
+}
+.evo-tag.conf {
+  color: var(--accent);
+}
+.evo-tag.status.validated {
+  color: var(--green);
+  border-color: rgba(63, 185, 80, 0.5);
+  background: rgba(63, 185, 80, 0.12);
+}
+.evo-tag.status.rejected {
+  color: var(--red);
+  border-color: rgba(248, 81, 73, 0.5);
+  background: rgba(248, 81, 73, 0.12);
+}
+.evo-tag.status.proposed {
+  color: var(--amber);
+  border-color: rgba(210, 153, 34, 0.5);
+  background: rgba(210, 153, 34, 0.12);
+}
+.evo-evidence {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+}

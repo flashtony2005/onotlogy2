@@ -4,7 +4,7 @@
 |----|------|
 | 文档ID | WB-DOC-01-001 |
 | 所属模块 | WorkBuddy-Overview |
-| 版本 | V1.5 |
+| 版本 | V1.6 |
 | 创建人 | lushaohui |
 | 创建时间 | 2026-08-11 |
 | 更新记录 | 见文末修订日志 |
@@ -70,13 +70,15 @@ V1.1 已定义核心模型为 `Object / Relation / Action / Policy / Event`，�
 | Event | 时间维度（发生过什么） | 生命周期 V0.1 / 领域事件 V0.2 |
 | Action | 对象的未来行为 | 最小执行 V0.3 / 完整引擎 V0.4 |
 | Policy | 行为约束 | = Action 的约束，后生长 |
-| Memory | 经验积累 | = Event 的积累，后生长 |
-| Agent | 智能操作者 | V0.3 接入 Pi 作 Cognitive Engine（=MVP），V0.5 扩展自治 |
+| Memory | 经验积累 | = Event 的积累；**V0.5 已落地记忆沉淀闭环（REQ-016）：经验按 `action.<name>` upsert 至 `wb_memory`，下一轮 run 经 `MemoryRecall` 召回** |
+| Agent | 智能操作者 | V0.3 接入 Pi 作 Cognitive Engine（=MVP）；**V0.5 扩展自治：Memory 沉淀（REQ-016）+ Evolution Engine MVP（REQ-017，Learn≠Permission）** |
 
 ### 4.4 最终判断
 本项目的真正创新不是"做一个开源 Palantir"，也不是"一个给 Agent 用的数据库"，更不是"Pi 增强版"，而是**第一个 Agent Native 的可观察世界模型操作系统**：
 
 > **Agent 可以行动 + 人可以理解 + 人可以干预 + 系统可以学习**
+
+"系统可以学习"已在 V0.5 迈出第一步：Evolution Engine（BL-003 · REQ-017）把 `wb_memory` 经验提炼为 Pattern→Proposal→Validation→LearnedKnowledge，**全程可观察、可验证、可撤销**；第一原则 **Learn≠Permission**——知识沉淀不回写 Policy、不自动绕过 Human Approval（WB2005），AutoApprove 类"Knowledge→Permission"升级归第二阶段。
 
 这是区别于 LangChain / AutoGen / CrewAI 等普通 Agent Framework 的核心竞争力——当前 Ontology + Event + Runtime 天然适合承载"可观察"这一层。
 
@@ -87,7 +89,7 @@ V1.1 已定义核心模型为 `Object / Relation / Action / Policy / Event`，�
 2. **V0.2**：Object + Relation + Event 聚合成可查询的世界模型（世界成型）；
 3. **V0.3 = MVP**：Agent（Pi 作 Cognitive Engine）基于世界模型决策，且人能**看到证据、理解推理、并介入审批**（Observe → Understand → Intervene，产品价值成立）。
 
-若 V0.3 闭环成立，Action 编排 / Policy / GraphRAG / Evolution 都会自然生长——这也契合"从极简内核，通过分形循环生长成完整 Ontology OS"的路线。
+若 V0.3 闭环成立，Action 编排 / Policy / GraphRAG / Evolution 都会自然生长——这也契合"从极简内核，通过分形循环生长成完整 Ontology OS"的路线。截至 V0.5，该路线已印证：V0.4 落地完整 Action 引擎 + Policy 引擎（含 Human Approval），V0.5 落地 Memory 沉淀闭环（REQ-016）+ Evolution Engine MVP（REQ-017，Learn≠Permission）；GraphRAG 仍属更远目标。
 
 ### 4.5 业务价值
 | 价值维度 | 说明 | 量化指标（待补） |
@@ -127,3 +129,4 @@ V1.1 已定义核心模型为 `Object / Relation / Action / Policy / Event`，�
 | V1.3 | lushaohui | 2026-08-11 | 纠正：MVP 包含 Agent 接入（Pi 作 Cognitive Engine）；更新哲学表与最终判断中的 Agent 定位 |
 | V1.4 | lushaohui | 2026-08-11 | Pi 降级为 Cognitive Engine；补充核心资产切分（Ontology+WorldModel+AgentRuntime+Trace），非"Pi 增强版" |
 | V1.5 | lushaohui | 2026-08-11 | 方案B对齐：明确 MVP=V0.3；哲学表/最终判断按 V0.1 内核→V0.2 世界→V0.3 Agent 闭环重述；Event 分层 |
+| V1.6 | lushaohui | 2026-08-12 | 同步 V0.5 现状：哲学表 Memory 行标注 REQ-016 记忆沉淀闭环已落地、Agent 行标注 V0.5 自治扩展（Memory+Evolution）；4.4 补"系统可以学习=Evolution Engine MVP（REQ-017，Learn≠Permission）"；4.4 末段注明 V0.4/V0.5 已印证分形生长路线（Action/Policy→Memory/Evolution 落地，GraphRAG 仍远） |

@@ -1,8 +1,13 @@
 import { useMemo, useState } from 'react'
-import { getMemory, postRun } from './api'
+import { getEvolution, getMemory, postRun } from './api'
 import { useTraceStream } from './hooks/useTraceStream'
 import { buildTimeline } from './view'
-import type { MemoryRecord, TraceEventDto, ViewKind } from './types'
+import type {
+  EvolutionStateDto,
+  MemoryRecord,
+  TraceEventDto,
+  ViewKind,
+} from './types'
 
 const STEP_ICON: Record<string, string> = {
   Goal: '🎯',
@@ -21,6 +26,7 @@ const VIEWS: { key: ViewKind; label: string; desc: string }[] = [
   { key: 'operator', label: 'Operator', desc: '管理员 · Pipeline 进度' },
   { key: 'developer', label: 'Developer', desc: '开发者 · 全量 IO' },
   { key: 'memory', label: 'Memory', desc: '记忆沉淀 · Action→Memory 闭环' },
+  { key: 'evolution', label: 'Evolution', desc: '自学习 · Experience→Knowledge 闭环' },
 ]
 
 function fmtTime(ts: string): string {
@@ -61,6 +67,22 @@ export default function App() {
       /* 后端无记忆或暂未就绪：保留上次结果 */
     } finally {
       setMemoryLoading(false)
+    }
+  }
+
+  const [evolution, setEvolution] = useState<EvolutionStateDto | null>(null)
+  const [evolutionLoading, setEvolutionLoading] = useState(false)
+
+  // Evolution 视图刷新：从 REST /evolution 拉取聚合状态（仅可见性，不改 Policy）。
+  const reloadEvolution = async () => {
+    setEvolutionLoading(true)
+    try {
+      const dto = await getEvolution()
+      setEvolution(dto)
+    } catch {
+      /* 后端无知识或暂未就绪：保留上次结果 */
+    } finally {
+      setEvolutionLoading(false)
     }
   }
 
@@ -106,7 +128,7 @@ export default function App() {
           <span className="logo">◈</span>
           <div>
             <h1>OpenAIP-OS · Agent 认知观察</h1>
-            <p className="sub">V0.3 · Pi 作 Cognitive Engine · 自有 Planner 闭环</p>
+            <p className="sub">V0.5 · 自有 Planner 闭环 · Memory 沉淀 · Evolution(Learn≠Permission)</p>
           </div>
         </div>
         <div className={`conn ${connected ? 'on' : 'off'}`}>
@@ -162,6 +184,7 @@ export default function App() {
             onClick={() => {
               setView(v.key)
               if (v.key === 'memory') void reloadMemory()
+              if (v.key === 'evolution') void reloadEvolution()
             }}
             title={v.desc}
           >
@@ -172,7 +195,7 @@ export default function App() {
       </nav>
 
       <main className="timeline">
-        {!runId && view !== 'memory' && (
+        {!runId && view !== 'memory' && view !== 'evolution' && (
           <div className="empty">
             输入目标并点击「触发 Agent 运行」，实时观察 Agent 认知闭环。
           </div>
@@ -182,7 +205,11 @@ export default function App() {
           <MemoryPanel memories={memories} loading={memoryLoading} onReload={reloadMemory} />
         )}
 
-        {runId && timeline.decision && (
+        {view === 'evolution' && (
+          <EvolutionPanel state={evolution} loading={evolutionLoading} onReload={reloadEvolution} />
+        )}
+
+        {runId && timeline.decision && view !== 'memory' && view !== 'evolution' && (
           <div className="decision">
             <h3>📊 决策摘要（Executive）</h3>
             <div>
@@ -200,11 +227,12 @@ export default function App() {
           </div>
         )}
 
-        {runId && view !== 'memory' && timeline.events.length === 0 && (
+        {runId && view !== 'memory' && view !== 'evolution' && timeline.events.length === 0 && (
           <div className="empty">等待认知事件…</div>
         )}
 
-        {timeline.events.map((ev) => (
+        {view !== 'memory' && view !== 'evolution' && timeline.events.length > 0 &&
+          timeline.events.map((ev) => (
           <article key={ev.id} className={`event ${ev.eventType.toLowerCase()}`}>
             <div className="ev-head">
               <span className="ic">{STEP_ICON[ev.eventType] ?? '•'}</span>
@@ -280,6 +308,101 @@ function MemoryPanel({
               <pre className="mem-payload">{fmtJson(m.payload)}</pre>
             </article>
           ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Evolution 视图：自学习知识面板（V0.5 / BL-003 · REQ-017，Learn≠Permission）──
+function EvolutionPanel({
+  state,
+  loading,
+  onReload,
+}: {
+  state: EvolutionStateDto | null
+  loading: boolean
+  onReload: () => void
+}) {
+  const total =
+    (state?.patterns.length ?? 0) +
+    (state?.proposals.length ?? 0) +
+    (state?.learned.length ?? 0)
+  return (
+    <div className="evolution">
+      <div className="evo-head">
+        <h3>🧬 Evolution · Experience→Knowledge 闭环</h3>
+        <button className="reload" onClick={onReload} disabled={loading}>
+          {loading ? '刷新中…' : '↻ 刷新'}
+        </button>
+      </div>
+      <p className="evo-note">
+        Learn≠Permission：本视图仅暴露知识，<b>不修改 Policy、不绕过 Human Approval（WB2005）</b>。
+        证据链 Learned→Proposal→Pattern→Experience 全程可追溯。
+      </p>
+
+      {total === 0 ? (
+        <div className="empty">
+          暂无知识。运行多轮含复现动作的 Agent 后，经验会经 wb_memory 提炼为
+          Pattern（hits≥2）→ Proposal → Validated Knowledge。
+        </div>
+      ) : (
+        <div className="evo-body">
+          <section className="evo-section">
+            <h4>
+              Pattern <span className="evo-count">{state?.patterns.length ?? 0}</span>
+            </h4>
+            {(state?.patterns ?? []).map((p) => (
+              <article key={p.label} className="evo-item">
+                <div className="evo-line">
+                  <code className="evo-label">{p.label}</code>
+                  <span className="evo-tag action">action: {p.action}</span>
+                  <span className="evo-tag conf">conf {p.confidence.toFixed(2)}</span>
+                </div>
+                <div className="evo-evidence">
+                  来源 run：{p.runIds.length ? p.runIds.join(', ') : '—'}
+                </div>
+              </article>
+            ))}
+          </section>
+
+          <section className="evo-section">
+            <h4>
+              Proposal <span className="evo-count">{state?.proposals.length ?? 0}</span>
+            </h4>
+            {(state?.proposals ?? []).map((p) => (
+              <article key={p.id} className="evo-item">
+                <div className="evo-line">
+                  <code className="evo-label">{p.id}</code>
+                  <span className={`evo-tag status ${p.status.toLowerCase()}`}>{p.status}</span>
+                  <span className="evo-tag conf">conf {p.confidence.toFixed(2)}</span>
+                </div>
+                <div className="evo-evidence">
+                  来源 Pattern：{p.patternLabel} · run：
+                  {p.runIds.length ? p.runIds.join(', ') : '—'}
+                </div>
+              </article>
+            ))}
+          </section>
+
+          <section className="evo-section">
+            <h4>
+              Learned <span className="evo-count">{state?.learned.length ?? 0}</span>
+            </h4>
+            {(state?.learned ?? []).map((l) => (
+              <article key={l.id} className="evo-item">
+                <div className="evo-line">
+                  <code className="evo-label">{l.id}</code>
+                  <span className="evo-tag action">action: {l.action}</span>
+                  <span className="evo-tag conf">conf {l.confidence.toFixed(2)}</span>
+                </div>
+                <div className="evo-evidence">
+                  来源 Proposal：{l.proposalId} · run：
+                  {l.runIds.length ? l.runIds.join(', ') : '—'}
+                </div>
+              </article>
+            ))}
+          </section>
         </div>
       )}
     </div>
