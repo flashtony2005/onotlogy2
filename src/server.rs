@@ -32,6 +32,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::net::TcpListener;
 
 /// 运行记录（内存态，供 timeline 状态覆盖与 WB2004/2005 快速反馈）。
@@ -49,6 +50,8 @@ pub struct AppState {
     pub registry: ActionRegistry,
     /// 是否自动批准需审批动作（Human Approval）：默认 false → require_approval 动作挂起等待 HTTP 审批。
     auto_approve: bool,
+    /// 挂起审批超时（None → 默认 APPROVAL_TIMEOUT 300s）；测试注入极短超时触发 Expired 回收路径。
+    approval_timeout: Option<Duration>,
     /// 待审批请求存储（V0.4 遗留的 server 挂起式 HTTP 审批端点）；连接 Planner 挂起点与审批 API。
     store: Arc<ApprovalStore>,
     runs: Mutex<HashMap<String, RunRecord>>,
@@ -248,11 +251,36 @@ pub async fn serve(
     registry: ActionRegistry,
     auto_approve: bool,
 ) -> std::io::Result<()> {
+    serve_with_timeout(
+        kernel,
+        engine,
+        listener,
+        static_dir,
+        registry,
+        auto_approve,
+        None,
+    )
+    .await
+}
+
+/// `serve` 的可测试变体：允许注入挂起审批超时（测试触发 Expired 回收路径）。
+/// `approval_timeout=None` 时使用默认 `APPROVAL_TIMEOUT`（300s）。
+#[doc(hidden)]
+pub async fn serve_with_timeout(
+    kernel: Arc<RuntimeKernel>,
+    engine: Arc<dyn AgentEngine>,
+    listener: TcpListener,
+    static_dir: impl Into<String>,
+    registry: ActionRegistry,
+    auto_approve: bool,
+    approval_timeout: Option<Duration>,
+) -> std::io::Result<()> {
     let state = Arc::new(AppState {
         kernel,
         engine,
         registry,
         auto_approve,
+        approval_timeout,
         store: Arc::new(ApprovalStore::new()),
         runs: Mutex::new(HashMap::new()),
         static_dir: static_dir.into(),
@@ -496,12 +524,11 @@ async fn run_start(State(st): State<Arc<AppState>>, Json(body): Json<RunBody>) -
         let approver: Arc<dyn PolicyApprover> = if auto_approve {
             Arc::new(AutoApprover { allow: true })
         } else {
-            Arc::new(ServerApprover::new(
-                kernel.clone(),
-                store,
-                rid.clone(),
-                ag.clone(),
-            ))
+            let mut sa = ServerApprover::new(kernel.clone(), store, rid.clone(), ag.clone());
+            if let Some(t) = st.approval_timeout {
+                sa = sa.with_timeout(t);
+            }
+            Arc::new(sa)
         };
         let res = Planner::with_actions(&kernel, st.registry.clone())
             .with_approver(approver)

@@ -214,7 +214,7 @@
 }
 ```
 - 响应失败错误码：WB1002（未登录）、WB2003（运行不存在）
-- 特殊逻辑：返回该运行全部审批请求（含历史裁决，state=Pending/Approved/Rejected）；动作经 `require_approval` 闸门触发时由 `ServerApprover` 挂起运行并写入一条 Pending 请求，前端轮询本接口渲染审批列表（V0.4 遗留项：server 挂起式 HTTP 审批）
+- 特殊逻辑：返回该运行全部审批请求（含历史裁决，state=Pending/Approved/Rejected/**Expired**）；动作经 `require_approval` 闸门触发时由 `ServerApprover` 挂起运行并写入一条 Pending 请求，前端轮询本接口渲染审批列表（V0.4 遗留项：server 挂起式 HTTP 审批）。**Expired** 表示挂起超时（默认 300s）后由 `ApprovalStore::expire` 回收，运行已按拒绝回退；Expired 与人工 Rejected 状态可区分，前端不得把 Expired 渲染为可裁决的待审批项
 
 ### 4.11 裁决一条审批请求
 - [强制] 请求方式：POST
@@ -230,7 +230,7 @@
 { "code": 0, "msg": "success", "data": { "reqId": "apr_001", "decision": "Approved" } }
 ```
 - 响应失败错误码：WB1001（参数错误）、WB1002（未登录）、WB2003（运行不存在）、**404（审批请求不存在或已裁决，重复裁决被拒）**
-- 特殊逻辑：裁决后置 `ApprovalStore` 中状态为 Approved/Rejected 并唤醒挂起的 Planner；批准 → 运行继续，拒绝 → 动作以 WB2005 终止该运行。**同一 reqId 仅可裁决一次**，重复裁决返回 404（code 字段，非 HTTP status）。与 CLI `ConsoleApprover`、server `--auto-approve` 开关等价，是 Human-in-the-loop 的三态之一
+- 特殊逻辑：裁决后置 `ApprovalStore` 中状态为 Approved/Rejected 并唤醒挂起的 Planner；批准 → 运行继续，拒绝 → 动作以 WB2005 终止该运行。**同一 reqId 仅可裁决一次**，重复裁决返回 404（code 字段，非 HTTP status）。与 CLI `ConsoleApprover`、server `--auto-approve` 开关等价，是 Human-in-the-loop 的审批态之一。**超时回收（Expired）的请求同样拒绝裁决**（返回 404），避免超时残留请求被误裁决、UI 出现幽灵待审批。超时与人工拒绝通过 state（Expired/Rejected）区分，事件 `ApprovalDecision.decision` 对应 `Expired`/`Rejected`/`Approved`
 
 ## 5. 风险点 & 注意事项
 - Trace 缺失 `objectRefs` 会破坏可解释性承诺，写入侧须评审卡点（见 `agent-observation-design.md` 5）。

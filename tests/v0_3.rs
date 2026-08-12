@@ -1454,6 +1454,252 @@ async fn tc023b_server_http_approval_reject() {
     assert_eq!(code3, 404, "已裁决请求不应再接受裁决");
 }
 
+// ── TC-023c：挂起超时回收 — 超时后 state=Expired（无幽灵 Pending），超时残留请求不可再裁决 ──
+// 闭环 Critical-1/2：超时后 ApprovalStore 请求必须翻 Expired 并清 tx，否则 UI 持续显示
+// 待审批且 resolve 误判成功；Critical-3：Expired 与人工 Rejected 状态可区分。
+#[tokio::test]
+async fn tc023c_server_http_approval_timeout_expired() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = std::sync::Arc::new(RuntimeKernel::new(s));
+    kernel
+        .create_object("Customer", "001", json!({"name": "Apple", "level": "VIP"}))
+        .await
+        .unwrap();
+    let engine: std::sync::Arc<dyn AgentEngine> = std::sync::Arc::new(FakeEngine);
+    let reg = ActionRegistry::from_ir(&parse_odl(ODL_APPROVE).unwrap());
+
+    // 注入极短超时（50ms）触发超时回收路径
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let ks = kernel.clone();
+    let es = engine.clone();
+    tokio::spawn(async move {
+        let _ = server::serve_with_timeout(
+            ks,
+            es,
+            listener,
+            "ui/dist",
+            reg,
+            false,
+            Some(Duration::from_millis(50)),
+        )
+        .await;
+    });
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let (_, body) = http_call(
+        addr,
+        "POST",
+        "/api/v1/wb/agent/run",
+        Some(r#"{"agentId":"retention-agent","goal":"close account"}"#),
+    )
+    .await;
+    let run_id = serde_json::from_str::<Value>(&body).unwrap()["data"]["runId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // 应挂起出一条 Pending（先抓 reqId）
+    let mut req_id = String::new();
+    for _ in 0..100 {
+        let (_, b) = http_call(
+            addr,
+            "GET",
+            &format!("/api/v1/wb/agent/run/{run_id}/approvals"),
+            None,
+        )
+        .await;
+        let list = serde_json::from_str::<Value>(&b)
+            .unwrap()
+            .get("data")
+            .and_then(|d| d.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if let Some(p) = list.iter().find(|p| p["state"] == "Pending") {
+            req_id = p["reqId"].as_str().unwrap().to_string();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(!req_id.is_empty(), "应挂起出一条待审批请求");
+
+    // 等超时回收（>50ms），运行应终止（Failed）
+    let mut status = String::new();
+    for _ in 0..100 {
+        let (_, b) = http_call(
+            addr,
+            "GET",
+            &format!("/api/v1/wb/agent/run/{run_id}/timeline?view=operator"),
+            None,
+        )
+        .await;
+        status = serde_json::from_str::<Value>(&b)
+            .unwrap()
+            .get("data")
+            .and_then(|d| d.get("status"))
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string();
+        if status == "Failed" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(status, "Failed", "超时应终止运行");
+
+    // 超时后状态必须翻 Expired（非 Pending 幽灵，也非 Rejected）
+    let (_, b) = http_call(
+        addr,
+        "GET",
+        &format!("/api/v1/wb/agent/run/{run_id}/approvals"),
+        None,
+    )
+    .await;
+    let list = serde_json::from_str::<Value>(&b)
+        .unwrap()
+        .get("data")
+        .and_then(|d| d.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        list.iter()
+            .any(|p| p["reqId"] == req_id && p["state"] == "Expired"),
+        "超时后审批请求应翻 Expired（无幽灵 Pending）"
+    );
+
+    // 超时残留请求不可再裁决：resolve 应返回 404（原为 Critical-2 误判成功）
+    let (_, b3) = http_call(
+        addr,
+        "POST",
+        &format!("/api/v1/wb/agent/run/{run_id}/approval/{req_id}"),
+        Some(r#"{"decision":"approve"}"#),
+    )
+    .await;
+    let code3 = serde_json::from_str::<Value>(&b3)
+        .unwrap()
+        .get("code")
+        .and_then(|c| c.as_i64())
+        .unwrap_or(0);
+    assert_eq!(code3, 404, "超时(Expired)请求不应再接受裁决");
+}
+
+// ── TC-023d：超时 Expired 与人工 Rejected 状态可区分（Critical-3） ──────────────────
+#[tokio::test]
+async fn tc023d_timeout_expired_distinct_from_rejected() {
+    use openaip_os::planner::{ApprovalState, ApprovalStore};
+    let store = ApprovalStore::new();
+
+    // 人工拒绝路径：resolve 置 Rejected
+    let (tx, _rx) = tokio::sync::oneshot::channel();
+    store.requests_insert_for_test("r_reject", ApprovalState::Pending, Some(tx));
+    assert!(store.resolve("r_reject", false), "人工拒绝应成功裁决");
+    assert_eq!(
+        store.get("r_reject").unwrap().state,
+        ApprovalState::Rejected,
+        "人工拒绝应记为 Rejected"
+    );
+
+    // 超时路径：expire 置 Expired
+    let (tx2, _rx2) = tokio::sync::oneshot::channel();
+    store.requests_insert_for_test("r_expire", ApprovalState::Pending, Some(tx2));
+    store.expire("r_expire");
+    assert_eq!(
+        store.get("r_expire").unwrap().state,
+        ApprovalState::Expired,
+        "超时回收应记为 Expired"
+    );
+    // Expired 不可再裁决
+    assert!(!store.resolve("r_expire", true), "Expired 不应再接受裁决");
+}
+
+// ── TC-023e：裁决端点必须匹配 run_id（跨 run 裁决 → 404） ─────────────────────────────
+#[tokio::test]
+async fn tc023e_approval_wrong_run_id_rejected() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = std::sync::Arc::new(RuntimeKernel::new(s));
+    kernel
+        .create_object("Customer", "001", json!({"name": "Apple", "level": "VIP"}))
+        .await
+        .unwrap();
+    let engine: std::sync::Arc<dyn AgentEngine> = std::sync::Arc::new(FakeEngine);
+    let reg = ActionRegistry::from_ir(&parse_odl(ODL_APPROVE).unwrap());
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let ks = kernel.clone();
+    let es = engine.clone();
+    tokio::spawn(async move {
+        let _ = server::serve(ks, es, listener, "ui/dist", reg, false).await;
+    });
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let (_, body) = http_call(
+        addr,
+        "POST",
+        "/api/v1/wb/agent/run",
+        Some(r#"{"agentId":"retention-agent","goal":"close account"}"#),
+    )
+    .await;
+    let run_id = serde_json::from_str::<Value>(&body).unwrap()["data"]["runId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let mut req_id = String::new();
+    for _ in 0..100 {
+        let (_, b) = http_call(
+            addr,
+            "GET",
+            &format!("/api/v1/wb/agent/run/{run_id}/approvals"),
+            None,
+        )
+        .await;
+        let list = serde_json::from_str::<Value>(&b)
+            .unwrap()
+            .get("data")
+            .and_then(|d| d.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if let Some(p) = list.iter().find(|p| p["state"] == "Pending") {
+            req_id = p["reqId"].as_str().unwrap().to_string();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(!req_id.is_empty(), "应挂起出一条待审批请求");
+
+    // 用错误 run_id 裁决 → JSON code=404
+    let wrong_run = format!("{run_id}_wrong");
+    let (_, b_wrong) = http_call(
+        addr,
+        "POST",
+        &format!("/api/v1/wb/agent/run/{wrong_run}/approval/{req_id}"),
+        Some(r#"{"decision":"approve"}"#),
+    )
+    .await;
+    let code_wrong = serde_json::from_str::<Value>(&b_wrong)
+        .unwrap()
+        .get("code")
+        .and_then(|c| c.as_i64())
+        .unwrap_or(0);
+    assert_eq!(code_wrong, 404, "跨 run 裁决应被拒绝");
+
+    // 正确 run_id 裁决仍应成功
+    let (_, b_ok) = http_call(
+        addr,
+        "POST",
+        &format!("/api/v1/wb/agent/run/{run_id}/approval/{req_id}"),
+        Some(r#"{"decision":"approve"}"#),
+    )
+    .await;
+    let code_ok = serde_json::from_str::<Value>(&b_ok)
+        .unwrap()
+        .get("code")
+        .and_then(|c| c.as_i64())
+        .unwrap_or(-1);
+    assert_eq!(code_ok, 0, "正确 run_id 应能裁决");
+}
+
 // ── TC-024a：server Memory 视图端点 — GET /memory 返回沉淀（hits 累加） ──────────────
 #[tokio::test]
 async fn tc024a_server_memory_endpoint() {

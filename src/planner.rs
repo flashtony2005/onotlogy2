@@ -200,6 +200,8 @@ pub enum ApprovalState {
     Pending,
     Approved,
     Rejected,
+    /// 挂起超时（Planner 已按拒绝回退）：与人工拒绝（Rejected）区分，UI 不再显示幽灵待审批。
+    Expired,
 }
 
 /// 一条待审批请求（挂起态，供浏览器/HTTP 审批端点裁决后恢复运行）。
@@ -266,15 +268,54 @@ impl ApprovalStore {
         rx
     }
 
-    /// 裁决：发信号唤醒挂起的 Planner，更新状态；返回是否存在该请求（已裁决/不存在 → false）。
+    /// 超时回收：挂起 Planner 已按拒绝回退后调用，把残留请求翻为 Expired 并清掉 tx。
+    /// 之后 `resolve` 对其返回 false（映射 404），避免「请求仍在 Pending + resolve 误判成功」
+    /// 导致的 UI 幽灵待审批（Critical-1/2）；Expired 与人工 Rejected 可区分（Critical-3）。
+    /// 已裁决（tx 为 None）或已 Expired 的请求幂等：直接返回。
+    pub fn expire(&self, req_id: &str) {
+        let mut g = self.requests.lock().unwrap();
+        if let Some(e) = g.get_mut(req_id) {
+            e.tx = None;
+            if e.request.state == ApprovalState::Pending {
+                e.request.state = ApprovalState::Expired;
+            }
+        }
+    }
+
+    /// 测试专用：直接插入一条请求（绕过挂起信道生命周期），便于单测 resolve/expire 语义。
+    /// 非 cfg 限定，因集成测试位于独立 crate，无法访问 cfg(test) 项。
+    #[doc(hidden)]
+    pub fn requests_insert_for_test(
+        &self,
+        req_id: &str,
+        state: ApprovalState,
+        tx: Option<oneshot::Sender<bool>>,
+    ) {
+        use crate::planner::ApprovalRequest;
+        self.requests.lock().unwrap().insert(
+            req_id.to_string(),
+            ApprovalEntry {
+                request: ApprovalRequest {
+                    req_id: req_id.to_string(),
+                    run_id: "test-run".to_string(),
+                    agent_id: "test-agent".to_string(),
+                    step_id: "step".to_string(),
+                    description: "test".to_string(),
+                    state,
+                },
+                tx,
+            },
+        );
+    }
+
     /// 裁决：发信号唤醒挂起的 Planner，更新状态；返回是否成功裁决。
-    /// 请求不存在或已裁决（tx 已被取走）→ 返回 false（HTTP 端点映射 404）。
+    /// 请求不存在 / 已裁决（tx 已被取走）/ 已超时 Expired → 返回 false（HTTP 端点映射 404）。
     pub fn resolve(&self, req_id: &str, approve: bool) -> bool {
         let mut g = self.requests.lock().unwrap();
         let Some(e) = g.get_mut(req_id) else {
             return false;
         };
-        // 已裁决（tx 已被取走）→ 拒绝二次裁决
+        // 已裁决（tx 已被取走）或已超时（Expired）→ 拒绝裁决
         let Some(tx) = e.tx.take() else {
             return false;
         };
@@ -303,6 +344,8 @@ pub struct ServerApprover {
     run_id: String,
     agent_id: String,
     seq: AtomicU64,
+    /// 挂起超时（默认 APPROVAL_TIMEOUT）；测试可注入极短超时触发超时回收路径。
+    timeout: Duration,
 }
 
 impl ServerApprover {
@@ -318,7 +361,14 @@ impl ServerApprover {
             run_id,
             agent_id,
             seq: AtomicU64::new(0),
+            timeout: APPROVAL_TIMEOUT,
         }
+    }
+
+    /// 覆盖挂起超时（默认 APPROVAL_TIMEOUT）；测试注入极短超时触发 Expired 回收路径。
+    pub fn with_timeout(mut self, d: Duration) -> Self {
+        self.timeout = d;
+        self
     }
 }
 
@@ -357,12 +407,16 @@ impl PolicyApprover for ServerApprover {
             )
             .await;
         // 挂起等待 HTTP 端点裁决（approve=true 放行 / false=WB2005 终止）。
-        // 超时或信道关闭均按拒绝处理，避免 run 永久挂起。
-        let decision = match tokio::time::timeout(APPROVAL_TIMEOUT, rx).await {
-            Ok(Ok(v)) => v,
-            _ => false,
+        // 超时：回收残留请求（store.expire 翻 Expired + 清 tx），避免 UI 幽灵待审批。
+        let (decision, outcome) = match tokio::time::timeout(self.timeout, rx).await {
+            Ok(Ok(v)) => (v, if v { "Approved" } else { "Rejected" }),
+            _ => {
+                self.store.expire(&req_id);
+                (false, "Expired")
+            }
         };
-        // 发 ApprovalDecision 事件（供 timeline / WS 实时反映结果）
+        // 发 ApprovalDecision 事件（供 timeline / WS 实时反映结果）；
+        // Expired 与人工 Rejected 通过 outcome 区分，便于 UI/审计溯源（Critical-3）。
         let _ = self
             .kernel
             .emit_cognitive(
@@ -372,14 +426,18 @@ impl PolicyApprover for ServerApprover {
                 &step.object_refs,
                 Some(&format!(
                     "审批结果: {}（reqId={}）",
-                    if decision { "批准" } else { "拒绝" },
+                    match outcome {
+                        "Approved" => "批准",
+                        "Rejected" => "拒绝",
+                        _ => "超时未裁决",
+                    },
                     req_id
                 )),
                 Some(json!({
                     "reqId": req_id,
-                    "decision": if decision { "Approved" } else { "Rejected" }
+                    "decision": outcome
                 })),
-                Some(json!(if decision { "Approved" } else { "Rejected" })),
+                Some(json!(outcome)),
                 Some(if decision { 0.9 } else { 0.0 }),
             )
             .await;
