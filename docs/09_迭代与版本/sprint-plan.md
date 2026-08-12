@@ -57,7 +57,7 @@ V0.5 Agent 自治      让系统能学习       自学习 / Evolution / Memory �
 - 需求：REQ-009/010/011
 
 **V0.4 Action & Policy**（让行为可编排）
-- Action 从"最小执行"升级为完整引擎（**已实现**）：对象自有能力经 ODL `actions:` 声明 → `ActionRegistry` → `ActionEngine` 数据驱动解释执行（`updates` / `creates` / `link`，幂等），替代硬编码挽留计划；需求 REQ-014，TC-014a/b/c 全绿
+- Action 从"最小执行"升级为完整引擎（**已实现**）：对象自有能力经 ODL `actions:` 声明 → `ActionRegistry` → `ActionEngine` 数据驱动解释执行（`updates` / `creates` / `link`，幂等），替代硬编码挽留计划；需求 REQ-014，TC-020a/b/c 全绿
 - Policy 约束与审批（Human Approval）：**待办**，归后续版本（V0.5 或单独 Policy 迭代）
 
 **V0.5 Agent 自治**（让系统能学习）

@@ -125,4 +125,4 @@ oaip agent run "reduce churn"
 | V1.7 | lushaohui | 2026-08-11 | ODL 属性语法定版：以 architecture-total 4.2.1 为准（`properties:` 块 + `name: type`） |
 | V1.8 | lushaohui | 2026-08-11 | V0.2 落地：补 REQ-012(Relation 引擎)/REQ-013(领域 Event)，状态已实现 |
 | V1.9 | lushaohui | 2026-08-12 | V0.3=MVP 落地：REQ-009/010/011 状态置「已实现」（三层观察 UI + WebSocket + Pi 作 Cognitive Engine + 自有 Planner 闭环，TC-009/010/011 全绿） |
-| V2.0 | lushaohui | 2026-08-12 | V0.4 完整 Action 引擎落地：登记 REQ-014（已实现）；ODL `actions:` 声明 → `ActionRegistry` → `ActionEngine` 数据驱动解释执行，替代硬编码挽留计划；新增 TC-014a/b/c 全绿 |
+| V2.0 | lushaohui | 2026-08-12 | V0.4 完整 Action 引擎落地：登记 REQ-014（已实现）；ODL `actions:` 声明 → `ActionRegistry` → `ActionEngine` 数据驱动解释执行，替代硬编码挽留计划；新增 TC-020a/b/c 全绿 |

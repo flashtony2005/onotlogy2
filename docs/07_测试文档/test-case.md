@@ -4,7 +4,7 @@
 |----|------|
 | 文档ID | WB-DOC-07-002 |
 | 所属模块 | WorkBuddy-Test |
-| 版本 | V2.6 |
+| 版本 | V2.7 |
 | 创建人 | lushaohui |
 | 创建时间 | 2026-08-11 |
 | 更新记录 | 见文末修订日志 |
@@ -57,6 +57,13 @@
 | TC-018 | REQ-009/010 | e2e | `POST /api/v1/wb/agent/run` | 缺 `agentId` → `WB1001`；有效 → `runId`+`streamUrl`；轮询 `/run/:id/timeline?view=executive` | 门禁正确；Executive 视图返回决策摘要（`decision`） | 通过（自动化 tests/v0_3.rs） |
 | TC-019 | REQ-009 | e2e | 两个 run 落同一 kernel | `WS /api/v1/wb/agent/{run_b}/stream` | 仅收 `run_b` 事件，不混入 `run_a`（按 run/agent 隔离） | 通过（自动化 tests/v0_3.rs） |
 
+### 4.3.1 V0.4 测试契约（完整 Action 引擎，REQ-014）
+| 用例ID | REQ | 类型 | Given | When | Then（边界判定） | 状态 |
+|--------|-----|------|-------|------|------------------|------|
+| TC-020a | REQ-014 | 单元 | ODL 含 `actions:` 块（params / updates / creates / data / link / `self` 表达式） | `parse_odl` → IR | `ActionDef` 的 params/updates/creates 字段名与类型与 .odl 一致；`self` / `self.field` / 参数名 / 字面量解析正确，无信息丢失 | 通过（自动化 tests/v0_3.rs::tc014a_odl_parses_actions） |
+| TC-020b | REQ-014 | 集成 | ActionRegistry + ActionEngine + 已存在目标对象（含 updateLevel / createOrder 声明） | `invoke`（updateLevel 改写 level / createOrder 建 Order+places 边+customer=self） | level 被改写；新 Order 创建且 `places` 边去重（幂等）；产生 `action.createOrder` world 事件并绑定 `object_refs` | 通过（自动化 tests/v0_3.rs::tc014b_action_engine_executes） |
+| TC-020c | REQ-014 | e2e | `examples/crm.odl`（`Customer.actions.retain` → 建 RetentionTask + needs_retention 边）经 registry | Planner 经 `ActionRegistry` 闭环（替代硬编码挽留计划） | 每客户 1 个 RetentionTask + 1 条 `needs_retention` 边；`action.retain` world 事件发出；Policy Allow 放行 | 通过（自动化 tests/v0_3.rs::tc014c_planner_via_registry_closed_loop） |
+
 ### 4.4 异常与边界用例（必须覆盖）
 | 用例ID | 关联 | 场景 | 预期 | 状态 |
 |--------|------|------|------|------|
@@ -88,3 +95,4 @@
 | V2.4 | lushaohui | 2026-08-12 | 新增 TC-005-b（旧 schema 打开拒 WB2101，对应 `oaip db reset` 迁移防护）；bin/oaip `db reset` 子命令落表 |
 | V2.5 | lushaohui | 2026-08-12 | V0.3=MVP 全绿：TC-009/010/011 + TC-010-b/011-b 状态置「通过（自动化 tests/v0_3.rs）」；补充 4.3/4.4 状态列 |
 | V2.6 | lushaohui | 2026-08-12 | V0.3 补充测试：新增 TC-014(多候选闭环缩放)/TC-015(空世界 world 哨兵)/TC-016(TraceQuery 过滤+游标)/TC-017(REST 列表+WB2002)/TC-018(POST /run 门禁+Executive 决策)/TC-019(WS 按 run 隔离)；全部 tests/v0_3.rs 通过 |
+| V2.7 | lushaohui | 2026-08-12 | V0.4 完整 Action 引擎落地：新增 4.3.1 节登记 TC-020a/b/c（REQ-014，tests/v0_3.rs::tc014a/b/c 全绿）；`self`/`self.field` 值表达式 + 幂等 creates/link + `action.<name>` 事件断言 |
