@@ -31,7 +31,7 @@
 | BL-003 | Evolution Engine | 需 Experience→Pattern→Proposal→Validation→Merge；MVP 连 Experience 都无 | 远期 |
 | BL-004 | Multi-Agent | 属 Agent Society（Protocol/Consensus/Delegation） | V3 |
 | BL-005 | 完整 Action Engine（对象自有能力 actions） | 最小 Action 执行已在 V0.3 随 Planner 闭环落地；完整引擎=Object 的未来行为，需先有稳定世界模型 | V0.4 |
-| BL-006 | Policy Engine | = Action 的约束，依赖 Action | V0.4 之后 |
+| BL-006 | Policy Engine | = Action 的约束，依赖 Action | V0.4 已实现（动作级 `policy:` 审批闸门 + 前置条件 + CLI 交互审批 + server 挂起式 HTTP 审批端点，V0.4 遗留项已收口） |
 | BL-007 | Workflow | 依赖 Action / Policy 编排 | 远期 |
 | BL-008 | Memory | = Event 的积累，依赖 World Model 领域事件（V0.2）与认知事件（V0.3）沉淀 | V0.5 |
 | BL-009 | Knowledge Graph | 是 GraphRAG 底座，依赖 Object Graph | 世界模型成熟后 |

@@ -32,8 +32,9 @@ pub use ir::{
 };
 pub use odl::parse_odl;
 pub use planner::{
-    AgentRunResult, AutoApprover, Capability, ConsoleApprover, LLMGoalParser, PlanStep, Planner,
-    PlannerError, Policy, PolicyApprover, PolicyDecision, RunStatus,
+    AgentRunResult, ApprovalRequest, ApprovalState, ApprovalStore, AutoApprover, Capability,
+    ConsoleApprover, LLMGoalParser, PlanStep, Planner, PlannerError, Policy, PolicyApprover,
+    PolicyDecision, RunStatus, ServerApprover,
 };
 pub use runtime::{EventBus, RuntimeKernel, TraceEvent, TraceKind};
 pub use storage::{

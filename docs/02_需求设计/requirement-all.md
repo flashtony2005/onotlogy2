@@ -66,7 +66,7 @@
 | REQ-012 | Relation 引擎：建边/图查询（neighbors/query_by_edge）/重复边拦截(WB2007) | lushaohui | Must | 已实现 | V0.2 |
 | REQ-013 | 领域 Event：PaymentLate 等业务事件经 `TraceEvent(kind=world)` 落库 + EventBus 发布 | lushaohui | Must | 已实现 | V0.2 |
 | REQ-014 | 完整 Action 引擎：对象自有能力经 ODL `actions:` 声明 → ActionRegistry → ActionEngine 解释执行（updates/creates/link，幂等）；替代硬编码计划 | lushaohui | Should | 已实现 | V0.4 |
-| REQ-015 | Policy 引擎：动作级 `policy:` 约束（`require_approval` 审批闸门 + `precondition` 前置条件，AND）；需审批默认 Deny（WB2005）转 Human Approval，经 `PolicyApprover` 放行；落地形态：CLI `ConsoleApprover`（stdin 交互 y/N，决策缓存）+ server `--auto-approve` 开关（`AutoApprover`） | lushaohui | Should | 已实现 | V0.4 |
+| REQ-015 | Policy 引擎：动作级 `policy:` 约束（`require_approval` 审批闸门 + `precondition` 前置条件，AND）；需审批默认 Deny（WB2005）转 Human Approval，经 `PolicyApprover` 放行；落地形态：CLI `ConsoleApprover`（stdin 交互 y/N，决策缓存）+ server `--auto-approve` 开关（`AutoApprover`）+ server 挂起式 HTTP 审批端点（`ServerApprover`+`ApprovalStore`：`GET /run/:run_id/approvals` + `POST /run/:run_id/approval/:req_id`，浏览器点批准/拒绝后恢复或 WB2005 终止） | lushaohui | Should | 已实现 | V0.4 |
 | REQ-016 | Memory 沉淀（Agent 自治基础，BL-008）：经验按 `action.<name>` 沉淀至 `wb_memory`（label 去重、hits 累加），下一轮 run 经 `MemoryRecall` 认知事件召回归入 Plans，形成 Action→Memory→下次 Plan 闭环；Evolution Engine（BL-003）归远期 | lushaohui | Should | 已实现 | V0.5 |
 
 ### 4.3 核心模型需求

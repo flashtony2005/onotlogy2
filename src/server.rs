@@ -1,6 +1,9 @@
 //! Trace API 服务（对应 REQ-009 / api-agent-trace.md）
 //!
 //! - REST：`GET /trace`、`GET /trace/{id}`、`GET /run/{runId}/timeline?view=`、`POST /run`
+//! - Human Approval（V0.4 遗留）：`GET /run/{runId}/approvals`（待审批列表）、
+//!   `POST /run/{runId}/approval/{reqId}`（裁决 `{"decision":"approve"|"reject"}`，
+//!   `require_approval` 动作挂起等待浏览器点批准/拒绝后恢复或 WB2005 终止）
 //! - WebSocket：`/api/v1/wb/agent/{id}/stream`（历史 + 增量 + `?after` 断线重连补齐）
 //! - 静态托管：三层观察 UI 构建产物 `ui/dist`（不存在时返回提示）
 //!
@@ -9,7 +12,8 @@
 use crate::action::ActionRegistry;
 use crate::agent::AgentEngine;
 use crate::planner::{
-    AutoApprover, Planner, PlannerError, PolicyApprover, RunStatus, generate_run_id,
+    ApprovalRequest, ApprovalStore, AutoApprover, Planner, PlannerError, PolicyApprover, RunStatus,
+    ServerApprover, generate_run_id,
 };
 use crate::runtime::RuntimeKernel;
 use crate::storage::TraceQuery;
@@ -22,7 +26,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
@@ -40,8 +44,10 @@ pub struct AppState {
     pub engine: Arc<dyn AgentEngine>,
     /// 动作注册表（V0.4）：对象自有动作的声明式来源；空 → legacy 兜底。
     pub registry: ActionRegistry,
-    /// 是否自动批准需审批动作（Human Approval）：默认 false → require_approval 动作被拒（WB2005）。
+    /// 是否自动批准需审批动作（Human Approval）：默认 false → require_approval 动作挂起等待 HTTP 审批。
     auto_approve: bool,
+    /// 待审批请求存储（V0.4 遗留的 server 挂起式 HTTP 审批端点）；连接 Planner 挂起点与审批 API。
+    store: Arc<ApprovalStore>,
     runs: Mutex<HashMap<String, RunRecord>>,
     pub static_dir: String,
 }
@@ -147,13 +153,22 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/v1/wb/agent/trace/:id", get(get_trace))
         .route("/api/v1/wb/agent/run/:run_id/timeline", get(timeline))
         .route("/api/v1/wb/agent/run", post(run_start))
+        .route(
+            "/api/v1/wb/agent/run/:run_id/approvals",
+            get(list_approvals),
+        )
+        .route(
+            "/api/v1/wb/agent/run/:run_id/approval/:req_id",
+            post(resolve_approval),
+        )
         .route("/api/v1/wb/agent/:id/stream", get(ws_handler))
         .fallback(get(serve_static))
         .with_state(state)
 }
 
 /// 启动 HTTP + WS 服务（绑定已就绪的 listener，返回绑定地址供测试使用）。
-/// `auto_approve`：是否自动批准需审批动作（Human Approval）；false → 默认拒（WB2005）。
+/// `auto_approve`：是否自动批准需审批动作（Human Approval）；
+/// false → `require_approval` 动作挂起，由浏览器经 HTTP 审批端点裁决后恢复（V0.4 遗留）。
 pub async fn serve(
     kernel: Arc<RuntimeKernel>,
     engine: Arc<dyn AgentEngine>,
@@ -167,6 +182,7 @@ pub async fn serve(
         engine,
         registry,
         auto_approve,
+        store: Arc::new(ApprovalStore::new()),
         runs: Mutex::new(HashMap::new()),
         static_dir: static_dir.into(),
     });
@@ -237,6 +253,41 @@ async fn timeline(
     ApiResponse::ok(tl)
 }
 
+/// `GET /api/v1/wb/agent/run/:run_id/approvals`：列出该运行的全部审批请求（含历史裁决）。
+async fn list_approvals(
+    State(st): State<Arc<AppState>>,
+    Path(run_id): Path<String>,
+) -> Json<ApiResponse<Vec<ApprovalRequest>>> {
+    ApiResponse::ok(st.store.list_for_run(&run_id))
+}
+
+#[derive(serde::Deserialize)]
+struct ApprovalDecisionBody {
+    /// `approve` | `yes` | `true` → 批准；其余 → 拒绝（WB2005 终止）。
+    decision: String,
+}
+
+/// `POST /api/v1/wb/agent/run/:run_id/approval/:req_id`：裁决一条待审批请求，唤醒挂起的运行。
+async fn resolve_approval(
+    State(st): State<Arc<AppState>>,
+    Path((_run_id, req_id)): Path<(String, String)>,
+    Json(body): Json<ApprovalDecisionBody>,
+) -> Response {
+    let approve = matches!(
+        body.decision.to_ascii_lowercase().as_str(),
+        "approve" | "yes" | "true"
+    );
+    if st.store.resolve(&req_id, approve) {
+        ApiResponse::ok(json!({
+            "reqId": req_id,
+            "decision": if approve { "Approved" } else { "Rejected" }
+        }))
+        .into_response()
+    } else {
+        ApiResponse::error(404, "审批请求不存在或已裁决").into_response()
+    }
+}
+
 /// `POST /api/v1/wb/agent/run`：触发 Agent 运行（异步，立即返回 runId + streamUrl）。
 async fn run_start(State(st): State<Arc<AppState>>, Json(body): Json<RunBody>) -> Response {
     let agent_id = match body.agent_id {
@@ -264,17 +315,25 @@ async fn run_start(State(st): State<Arc<AppState>>, Json(body): Json<RunBody>) -
     let kernel = st.kernel.clone();
     let engine = st.engine.clone();
     let st2 = st.clone();
+    let store = st.store.clone();
     let auto_approve = st.auto_approve;
     let goal = body.goal.clone();
     let ag = agent_id.clone();
     let rid = run_id.clone();
     tokio::spawn(async move {
-        // Human Approval 闸门：auto_approve → 直接放行；否则默认拒（WB2005），
-        // 由客户端/人工在外部裁决（CLI 用 ConsoleApprover 交互；HTTP 审批端点见后续迭代）。
+        // Human Approval 闸门：
+        // - auto_approve → 直接放行（AutoApprover）；
+        // - 否则 `require_approval` 动作挂起，注册待审批请求并等待浏览器经 HTTP 端点裁决
+        //   （ServerApprover），批准则恢复执行，拒绝则 WB2005 终止。
         let approver: Arc<dyn PolicyApprover> = if auto_approve {
             Arc::new(AutoApprover { allow: true })
         } else {
-            Arc::new(AutoApprover { allow: false })
+            Arc::new(ServerApprover::new(
+                kernel.clone(),
+                store,
+                rid.clone(),
+                ag.clone(),
+            ))
         };
         let res = Planner::with_actions(&kernel, st.registry.clone())
             .with_approver(approver)

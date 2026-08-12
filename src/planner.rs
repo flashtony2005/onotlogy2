@@ -10,12 +10,16 @@ use crate::agent::{AgentEngine, AgentError, Context, Decision, WorldSnapshot};
 use crate::ir::{ActionDef, CompareOp, ValueExpr};
 use crate::runtime::RuntimeKernel;
 use crate::storage::StorageError;
+use async_trait::async_trait;
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::oneshot;
 
 /// Planner 运行错误，映射到 WB 错误码。
 #[derive(Debug, thiserror::Error)]
@@ -108,9 +112,13 @@ pub struct Policy;
 
 /// Human Approval 审批器：决定 `require_approval` 的动作是否被放行。
 /// 默认 `AutoApprover { allow: false }`（拒，等待人工）；服务/测试可注入自动批准。
+///
+/// `approve` 为 `async`：CLI 的 `ConsoleApprover` 同步读 stdin 立即返回；
+/// 服务的 `ServerApprover` 在此挂起运行、等待 HTTP 端点裁决后恢复。
+#[async_trait]
 pub trait PolicyApprover: Send + Sync {
     /// 返回 true 表示该步已获人工/自动批准，可越过审批闸门执行。
-    fn approve(&self, step: &PlanStep) -> bool;
+    async fn approve(&self, step: &PlanStep) -> bool;
 }
 
 /// 自动审批器：无人工场景（测试 / 服务）使用；`allow=true` 直接放行。
@@ -118,8 +126,9 @@ pub trait PolicyApprover: Send + Sync {
 pub struct AutoApprover {
     pub allow: bool,
 }
+#[async_trait]
 impl PolicyApprover for AutoApprover {
-    fn approve(&self, _step: &PlanStep) -> bool {
+    async fn approve(&self, _step: &PlanStep) -> bool {
         self.allow
     }
 }
@@ -153,8 +162,9 @@ impl Default for ConsoleApprover {
         Self::new()
     }
 }
+#[async_trait]
 impl PolicyApprover for ConsoleApprover {
-    fn approve(&self, step: &PlanStep) -> bool {
+    async fn approve(&self, step: &PlanStep) -> bool {
         let key = Self::key_of(step);
         if let Some(v) = self.cache.lock().unwrap().get(&key) {
             return *v;
@@ -180,6 +190,196 @@ fn prompt(question: &str) -> bool {
     matches!(buf.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
+/// 待审批请求状态（与 timeline / HTTP 响应对齐）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum ApprovalState {
+    Pending,
+    Approved,
+    Rejected,
+}
+
+/// 一条待审批请求（挂起态，供浏览器/HTTP 审批端点裁决后恢复运行）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalRequest {
+    pub req_id: String,
+    pub run_id: String,
+    pub agent_id: String,
+    /// 动作标识（`action@target_id`），便于 UI 展示与去重。
+    pub step_id: String,
+    pub description: String,
+    pub state: ApprovalState,
+}
+
+/// 审批请求存储：连接 Planner 挂起点与 HTTP 审批端点（V0.4 遗留的 server 挂起式 HTTP 审批）。
+pub struct ApprovalStore {
+    requests: Mutex<HashMap<String, ApprovalEntry>>,
+}
+
+struct ApprovalEntry {
+    request: ApprovalRequest,
+    /// 挂起 Planner 的唤醒信道；裁决后置 None。
+    tx: Option<oneshot::Sender<bool>>,
+}
+
+impl ApprovalStore {
+    pub fn new() -> Self {
+        Self {
+            requests: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// 列出某运行的所有审批请求（含历史裁决），供 UI 渲染审批列表。
+    pub fn list_for_run(&self, run_id: &str) -> Vec<ApprovalRequest> {
+        self.requests
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|e| e.request.run_id == run_id)
+            .map(|e| e.request.clone())
+            .collect()
+    }
+
+    /// 取单条审批请求（快照）。
+    pub fn get(&self, req_id: &str) -> Option<ApprovalRequest> {
+        self.requests
+            .lock()
+            .unwrap()
+            .get(req_id)
+            .map(|e| e.request.clone())
+    }
+
+    /// 内部：注册待审批并挂起（由 `ServerApprover` 调用，返回裁决信道接收端）。
+    fn register(&self, req: ApprovalRequest) -> oneshot::Receiver<bool> {
+        let (tx, rx) = oneshot::channel();
+        self.requests.lock().unwrap().insert(
+            req.req_id.clone(),
+            ApprovalEntry {
+                request: req,
+                tx: Some(tx),
+            },
+        );
+        rx
+    }
+
+    /// 裁决：发信号唤醒挂起的 Planner，更新状态；返回是否存在该请求（已裁决/不存在 → false）。
+    /// 裁决：发信号唤醒挂起的 Planner，更新状态；返回是否成功裁决。
+    /// 请求不存在或已裁决（tx 已被取走）→ 返回 false（HTTP 端点映射 404）。
+    pub fn resolve(&self, req_id: &str, approve: bool) -> bool {
+        let mut g = self.requests.lock().unwrap();
+        let Some(e) = g.get_mut(req_id) else {
+            return false;
+        };
+        // 已裁决（tx 已被取走）→ 拒绝二次裁决
+        let Some(tx) = e.tx.take() else {
+            return false;
+        };
+        e.request.state = if approve {
+            ApprovalState::Approved
+        } else {
+            ApprovalState::Rejected
+        };
+        let _ = tx.send(approve);
+        true
+    }
+}
+
+impl Default for ApprovalStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// 服务端挂起式审批器：遇 `require_approval` 动作时挂起运行，注册待审批请求，
+/// 并发 `PendingApproval` 认知事件（含 `reqId`）；浏览器经 HTTP 端点裁决后恢复。
+/// 对应 V0.4 遗留的 server 挂起式 HTTP 审批端点（让浏览器点批准）。
+pub struct ServerApprover {
+    kernel: Arc<RuntimeKernel>,
+    store: Arc<ApprovalStore>,
+    run_id: String,
+    agent_id: String,
+    seq: AtomicU64,
+}
+
+impl ServerApprover {
+    pub fn new(
+        kernel: Arc<RuntimeKernel>,
+        store: Arc<ApprovalStore>,
+        run_id: String,
+        agent_id: String,
+    ) -> Self {
+        Self {
+            kernel,
+            store,
+            run_id,
+            agent_id,
+            seq: AtomicU64::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl PolicyApprover for ServerApprover {
+    async fn approve(&self, step: &PlanStep) -> bool {
+        let req_id = format!(
+            "apr_{}_{}",
+            self.run_id,
+            self.seq.fetch_add(1, Ordering::SeqCst)
+        );
+        let step_id = ConsoleApprover::key_of(step);
+        // 注册待审批并挂起（rx 在 resolve 时被唤醒）
+        let rx = self.store.register(ApprovalRequest {
+            req_id: req_id.clone(),
+            run_id: self.run_id.clone(),
+            agent_id: self.agent_id.clone(),
+            step_id: step_id.clone(),
+            description: step.description.clone(),
+            state: ApprovalState::Pending,
+        });
+        // 发 PendingApproval 认知事件（含 reqId，UI 据此渲染审批按钮）
+        let _ = self
+            .kernel
+            .emit_cognitive(
+                "PendingApproval",
+                &self.run_id,
+                &self.agent_id,
+                &step.object_refs,
+                Some(&format!("等待人工审批: {}", step.description)),
+                Some(
+                    json!({ "reqId": req_id, "stepId": step_id, "description": step.description }),
+                ),
+                Some(json!("Pending")),
+                Some(0.0),
+            )
+            .await;
+        // 挂起等待 HTTP 端点裁决（approve=true 放行 / false=WB2005 终止）
+        let decision = rx.await.unwrap_or(false);
+        // 发 ApprovalDecision 事件（供 timeline / WS 实时反映结果）
+        let _ = self
+            .kernel
+            .emit_cognitive(
+                "ApprovalDecision",
+                &self.run_id,
+                &self.agent_id,
+                &step.object_refs,
+                Some(&format!(
+                    "审批结果: {}（reqId={}）",
+                    if decision { "批准" } else { "拒绝" },
+                    req_id
+                )),
+                Some(json!({
+                    "reqId": req_id,
+                    "decision": if decision { "Approved" } else { "Rejected" }
+                })),
+                Some(json!(if decision { "Approved" } else { "Rejected" })),
+                Some(if decision { 0.9 } else { 0.0 }),
+            )
+            .await;
+        decision
+    }
+}
+
 impl Policy {
     /// 校验计划步：破坏性动作（删对象）默认拒，转 Human Approval；其余允许。
     pub fn check(step: &PlanStep) -> PolicyDecision {
@@ -196,7 +396,7 @@ impl Policy {
     /// - `def` 为 None（动作未注册）→ 放行；
     /// - `precondition` 全部满足才放行（AND）；任一不满足 → Deny；
     /// - `require_approval=true` 默认 Deny（WB2005），须经 `approver` 放行。
-    pub fn check_action(
+    pub async fn check_action(
         step: &PlanStep,
         def: Option<&ActionDef>,
         approver: &dyn PolicyApprover,
@@ -219,8 +419,9 @@ impl Policy {
                 };
             }
         }
-        // 审批闸门：require_approval 默认 Deny，需 approver 放行（Human Approval）
-        if def.policy.require_approval && !approver.approve(step) {
+        // 审批闸门：require_approval 默认 Deny，需 approver 放行（Human Approval）。
+        // approver.approve 为 async：ConsoleApprover 同步返回；ServerApprover 挂起等待 HTTP 裁决。
+        if def.policy.require_approval && !approver.approve(step).await {
             return PolicyDecision::Deny {
                 reason: format!("动作 {} 需 Human Approval（WB2005）", def.name),
             };
@@ -553,7 +754,7 @@ impl<'a> Planner<'a> {
                         .as_object()
                         .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
                         .unwrap_or_default();
-                    Policy::check_action(step, def, self.approver.as_ref(), target, &args_map)
+                    Policy::check_action(step, def, self.approver.as_ref(), target, &args_map).await
                 }
                 _ => Policy::check(step),
             };

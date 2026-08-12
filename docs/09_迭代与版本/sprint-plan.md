@@ -60,6 +60,7 @@ V0.5 Agent 自治      让系统能学习       自学习 / Evolution / Memory �
 - Action 从"最小执行"升级为完整引擎（**已实现**）：对象自有能力经 ODL `actions:` 声明 → `ActionRegistry` → `ActionEngine` 数据驱动解释执行（`updates` / `creates` / `link`，幂等），替代硬编码挽留计划；需求 REQ-014，TC-014a/b/c 全绿
 - Policy 引擎（**已实现**）：动作级 `policy:` 约束 —— `require_approval` 审批闸门（默认 Deny→WB2005，转 Human Approval，经 `PolicyApprover` 放行）+ `precondition` 前置条件（字段/参数比较，AND）；需求 REQ-015，TC-015a/b/c/d 全绿
 - 交互式 Human Approval（**已实现**）：CLI `agent run` 默认 `ConsoleApprover`（stdin 交互 y/N，按 `action@target` 缓存决策）+ `--auto-approve` 开关；server `serve` 同步加 `--auto-approve`（`AutoApprover`）；TC-021a/b 全绿
+- server 挂起式 HTTP 审批端点（**已实现**，V0.4 遗留项）：`require_approval` 动作触发时运行挂起，注册待审批请求并发 `PendingApproval` 认知事件；浏览器经 `GET /run/:run_id/approvals` 拉取、`POST /run/:run_id/approval/:req_id` 裁决（approve→恢复执行 / reject→WB2005 终止，已裁决请求拒绝二次裁决）；新增 `ServerApprover`+`ApprovalStore`，`PolicyApprover::approve` 升为 async；TC-023a/b 全绿
 
 **V0.5 Agent 自治**（让系统能学习）
 - Memory 沉淀（**已实现**）：经验按 `action.<name>` 沉淀至 `wb_memory`（hits 累加），下一轮 run 经 `MemoryRecall` 认知事件召回，形成 Action→Memory→下次 Plan 闭环；需求 REQ-016，TC-022a/b 全绿
@@ -105,3 +106,4 @@ V0.5 Agent 自治      让系统能学习       自学习 / Evolution / Memory �
 | V2.1 | lushaohui | 2026-08-12 | V0.4 Policy 引擎落地：REQ-015 已实现（状态表 V0.4→已实现）；动作级 `policy:` 审批闸门 + 前置条件；TC-015a/b/c/d 全绿 |
 | V2.2 | lushaohui | 2026-08-12 | 交互式 Human Approval 落地：CLI `ConsoleApprover` + server `--auto-approve` 开关；TC-021a/b 全绿 |
 | V2.3 | lushaohui | 2026-08-12 | V0.5 Memory 沉淀落地：REQ-016 已实现（状态表 V0.5→已实现）；经验按 `action.<name>` 沉淀 `wb_memory` + `MemoryRecall` 闭环；Evolution 归远期；TC-022a/b 全绿 |
+| V2.4 | lushaohui | 2026-08-12 | V0.4 遗留项：server 挂起式 HTTP 审批端点落地；`PolicyApprover::approve` 升 async，新增 `ServerApprover`+`ApprovalStore`，server 暴露 `GET /run/:run_id/approvals` 与 `POST /run/:run_id/approval/:req_id`（approve→恢复 / reject→WB2005 终止）；TC-023a/b 全绿 |
