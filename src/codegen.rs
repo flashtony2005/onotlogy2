@@ -194,6 +194,27 @@ CREATE TABLE IF NOT EXISTS wb_approval_audit (
   reason      TEXT,                -- 决策说明（如「5 道闸门全过」/「审计写库失败回退」）
   created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- V0.7 认证与授权（P0 风险「无认证」）：本地账号 + 不透明会话令牌。
+-- 不依赖外键（libsql 默认 foreign_keys=OFF）；用户禁用时由应用层级联清理会话（delete_sessions_for_user）。
+CREATE TABLE IF NOT EXISTS wb_user (
+  id            TEXT PRIMARY KEY,
+  username      TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,             -- argon2id PHC 编码串
+  role          TEXT NOT NULL,             -- executive | operator | developer
+  display_name  TEXT NOT NULL DEFAULT '',
+  disabled      INTEGER NOT NULL DEFAULT 0,-- 1=禁用（其会话立即失效）
+  created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_user_name ON wb_user(username);
+
+CREATE TABLE IF NOT EXISTS wb_session (
+  token      TEXT PRIMARY KEY,             -- 不透明随机令牌（hex 编码 32B）
+  user_id    TEXT NOT NULL,                -- 逻辑关联 wb_user.id（无 FK，应用层维护）
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at TEXT NOT NULL                -- 过期时间（unix 秒，字符串数值比较）
+);
+CREATE INDEX IF NOT EXISTS idx_session_user ON wb_session(user_id);
 "#
     .to_string()
 }

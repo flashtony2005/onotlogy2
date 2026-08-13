@@ -14,5 +14,10 @@ serde_json = "1.0.151"
 thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util"] }
 
+# V0.7 认证与授权（P0 风险「无认证」）：argon2id 口令哈希 + 不透明会话令牌。
+argon2 = "0.5"
+hex = "0.4"
+rand_core = { version = "0.6", features = ["getrandom"] }
+
 [dev-dependencies]
 tokio-tungstenite = "0.24"

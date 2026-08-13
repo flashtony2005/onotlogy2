@@ -32,6 +32,24 @@ pub struct ApprovalAudit {
     pub created_at: String,
 }
 
+/// 本地账号（V0.7 认证）。
+pub struct UserRecord {
+    pub id: String,
+    pub username: String,
+    pub password_hash: String,
+    pub role: String,
+    pub display_name: String,
+    pub disabled: bool,
+}
+
+/// 会话行（V0.7 认证）：不透明令牌 + 过期时间。
+pub struct SessionRecord {
+    pub token: String,
+    pub user_id: String,
+    pub created_at: String,
+    pub expires_at: String,
+}
+
 fn now_ts() -> String {
     let d = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -163,6 +181,9 @@ pub trait RelationEngine {
 }
 
 /// 基于 libSQL（Turso）的实现。持有单连接以共享同一 in-memory / 文件库。
+/// `Connection` 在 libsql 中为廉价克隆（内部 Arc），故整体可 `Clone`，
+/// 便于把同一存储句柄分给认证/会话等长期存活的提供方（V0.7）。
+#[derive(Clone)]
 pub struct LibSQLStorage {
     conn: Connection,
 }
@@ -1107,6 +1128,127 @@ fn row_to_trace(row: &libsql::Row) -> Result<TraceEvent, StorageError> {
         output: output.map(|s| serde_json::from_str(&s)).transpose()?,
         confidence,
         timestamp: row.get(10)?,
+    })
+}
+
+// ── 认证与授权（V0.7 · 对应 P0 风险「无认证」）──
+impl LibSQLStorage {
+    /// 创建本地账号（用户名唯一约束由 wb_user.username UNIQUE 保证）。
+    pub async fn create_user(&self, u: &UserRecord) -> Result<(), StorageError> {
+        self.conn
+            .execute(
+                "INSERT INTO wb_user (id, username, password_hash, role, display_name, disabled) VALUES (?1,?2,?3,?4,?5,?6)",
+                params![
+                    u.id.clone(),
+                    u.username.clone(),
+                    u.password_hash.clone(),
+                    u.role.clone(),
+                    u.display_name.clone(),
+                    u.disabled as i64
+                ],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// 按用户名取账号（登录校验）；不存在返回 None。
+    pub async fn get_user_by_username(
+        &self,
+        username: &str,
+    ) -> Result<Option<UserRecord>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, username, password_hash, role, display_name, disabled FROM wb_user WHERE username = ?1",
+                params![username],
+            )
+            .await?;
+        match rows.next().await? {
+            Some(r) => Ok(Some(user_from_row(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// 按 id 取账号（会话校验反查）；不存在返回 None。
+    pub async fn get_user_by_id(&self, id: &str) -> Result<Option<UserRecord>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, username, password_hash, role, display_name, disabled FROM wb_user WHERE id = ?1",
+                params![id],
+            )
+            .await?;
+        match rows.next().await? {
+            Some(r) => Ok(Some(user_from_row(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// 签发会话行（令牌由调用方生成，见 `SessionStore`）。
+    pub async fn save_session(
+        &self,
+        token: &str,
+        user_id: &str,
+        expires_at: &str,
+    ) -> Result<(), StorageError> {
+        self.conn
+            .execute(
+                "INSERT INTO wb_session (token, user_id, expires_at) VALUES (?1,?2,?3)",
+                params![token, user_id, expires_at],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// 取会话行（含 user_id，用于反查用户与过期判定）。
+    pub async fn get_session(&self, token: &str) -> Result<Option<SessionRecord>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT token, user_id, created_at, expires_at FROM wb_session WHERE token = ?1",
+                params![token],
+            )
+            .await?;
+        match rows.next().await? {
+            Some(r) => Ok(Some(SessionRecord {
+                token: r.get(0)?,
+                user_id: r.get(1)?,
+                created_at: r.get(2)?,
+                expires_at: r.get(3)?,
+            })),
+            None => Ok(None),
+        }
+    }
+
+    /// 撤销单条会话（登出 / 禁用级联）。
+    pub async fn delete_session(&self, token: &str) -> Result<(), StorageError> {
+        self.conn
+            .execute("DELETE FROM wb_session WHERE token = ?1", params![token])
+            .await?;
+        Ok(())
+    }
+
+    /// 撤销某用户全部会话（禁用账号时级联）。
+    pub async fn delete_sessions_for_user(&self, user_id: &str) -> Result<(), StorageError> {
+        self.conn
+            .execute(
+                "DELETE FROM wb_session WHERE user_id = ?1",
+                params![user_id],
+            )
+            .await?;
+        Ok(())
+    }
+}
+
+/// 从 wb_user 行构造 `UserRecord`。
+fn user_from_row(r: &libsql::Row) -> Result<UserRecord, StorageError> {
+    Ok(UserRecord {
+        id: r.get(0)?,
+        username: r.get(1)?,
+        password_hash: r.get(2)?,
+        role: r.get(3)?,
+        display_name: r.get(4)?,
+        disabled: r.get::<i64>(5)? != 0,
     })
 }
 

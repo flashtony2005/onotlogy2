@@ -15,6 +15,7 @@
 
 pub mod action;
 pub mod agent;
+pub mod auth;
 pub mod codegen;
 pub mod evolution;
 pub mod ir;
@@ -27,6 +28,9 @@ pub mod trace;
 
 pub use action::{ActionEffect, ActionEngine, ActionError, ActionRegistry};
 pub use agent::{AgentEngine, AgentError, Context, Decision, PiAgentEngine, WorldSnapshot};
+pub use auth::{
+    AuthError, AuthUser, IdentityProvider, LocalIdentityProvider, Role, SessionStore, clamp_view,
+};
 pub use codegen::{CodegenOutput, ObjectDef, codegen};
 pub use evolution::{
     EvolutionState, Experience, LearnedKnowledge, PATTERN_MIN_HITS, Pattern, Proposal,
@@ -46,6 +50,6 @@ pub use planner::{
 pub use runtime::{EventBus, RuntimeKernel, TraceEvent, TraceKind};
 pub use storage::{
     ApprovalAudit, LibSQLStorage, MemoryRecord, ObjectEngine, ObjectRecord, RelationEngine,
-    RelationRecord, TraceQuery,
+    RelationRecord, SessionRecord, TraceQuery, UserRecord,
 };
 pub use trace::{RunTimeline, TraceEventDto, View};
