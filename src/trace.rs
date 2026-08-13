@@ -32,6 +32,15 @@ pub enum View {
 }
 
 impl View {
+    /// 视图名（小写，用于响应字段与服务端钳制断言）。
+    pub fn name(&self) -> &'static str {
+        match self {
+            View::Executive => "executive",
+            View::Operator => "operator",
+            View::Developer => "developer",
+        }
+    }
+
     /// 由查询参数解析视图（默认 Operator）。
     pub fn from_param(s: &str) -> View {
         match s {
@@ -121,6 +130,8 @@ pub struct RunTimeline {
     pub status: String,
     pub progress: u8,
     pub human_approval: String,
+    /// 服务端钳制后的有效视图（不信任前端 `?view=`），供前端渲染对齐角色上限。
+    pub view: String,
     pub events: Vec<TimelineEvent>,
     /// 仅 Executive 视图填充。
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -230,6 +241,7 @@ pub fn build_timeline(
         status: status.as_str().to_string(),
         progress,
         human_approval,
+        view: view.name().to_string(),
         events: events_out,
         decision,
     }
@@ -262,6 +274,7 @@ mod tests {
             status: "Completed".into(),
             progress: 100,
             human_approval: "None".into(),
+            view: "operator".into(),
             events: vec![TimelineEvent {
                 id: "tr_1".into(),
                 event_type: "Goal".into(),
@@ -277,6 +290,7 @@ mod tests {
         let json = serde_json::to_value(tl).unwrap();
         assert_eq!(json["runId"], "run_1");
         assert_eq!(json["agentId"], "retention-agent");
+        assert_eq!(json["view"], "operator");
         assert_eq!(json["humanApproval"], "None");
         assert_eq!(json["events"][0]["eventType"], "Goal");
         assert_eq!(json["events"][0]["objectRefs"][0], "001");

@@ -145,6 +145,12 @@ impl RuntimeKernel {
         &self.bus
     }
 
+    /// 暴露存储句柄（Clone：libSQL Connection 内部 Arc）。供 `serve` 复用同一库构建
+    /// 认证/会话提供方，避免双开连接（V0.7 认证）。
+    pub fn storage(&self) -> LibSQLStorage {
+        self.storage.clone()
+    }
+
     pub async fn create_object(
         &self,
         object_type: &str,

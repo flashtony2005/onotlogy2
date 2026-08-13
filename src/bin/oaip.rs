@@ -3,6 +3,7 @@
 use clap::{Parser, Subcommand};
 use openaip_os::action::ActionRegistry;
 use openaip_os::agent::{AgentEngine, PiAgentEngine};
+use openaip_os::auth::{IdentityProvider, LocalIdentityProvider};
 use openaip_os::planner::{
     AutoApprover, ConsoleApprover, Planner, PlannerError, PolicyApprover, RuntimeConfig,
     generate_run_id,
@@ -74,6 +75,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: DbCmd,
     },
+    /// 用户与账号管理（V0.7 认证）
+    User {
+        #[command(subcommand)]
+        cmd: UserCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -136,6 +142,17 @@ enum EventCmd {
 enum DbCmd {
     /// 删除并重建本地数据库（schema 迁移 / 清理演示数据）
     Reset,
+}
+
+#[derive(Subcommand)]
+enum UserCmd {
+    /// 离线创建/确保管理员账号（默认 Developer 角色，幂等）；用于首次部署或 env 不便时。
+    CreateAdmin {
+        username: String,
+        /// 口令（建议经环境变量传入，避免出现在 shell 历史）。
+        #[arg(long)]
+        password: String,
+    },
 }
 
 #[tokio::main]
@@ -201,6 +218,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Cmd::Db { cmd } => match cmd {
             DbCmd::Reset => cmd_db_reset(&cli.db).await?,
+        },
+        Cmd::User { cmd } => match cmd {
+            UserCmd::CreateAdmin { username, password } => {
+                cmd_user_create_admin(&cli.db, &username, &password).await?
+            }
         },
     }
     Ok(())
@@ -417,13 +439,31 @@ async fn cmd_serve(
     auto_approve_evolution: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage = LibSQLStorage::open(db).await?;
+    // V0.7 认证：空库必须先用 env 或 `oaip user create-admin` 建管理员，否则拒绝启动。
+    let idp = LocalIdentityProvider::new(storage.clone());
+    let has_users = storage.count_users().await? > 0;
+    if !has_users {
+        match (
+            std::env::var("WB_BOOTSTRAP_ADMIN_USER"),
+            std::env::var("WB_BOOTSTRAP_ADMIN_PWD"),
+        ) {
+            (Ok(u), Ok(p)) => idp.bootstrap_admin(&u, &p).await?,
+            _ => {
+                return Err(
+                    "未配置管理员账号：请设置环境变量 WB_BOOTSTRAP_ADMIN_USER / WB_BOOTSTRAP_ADMIN_PWD，\
+                     或先运行 `oaip user create-admin <用户名> --password <口令>` 建账号"
+                        .into(),
+                )
+            }
+        }
+    }
     let kernel = Arc::new(RuntimeKernel::new(storage));
     let engine: Arc<dyn AgentEngine> = Arc::new(PiAgentEngine::new("retention-agent"));
     let registry = load_registry(odl)?;
     let addr: SocketAddr = format!("{host}:{port}").parse()?;
     let listener = TcpListener::bind(addr).await?;
     println!(
-        "🚀 OpenAIP-OS Agent Observation 服务已启动：\n  UI  → http://{addr}/\n  API → http://{addr}/api/v1/wb/agent\n  WS  → ws://{addr}/api/v1/wb/agent/{{runId}}/stream"
+        "🚀 OpenAIP-OS Agent Observation 服务已启动：\n  UI  → http://{addr}/\n  API → http://{addr}/api/v1/wb/agent\n  WS  → ws://{addr}/api/v1/wb/agent/{{runId}}/stream\n  认证 → 已强制（V0.7）；先 POST /api/v1/wb/auth/login 取令牌"
     );
     server::serve(
         kernel,
@@ -433,8 +473,22 @@ async fn cmd_serve(
         registry,
         auto_approve,
         auto_approve_evolution,
+        true,
     )
     .await?;
+    Ok(())
+}
+
+/// 离线创建/确保管理员账号（默认 Developer，幂等）。
+async fn cmd_user_create_admin(
+    db: &str,
+    username: &str,
+    password: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let storage = LibSQLStorage::open(db).await?;
+    let idp = LocalIdentityProvider::new(storage);
+    idp.bootstrap_admin(username, password).await?;
+    println!("✅ 管理员账号已就绪：{username}（角色 Developer）");
     Ok(())
 }
 

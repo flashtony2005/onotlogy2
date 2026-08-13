@@ -11,19 +11,23 @@
 
 use crate::action::ActionRegistry;
 use crate::agent::AgentEngine;
+use crate::auth::{
+    AuthUser, IdentityProvider, LocalIdentityProvider, Role, SessionStore, clamp_view,
+};
 use crate::evolution::{
     EvolutionState, LearnedKnowledge, Pattern, Proposal, ProposalKind, ProposalStatus,
 };
 use crate::planner::{
-    ApprovalRequest, ApprovalStore, AutoApprover, Planner, PlannerError, PolicyApprover, RunStatus,
-    RuntimeConfig, ServerApprover, generate_run_id,
+    ApprovalStore, AutoApprover, Planner, PlannerError, PolicyApprover, RunStatus, RuntimeConfig,
+    ServerApprover, generate_run_id,
 };
 use crate::runtime::RuntimeKernel;
 use crate::storage::{ApprovalAudit, TraceQuery};
 use crate::trace::{RunTimeline, TraceEventDto, View, build_timeline};
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{OriginalUri, Path, Query, State, WebSocketUpgrade};
-use axum::http::StatusCode;
+use axum::extract::{Extension, OriginalUri, Path, Query, Request, State, WebSocketUpgrade};
+use axum::http::{StatusCode, header::AUTHORIZATION};
+use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -58,6 +62,12 @@ pub struct AppState {
     store: Arc<ApprovalStore>,
     runs: Mutex<HashMap<String, RunRecord>>,
     pub static_dir: String,
+    /// 身份提供方（V0.7 认证）：本地账号实现；OIDC 后续同 trait 插拔。
+    idp: Arc<dyn IdentityProvider>,
+    /// 会话存储（V0.7 认证）：不透明令牌签发/校验/撤销。
+    sessions: SessionStore,
+    /// 是否强制认证（V0.7）：生产 true；集成测试以 false 注入合成 Developer 直接放行。
+    enforce_auth: bool,
 }
 
 /// 统一响应信封：`code` 为数值（0=成功；WBxxxx → 数字部分），`data` 为业务数据。
@@ -218,8 +228,9 @@ struct EvolutionDto {
 }
 
 // ── 路由 ─────────────────────────────────────────────────────────────────
-/// 构建路由（API 优先，静态托管兜底）。
-fn router(state: Arc<AppState>) -> Router {
+/// 构建路由（API 优先，静态托管兜底）。状态由 `auth_layer` 中间件经 `from_fn_with_state`
+/// 统一注入（handler 与中间件共用 `Arc<AppState>`），故此处不调 `.with_state`。
+fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/v1/wb/agent/trace", get(list_trace))
         .route("/api/v1/wb/agent/trace/:id", get(get_trace))
@@ -248,13 +259,18 @@ fn router(state: Arc<AppState>) -> Router {
             post(resolve_approval),
         )
         .route("/api/v1/wb/agent/:id/stream", get(ws_handler))
+        // ── V0.7 认证端点 ──
+        .route("/api/v1/wb/auth/login", post(auth_login))
+        .route("/api/v1/wb/auth/logout", post(auth_logout))
+        .route("/api/v1/wb/auth/me", get(auth_me))
         .fallback(get(serve_static))
-        .with_state(state)
 }
 
 /// 启动 HTTP + WS 服务（绑定已就绪的 listener，返回绑定地址供测试使用）。
 /// `auto_approve`：是否自动批准需审批动作（Human Approval）；
 /// false → `require_approval` 动作挂起，由浏览器经 HTTP 审批端点裁决后恢复（V0.4 遗留）。
+/// `enforce_auth`：是否强制认证（V0.7）；生产传 `true`，集成测试传 `false`（注入合成 Developer）。
+#[allow(clippy::too_many_arguments)]
 pub async fn serve(
     kernel: Arc<RuntimeKernel>,
     engine: Arc<dyn AgentEngine>,
@@ -263,6 +279,7 @@ pub async fn serve(
     registry: ActionRegistry,
     auto_approve: bool,
     auto_approve_evolution: bool,
+    enforce_auth: bool,
 ) -> std::io::Result<()> {
     serve_with_timeout(
         kernel,
@@ -272,6 +289,7 @@ pub async fn serve(
         registry,
         auto_approve,
         auto_approve_evolution,
+        enforce_auth,
         None,
     )
     .await
@@ -289,8 +307,13 @@ pub async fn serve_with_timeout(
     registry: ActionRegistry,
     auto_approve: bool,
     auto_approve_evolution: bool,
+    enforce_auth: bool,
     approval_timeout: Option<Duration>,
 ) -> std::io::Result<()> {
+    // 认证/会话提供方复用内核同一存储句柄（LibSQLStorage 内部 Arc，单连接共享库）。
+    let storage = kernel.storage();
+    let idp: Arc<dyn IdentityProvider> = Arc::new(LocalIdentityProvider::new(storage.clone()));
+    let sessions = SessionStore::new(storage);
     let state = Arc::new(AppState {
         kernel,
         engine,
@@ -301,15 +324,132 @@ pub async fn serve_with_timeout(
         store: Arc::new(ApprovalStore::new()),
         runs: Mutex::new(HashMap::new()),
         static_dir: static_dir.into(),
+        idp,
+        sessions,
+        enforce_auth,
     });
-    let app = router(state);
+    let app = router()
+        .layer(middleware::from_fn(auth_layer))
+        .layer(Extension(state.clone()))
+        .with_state(state);
     axum::serve(listener, app).await
+}
+
+/// 认证中间件（V0.7）：从 `Authorization: Bearer <token>` 解析会话，注入 `AuthUser` 扩展。
+/// `AppState` 由外层 `Extension` 层注入（避免与 handler 的 `State` 重复，也规避多 axum 版本推断冲突）。
+/// - 白名单（静态资源 + 登录）：直接放行。
+/// - `enforce_auth=false`：测试/开发模式，注入合成 Developer 直接放行（仅测试用）。
+/// - 其他：缺令牌 / 无效 / 过期 / 禁用用户 → 401。
+async fn auth_layer(mut req: Request, next: Next) -> Response {
+    let path = req.uri().path().to_string();
+    if is_public(&path) {
+        return next.run(req).await;
+    }
+    let st = match req.extensions().get::<Arc<AppState>>().cloned() {
+        Some(s) => s,
+        None => return unauthorized("服务未就绪"),
+    };
+    if !st.enforce_auth {
+        // 测试/开发模式：注入 Developer 直接放行（不校验令牌，仅测试用，生产 enforce_auth=true）。
+        req.extensions_mut().insert(AuthUser {
+            id: "test".into(),
+            username: "test".into(),
+            role: Role::Developer,
+        });
+        return next.run(req).await;
+    }
+    let token = match bearer_token(&req) {
+        Some(t) => t,
+        None => return unauthorized("缺少认证令牌"),
+    };
+    match st.sessions.validate(&token).await {
+        Ok(Some(user)) => {
+            req.extensions_mut().insert(user);
+            req.extensions_mut().insert(AuthToken(token));
+            next.run(req).await
+        }
+        _ => unauthorized("无效或已过期的令牌"),
+    }
+}
+
+/// 公共白名单：静态资源（非 `/api/` 前缀）与登录端点免鉴权。
+fn is_public(path: &str) -> bool {
+    path == "/api/v1/wb/auth/login" || !path.starts_with("/api/")
+}
+
+/// 从不透明 `Authorization: Bearer <token>` 提取令牌。
+fn bearer_token(req: &Request) -> Option<String> {
+    let h = req.headers().get(AUTHORIZATION)?;
+    let s = h.to_str().ok()?;
+    s.strip_prefix("Bearer ").map(|t| t.trim().to_string())
+}
+
+/// 401 响应（缺令牌 / 令牌无效）。
+fn unauthorized(msg: &str) -> Response {
+    (StatusCode::UNAUTHORIZED, ApiResponse::<()>::error(401, msg)).into_response()
+}
+
+/// 403 响应（已认证但角色无权）。
+fn forbidden(msg: &str) -> Response {
+    (StatusCode::FORBIDDEN, ApiResponse::<()>::error(403, msg)).into_response()
+}
+
+/// 中间件注入的会话令牌（供 logout 撤销）。
+#[derive(Clone)]
+struct AuthToken(pub String);
+
+/// 登录请求体。
+#[derive(serde::Deserialize)]
+struct LoginBody {
+    username: String,
+    password: String,
+}
+
+/// `POST /api/v1/wb/auth/login`：本地账号校验 → 签发不透明会话令牌。公开端点。
+async fn auth_login(State(st): State<Arc<AppState>>, Json(body): Json<LoginBody>) -> Response {
+    // 登录限流/锁定：本地单用户场景可不启用；多用户暴露前应在本 handler 加简单计数器
+    // （按 IP/用户名，连续失败 N 次锁定 M 分钟），防引导账号爆破（见 design-auth.md §3.6 补充）。
+    let user = match st.idp.authenticate(&body.username, &body.password).await {
+        Ok(Some(u)) => u,
+        Ok(None) => return unauthorized("用户名或口令错误"),
+        Err(_) => return ApiResponse::<()>::error(5000, "认证服务错误").into_response(),
+    };
+    let token = match st.sessions.issue(&user).await {
+        Ok(t) => t,
+        Err(_) => return ApiResponse::<()>::error(5000, "会话签发失败").into_response(),
+    };
+    ApiResponse::ok(json!({
+        "token": token,
+        "user": { "username": user.username, "role": user.role }
+    }))
+    .into_response()
+}
+
+/// `POST /api/v1/wb/auth/logout`：撤销当前会话令牌。需鉴权。
+async fn auth_logout(
+    State(st): State<Arc<AppState>>,
+    Extension(token): Extension<AuthToken>,
+) -> Response {
+    if st.sessions.revoke(&token.0).await.is_err() {
+        return ApiResponse::<()>::error(5000, "登出失败").into_response();
+    }
+    ApiResponse::ok(json!({ "loggedOut": true })).into_response()
+}
+
+/// `GET /api/v1/wb/auth/me`：返回当前认证用户（供前端初始化角色）。需鉴权。
+async fn auth_me(Extension(user): Extension<AuthUser>) -> Response {
+    ApiResponse::ok(json!({
+        "username": user.username,
+        "role": user.role
+    }))
+    .into_response()
 }
 
 // ──  handlers  ───────────────────────────────────────────────────────────
 /// `GET /api/v1/wb/agent/trace`：分页查询 Trace 事件（run/agent/object/type 过滤）。
 async fn list_trace(
     State(st): State<Arc<AppState>>,
+    Extension(_auth): Extension<AuthUser>,
     Query(q): Query<TraceListParams>,
 ) -> Json<ApiResponse<TraceListDto>> {
     let tq = TraceQuery {
@@ -334,7 +474,11 @@ async fn list_trace(
 }
 
 /// `GET /api/v1/wb/agent/trace/:id`：单条 Trace（缺失 → WB2002）。
-async fn get_trace(State(st): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+async fn get_trace(
+    State(st): State<Arc<AppState>>,
+    Extension(_auth): Extension<AuthUser>,
+    Path(id): Path<String>,
+) -> Response {
     match st.kernel.get_trace(&id).await {
         Ok(Some(e)) => ApiResponse::ok(TraceEventDto::from(e)).into_response(),
         Ok(None) => ApiResponse::error(wb_code("WB2002"), "Trace 不存在").into_response(),
@@ -345,10 +489,13 @@ async fn get_trace(State(st): State<Arc<AppState>>, Path(id): Path<String>) -> R
 /// `GET /api/v1/wb/agent/run/:run_id/timeline?view=`：运行时间线（三层视图）。
 async fn timeline(
     State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(run_id): Path<String>,
     Query(q): Query<ViewParam>,
 ) -> Json<ApiResponse<RunTimeline>> {
-    let view = View::from_param(&q.view.unwrap_or_else(|| "operator".into()));
+    // 服务端视图钳制：前端 `?view=` 仅作建议，被钳制到角色允许上限（不信任前端自提权限）。
+    let requested = View::from_param(&q.view.unwrap_or_else(|| "operator".into()));
+    let view = clamp_view(requested, user.role);
     let events = st
         .kernel
         .list_events(TraceQuery::for_run(&run_id))
@@ -370,7 +517,10 @@ async fn timeline(
 }
 
 /// `GET /api/v1/wb/agent/memory`：记忆存储全量（V0.5 Memory 视图数据源，按 hits 降序）。
-async fn list_memory(State(st): State<Arc<AppState>>) -> Response {
+async fn list_memory(
+    State(st): State<Arc<AppState>>,
+    Extension(_auth): Extension<AuthUser>,
+) -> Response {
     let records = match st.kernel.recall_all().await {
         Ok(r) => r,
         Err(_) => return ApiResponse::error(5000, "存储错误").into_response(),
@@ -391,7 +541,10 @@ async fn list_memory(State(st): State<Arc<AppState>>) -> Response {
 
 /// `GET /api/v1/wb/agent/evolution`：Evolution 聚合状态（BL-003 · REQ-017）。
 /// 返回 patterns / proposals / learned（含可追溯证据 run_ids 与 proposal_id）。
-async fn list_evolution(State(st): State<Arc<AppState>>) -> Response {
+async fn list_evolution(
+    State(st): State<Arc<AppState>>,
+    Extension(_auth): Extension<AuthUser>,
+) -> Response {
     let state: EvolutionState = match st.kernel.evolution_state().await {
         Ok(s) => s,
         Err(_) => return ApiResponse::error(5000, "存储错误").into_response(),
@@ -454,7 +607,15 @@ async fn list_evolution(State(st): State<Arc<AppState>>) -> Response {
 }
 
 /// `DELETE /api/v1/wb/agent/evolution/learned/:id`：撤销一条 LearnedKnowledge（可撤销承诺）。
-async fn revoke_learned(State(st): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+async fn revoke_learned(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(id): Path<String>,
+) -> Response {
+    // 写 Evolution（撤销 LearnedKnowledge）仅 Developer（最小权限边界，D3）。
+    if !user.can_write_evolution() {
+        return forbidden("当前角色无权写 Evolution（需 Developer）");
+    }
     match st.kernel.revoke_learned(&id).await {
         Ok(()) => ApiResponse::ok(json!({ "id": id, "revoked": true })).into_response(),
         Err(_) => ApiResponse::error(5000, "存储错误").into_response(),
@@ -472,9 +633,14 @@ struct AutoApproveBody {
 
 async fn toggle_auto_approve(
     State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<String>,
     Json(body): Json<AutoApproveBody>,
 ) -> Response {
+    // 写 Evolution（切换自动放行资格）仅 Developer（最小权限边界，D3）。
+    if !user.can_write_evolution() {
+        return forbidden("当前角色无权写 Evolution（需 Developer）");
+    }
     if st
         .kernel
         .set_learned_auto_approve(&id, body.enabled)
@@ -527,7 +693,14 @@ impl From<ApprovalAudit> for ApprovalAuditDto {
 }
 
 /// `GET /api/v1/wb/agent/evolution/audit`：列出全部自动放行审计（REQ-018 可审计）。
-async fn list_approval_audit_handler(State(st): State<Arc<AppState>>) -> Response {
+async fn list_approval_audit_handler(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+) -> Response {
+    // 读 Audit 需 Operator 及以上。
+    if !user.can_read_audit() {
+        return forbidden("当前角色无权读取审计（需 Operator 及以上）");
+    }
     match st.kernel.list_approval_audit(None).await {
         Ok(rows) => ApiResponse::ok(
             rows.into_iter()
@@ -542,9 +715,14 @@ async fn list_approval_audit_handler(State(st): State<Arc<AppState>>) -> Respons
 /// `GET /api/v1/wb/agent/run/:run_id/approvals`：列出该运行的全部审批请求（含历史裁决）。
 async fn list_approvals(
     State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path(run_id): Path<String>,
-) -> Json<ApiResponse<Vec<ApprovalRequest>>> {
-    ApiResponse::ok(st.store.list_for_run(&run_id))
+) -> Response {
+    // 读审批列表需 Operator 及以上。
+    if !user.can_read_audit() {
+        return forbidden("当前角色无权读取审批（需 Operator 及以上）");
+    }
+    ApiResponse::ok(st.store.list_for_run(&run_id)).into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -556,9 +734,14 @@ struct ApprovalDecisionBody {
 /// `POST /api/v1/wb/agent/run/:run_id/approval/:req_id`：裁决一条待审批请求，唤醒挂起的运行。
 async fn resolve_approval(
     State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
     Path((run_id, req_id)): Path<(String, String)>,
     Json(body): Json<ApprovalDecisionBody>,
 ) -> Response {
+    // 裁决审批需 Operator 及以上。
+    if !user.can_resolve_approval() {
+        return forbidden("当前角色无权裁决审批（需 Operator 及以上）");
+    }
     let Some(req) = st.store.get(&req_id) else {
         return ApiResponse::error(404, "审批请求不存在或已裁决").into_response();
     };
@@ -581,7 +764,15 @@ async fn resolve_approval(
 }
 
 /// `POST /api/v1/wb/agent/run`：触发 Agent 运行（异步，立即返回 runId + streamUrl）。
-async fn run_start(State(st): State<Arc<AppState>>, Json(body): Json<RunBody>) -> Response {
+async fn run_start(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<RunBody>,
+) -> Response {
+    // 触发运行需 Operator 及以上（Executive 只读）。
+    if !user.can_trigger_run() {
+        return forbidden("当前角色无权触发运行（需 Operator 及以上）");
+    }
     let agent_id = match body.agent_id {
         Some(a) if !a.is_empty() => a,
         _ => return ApiResponse::error(wb_code("WB1001"), "agentId 必填").into_response(),
@@ -662,6 +853,7 @@ async fn run_start(State(st): State<Arc<AppState>>, Json(body): Json<RunBody>) -
 async fn ws_handler(
     ws: WebSocketUpgrade,
     State(st): State<Arc<AppState>>,
+    Extension(_auth): Extension<AuthUser>,
     Path(id): Path<String>,
     Query(params): Query<WsParams>,
 ) -> Response {

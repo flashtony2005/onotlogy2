@@ -144,7 +144,8 @@ impl LocalIdentityProvider {
         Self { storage }
     }
 
-    fn hash_password(pw: &str) -> Result<String, AuthError> {
+    /// 计算 argon2id 口令哈希（测试/CLI 造账号复用同一实现）。
+    pub fn hash_password(pw: &str) -> Result<String, AuthError> {
         let salt = SaltString::generate(&mut OsRng);
         Argon2::default()
             .hash_password(pw.as_bytes(), &salt)

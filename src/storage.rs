@@ -1169,6 +1169,18 @@ impl LibSQLStorage {
         }
     }
 
+    /// 账号总数（启动引导判定：空库且未配 env 则拒绝启动）。
+    pub async fn count_users(&self) -> Result<i64, StorageError> {
+        let mut rows = self
+            .conn
+            .query("SELECT COUNT(*) FROM wb_user", params![])
+            .await?;
+        match rows.next().await? {
+            Some(r) => Ok(r.get(0)?),
+            None => Ok(0),
+        }
+    }
+
     /// 按 id 取账号（会话校验反查）；不存在返回 None。
     pub async fn get_user_by_id(&self, id: &str) -> Result<Option<UserRecord>, StorageError> {
         let mut rows = self
@@ -1182,6 +1194,24 @@ impl LibSQLStorage {
             Some(r) => Ok(Some(user_from_row(&r)?)),
             None => Ok(None),
         }
+    }
+
+    /// 启停账号（禁用时级联清其全部会话，应用层替代外键 ON DELETE CASCADE）。
+    pub async fn set_user_disabled(
+        &self,
+        user_id: &str,
+        disabled: bool,
+    ) -> Result<(), StorageError> {
+        self.conn
+            .execute(
+                "UPDATE wb_user SET disabled = ?2 WHERE id = ?1",
+                params![user_id, disabled as i64],
+            )
+            .await?;
+        if disabled {
+            self.delete_sessions_for_user(user_id).await?;
+        }
+        Ok(())
     }
 
     /// 签发会话行（令牌由调用方生成，见 `SessionStore`）。

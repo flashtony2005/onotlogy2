@@ -283,6 +283,7 @@ async fn tc009_ws_stream_and_reconnect() {
             ActionRegistry::empty(),
             false,
             false,
+            false,
         )
         .await;
     });
@@ -401,6 +402,7 @@ async fn spawn_server(kernel: std::sync::Arc<RuntimeKernel>) -> SocketAddr {
             listener,
             "ui/dist",
             ActionRegistry::empty(),
+            false,
             false,
             false,
         )
@@ -1278,7 +1280,7 @@ async fn tc023a_server_http_approval_suspend_and_approve() {
     let ks = kernel.clone();
     let es = engine.clone();
     tokio::spawn(async move {
-        let _ = server::serve(ks, es, listener, "ui/dist", reg, false, false).await;
+        let _ = server::serve(ks, es, listener, "ui/dist", reg, false, false, false).await;
     });
     tokio::time::sleep(Duration::from_millis(150)).await;
 
@@ -1386,7 +1388,7 @@ async fn tc023b_server_http_approval_reject() {
     let ks = kernel.clone();
     let es = engine.clone();
     tokio::spawn(async move {
-        let _ = server::serve(ks, es, listener, "ui/dist", reg, false, false).await;
+        let _ = server::serve(ks, es, listener, "ui/dist", reg, false, false, false).await;
     });
     tokio::time::sleep(Duration::from_millis(150)).await;
 
@@ -1523,6 +1525,7 @@ async fn tc023c_server_http_approval_timeout_expired() {
             listener,
             "ui/dist",
             reg,
+            false,
             false,
             false,
             Some(Duration::from_millis(50)),
@@ -1673,7 +1676,7 @@ async fn tc023e_approval_wrong_run_id_rejected() {
     let ks = kernel.clone();
     let es = engine.clone();
     tokio::spawn(async move {
-        let _ = server::serve(ks, es, listener, "ui/dist", reg, false, false).await;
+        let _ = server::serve(ks, es, listener, "ui/dist", reg, false, false, false).await;
     });
     tokio::time::sleep(Duration::from_millis(150)).await;
 
