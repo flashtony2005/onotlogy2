@@ -931,19 +931,27 @@ async fn run_start(
 async fn ws_handler(
     ws: WebSocketUpgrade,
     State(st): State<Arc<AppState>>,
-    Extension(_auth): Extension<AuthUser>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<String>,
     Query(params): Query<WsParams>,
 ) -> Response {
-    ws.on_upgrade(move |socket| handle_ws(socket, st, id, params.after))
+    // 服务端视图钳制：WS 实时流与 REST timeline 同一套最小权限策略（不信任前端自提）。
+    let view = clamp_view(View::Developer, user.role);
+    ws.on_upgrade(move |socket| handle_ws(socket, st, id, params.after, view))
 }
 
 /// WS 主体：先补历史（含 `?after` 重连补齐），再增量推送匹配事件。
-async fn handle_ws(socket: WebSocket, st: Arc<AppState>, id: String, after: Option<String>) {
+async fn handle_ws(
+    socket: WebSocket,
+    st: Arc<AppState>,
+    id: String,
+    after: Option<String>,
+    view: View,
+) {
     let (mut sender, mut receiver) = socket.split();
 
-    // 历史补齐（run/agent 任一匹配）
-    let history = collect_history(&st, &id, after.as_deref()).await;
+    // 历史补齐（run/agent 任一匹配），按角色视图钳制
+    let history = collect_history(&st, &id, after.as_deref(), view).await;
     for dto in history {
         if sender
             .send(Message::Text(serde_json::to_string(&dto).unwrap()))
@@ -964,7 +972,10 @@ async fn handle_ws(socket: WebSocket, st: Arc<AppState>, id: String, after: Opti
                         if e.run_id.as_deref() == Some(id.as_str())
                             || e.agent_id.as_deref() == Some(id.as_str())
                         {
-                            let dto = TraceEventDto::from(e);
+                            // 服务端视图钳制：越权细节字段剥除（Executive 仅 Goal/Action）
+                            let Some(dto) = TraceEventDto::from_view(&e, view) else {
+                                continue;
+                            };
                             if sender
                                 .send(Message::Text(serde_json::to_string(&dto).unwrap()))
                                 .await
@@ -989,7 +1000,13 @@ async fn handle_ws(socket: WebSocket, st: Arc<AppState>, id: String, after: Opti
 }
 
 /// 收集历史事件（run 或 agent 匹配），去重排序，并按 after 游标截断（断线重连补齐）。
-async fn collect_history(st: &AppState, id: &str, after: Option<&str>) -> Vec<TraceEventDto> {
+/// 事件经 `TraceEventDto::from_view` 按角色视图钳制后下发。
+async fn collect_history(
+    st: &AppState,
+    id: &str,
+    after: Option<&str>,
+    view: View,
+) -> Vec<TraceEventDto> {
     let mut run = st
         .kernel
         .list_events(TraceQuery::for_run(id))
@@ -1015,7 +1032,10 @@ async fn collect_history(st: &AppState, id: &str, after: Option<&str>) -> Vec<Tr
     if let Some(start) = cut {
         merged = merged.split_off(start);
     }
-    merged.into_iter().map(TraceEventDto::from).collect()
+    merged
+        .into_iter()
+        .filter_map(|e| TraceEventDto::from_view(&e, view))
+        .collect()
 }
 
 /// 静态文件托管（SPA 兜底 index.html）。作为 Router::fallback，保留原始请求路径。

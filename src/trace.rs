@@ -93,6 +93,33 @@ impl From<TraceEvent> for TraceEventDto {
     }
 }
 
+impl TraceEventDto {
+    /// 视图感知构造（WS 实时流用）：执行服务端钳制，不信任前端自提权限。
+    /// - 仅 `Developer` 视图保留 reasoning/input/output；Operator/Executive 剥除细节字段
+    /// - `Executive` 视图仅保留 Goal/Action 事件（其余返回 None，调用方跳过）
+    ///
+    /// 与 `build_timeline` 的 REST 钳制规则保持一致（同一套最小权限策略）。
+    pub fn from_view(e: &TraceEvent, view: View) -> Option<Self> {
+        if matches!(view, View::Executive) && e.event_type != "Goal" && e.event_type != "Action" {
+            return None;
+        }
+        let detail = matches!(view, View::Developer);
+        Some(TraceEventDto {
+            id: e.id.clone(),
+            kind: e.kind.as_str().to_string(),
+            event_type: e.event_type.clone(),
+            object_refs: e.object_refs.clone(),
+            run_id: e.run_id.clone(),
+            agent_id: e.agent_id.clone(),
+            reasoning: if detail { e.reasoning.clone() } else { None },
+            input: if detail { e.input.clone() } else { None },
+            output: if detail { e.output.clone() } else { None },
+            confidence: e.confidence,
+            timestamp: e.timestamp.clone(),
+        })
+    }
+}
+
 /// 时间线中的单个事件（视图裁剪后的形态）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -296,5 +323,60 @@ mod tests {
         assert_eq!(json["events"][0]["objectRefs"][0], "001");
         assert!(json.get("run_id").is_none());
         assert!(json.get("human_approval").is_none());
+    }
+
+    /// WS 视图钳制：`from_view` 须与 REST `build_timeline` 同一套最小权限规则。
+    #[test]
+    fn ws_from_view_clamps_to_role() {
+        use crate::runtime::{TraceEvent, TraceKind};
+
+        // 一个带细节的推理事件（非 Goal/Action）
+        let reasoning_ev = TraceEvent {
+            id: "e1".into(),
+            kind: TraceKind::Cognitive,
+            event_type: "Reasoning".into(),
+            object_refs: vec!["001".into()],
+            run_id: Some("run_1".into()),
+            agent_id: Some("retention-agent".into()),
+            reasoning: Some("内部推理".into()),
+            input: Some(serde_json::json!({"x": 1})),
+            output: Some(serde_json::json!({"y": 2})),
+            confidence: Some(0.9),
+            timestamp: "1".into(),
+        };
+        // 一个 Goal 事件（Executive 允许保留，但仍应去细节）
+        let goal_ev = TraceEvent {
+            id: "e2".into(),
+            kind: TraceKind::Cognitive,
+            event_type: "Goal".into(),
+            object_refs: vec!["001".into()],
+            run_id: Some("run_1".into()),
+            agent_id: Some("retention-agent".into()),
+            reasoning: Some("目标推理".into()),
+            input: Some(serde_json::json!({"goal": "g"})),
+            output: Some(serde_json::json!({"ok": true})),
+            confidence: None,
+            timestamp: "2".into(),
+        };
+
+        // Developer：全量保留
+        let dev_r = TraceEventDto::from_view(&reasoning_ev, View::Developer).unwrap();
+        assert_eq!(dev_r.reasoning.as_deref(), Some("内部推理"));
+        assert!(dev_r.input.is_some());
+        assert!(dev_r.output.is_some());
+
+        // Operator：剥除细节字段，但仍保留事件
+        let op_r = TraceEventDto::from_view(&reasoning_ev, View::Operator).unwrap();
+        assert!(op_r.reasoning.is_none());
+        assert!(op_r.input.is_none());
+        assert!(op_r.output.is_none());
+
+        // Executive：非 Goal/Action 事件被丢弃
+        assert!(TraceEventDto::from_view(&reasoning_ev, View::Executive).is_none());
+        // Executive：Goal 事件保留但去细节
+        let exec_g = TraceEventDto::from_view(&goal_ev, View::Executive).unwrap();
+        assert_eq!(exec_g.event_type, "Goal");
+        assert!(exec_g.reasoning.is_none());
+        assert!(exec_g.output.is_none());
     }
 }

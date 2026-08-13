@@ -171,6 +171,7 @@ CREATE INDEX IF NOT EXISTS idx_session_user ON wb_session(user_id);
 
 | 版本 | 作者 | 日期 | 说明 |
 | --- | --- | --- | --- |
+| V0.4 | lushaohui | 2026-08-13 | **WS 视图钳制闭合**：`TraceEventDto::from_view(e, view)` 按角色钳制（Developer 全量；Operator/Executive 剥除 reasoning/input/output；Executive 仅保留 Goal/Action）；`ws_handler` 取真实 `AuthUser` → `clamp_view(View::Developer, role)`，历史补齐(`collect_history`)与实时增量(`handle_ws`)统一走 `from_view`，与 REST `timeline` 同一套最小权限策略。集成测试 TC-ws-a/b/c（Dev 全量 / Exec 钳制 / 无令牌 401）全绿，新增单测 `ws_from_view_clamps_to_role` | --- |
 | V0.3 | lushaohui | 2026-08-13 | **功能门落地**：`auth_layer` 中间件（401/无令牌/错令牌/过期/禁用）+ 登录限流注释 + `POST /auth/login`、`/auth/logout`、`/auth/me` 路由与 handler；受保护 handler 注入 `AuthUser` 并据能力矩阵判定（run/approval→Operator+，写 Evolution→Developer，读 Audit→Operator+）；`timeline` 服务端钳制 `?view=` 到角色上限（TC-auth-d 断言 `view=executive`）；`RunTimeline.view` 下发有效视图；`cmd_serve` 启动引导（env `WB_BOOTSTRAP_ADMIN_*` 或拒绝）+ `oaip user create-admin` 子命令；`LibSQLStorage::count_users`/`set_user_disabled`(级联清会话)。集成测试 TC-auth-a~g 全绿，原有 48 测试经 `enforce_auth=false`+合成 Developer 保持绿 | --- |
 | V0.2 | lushaohui | 2026-08-13 | 评审定稿：D1–D5 结论落表；补充建议（视图 rank / 去 FK / 登录限流）吸收；地基实现 `src/auth.rs` 完成（Role/View 钳制/LocalIdentityProvider/SessionStore/能力矩阵 + 单测），服务端中间件与路由待接 | --- | --- |
 | V0.1 | lushaohui | 2026-08-13 | 初稿：本地身份 + 会话令牌 + axum 中间件 + 三层角色能力矩阵 + 服务端视图钳制 + wb_user/wb_session DDL + TC 矩阵；列 5 项待确认分叉 |
