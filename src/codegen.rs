@@ -215,6 +215,36 @@ CREATE TABLE IF NOT EXISTS wb_session (
   expires_at TEXT NOT NULL                -- 过期时间（unix 秒，字符串数值比较）
 );
 CREATE INDEX IF NOT EXISTS idx_session_user ON wb_session(user_id);
+
+-- V0.7 运行态持久化（P0 风险「运行态全在内存」）：run 生命周期 + 待审批请求持久化。
+-- 内存 runs / ApprovalStore 仍服务热路径与 oneshot 唤醒；下表为持久真相源，支持跨重启恢复。
+CREATE TABLE IF NOT EXISTS wb_run (
+  id            TEXT PRIMARY KEY,        -- run_id
+  agent_id      TEXT NOT NULL,
+  goal          TEXT NOT NULL,
+  status        TEXT NOT NULL,           -- Running | Completed | Failed | Interrupted
+  human_approval INTEGER NOT NULL DEFAULT 0,
+  created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  finished_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_run_agent ON wb_run(agent_id);
+CREATE INDEX IF NOT EXISTS idx_run_status ON wb_run(status);
+
+CREATE TABLE IF NOT EXISTS wb_approval (
+  id          TEXT PRIMARY KEY,          -- req_id
+  run_id      TEXT NOT NULL,
+  agent_id    TEXT NOT NULL,
+  step_id     TEXT NOT NULL,             -- action@target_id
+  description TEXT,
+  state       TEXT NOT NULL,             -- Pending | Approved | Rejected | Expired
+  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resolved_by TEXT,                      -- 裁决人（AuthUser.id，预留）
+  resolved_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_appr_run ON wb_approval(run_id);
+CREATE INDEX IF NOT EXISTS idx_appr_state ON wb_approval(state);
 "#
     .to_string()
 }

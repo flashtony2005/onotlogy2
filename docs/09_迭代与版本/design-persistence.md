@@ -4,7 +4,7 @@
 | --- | --- |
 | 关联风险 | P0：`RunRecord`(server.rs:39) / `ApprovalStore`(planner.rs:311) / EventBus 全进程内，重启丢失 |
 | 目标版本 | V0.7 |
-| 状态 | 设计稿 · 未动工 |
+| 状态 | 已落地 · V0.7（提交 ec...persist） |
 | 作者 | lushaohui |
 
 ---
@@ -143,5 +143,6 @@ fn recover(state: &AppState) {
 
 | 版本 | 作者 | 日期 | 说明 |
 | --- | --- | --- | --- |
-| V0.2 | lushaohui | 2026-08-13 | 评审定稿：P1–P4 结论落表；补充建议（with_tx 前验证 libsql 事务行为、恢复分支简化）吸收；未动工，排期 Auth 之后 || --- | --- | --- | --- |
+| V0.3 | lushaohui | 2026-08-13 | 实现落地：canonical_schema 加 wb_run/wb_approval；storage 加 RunRecord/ApprovalRecord + insert/update/list/get + recover_persisted_state（Running→Interrupted、Pending→Expired 简化分支）；server 在 run_start 持久化 run、ServerApprover 持久化 approval、list_approvals 合并内存+DB、resolve_approval 持久化裁决、timeline DB 回退、启动时 recover() 重建 runs 映射；RunStatus::Interrupted + ApprovalState 持久互转。TC-persist-a~d 全绿（48 既有 + 7 auth 保持绿）。P4 with_tx 按评审结论**独立 PR**，本增量不做（见 §3.5 / TC-e） |
+| V0.2 | lushaohui | 2026-08-13 | 评审定稿：P1–P4 结论落表；补充建议（with_tx 前验证 libsql 事务行为、恢复分支简化）吸收；排期 Auth 之后 |
 | V0.1 | lushaohui | 2026-08-13 | 初稿：wb_run/wb_approval DDL + RunRecord/ApprovalStore 持久化映射 + 重启恢复（Interrupted/Expired 语义）+ 事务边界缓解 P1 + TC 矩阵；列 4 项分叉 |

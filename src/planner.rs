@@ -106,6 +106,8 @@ pub enum RunStatus {
     Running,
     Completed,
     Failed,
+    /// 进程崩溃未正常结束（重启恢复时由 Running 标记，区别于 Failed）。
+    Interrupted,
 }
 
 impl RunStatus {
@@ -114,6 +116,17 @@ impl RunStatus {
             RunStatus::Running => "Running",
             RunStatus::Completed => "Completed",
             RunStatus::Failed => "Failed",
+            RunStatus::Interrupted => "Interrupted",
+        }
+    }
+
+    /// 持久化字符串 → 状态（未知 → Interrupted，安全兜底，避免回退成 Running）。
+    pub fn from_db_str(s: &str) -> RunStatus {
+        match s {
+            "Running" => RunStatus::Running,
+            "Completed" => RunStatus::Completed,
+            "Failed" => RunStatus::Failed,
+            _ => RunStatus::Interrupted,
         }
     }
 }
@@ -292,6 +305,28 @@ pub enum ApprovalState {
     Rejected,
     /// 挂起超时（Planner 已按拒绝回退）：与人工拒绝（Rejected）区分，UI 不再显示幽灵待审批。
     Expired,
+}
+
+impl ApprovalState {
+    /// 状态 → 持久化字符串。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ApprovalState::Pending => "Pending",
+            ApprovalState::Approved => "Approved",
+            ApprovalState::Rejected => "Rejected",
+            ApprovalState::Expired => "Expired",
+        }
+    }
+
+    /// 持久化字符串 → 状态（未知 → Pending，安全兜底）。
+    pub fn from_db_str(s: &str) -> ApprovalState {
+        match s {
+            "Approved" => ApprovalState::Approved,
+            "Rejected" => ApprovalState::Rejected,
+            "Expired" => ApprovalState::Expired,
+            _ => ApprovalState::Pending,
+        }
+    }
 }
 
 /// 一条待审批请求（挂起态，供浏览器/HTTP 审批端点裁决后恢复运行）。
@@ -480,6 +515,18 @@ impl PolicyApprover for ServerApprover {
             description: step.description.clone(),
             state: ApprovalState::Pending,
         });
+        // 持久化待审批（DB 真相源；内存 store 仅服务 oneshot 唤醒，重启后虽无法唤醒但不影响审计/列表）
+        let _ = self
+            .kernel
+            .storage()
+            .insert_approval(
+                &req_id,
+                &self.run_id,
+                &self.agent_id,
+                &step_id,
+                &step.description,
+            )
+            .await;
         // 发 PendingApproval 认知事件（含 reqId，UI 据此渲染审批按钮）
         let _ = self
             .kernel

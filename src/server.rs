@@ -18,11 +18,11 @@ use crate::evolution::{
     EvolutionState, LearnedKnowledge, Pattern, Proposal, ProposalKind, ProposalStatus,
 };
 use crate::planner::{
-    ApprovalStore, AutoApprover, Planner, PlannerError, PolicyApprover, RunStatus, RuntimeConfig,
-    ServerApprover, generate_run_id,
+    ApprovalRequest, ApprovalState, ApprovalStore, AutoApprover, Planner, PlannerError,
+    PolicyApprover, RunStatus, RuntimeConfig, ServerApprover, generate_run_id,
 };
 use crate::runtime::RuntimeKernel;
-use crate::storage::{ApprovalAudit, TraceQuery};
+use crate::storage::{ApprovalAudit, ApprovalRecord, TraceQuery};
 use crate::trace::{RunTimeline, TraceEventDto, View, build_timeline};
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{Extension, OriginalUri, Path, Query, Request, State, WebSocketUpgrade};
@@ -103,6 +103,15 @@ impl ApiResponse<()> {
 /// WB 错误码字符串 → 数值（去掉 WB 前缀，未知 → 5000）。
 fn wb_code(s: &str) -> i32 {
     s.trim_start_matches("WB").parse().unwrap_or(5000)
+}
+
+/// 当前微秒时间戳（run/approval 持久化时间戳）。
+fn now_micros() -> String {
+    let micros = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros();
+    format!("{micros}")
 }
 
 // ── 请求参数 ──────────────────────────────────────────────────────────────
@@ -331,8 +340,29 @@ pub async fn serve_with_timeout(
     let app = router()
         .layer(middleware::from_fn(auth_layer))
         .layer(Extension(state.clone()))
-        .with_state(state);
+        .with_state(state.clone());
+    // 重启恢复：重建 runs 内存映射；崩溃残留 Running→Interrupted、orphan Pending→Expired。
+    recover(&state).await;
     axum::serve(listener, app).await
+}
+
+/// 重启恢复（V0.7 持久化）：重建 runs 内存映射；崩溃残留 Running→Interrupted、orphan Pending→Expired
+/// （简化分支：无"活 run"可恢复，故不做"run 存活→Pending 保留"死分支）。
+async fn recover(state: &Arc<AppState>) {
+    let runs = match state.kernel.storage().recover_persisted_state().await {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    let mut g = state.runs.lock().unwrap();
+    for r in runs {
+        g.insert(
+            r.id.clone(),
+            RunRecord {
+                status: RunStatus::from_db_str(&r.status),
+                human_approval: r.human_approval,
+            },
+        );
+    }
 }
 
 /// 认证中间件（V0.7）：从 `Authorization: Bearer <token>` 解析会话，注入 `AuthUser` 扩展。
@@ -506,9 +536,14 @@ async fn timeline(
         .and_then(|e| e.agent_id.clone())
         .unwrap_or_default();
     let mut tl = build_timeline(events, run_id.clone(), agent_id, view);
-    // 用内存态运行记录覆盖状态（捕捉 WB2004/2005 失败）
+    // 用运行记录覆盖状态：内存优先，重启后内存为空则回退 DB（捕捉 WB2004/2005 失败）。
     if let Some(rec) = st.runs.lock().unwrap().get(&run_id) {
         tl.status = rec.status.as_str().to_string();
+        if rec.human_approval {
+            tl.human_approval = "Required".to_string();
+        }
+    } else if let Ok(Some(rec)) = st.kernel.storage().get_run(&run_id).await {
+        tl.status = rec.status.clone();
         if rec.human_approval {
             tl.human_approval = "Required".to_string();
         }
@@ -722,7 +757,19 @@ async fn list_approvals(
     if !user.can_read_audit() {
         return forbidden("当前角色无权读取审批（需 Operator 及以上）");
     }
-    ApiResponse::ok(st.store.list_for_run(&run_id)).into_response()
+    // 合并：DB 持久记录（跨重启）+ 内存 store（live 唤醒状态），按 req_id 去重，内存优先。
+    let mut by_id: HashMap<String, ApprovalRequest> = HashMap::new();
+    if let Ok(rows) = st.kernel.storage().list_approvals_for_run(&run_id).await {
+        for r in rows {
+            by_id.insert(r.id.clone(), approval_record_to_request(&r));
+        }
+    }
+    for req in st.store.list_for_run(&run_id) {
+        by_id.insert(req.req_id.clone(), req);
+    }
+    let mut list: Vec<ApprovalRequest> = by_id.into_values().collect();
+    list.sort_by(|a, b| a.req_id.cmp(&b.req_id));
+    ApiResponse::ok(list).into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -753,6 +800,13 @@ async fn resolve_approval(
         "approve" | "yes" | "true"
     );
     if st.store.resolve(&req_id, approve) {
+        // 持久化裁决（DB 真相源；resolved_by 取当前操作人 id）。
+        let decision = if approve { "Approved" } else { "Rejected" };
+        let _ = st
+            .kernel
+            .storage()
+            .update_approval_state(&req_id, decision, Some(&user.id), Some(&now_micros()))
+            .await;
         ApiResponse::ok(json!({
             "reqId": req_id,
             "decision": if approve { "Approved" } else { "Rejected" }
@@ -760,6 +814,18 @@ async fn resolve_approval(
         .into_response()
     } else {
         ApiResponse::error(404, "审批请求不存在或已裁决").into_response()
+    }
+}
+
+/// 将持久审批记录映射为 API `ApprovalRequest`（state 由字符串还原）。
+fn approval_record_to_request(r: &ApprovalRecord) -> ApprovalRequest {
+    ApprovalRequest {
+        req_id: r.id.clone(),
+        run_id: r.run_id.clone(),
+        agent_id: r.agent_id.clone(),
+        step_id: r.step_id.clone(),
+        description: r.description.clone(),
+        state: ApprovalState::from_db_str(&r.state),
     }
 }
 
@@ -794,6 +860,12 @@ async fn run_start(
             human_approval: false,
         },
     );
+    // 持久化 run（DB 真相源，跨重启可恢复状态）。
+    let _ = st
+        .kernel
+        .storage()
+        .insert_run(&run_id, &agent_id, &body.goal)
+        .await;
 
     let kernel = st.kernel.clone();
     let engine = st.engine.clone();
@@ -838,6 +910,12 @@ async fn run_start(
                 human_approval: false,
             },
         };
+        // 持久化终态（与内存映射并行）。
+        let _ = st2
+            .kernel
+            .storage()
+            .update_run_status(&rid, rec.status.as_str(), Some(&now_micros()))
+            .await;
         st2.runs.lock().unwrap().insert(rid, rec);
     });
 
