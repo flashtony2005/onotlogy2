@@ -185,8 +185,8 @@ struct Effect {
 |-------|------|------|
 | 0 | Context / Fiber / Effect / Relation 四 Primitive + 状态机 | kernel 单测全绿 |
 | 1 | Scheduler / Lifecycle / Effect Ledger / Compensation / Persistence | 删除用户闭环端到端 |
-| 2 | Service / Capability / Policy / Task（组合层） | 声明式动作经 Fiber 执行 |
-| 3 | Planner / Agent / Memory / Approval / Human-in-the-loop | 现有 run_goal 迁移到 Fiber 模型 |
+| 2 | Service / Capability / Policy / Task（组合层） | 声明式动作经 Fiber 执行（✅ 已落地 ba5cd50） |
+| 3 | Planner / Agent / Memory / Approval / Human-in-the-loop | 现有 run_goal 迁移到 Fiber 模型；**承接 Phase 2 移交项**：① Task.expected_relations 完成判定（规划产物）② Capability input/output schema 校验 ③ Service 绑定 Context + 长生命周期 Fiber |
 | 4 | Temporal World（as_of / replay / diff / event sourcing） | 时间旅行查询 |
 | 5 | Ontology Compiler / GraphRAG / World Model | 语义投影 |
 | 6 | Self-Evolving Agent | 闭环自治 |
