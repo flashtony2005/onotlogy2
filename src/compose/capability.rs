@@ -25,6 +25,8 @@ pub struct Capability {
     /// 提交成功后自动投影的 Relation：(predicate, target)。
     /// source 取 args["target"]（无则用 capability 名）。
     pub projection: Option<(String, String)>,
+    /// 必填参数（schema 校验：step 前检查 args 缺参 → Deny）。
+    pub required_params: Vec<String>,
 }
 
 impl Capability {
@@ -36,6 +38,7 @@ impl Capability {
             inverse: None,
             policy: Policy::default(),
             projection: None,
+            required_params: Vec::new(),
         }
     }
 
@@ -63,6 +66,11 @@ impl Capability {
         target: impl Into<String>,
     ) -> Self {
         self.projection = Some((predicate.into(), target.into()));
+        self
+    }
+
+    pub fn requiring(mut self, params: &[&str]) -> Self {
+        self.required_params = params.iter().map(|s| s.to_string()).collect();
         self
     }
 }

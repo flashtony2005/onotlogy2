@@ -12,6 +12,25 @@ use crate::kernel::fiber::{FiberId, FiberState, WaitPattern};
 use crate::kernel::relation::Relation;
 use crate::kernel::{CompensationEngine, ContextId, Effect, Kernel, KernelError};
 
+/// 期望关系（D5 目标函数）：Task 完成时世界应达成的状态。
+/// Agent 不信任自己的执行——重新观察世界确认目标达成。
+#[derive(Debug, Clone)]
+pub struct ExpectedRelation {
+    /// None = 任意 source。
+    pub source: Option<String>,
+    pub predicate: String,
+    /// None = 任意 target。
+    pub target: Option<String>,
+}
+
+impl ExpectedRelation {
+    pub fn matches(&self, r: &crate::kernel::Relation) -> bool {
+        r.predicate == self.predicate
+            && self.source.as_ref().map(|s| s == &r.source).unwrap_or(true)
+            && self.target.as_ref().map(|t| t == &r.target).unwrap_or(true)
+    }
+}
+
 /// 任务声明（语义对象；每个执行实例 = 一个 Fiber）。
 #[derive(Debug, Clone)]
 pub struct Task {
@@ -19,6 +38,8 @@ pub struct Task {
     pub goal: String,
     /// 该任务允许使用的能力（Task 边界约束）。
     pub allowed_capabilities: Vec<String>,
+    /// 完成判定依据（全部满足 → COMPLETED）。
+    pub expected_relations: Vec<ExpectedRelation>,
 }
 
 impl Task {
@@ -27,11 +48,25 @@ impl Task {
             id: id.into(),
             goal: goal.into(),
             allowed_capabilities: Vec::new(),
+            expected_relations: Vec::new(),
         }
     }
 
     pub fn allowing(mut self, caps: &[&str]) -> Self {
         self.allowed_capabilities = caps.iter().map(|s| s.to_string()).collect();
+        self
+    }
+
+    /// 声明完成时世界应达成的关系（(predicate, target)；source 任意）。
+    pub fn expecting(mut self, rels: &[(&str, &str)]) -> Self {
+        self.expected_relations = rels
+            .iter()
+            .map(|(p, t)| ExpectedRelation {
+                source: None,
+                predicate: p.to_string(),
+                target: Some(t.to_string()),
+            })
+            .collect();
         self
     }
 }
@@ -87,6 +122,17 @@ impl<'k> TaskExecutor<'k> {
             .ok_or(KernelError::FiberNotFound(fiber))?;
         if f.state != FiberState::Running {
             return Err(KernelError::FiberNotRunning("step".into()));
+        }
+
+        // 0) 必填参数校验（schema；缺参 = 业务拒绝）
+        for p in &capability.required_params {
+            if args.get(p).is_none() {
+                let reason = format!("缺少必填参数: {p}");
+                self.kernel
+                    .record_policy_denied(fiber, &capability.name, &reason);
+                self.kernel.advance(fiber, FiberState::Failed)?;
+                return Ok(StepOutcome::Denied(reason));
+            }
         }
 
         // 1) Policy 校验
@@ -147,6 +193,24 @@ impl<'k> TaskExecutor<'k> {
         }
 
         Ok(StepOutcome::Committed)
+    }
+
+    /// D5 完成判定：expected_relations 全部满足 → Fiber COMPLETED；否则维持 RUNNING。
+    pub fn check_complete(&mut self, fiber: FiberId, task: &Task) -> Result<bool, KernelError> {
+        let ctx = self
+            .kernel
+            .fiber(fiber)
+            .map(|f| f.context)
+            .ok_or(KernelError::FiberNotFound(fiber))?;
+        let all = task.expected_relations.iter().all(|e| {
+            self.kernel
+                .relations()
+                .any(|r| r.context == ctx && r.is_current(self.kernel.now()) && e.matches(r))
+        });
+        if all {
+            self.kernel.advance(fiber, FiberState::Completed)?;
+        }
+        Ok(all)
     }
 
     /// Fiber 失败 → P1 自动逆序补偿（能力声明的 inverse 生效）。

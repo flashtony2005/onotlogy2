@@ -34,4 +34,19 @@ impl Service {
     pub fn capability_names(&self) -> impl Iterator<Item = &String> {
         self.capabilities.keys()
     }
+
+    /// 绑定到 Context：记录 `Service --serves--> Context` 关系（③ 服务挂载语义）。
+    pub fn bind(
+        &self,
+        kernel: &mut crate::kernel::Kernel,
+        ctx: crate::kernel::ContextId,
+    ) -> Result<crate::kernel::RelationId, crate::kernel::KernelError> {
+        kernel.relate(crate::kernel::Relation::new(
+            ctx,
+            format!("service:{}", self.id),
+            "serves",
+            format!("ctx:{}", ctx.0),
+            kernel.now(),
+        ))
+    }
 }
