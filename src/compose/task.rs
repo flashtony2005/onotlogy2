@@ -11,6 +11,7 @@ use super::policy::PolicyVerdict;
 use crate::kernel::fiber::{FiberId, FiberState, WaitPattern};
 use crate::kernel::relation::Relation;
 use crate::kernel::{CompensationEngine, ContextId, Effect, Kernel, KernelError};
+use crate::runtime_exec::{CompensationExecutor as _, EffectExecutor as _};
 
 /// 期望关系（D5 目标函数）：Task 完成时世界应达成的状态。
 /// Agent 不信任自己的执行——重新观察世界确认目标达成。
@@ -82,14 +83,35 @@ pub enum StepOutcome {
     Denied(String),
 }
 
-/// Task 执行器：驱动 Fiber 沿「Policy → 审批 → Effect → 投影」链路推进。
+/// Task 执行器：驱动 Fiber 沿「Policy → 审批 → Effect → 执行 → 投影」链路推进。
 pub struct TaskExecutor<'k> {
     kernel: &'k mut Kernel,
+    /// 世界效应声明（Phase 5：注入后 Effect 真实改变 World；None = 旧 projection 模拟）。
+    /// 执行器在方法内临时构造（借用 kernel），避免双重 &mut。
+    effect_defs: Option<Vec<crate::ontology::RuntimeDefinition>>,
+    /// D4 分离：true 时补偿走 RelationCompensationExecutor；false 回退 CompensationEngine。
+    use_relation_compensation: bool,
 }
 
 impl<'k> TaskExecutor<'k> {
     pub fn new(kernel: &'k mut Kernel) -> Self {
-        Self { kernel }
+        Self {
+            kernel,
+            effect_defs: None,
+            use_relation_compensation: false,
+        }
+    }
+
+    /// 注入世界效应声明（RelationEffectExecutor 生效：Effect 真实改变 World）。
+    pub fn with_effect_defs(mut self, defs: Vec<crate::ontology::RuntimeDefinition>) -> Self {
+        self.effect_defs = Some(defs);
+        self
+    }
+
+    /// D4 分离：补偿走 RelationCompensationExecutor（撤销真实关系）。
+    pub fn with_relation_compensation(mut self) -> Self {
+        self.use_relation_compensation = true;
+        self
     }
 
     /// 在指定 Context 派生 Task Fiber（Task 声明 → 运行实例）。
@@ -167,29 +189,54 @@ impl<'k> TaskExecutor<'k> {
         }
 
         // 2) 提交 Effect（能力声明的动作 + 可逆性 + 补偿）
-        let effect = Effect::new(
+        let mut effect = Effect::new(
             capability.action.clone(),
             args.clone(),
             capability.reversibility,
             capability.inverse.clone(),
             self.kernel.now(),
         );
-        self.kernel.emit(fiber, effect)?;
+        effect.fiber = fiber; // executor 以 fiber 定位作用域（emit 也会重设）
 
-        // 3) Relation 投影（副作用的事实记录）
-        if let Some((pred, target)) = &capability.projection {
-            let source = args
-                .get("target")
-                .and_then(|v| v.as_str())
-                .unwrap_or(&capability.name)
-                .to_string();
+        // 3) 真实世界变化（Phase 5：Effect ≠ Projection）
+        //    有执行器 → executor 先执行（写 World，执行成功才 emit 记录）；
+        //    无执行器 → 回退 capability.projection（旧模拟，兼容既有契约）。
+        if let Some(defs) = &self.effect_defs {
+            let mut ex =
+                crate::runtime_exec::RelationEffectExecutor::new(self.kernel, defs.clone());
+            let result = ex
+                .execute(&effect)
+                .map_err(|e| KernelError::Closed(format!("Effect 执行失败: {e}")))?;
+            // D4：撤销清单写入 inverse payload——补偿时知道撤销哪些关系
+            if let Some(inv) = &mut effect.inverse {
+                inv.payload = serde_json::json!({ "relations": result.relations });
+            }
+            self.kernel.emit(fiber, effect)?;
             let ctx = self
                 .kernel
                 .fiber(fiber)
                 .map(|f| f.context)
                 .ok_or(KernelError::FiberNotFound(fiber))?;
-            self.kernel
-                .relate(Relation::new(ctx, source, pred, target, self.kernel.now()))?;
+            for (source, pred, target) in result.relations {
+                self.kernel
+                    .relate(Relation::new(ctx, source, pred, target, self.kernel.now()))?;
+            }
+        } else {
+            self.kernel.emit(fiber, effect)?;
+            if let Some((pred, target)) = &capability.projection {
+                let source = args
+                    .get("target")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&capability.name)
+                    .to_string();
+                let ctx = self
+                    .kernel
+                    .fiber(fiber)
+                    .map(|f| f.context)
+                    .ok_or(KernelError::FiberNotFound(fiber))?;
+                self.kernel
+                    .relate(Relation::new(ctx, source, pred, target, self.kernel.now()))?;
+            }
         }
 
         Ok(StepOutcome::Committed)
@@ -213,9 +260,35 @@ impl<'k> TaskExecutor<'k> {
         Ok(all)
     }
 
-    /// Fiber 失败 → P1 自动逆序补偿（能力声明的 inverse 生效）。
+    /// Fiber 失败 → 逆序补偿。
+    /// D4 分离（use_relation_compensation）→ RelationCompensationExecutor 撤销真实关系；
+    /// 否则回退 CompensationEngine（P1 Compensator 路径）。
     pub fn compensate(&mut self, fiber: FiberId) -> Result<(), KernelError> {
-        CompensationEngine::new(self.kernel).compensate(fiber)
+        if !self.use_relation_compensation {
+            return CompensationEngine::new(self.kernel).compensate(fiber);
+        }
+        // 逆序遍历已提交可补偿 Effect 的 inverse（payload 携带撤销清单）
+        let inverses: Vec<(String, Value)> = {
+            let f = self
+                .kernel
+                .fiber(fiber)
+                .ok_or(KernelError::FiberNotFound(fiber))?;
+            f.ledger
+                .reverse_order()
+                .filter_map(|id| self.kernel.effect(*id))
+                .filter(|e| e.is_compensatable())
+                .filter_map(|e| e.inverse.clone())
+                .map(|c| (c.action, c.payload))
+                .collect()
+        };
+        self.kernel.advance(fiber, FiberState::Compensating)?;
+        let mut ex = crate::runtime_exec::RelationCompensationExecutor::new(self.kernel);
+        for (action, payload) in inverses {
+            let comp = crate::kernel::Compensation { action, payload };
+            ex.compensate(&comp)
+                .map_err(|e| KernelError::Closed(format!("补偿失败（升级人工）: {e}")))?;
+        }
+        self.kernel.advance(fiber, FiberState::Compensated)
     }
 
     /// 便捷：把 RUNNING fiber 标记失败（业务动作执行失败时调用）。

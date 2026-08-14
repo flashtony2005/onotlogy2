@@ -10,6 +10,14 @@
 
 use serde_json::Value;
 
+pub mod entity;
+pub mod subgraph;
+
+pub use entity::{
+    EntityData, EntityDataProvider, EntityView, NullEntityDataProvider, derive_entities,
+};
+pub use subgraph::{Subgraph, subgraph};
+
 use crate::kernel::persistence::{
     PersistError, Persistence, StoredContext, StoredEvent, StoredRelation,
 };

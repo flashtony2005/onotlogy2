@@ -53,6 +53,8 @@ pub struct AgentLoop<'k> {
     agent: &'k mut Agent,
     services: &'k [Service],
     engine: &'k dyn CognitiveEngine,
+    /// Phase 5：世界效应声明（注入后 Effect 真实改变 World，D5 重投影闭环）。
+    effect_defs: Option<Vec<crate::ontology::RuntimeDefinition>>,
 }
 
 impl<'k> AgentLoop<'k> {
@@ -67,6 +69,23 @@ impl<'k> AgentLoop<'k> {
             agent,
             services,
             engine,
+            effect_defs: None,
+        }
+    }
+
+    /// 注入世界效应声明（RelationEffectExecutor 生效：Effect 真实改变 World）。
+    pub fn with_effect_defs(mut self, defs: Vec<crate::ontology::RuntimeDefinition>) -> Self {
+        self.effect_defs = Some(defs);
+        self
+    }
+
+    fn task_executor(&mut self) -> TaskExecutor<'_> {
+        let tx = TaskExecutor::new(self.kernel);
+        match &self.effect_defs {
+            Some(defs) => tx
+                .with_effect_defs(defs.clone())
+                .with_relation_compensation(),
+            None => tx,
         }
     }
 
@@ -95,7 +114,7 @@ impl<'k> AgentLoop<'k> {
             Ok(Some(d)) => d,
             Ok(None) => {
                 // 无更多动作 → D5 完成判定
-                let done = TaskExecutor::new(self.kernel).check_complete(fiber, task)?;
+                let done = self.task_executor().check_complete(fiber, task)?;
                 return Ok(if done {
                     LoopOutcome::Completed
                 } else {
@@ -119,7 +138,8 @@ impl<'k> AgentLoop<'k> {
                 decision.capability
             )));
         };
-        match TaskExecutor::new(self.kernel).step(fiber, cap, decision.args)? {
+        let outcome = self.task_executor().step(fiber, cap, decision.args)?;
+        match outcome {
             StepOutcome::Committed => {
                 // 沉淀记忆（D3：Effect 成功后认知状态更新）
                 self.agent
@@ -130,7 +150,7 @@ impl<'k> AgentLoop<'k> {
             StepOutcome::Waiting => Ok(LoopOutcome::Waiting),
             StepOutcome::Denied(reason) => {
                 // 已 FAILED（空补偿链）→ 明确走补偿收尾
-                let _ = TaskExecutor::new(self.kernel).compensate(fiber);
+                let _ = self.task_executor().compensate(fiber);
                 Ok(LoopOutcome::Denied(reason))
             }
         }
@@ -143,7 +163,7 @@ impl<'k> AgentLoop<'k> {
         task: &Task,
         input: Value,
     ) -> Result<LoopOutcome, KernelError> {
-        let fiber = TaskExecutor::new(self.kernel).spawn(ctx, task, input)?;
+        let fiber = self.task_executor().spawn(ctx, task, input)?;
         self.resume_until_done(fiber, task)
     }
 

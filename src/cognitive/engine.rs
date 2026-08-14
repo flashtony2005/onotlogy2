@@ -27,7 +27,7 @@ pub struct Decision {
     pub confidence: f64,
 }
 
-/// 观察视图（决策输入）：世界快照 + 相关关系 + 召回记忆 + 可用能力。
+/// 观察视图（决策输入）：世界快照 + 实体 + 子图 + 相关关系 + 召回记忆 + 可用能力。
 #[derive(Debug, Clone)]
 pub struct AgentView {
     pub goal: String,
@@ -39,6 +39,10 @@ pub struct AgentView {
     pub memory: Vec<MemoryItem>,
     /// 可用能力名（Service 提供）。
     pub capabilities: Vec<String>,
+    /// 实体视图（Phase 5 · D2：World Model 投影）。
+    pub entities: Vec<crate::world::EntityView>,
+    /// 语义子图（Phase 5 · D3：图遍历检索）。
+    pub subgraph: Option<crate::world::Subgraph>,
 }
 
 impl AgentView {
