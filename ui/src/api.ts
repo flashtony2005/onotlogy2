@@ -42,8 +42,16 @@ async function fetchWithTimeout(input: string, init?: RequestInit): Promise<Resp
 
 async function unwrap<T>(res: Response): Promise<T> {
   // U3：先判 HTTP 状态；响应体非 JSON（网关/500 HTML）时兜底可读错误，不抛 SyntaxError。
+  // B3：非 2xx 也尝试解析信封的 msg（如登录限流 429 的「请 X 分钟后再试」），丢失可读信息。
   if (!res.ok) {
-    throw new Error(`请求失败 (HTTP ${res.status})`)
+    let msg = `请求失败 (HTTP ${res.status})`
+    try {
+      const j = (await res.json()) as ApiResponse<unknown>
+      if (j.msg) msg = j.msg
+    } catch {
+      /* 非 JSON 响应：保留通用错误 */
+    }
+    throw new Error(msg)
   }
   let json: ApiResponse<T>
   try {

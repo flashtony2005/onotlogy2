@@ -23,6 +23,15 @@
 ## 4. 详细设计/内容
 > 产品版本采用 V0.1~V0.6 路线（见 sprint-plan.md），以下按产品里程碑记录，固定三级分类：新增功能 / Bug 修复 / 优化调整。
 
+## V0.10.0（模块化重构 + 认证收口 + 测试基建，2026-08-14）
+### 优化
+1. 长文件模块化：planner(1855行)/storage(1662)/server(1371) 拆目录模块共 22 文件；odl 去重；App.tsx 拆 4 组件
+2. V0.7 认证收口：恢复 `/auth/me` + 静态 fallback；UI 登录链路（token sessionStorage + Bearer + WS `?token=`）
+3. 安全：/graph /trace 角色钳制、登录限流（5 次锁 5 分钟）、会话令牌 SHA-256 哈希、LIKE 通配符转义
+4. 正确性：update 原子递增、link 事务化、WS 订阅-缓冲-补历史、审批超时落库、知识按 (类型,动作) 键控
+5. 测试：v0_3(3084行) 按领域拆 5 文件；tests/common 统一 FakeEngine/http_call/ODL 常量（4 文件复用）
+6. 工程：版本号统一 0.9.0；pre-commit 质量门禁（.githooks，fmt/clippy/test）
+
 ## V0.9.0（ToolBackend 缝 + 流水线闸门，2026-08-14）
 ### 新增
 1. `ToolBackend` / `ActionHook`：出世界执行与 pre/post 闸门；默认 `NullBackend` 不影响 CRM

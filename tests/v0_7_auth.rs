@@ -3,6 +3,9 @@
 //! 验证「服务端强制认证 + 角色能力门禁 + 视图钳制」：无令牌/错令牌 401，越权角色 403，
 //! 前端 `?view=` 被钳制到角色上限，登录/登出/禁用生命周期正确。
 
+mod common;
+use common::*;
+
 use async_trait::async_trait;
 use openaip_os::agent::{AgentEngine, AgentError, Context, Decision};
 use openaip_os::auth::{IdentityProvider, LocalIdentityProvider};
@@ -13,8 +16,7 @@ use serde_json::{Value, json};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 
 /// 测试用空引擎（认证测试不触发真实 Planner；401/403 在引擎前返回）。
 struct NoopEngine;
@@ -29,54 +31,10 @@ impl AgentEngine for NoopEngine {
     }
 }
 
-/// 原始 HTTP 调用（带可选 Bearer 令牌）。
-async fn http_call(
-    addr: SocketAddr,
-    method: &str,
-    path: &str,
-    body: Option<&str>,
-    token: Option<&str>,
-) -> (u16, String) {
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let auth_line = token
-        .map(|t| format!("Authorization: Bearer {t}\r\n"))
-        .unwrap_or_default();
-    let req = match body {
-        Some(b) => format!(
-            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\n{auth_line}Content-Length: {}\r\n\r\n{b}",
-            b.len()
-        ),
-        None => format!(
-            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n{auth_line}\r\n"
-        ),
-    };
-    stream.write_all(req.as_bytes()).await.unwrap();
-    let mut buf = Vec::new();
-    let _ = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut buf)).await;
-    let text = String::from_utf8_lossy(&buf);
-    let (head, rest) = text.split_once("\r\n\r\n").unwrap_or(("", ""));
-    let status: u16 = head
-        .lines()
-        .next()
-        .and_then(|l| l.split_whitespace().nth(1))
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-    let cl = head.lines().find_map(|l| {
-        l.to_ascii_lowercase()
-            .strip_prefix("content-length: ")
-            .and_then(|v| v.trim().parse::<usize>().ok())
-    });
-    let body = match cl {
-        Some(n) => rest.get(..n).unwrap_or(rest).to_string(),
-        None => rest.to_string(),
-    };
-    (status, body)
-}
-
 /// 登录并返回 (status, token)。
 async fn login(addr: SocketAddr, username: &str, password: &str) -> (u16, Option<String>) {
     let body = json!({ "username": username, "password": password }).to_string();
-    let (st, resp) = http_call(addr, "POST", "/api/v1/wb/auth/login", Some(&body), None).await;
+    let (st, resp) = http_call_auth(addr, "POST", "/api/v1/wb/auth/login", Some(&body), None).await;
     if st == 200 {
         let v: Value = serde_json::from_str(&resp).unwrap();
         (st, v["data"]["token"].as_str().map(|s| s.to_string()))
@@ -128,32 +86,10 @@ async fn spawn_auth_server() -> (SocketAddr, LibSQLStorage) {
 
 // ── TC-auth-a：无令牌访问受保护端点 → 401 ───────────────────────────────
 
-fn retain_registry() -> openaip_os::action::ActionRegistry {
-    openaip_os::action::ActionRegistry::from_ir(
-        &openaip_os::parse_odl(
-            r#"
-object Customer:
-  properties:
-    name: string
-    level: string
-  actions:
-    retain:
-      creates:
-        - type: RetentionTask
-          data:
-            title: "客户挽留计划"
-            customer: self
-          link: needs_retention
-"#,
-        )
-        .expect("retain ODL"),
-    )
-}
-
 #[tokio::test]
 async fn tc_auth_a_no_token_401() {
     let (addr, _s) = spawn_auth_server().await;
-    let (st, _) = http_call(
+    let (st, _) = http_call_auth(
         addr,
         "POST",
         "/api/v1/wb/agent/run",
@@ -168,7 +104,7 @@ async fn tc_auth_a_no_token_401() {
 #[tokio::test]
 async fn tc_auth_b_wrong_token_401() {
     let (addr, _s) = spawn_auth_server().await;
-    let (st, _) = http_call(
+    let (st, _) = http_call_auth(
         addr,
         "POST",
         "/api/v1/wb/agent/run",
@@ -185,7 +121,7 @@ async fn tc_auth_c_executive_run_forbidden() {
     let (addr, _s) = spawn_auth_server().await;
     let (_, token) = login(addr, "exec", "execpw").await;
     let token = token.expect("exec 应登录成功");
-    let (st, _) = http_call(
+    let (st, _) = http_call_auth(
         addr,
         "POST",
         "/api/v1/wb/agent/run",
@@ -202,7 +138,7 @@ async fn tc_auth_d_view_clamped_to_role() {
     let (addr, _s) = spawn_auth_server().await;
     let (_, token) = login(addr, "exec", "execpw").await;
     let token = token.expect("exec 应登录成功");
-    let (st, body) = http_call(
+    let (st, body) = http_call_auth(
         addr,
         "GET",
         "/api/v1/wb/agent/run/anyrun/timeline?view=developer",
@@ -228,7 +164,7 @@ async fn tc_auth_e_login_ok_and_token_works() {
     let (st, token) = login(addr, "admin", "adminpw").await;
     assert_eq!(st, 200);
     let token = token.expect("admin 应拿到令牌");
-    let (st_me, body) = http_call(addr, "GET", "/api/v1/wb/auth/me", None, Some(&token)).await;
+    let (st_me, body) = http_call_auth(addr, "GET", "/api/v1/wb/auth/me", None, Some(&token)).await;
     assert_eq!(st_me, 200);
     let v: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(v["data"]["role"], "developer");
@@ -240,9 +176,10 @@ async fn tc_auth_f_logout_invalidates_token() {
     let (addr, _s) = spawn_auth_server().await;
     let (_, token) = login(addr, "admin", "adminpw").await;
     let token = token.expect("admin 应拿到令牌");
-    let (st_lo, _) = http_call(addr, "POST", "/api/v1/wb/auth/logout", None, Some(&token)).await;
+    let (st_lo, _) =
+        http_call_auth(addr, "POST", "/api/v1/wb/auth/logout", None, Some(&token)).await;
     assert_eq!(st_lo, 200);
-    let (st_reuse, _) = http_call(addr, "GET", "/api/v1/wb/auth/me", None, Some(&token)).await;
+    let (st_reuse, _) = http_call_auth(addr, "GET", "/api/v1/wb/auth/me", None, Some(&token)).await;
     assert_eq!(st_reuse, 401);
 }
 
@@ -269,7 +206,7 @@ async fn tc_auth_g_disabled_user_token_401() {
     let u = storage.get_user_by_username("du").await.unwrap().unwrap();
     storage.set_user_disabled(&u.id, true).await.unwrap();
     // 复用旧令牌 → 401
-    let (st_reuse, _) = http_call(addr, "GET", "/api/v1/wb/auth/me", None, Some(&token)).await;
+    let (st_reuse, _) = http_call_auth(addr, "GET", "/api/v1/wb/auth/me", None, Some(&token)).await;
     assert_eq!(st_reuse, 401);
 }
 
@@ -291,7 +228,7 @@ async fn tc_auth_h_graph_clamped_to_role() {
     // Executive：200，但节点不含 data
     let (_, exec_token) = login(addr, "exec", "execpw").await;
     let exec_token = exec_token.expect("exec 应登录成功");
-    let (st, body) = http_call(addr, "GET", "/api/v1/wb/graph", None, Some(&exec_token)).await;
+    let (st, body) = http_call_auth(addr, "GET", "/api/v1/wb/graph", None, Some(&exec_token)).await;
     assert_eq!(st, 200);
     let v: Value = serde_json::from_str(&body).unwrap();
     let node = &v["data"]["nodes"][0];
@@ -305,7 +242,8 @@ async fn tc_auth_h_graph_clamped_to_role() {
     // Developer（admin）：节点含全量 data
     let (_, admin_token) = login(addr, "admin", "adminpw").await;
     let admin_token = admin_token.expect("admin 应登录成功");
-    let (st2, body2) = http_call(addr, "GET", "/api/v1/wb/graph", None, Some(&admin_token)).await;
+    let (st2, body2) =
+        http_call_auth(addr, "GET", "/api/v1/wb/graph", None, Some(&admin_token)).await;
     assert_eq!(st2, 200);
     let v2: Value = serde_json::from_str(&body2).unwrap();
     assert_eq!(v2["data"]["nodes"][0]["data"]["balance"], json!(99999.0));
@@ -335,7 +273,7 @@ async fn tc_auth_i_trace_list_clamped_to_role() {
     // Developer：能看到事件且带细节
     let (_, admin_token) = login(addr, "admin", "adminpw").await;
     let admin_token = admin_token.expect("admin 应登录成功");
-    let (st, body) = http_call(
+    let (st, body) = http_call_auth(
         addr,
         "GET",
         "/api/v1/wb/agent/trace",
@@ -355,7 +293,7 @@ async fn tc_auth_i_trace_list_clamped_to_role() {
     // Executive：非 Goal/Action 事件被钳制过滤（列表为空）
     let (_, exec_token) = login(addr, "exec", "execpw").await;
     let exec_token = exec_token.expect("exec 应登录成功");
-    let (st2, body2) = http_call(
+    let (st2, body2) = http_call_auth(
         addr,
         "GET",
         "/api/v1/wb/agent/trace",
@@ -396,6 +334,6 @@ async fn tc_auth_k_session_token_hashed_at_rest() {
     let row = storage.get_session(&token).await.unwrap();
     assert!(row.is_none(), "库中不得存明文令牌（M4 哈希存储）");
     // 令牌本身仍可正常鉴权（内部哈希比对）
-    let (st, _) = http_call(addr, "GET", "/api/v1/wb/auth/me", None, Some(&token)).await;
+    let (st, _) = http_call_auth(addr, "GET", "/api/v1/wb/auth/me", None, Some(&token)).await;
     assert_eq!(st, 200, "哈希存储不应破坏令牌校验");
 }

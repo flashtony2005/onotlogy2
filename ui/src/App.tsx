@@ -210,7 +210,7 @@ export default function App() {
             <span className="logo">◈</span>
             <div>
               <h1>OpenAIP-OS · Agent 认知观察</h1>
-              <p className="sub">V0.7 · 本地账号认证</p>
+              <p className="sub">V0.8 · 本地账号认证</p>
             </div>
           </div>
         </header>
@@ -229,7 +229,7 @@ export default function App() {
             <span className="logo">◈</span>
             <div>
               <h1>OpenAIP-OS · Agent 认知观察</h1>
-              <p className="sub">V0.7 · 本地账号认证</p>
+              <p className="sub">V0.8 · 本地账号认证</p>
             </div>
           </div>
         </header>
@@ -247,7 +247,7 @@ export default function App() {
           <span className="logo">◈</span>
           <div>
             <h1>OpenAIP-OS · Agent 认知观察</h1>
-            <p className="sub">V0.7 · 声明式 Action · Memory 沉淀 · Evolution(Learn≠Permission)</p>
+            <p className="sub">V0.8 · GraphRAG 基础 · 认证 · 声明式 Action</p>
           </div>
         </div>
         <div className="conn-group">

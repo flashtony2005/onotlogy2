@@ -3,6 +3,9 @@
 //! 验证：Developer 经 WS 看全量（reasoning/input/output）；Executive 经 WS 仅 Goal/Action 且无细节；
 //! 无令牌连接 WS → 被拒（401）。
 
+mod common;
+use common::*;
+
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use openaip_os::agent::{AgentEngine, AgentError, Context, Decision};
@@ -15,8 +18,7 @@ use serde_json::{Value, json};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderValue, Request};
@@ -40,54 +42,10 @@ impl AgentEngine for FakeEngine {
     }
 }
 
-/// 原始 HTTP 调用（带可选 Bearer 令牌）。
-async fn http_call(
-    addr: SocketAddr,
-    method: &str,
-    path: &str,
-    body: Option<&str>,
-    token: Option<&str>,
-) -> (u16, String) {
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let auth_line = token
-        .map(|t| format!("Authorization: Bearer {t}\r\n"))
-        .unwrap_or_default();
-    let req = match body {
-        Some(b) => format!(
-            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\n{auth_line}Content-Length: {}\r\n\r\n{b}",
-            b.len()
-        ),
-        None => format!(
-            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n{auth_line}\r\n"
-        ),
-    };
-    stream.write_all(req.as_bytes()).await.unwrap();
-    let mut buf = Vec::new();
-    let _ = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut buf)).await;
-    let text = String::from_utf8_lossy(&buf);
-    let (head, rest) = text.split_once("\r\n\r\n").unwrap_or(("", ""));
-    let status: u16 = head
-        .lines()
-        .next()
-        .and_then(|l| l.split_whitespace().nth(1))
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-    let cl = head.lines().find_map(|l| {
-        l.to_ascii_lowercase()
-            .strip_prefix("content-length: ")
-            .and_then(|v| v.trim().parse::<usize>().ok())
-    });
-    let body = match cl {
-        Some(n) => rest.get(..n).unwrap_or(rest).to_string(),
-        None => rest.to_string(),
-    };
-    (status, body)
-}
-
 /// 登录并返回 (status, token)。
 async fn login(addr: SocketAddr, username: &str, password: &str) -> (u16, Option<String>) {
     let body = json!({ "username": username, "password": password }).to_string();
-    let (st, resp) = http_call(addr, "POST", "/api/v1/wb/auth/login", Some(&body), None).await;
+    let (st, resp) = http_call_auth(addr, "POST", "/api/v1/wb/auth/login", Some(&body), None).await;
     if st == 200 {
         let v: Value = serde_json::from_str(&resp).unwrap();
         (st, v["data"]["token"].as_str().map(|s| s.to_string()))
@@ -141,28 +99,6 @@ async fn collect_ws_req(req: Request<()>) -> Result<Vec<Value>, ()> {
 }
 
 // ── TC-ws-a：Developer 经 WS 看全量（reasoning/input/output） ───────────────
-
-fn retain_registry() -> openaip_os::action::ActionRegistry {
-    openaip_os::action::ActionRegistry::from_ir(
-        &openaip_os::parse_odl(
-            r#"
-object Customer:
-  properties:
-    name: string
-    level: string
-  actions:
-    retain:
-      creates:
-        - type: RetentionTask
-          data:
-            title: "客户挽留计划"
-            customer: self
-          link: needs_retention
-"#,
-        )
-        .expect("retain ODL"),
-    )
-}
 
 #[tokio::test]
 async fn tc_ws_developer_full_detail() {

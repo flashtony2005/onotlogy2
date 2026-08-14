@@ -9,83 +9,18 @@
 
 mod common;
 
-use common::FakeEngine;
-use openaip_os::action::ActionRegistry;
-use openaip_os::agent::AgentEngine;
+use common::*;
 use openaip_os::planner::generate_run_id;
 use openaip_os::runtime::RuntimeKernel;
-use openaip_os::server;
 use openaip_os::storage::LibSQLStorage;
 use serde_json::Value;
 use serde_json::json;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
 
 /// 与 v0_3 同源的可用引擎：每步固定返回决策，跑通声明式挽留闭环（无审批闸门）。
 /// 启动一个服务（file db，支持跨重启持久化验证）。复用调用方 kernel 的同一存储连接。
-async fn spawn_server(kernel: Arc<RuntimeKernel>) -> SocketAddr {
-    let engine: Arc<dyn AgentEngine> = Arc::new(FakeEngine);
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let ks = kernel.clone();
-    tokio::spawn(async move {
-        let _ = server::serve(
-            ks,
-            engine,
-            listener,
-            "ui/dist",
-            retain_registry(),
-            false,
-            false,
-            false,
-        )
-        .await;
-    });
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    addr
-}
-
 /// 简易 HTTP 调用（utf8 文本，Content-Length 裁剪），与 v0_3 同款。
-async fn http_call(
-    addr: SocketAddr,
-    method: &str,
-    path: &str,
-    body: Option<&str>,
-) -> (u16, String) {
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let req = match body {
-        Some(b) => format!(
-            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{b}",
-            b.len()
-        ),
-        None => format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"),
-    };
-    stream.write_all(req.as_bytes()).await.unwrap();
-    let mut buf = Vec::new();
-    let _ = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut buf)).await;
-    let text = String::from_utf8_lossy(&buf);
-    let (head, rest) = text.split_once("\r\n\r\n").unwrap_or(("", ""));
-    let status: u16 = head
-        .lines()
-        .next()
-        .and_then(|l| l.split_whitespace().nth(1))
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-    let cl = head.lines().find_map(|l| {
-        l.to_ascii_lowercase()
-            .strip_prefix("content-length: ")
-            .and_then(|v| v.trim().parse::<usize>().ok())
-    });
-    let body = match cl {
-        Some(n) => rest.get(..n).unwrap_or(rest).to_string(),
-        None => rest.to_string(),
-    };
-    (status, body)
-}
-
 /// 轮询 wb_run 直到终态（Completed/Failed/Interrupted）或超时。
 async fn wait_run_done(kernel: &RuntimeKernel, run_id: &str) -> openaip_os::storage::RunRecord {
     for _ in 0..120 {
@@ -111,29 +46,6 @@ fn temp_db() -> String {
 }
 
 // ── TC-persist-a：run 生命周期持久化（先 Running，完成 Completed） ──────────────────────
-
-fn retain_registry() -> ActionRegistry {
-    use openaip_os::parse_odl;
-    ActionRegistry::from_ir(
-        &parse_odl(
-            r#"
-object Customer:
-  properties:
-    name: string
-    level: string
-  actions:
-    retain:
-      creates:
-        - type: RetentionTask
-          data:
-            title: "客户挽留计划"
-            customer: self
-          link: needs_retention
-"#,
-        )
-        .expect("retain ODL"),
-    )
-}
 
 #[tokio::test]
 async fn tc_persist_a_run_lifecycle_persisted() {
