@@ -200,8 +200,21 @@ pub struct LibSQLStorage {
     conn: Connection,
 }
 
-/// 当前 schema 版本。每次 schema 变更（加列 / 改列名）递增；旧库 open 时据此拦截（WB2101）。
-const SCHEMA_VERSION: &str = "1";
+/// 当前 schema 版本。每次 schema 变更（加列 / 改列名）递增；
+/// 旧库 open 时按 `MIGRATIONS` 顺序自动迁移（事务化），不再要求 `db reset`。
+const SCHEMA_VERSION: i64 = 2;
+
+/// 版本化迁移注册表：`(from_version, sql)`，按版本升序执行；每步成功后推进
+/// `wb_meta.schema_version`。迁移在事务内执行（失败整体回滚，版本不推进，可安全重试）。
+/// 新库由 `canonical_schema` 直接建到当前版本，不执行迁移。
+const MIGRATIONS: &[(i64, &str)] = &[
+    // V1 → V2：wb_learned 补 auto_approve_enabled（REQ-018）。
+    // 此前该 ALTER 硬编码在「版本匹配」分支且吞错；现为正式迁移项。
+    (
+        1,
+        "ALTER TABLE wb_learned ADD COLUMN auto_approve_enabled INTEGER NOT NULL DEFAULT 1",
+    ),
+];
 
 /// 判断 libsql 错误是否为 `no such table`（跨创建方稳定，优于 PRAGMA / sqlite_master 文本探测）。
 fn is_no_such_table(e: &libsql::Error) -> bool {
@@ -224,8 +237,10 @@ impl LibSQLStorage {
     ///    （`id` 在新旧 schema 均存在，故只回答“表在不在”，不依赖具体列名）。
     /// 2. 表不存在 → 全新库：建全套核心 schema + 写入 `wb_meta.schema_version`。
     /// 3. 表存在 → 读 `wb_meta.schema_version`：
-    ///    - 无 `wb_meta` / 无版本行 / 版本不符 → 旧 schema，返 WB2101 引导 `oaip db reset`。
-    ///    - 版本匹配 → 幂等刷新 schema（未来增量列在此落地）。
+    ///    - 无 `wb_meta` / 无版本行 → 旧 schema，返 WB2101 引导 `oaip db reset`。
+    ///    - 版本 < 当前 → 按 `MIGRATIONS` 顺序事务化迁移（每步更新版本，失败整体回滚）。
+    ///    - 版本 > 当前 → 返 WB2101（未来版本库，拒绝打开）。
+    ///    - 版本匹配 → 幂等刷新 schema。
     async fn ensure_schema(conn: &Connection) -> Result<(), StorageError> {
         let has_obj = match conn
             .query("SELECT id FROM wb_ontology_object LIMIT 0", params![])
@@ -241,13 +256,13 @@ impl LibSQLStorage {
             conn.execute_batch(&codegen::canonical_schema()).await?;
             conn.execute(
                 "INSERT OR REPLACE INTO wb_meta (key, value) VALUES ('schema_version', ?1)",
-                params![SCHEMA_VERSION],
+                params![SCHEMA_VERSION.to_string()],
             )
             .await?;
             return Ok(());
         }
 
-        // 已有对象表 → 读版本（无 wb_meta / 版本不符 → 旧 schema）
+        // 已有对象表 → 读版本（无 wb_meta / 无版本行 → 旧 schema）
         let version = match conn
             .query(
                 "SELECT value FROM wb_meta WHERE key='schema_version'",
@@ -262,26 +277,45 @@ impl LibSQLStorage {
             Err(e) if is_no_such_table(&e) => String::new(),
             Err(e) => return Err(StorageError::Db(e)),
         };
-
-        if version != SCHEMA_VERSION {
+        let cur: i64 = match version.parse() {
+            Ok(v) => v,
+            Err(_) => {
+                return Err(StorageError::Constraint {
+                    code: "WB2101",
+                    message: "检测到无法识别的 schema 版本（无 wb_meta / 无版本行）。请运行 `oaip db reset` 重建数据库"
+                        .into(),
+                });
+            }
+        };
+        if cur > SCHEMA_VERSION {
             return Err(StorageError::Constraint {
                 code: "WB2101",
-                message:
-                    "检测到旧 schema 或版本不匹配（列 object_type/from_id/to_id/edge_type）。请运行 `oaip db reset` 重建数据库"
-                        .into(),
+                message: format!(
+                    "数据库 schema 版本 {cur} 高于程序支持的 {SCHEMA_VERSION}（请升级程序后再打开）"
+                ),
             });
+        }
+
+        // C1 版本化迁移：按 MIGRATIONS 升序执行，事务保证原子（失败整体回滚，版本不推进）。
+        if cur < SCHEMA_VERSION {
+            let tx = conn.transaction().await?;
+            let mut v = cur;
+            for (from, sql) in MIGRATIONS {
+                if *from >= v {
+                    tx.execute_batch(sql).await?;
+                    v = from + 1;
+                    tx.execute(
+                        "INSERT OR REPLACE INTO wb_meta (key, value) VALUES ('schema_version', ?1)",
+                        params![v.to_string()],
+                    )
+                    .await?;
+                }
+            }
+            tx.commit().await?;
         }
 
         // 版本匹配 → 幂等刷新 schema
         conn.execute_batch(&codegen::canonical_schema()).await?;
-        // REQ-018 迁移：为已有 wb_learned 补 auto_approve_enabled 列（新库已由 canonical_schema 包含）；
-        // 列已存在则 ALTER 报错，忽略即可（幂等）。
-        let _ = conn
-            .execute(
-                "ALTER TABLE wb_learned ADD COLUMN auto_approve_enabled INTEGER NOT NULL DEFAULT 1",
-                params![],
-            )
-            .await;
         Ok(())
     }
 
@@ -519,5 +553,92 @@ mod tests {
         assert_eq!(dup.as_deref(), Some("WB2007"), "另一条应拒 WB2007");
         let edges = s.neighbors("001").await.unwrap();
         assert_eq!(edges.len(), 1, "不得双插同一条边");
+    }
+
+    // C1 迁移：V1 旧库（wb_learned 缺 auto_approve_enabled 列）→ open 自动迁移到当前版本
+    #[tokio::test]
+    async fn open_migrates_v1_schema_to_current() {
+        let path = std::env::temp_dir().join(format!("oaip_v1_migrate_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let db = libsql::Builder::new_local(path.to_str().unwrap())
+            .build()
+            .await
+            .unwrap();
+        let conn = db.connect().unwrap();
+        // 造 V1 库：对象表 + wb_meta(version=1) + 缺新列的 wb_learned
+        conn.execute_batch(
+            "CREATE TABLE wb_ontology_object (
+               id TEXT PRIMARY KEY, create_time TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               update_time TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, is_delete INTEGER NOT NULL DEFAULT 0,
+               type TEXT NOT NULL, data TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1);
+             CREATE TABLE wb_meta (key TEXT PRIMARY KEY, value TEXT);
+             INSERT INTO wb_meta (key, value) VALUES ('schema_version', '1');
+             CREATE TABLE wb_learned (
+               id TEXT PRIMARY KEY, kind TEXT NOT NULL, action TEXT NOT NULL,
+               confidence REAL NOT NULL, proposal_id TEXT NOT NULL, run_ids TEXT NOT NULL,
+               created_at TEXT NOT NULL);",
+        )
+        .await
+        .unwrap();
+        drop(conn);
+
+        // open 应自动迁移：不报 WB2101
+        let storage = LibSQLStorage::open(path.to_str().unwrap())
+            .await
+            .unwrap_or_else(|e| panic!("V1 库应自动迁移而非失败/要求 db reset: {e}"));
+        // 迁移后 wb_learned 含新列：写入含 auto_approve_enabled 的行应成功
+        storage
+            .conn
+            .execute(
+                "INSERT INTO wb_learned (id, kind, action, confidence, proposal_id, run_ids, created_at, auto_approve_enabled) \
+                 VALUES ('l1', 'ActionPattern', 'retain', 0.9, 'p1', '[]', 't', 1)",
+                params![],
+            )
+            .await
+            .unwrap();
+        // 版本已推进到当前
+        let mut rows = storage
+            .conn
+            .query(
+                "SELECT value FROM wb_meta WHERE key='schema_version'",
+                params![],
+            )
+            .await
+            .unwrap();
+        let v: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(v, SCHEMA_VERSION.to_string(), "迁移后版本应为当前版本");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // C1 迁移：版本高于程序支持 → 拒绝打开（未来版本库）
+    #[tokio::test]
+    async fn open_rejects_future_schema_version() {
+        let path = std::env::temp_dir().join(format!("oaip_future_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let db = libsql::Builder::new_local(path.to_str().unwrap())
+            .build()
+            .await
+            .unwrap();
+        let conn = db.connect().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE wb_ontology_object (
+               id TEXT PRIMARY KEY, create_time TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               update_time TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, is_delete INTEGER NOT NULL DEFAULT 0,
+               type TEXT NOT NULL, data TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1);
+             CREATE TABLE wb_meta (key TEXT PRIMARY KEY, value TEXT);
+             INSERT INTO wb_meta (key, value) VALUES ('schema_version', '99');",
+        )
+        .await
+        .unwrap();
+        drop(conn);
+        let err = match LibSQLStorage::open(path.to_str().unwrap()).await {
+            Ok(_) => panic!("未来版本库应拒绝打开"),
+            Err(e) => e,
+        };
+        let _ = std::fs::remove_file(&path);
+        match err {
+            StorageError::Constraint { code, .. } => assert_eq!(code, "WB2101"),
+            other => panic!("应返回 WB2101，实际: {other:?}"),
+        }
     }
 }
