@@ -8,7 +8,7 @@ use openaip_os::agent::{AgentEngine, AgentError, Context, Decision};
 use openaip_os::auth::{IdentityProvider, LocalIdentityProvider};
 use openaip_os::runtime::RuntimeKernel;
 use openaip_os::server;
-use openaip_os::storage::{LibSQLStorage, UserRecord};
+use openaip_os::storage::{LibSQLStorage, ObjectEngine, UserRecord};
 use serde_json::{Value, json};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -271,4 +271,131 @@ async fn tc_auth_g_disabled_user_token_401() {
     // 复用旧令牌 → 401
     let (st_reuse, _) = http_call(addr, "GET", "/api/v1/wb/auth/me", None, Some(&token)).await;
     assert_eq!(st_reuse, 401);
+}
+
+// ── TC-auth-h：/graph 按角色钳制（Executive 剥 data，Developer 全量） ─────
+// 防止 /graph 成为 V0.7 视图钳制的旁路：Executive 是最低权限角色，不得经图端点读到对象全量字段。
+#[tokio::test]
+async fn tc_auth_h_graph_clamped_to_role() {
+    let (addr, storage) = spawn_auth_server().await;
+    // 造一个带敏感 data 的对象
+    storage
+        .create(
+            "Customer",
+            "001",
+            json!({"name": "Apple", "balance": 99999.0}),
+        )
+        .await
+        .unwrap();
+
+    // Executive：200，但节点不含 data
+    let (_, exec_token) = login(addr, "exec", "execpw").await;
+    let exec_token = exec_token.expect("exec 应登录成功");
+    let (st, body) = http_call(addr, "GET", "/api/v1/wb/graph", None, Some(&exec_token)).await;
+    assert_eq!(st, 200);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    let node = &v["data"]["nodes"][0];
+    assert_eq!(node["id"], "001");
+    assert_eq!(node["type"], "Customer");
+    assert!(
+        node.get("data").is_none(),
+        "Executive 不得经 /graph 读到对象 data"
+    );
+
+    // Developer（admin）：节点含全量 data
+    let (_, admin_token) = login(addr, "admin", "adminpw").await;
+    let admin_token = admin_token.expect("admin 应登录成功");
+    let (st2, body2) = http_call(addr, "GET", "/api/v1/wb/graph", None, Some(&admin_token)).await;
+    assert_eq!(st2, 200);
+    let v2: Value = serde_json::from_str(&body2).unwrap();
+    assert_eq!(v2["data"]["nodes"][0]["data"]["balance"], json!(99999.0));
+}
+
+// ── TC-auth-i：读接口钳制 — Executive 经 /trace 列表看不到事件（M2） ──────
+// list_trace/get_trace 与 timeline/WS 同一套 from_view 钳制，不得成为三层视图旁路。
+#[tokio::test]
+async fn tc_auth_i_trace_list_clamped_to_role() {
+    let (addr, storage) = spawn_auth_server().await;
+    // 经同一存储句柄造一条带推理细节的认知事件（server 与测试共享连接）
+    let kernel = Arc::new(RuntimeKernel::new(storage.clone()));
+    kernel
+        .emit_cognitive(
+            "Reasoning",
+            "run_1",
+            "retention-agent",
+            &["001".to_string()],
+            Some("内部推理：高流失风险"),
+            Some(serde_json::json!({"candidates": ["001"]})),
+            Some(serde_json::json!({"risk": "high"})),
+            Some(0.4),
+        )
+        .await
+        .unwrap();
+
+    // Developer：能看到事件且带细节
+    let (_, admin_token) = login(addr, "admin", "adminpw").await;
+    let admin_token = admin_token.expect("admin 应登录成功");
+    let (st, body) = http_call(
+        addr,
+        "GET",
+        "/api/v1/wb/agent/trace",
+        None,
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(st, 200);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    let list = v["data"]["list"].as_array().unwrap();
+    assert_eq!(list.len(), 1, "Developer 应能看到事件");
+    assert!(
+        list[0]["reasoning"].is_string(),
+        "Developer 视图应保留 reasoning 细节"
+    );
+
+    // Executive：非 Goal/Action 事件被钳制过滤（列表为空）
+    let (_, exec_token) = login(addr, "exec", "execpw").await;
+    let exec_token = exec_token.expect("exec 应登录成功");
+    let (st2, body2) = http_call(
+        addr,
+        "GET",
+        "/api/v1/wb/agent/trace",
+        None,
+        Some(&exec_token),
+    )
+    .await;
+    assert_eq!(st2, 200);
+    let v2: Value = serde_json::from_str(&body2).unwrap();
+    assert!(
+        v2["data"]["list"].as_array().unwrap().is_empty(),
+        "Executive 不得经 /trace 读到事件细节（M2 钳制）"
+    );
+}
+
+// ── TC-auth-j：登录限流 — 连续失败 5 次后锁定 429（M3） ─────────────────
+#[tokio::test]
+async fn tc_auth_j_login_rate_limited() {
+    let (addr, _s) = spawn_auth_server().await;
+    for _ in 0..5 {
+        let (st, _) = login(addr, "admin", "wrongpw").await;
+        assert_eq!(st, 401, "前 5 次应为普通认证失败");
+    }
+    // 锁定窗口内：错误口令与正确口令一律 429
+    let (st6, _) = login(addr, "admin", "wrongpw").await;
+    assert_eq!(st6, 429, "连续失败 5 次后应锁定（429）");
+    let (st7, _) = login(addr, "admin", "adminpw").await;
+    assert_eq!(st7, 429, "锁定窗口内正确口令也不放行");
+}
+
+// ── TC-auth-k：会话令牌哈希存储 — 库中无明文令牌（M4） ─────────────────
+#[tokio::test]
+async fn tc_auth_k_session_token_hashed_at_rest() {
+    let (addr, storage) = spawn_auth_server().await;
+    let (_, token) = login(addr, "admin", "adminpw").await;
+    let token = token.expect("admin 应登录成功");
+    // 明文令牌不可直接查库（wb_session 存 SHA-256 哈希而非明文）
+    let row = storage.get_session(&token).await.unwrap();
+    assert!(row.is_none(), "库中不得存明文令牌（M4 哈希存储）");
+    // 令牌本身仍可正常鉴权（内部哈希比对）
+    let (st, _) = http_call(addr, "GET", "/api/v1/wb/auth/me", None, Some(&token)).await;
+    assert_eq!(st, 200, "哈希存储不应破坏令牌校验");
 }

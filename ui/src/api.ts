@@ -1,26 +1,103 @@
 // REST 客户端：与 api-agent-trace.md 对齐（{ code, msg, data } 信封，前缀 /api/v1/wb/agent）。
 // BASE 留空 → 同源（生产由 Rust 服务托管，开发由 Vite 代理转发）。
+// V0.7：除 /auth/login 外全部请求注入 `Authorization: Bearer <token>`；401 抛 AuthError 由 UI 跳登录。
 
+import { getToken } from './auth'
 import type {
   ApiResponse,
   ApprovalAuditDto,
+  AuthUserDto,
   EvolutionStateDto,
   MemoryListDto,
   RunStartDto,
-  RunTimeline,
   TaskListDto,
 } from './types'
 
+/** 401（令牌缺失/过期/禁用）→ UI 据此清令牌并跳登录。 */
+export class AuthError extends Error {
+  constructor(msg = '登录已过期，请重新登录') {
+    super(msg)
+    this.name = 'AuthError'
+  }
+}
+
+/// 请求超时（后端 hang 时避免 UI 永久 pending）。
+const FETCH_TIMEOUT_MS = 30_000
+
+/** 带超时的 fetch：AbortController 兜底，超时抛可读错误。 */
+async function fetchWithTimeout(input: string, init?: RequestInit): Promise<Response> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
+  try {
+    return await fetch(input, { ...init, signal: ctrl.signal })
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new Error(`请求超时（>${FETCH_TIMEOUT_MS / 1000}s）：${input}`)
+    }
+    throw e
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function unwrap<T>(res: Response): Promise<T> {
-  const json = (await res.json()) as ApiResponse<T>
+  // U3：先判 HTTP 状态；响应体非 JSON（网关/500 HTML）时兜底可读错误，不抛 SyntaxError。
+  if (!res.ok) {
+    throw new Error(`请求失败 (HTTP ${res.status})`)
+  }
+  let json: ApiResponse<T>
+  try {
+    json = (await res.json()) as ApiResponse<T>
+  } catch {
+    throw new Error('服务异常：响应不是有效 JSON')
+  }
   if (json.code !== 0 || !json.data) {
     throw new Error(json.msg || `请求失败 (code=${json.code})`)
   }
   return json.data
 }
 
+/** 带 Bearer 令牌的请求；401 统一抛 AuthError（不在各调用点重复判断）。 */
+async function authFetch(input: string, init?: RequestInit): Promise<Response> {
+  const token = getToken()
+  const headers = new Headers(init?.headers)
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  const res = await fetchWithTimeout(input, { ...init, headers })
+  if (res.status === 401) throw new AuthError()
+  return res
+}
+
+// ── V0.7 认证 ───────────────────────────────────────────────────────────────
+
+/** `POST /api/v1/wb/auth/login`：公开端点，换取不透明会话令牌。 */
+export async function postLogin(
+  username: string,
+  password: string,
+): Promise<{ token: string; user: AuthUserDto }> {
+  const res = await fetch('/api/v1/wb/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  })
+  return unwrap<{ token: string; user: AuthUserDto }>(res)
+}
+
+/** `GET /api/v1/wb/auth/me`：恢复会话（刷新/重开页面后校验令牌仍有效）。 */
+export async function getMe(): Promise<AuthUserDto> {
+  const res = await authFetch('/api/v1/wb/auth/me')
+  return unwrap<AuthUserDto>(res)
+}
+
+/** `POST /api/v1/wb/auth/logout`：撤销当前会话令牌。 */
+export async function postLogout(): Promise<void> {
+  const res = await authFetch('/api/v1/wb/auth/logout', { method: 'POST' })
+  await unwrap<{ loggedOut: boolean }>(res)
+}
+
+// ── Agent 观察 API ──────────────────────────────────────────────────────────
+
 export async function postRun(agentId: string, goal: string): Promise<RunStartDto> {
-  const res = await fetch('/api/v1/wb/agent/run', {
+  const res = await authFetch('/api/v1/wb/agent/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ agentId, goal }),
@@ -28,29 +105,22 @@ export async function postRun(agentId: string, goal: string): Promise<RunStartDt
   return unwrap<RunStartDto>(res)
 }
 
-export async function getTimeline(runId: string, view: string): Promise<RunTimeline> {
-  const res = await fetch(
-    `/api/v1/wb/agent/run/${encodeURIComponent(runId)}/timeline?view=${view}`,
-  )
-  return unwrap<RunTimeline>(res)
-}
-
 /// `GET /api/v1/wb/agent/memory`：记忆存储全量（V0.5 Memory 视图数据源）。
 export async function getMemory(): Promise<MemoryListDto> {
-  const res = await fetch('/api/v1/wb/agent/memory')
+  const res = await authFetch('/api/v1/wb/agent/memory')
   return unwrap<MemoryListDto>(res)
 }
 
 /// `GET /api/v1/wb/agent/tasks`：RetentionTask 状态列表。
 export async function getTasks(): Promise<TaskListDto> {
-  const res = await fetch('/api/v1/wb/agent/tasks')
+  const res = await authFetch('/api/v1/wb/agent/tasks')
   return unwrap<TaskListDto>(res)
 }
 
 /// `GET /api/v1/wb/agent/evolution`：Evolution 聚合状态（BL-003 · REQ-017）。
 /// 仅暴露知识，不含任何改写 Policy / 绕过 Human Approval 的能力（Learn≠Permission）。
 export async function getEvolution(): Promise<EvolutionStateDto> {
-  const res = await fetch('/api/v1/wb/agent/evolution')
+  const res = await authFetch('/api/v1/wb/agent/evolution')
   return unwrap<EvolutionStateDto>(res)
 }
 
@@ -60,7 +130,7 @@ export async function postAutoApproveToggle(
   id: string,
   enabled: boolean,
 ): Promise<{ id: string; autoApproveEnabled: boolean }> {
-  const res = await fetch(`/api/v1/wb/agent/evolution/learned/${id}/auto-approve`, {
+  const res = await authFetch(`/api/v1/wb/agent/evolution/learned/${id}/auto-approve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled }),
@@ -70,6 +140,6 @@ export async function postAutoApproveToggle(
 
 /// REQ-018：列出自动放行审计（wb_approval_audit，可追溯至 LearnedKnowledge + run）。
 export async function getApprovalAudit(): Promise<ApprovalAuditDto[]> {
-  const res = await fetch('/api/v1/wb/agent/evolution/audit')
+  const res = await authFetch('/api/v1/wb/agent/evolution/audit')
   return unwrap<ApprovalAuditDto[]>(res)
 }

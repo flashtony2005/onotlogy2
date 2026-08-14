@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::process::Stdio;
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
 
 /// 认知引擎错误。
 #[derive(Debug, thiserror::Error)]
@@ -122,6 +123,12 @@ impl PiAgentEngine {
             s.api_key_env = Some(k);
         }
         s
+    }
+
+    /// 覆盖单次推理超时（默认 120s）。测试注入极短超时验证超时杀进程路径（H1）。
+    pub fn with_timeout(mut self, d: Duration) -> Self {
+        self.timeout = d;
+        self
     }
 
     /// 指定 LLM Provider（默认 google，经 pi 内置）。
@@ -261,24 +268,39 @@ impl AgentEngine for PiAgentEngine {
             cmd.arg("--api-key").arg(key);
         }
 
-        let child = cmd
+        let mut child = cmd
             .spawn()
             .map_err(|e| AgentError::Unavailable(format!("启动 pi 进程失败: {e}")))?;
 
-        let output = tokio::time::timeout(self.timeout, child.wait_with_output())
-            .await
-            .map_err(|_| AgentError::Unavailable("pi 推理超时".into()))?
-            .map_err(|e| AgentError::Unavailable(format!("等待 pi 输出失败: {e}")))?;
+        // H1：超时必须杀进程并回收，避免 pi 成孤儿继续消耗 LLM 额度/资源。
+        // `wait` 借用 child（不消费），超时分支可继续 kill + 回收；输出在进程结束后
+        // 从管道读取（pi 决策输出量小，不会触发管道满阻塞；若真阻塞会命中超时兜底）。
+        let status = match tokio::time::timeout(self.timeout, child.wait()).await {
+            Ok(res) => {
+                res.map_err(|e| AgentError::Unavailable(format!("等待 pi 退出失败: {e}")))?
+            }
+            Err(_) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await; // 回收僵尸进程
+                return Err(AgentError::Unavailable("pi 推理超时（已终止进程）".into()));
+            }
+        };
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        if let Some(mut s) = child.stdout.take() {
+            let _ = s.read_to_string(&mut stdout).await;
+        }
+        if let Some(mut s) = child.stderr.take() {
+            let _ = s.read_to_string(&mut stderr).await;
+        }
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        if !status.success() {
             return Err(AgentError::Unavailable(format!(
                 "pi 进程退出非 0：{}",
                 stderr.lines().next().unwrap_or("")
             )));
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(self.parse_decision(stdout.trim(), ctx))
     }
 }
@@ -356,4 +378,59 @@ fn collect_refs(ctx: &Context) -> Vec<String> {
         .iter()
         .filter_map(|o| o.get("id").and_then(|x| x.as_str()).map(|s| s.to_string()))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// H1 回归：推理超时必须 kill 子进程并回收，不得遗留孤儿 pi 进程。
+    #[tokio::test]
+    async fn timeout_kills_child_process() {
+        let dir = std::env::temp_dir();
+        let script = dir.join(format!("fake_pi_{}.sh", std::process::id()));
+        let pidfile = dir.join(format!("fake_pi_{}.pid", std::process::id()));
+        let _ = std::fs::remove_file(&pidfile);
+        // 假 pi：记录自身 PID 后长睡（超过注入的超时）
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\necho $$ > {}\nsleep 30\n", pidfile.display()),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        // edition 2024：set_var 为 unsafe
+        unsafe { std::env::set_var("PI_BIN", &script) };
+        let engine = PiAgentEngine::new("test-agent").with_timeout(Duration::from_millis(1000));
+        let ctx = Context {
+            goal: "g".into(),
+            run_id: "r".into(),
+            agent_id: "a".into(),
+            step: "Goal".into(),
+            prior_output: Value::Null,
+            world: WorldSnapshot::default(),
+        };
+        let res = engine.reason(&ctx).await;
+        unsafe { std::env::remove_var("PI_BIN") };
+        let _ = std::fs::remove_file(&script);
+
+        assert!(
+            matches!(&res, Err(AgentError::Unavailable(m)) if m.contains("超时")),
+            "应返回超时错误，实际: {res:?}"
+        );
+        // 进程应已被 kill + wait 回收：kill -0 应失败（进程不存在）
+        let pid = std::fs::read_to_string(&pidfile).unwrap_or_default();
+        let _ = std::fs::remove_file(&pidfile);
+        let pid = pid.trim();
+        assert!(!pid.is_empty(), "假 pi 应已启动并记录 PID");
+        let alive = std::process::Command::new("kill")
+            .args(["-0", pid])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(!alive, "H1：超时后 pi 子进程（pid={pid}）应已被终止");
+    }
 }

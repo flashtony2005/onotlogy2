@@ -7,9 +7,11 @@
 //! - d 待审批 Pending 跨重启 → orphan 翻 Expired（简化恢复分支）
 //! - e 对象+事件同事务（with_tx）→ 独立 PR，本增量不做，见 design-persistence.md §3.5 / P4
 
-use async_trait::async_trait;
+mod common;
+
+use common::FakeEngine;
 use openaip_os::action::ActionRegistry;
-use openaip_os::agent::{AgentEngine, AgentError, Context, Decision};
+use openaip_os::agent::AgentEngine;
 use openaip_os::planner::generate_run_id;
 use openaip_os::runtime::RuntimeKernel;
 use openaip_os::server;
@@ -23,38 +25,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 /// 与 v0_3 同源的可用引擎：每步固定返回决策，跑通声明式挽留闭环（无审批闸门）。
-struct FakeEngine;
-
-#[async_trait]
-impl AgentEngine for FakeEngine {
-    fn name(&self) -> &str {
-        "fake"
-    }
-    async fn reason(&self, ctx: &Context) -> Result<Decision, AgentError> {
-        let intent = match ctx.step.as_str() {
-            "Goal" => "Customer Retention",
-            "Intent" => "Reduce churn for at-risk customers",
-            "Reasoning" => "Payment delay and order drop signal churn risk",
-            "Planning" => "Create retention tasks and link relations",
-            _ => ctx.step.as_str(),
-        }
-        .to_string();
-        let refs: Vec<String> = ctx
-            .world
-            .objects
-            .iter()
-            .filter_map(|o| o.get("id").and_then(|x| x.as_str()).map(|s| s.to_string()))
-            .collect();
-        Ok(Decision {
-            intent,
-            reasoning: format!("fake reasoning for {}", ctx.step),
-            confidence: 0.9,
-            object_refs: refs,
-            output: json!({ "step": ctx.step }),
-        })
-    }
-}
-
 /// 启动一个服务（file db，支持跨重启持久化验证）。复用调用方 kernel 的同一存储连接。
 async fn spawn_server(kernel: Arc<RuntimeKernel>) -> SocketAddr {
     let engine: Arc<dyn AgentEngine> = Arc::new(FakeEngine);

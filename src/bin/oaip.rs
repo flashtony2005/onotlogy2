@@ -167,9 +167,7 @@ enum UserCmd {
         display_name: String,
     },
     /// 删除账号（幂等）
-    Delete {
-        username: String,
-    },
+    Delete { username: String },
 }
 
 #[tokio::main]
@@ -525,8 +523,12 @@ async fn cmd_user_create(
     role: &str,
     display_name: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let storage = LibSQLStorage::open(db).await?;
     let role_str = role.to_lowercase();
+    // 角色白名单校验：非法角色会让该用户登录时永久失败（Role::from_str 报错），必须前置拦截。
+    if !matches!(role_str.as_str(), "executive" | "operator" | "developer") {
+        return Err(format!("未知角色: {role}（可选 executive / operator / developer）").into());
+    }
+    let storage = LibSQLStorage::open(db).await?;
     let rec = UserRecord {
         id: format!("user.{username}"),
         username: username.to_string(),

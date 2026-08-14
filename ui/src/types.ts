@@ -2,6 +2,12 @@
 
 export type ViewKind = 'executive' | 'operator' | 'developer' | 'memory' | 'evolution' | 'tasks'
 
+/// V0.7 认证用户（对应 server `GET /api/v1/wb/auth/me` / 登录响应 user）。
+export interface AuthUserDto {
+  username: string
+  role: string
+}
+
 export interface TaskRecord {
   id: string
   title: string

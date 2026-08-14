@@ -1,6 +1,7 @@
 // 三层视图裁剪：与 src/trace.rs::build_timeline 同源（REQ-009 / agent-observation-design.md 4.5）。
 // Executive 隐藏思考、Operator 仅 8 步 Pipeline 骨架、Developer 全量 IO。
 // 与 REST /timeline?view= 结果一致，避免 WS 实时流与离线查询漂移。
+// 状态推导与 src/trace.rs::derive_run_state 同源：失败/审批状态与后端一致。
 
 import type {
   DecisionSummary,
@@ -39,21 +40,35 @@ function asString(v: unknown): string | undefined {
   return typeof v === 'string' ? v : JSON.stringify(v)
 }
 
+/// 与后端 derive_run_state 同源：ActionFailed / PolicyCheck Deny → Failed；
+/// MemoryUpdate → Completed；否则 Running（失败优先于 Completed）。
+function deriveState(events: TraceEventDto[]) {
+  const denied = events.some(
+    (e) => e.eventType === 'PolicyCheck' && JSON.stringify(e.output) === '"Deny"',
+  )
+  const failed = denied || events.some((e) => e.eventType === 'ActionFailed')
+  const hasMemory = events.some((e) => e.eventType === 'MemoryUpdate')
+  const status = failed ? 'Failed' : hasMemory ? 'Completed' : 'Running'
+  const pending = events.some((e) => e.eventType === 'PendingApproval')
+  const humanApproval = denied || pending ? 'Required' : 'None'
+  return { status, humanApproval }
+}
+
 export function buildTimeline(
   events: TraceEventDto[],
   runId: string,
   agentId: string,
   view: ViewKind,
 ): RunTimeline {
-  const status = events.some((e) => e.eventType === 'MemoryUpdate') ? 'Completed' : 'Running'
+  // 统一按 timestamp 排序后再推导/渲染（WS 到达序可能与时间序漂移）
+  const ordered = [...events].sort((a, b) =>
+    a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0,
+  )
+  const { status, humanApproval } = deriveState(ordered)
   const stepCount = COGNITIVE_STEPS.filter((s) =>
-    events.some((e) => e.eventType === s),
+    ordered.some((e) => e.eventType === s),
   ).length
   const progress = Math.round((stepCount / COGNITIVE_STEPS.length) * 100)
-  const denied = events.some(
-    (e) => e.eventType === 'PolicyCheck' && JSON.stringify(e.output) === '"Deny"',
-  )
-  const humanApproval = denied ? 'Required' : 'None'
 
   let tlEvents: TimelineEvent[] = []
   let decision: DecisionSummary | undefined
@@ -62,34 +77,35 @@ export function buildTimeline(
     return { runId, agentId, status, progress, humanApproval, events: [], decision: undefined }
   } else if (view === 'executive') {
     // 仅 Mission(Goal) + Decision/Outcome(Action)，隐藏思考细节
-    const kept = events
+    const kept = ordered
       .filter((e) => e.eventType === 'Goal' || e.eventType === 'Action')
       .map((e) => toTimelineEvent(e, false))
-    const goalEv = events.find((e) => e.eventType === 'Goal')
+    const goalEv = ordered.find((e) => e.eventType === 'Goal')
     const mission = asString((goalEv?.input as { goal?: unknown } | undefined)?.goal) ?? ''
-    const actionEv = events.find((e) => e.eventType === 'Action')
+    const actionEv = ordered.find((e) => e.eventType === 'Action')
     const decisionText =
       (actionEv && asString(actionEv.output)) ??
       actionEv?.reasoning ??
       '无明确决策'
-    const risk = events
+    // 风险 = 1 - 最高置信（低置信的推理才是高风险信号；与后端 trace.rs 同源）
+    const maxConf = ordered
       .filter((e) => e.eventType === 'Reasoning')
       .map((e) => e.confidence ?? 0)
       .reduce((a, b) => Math.max(a, b), 0)
-    decision = { mission, decision: decisionText, risk: risk.toFixed(2) }
+    decision = { mission, decision: decisionText, risk: (1 - maxConf).toFixed(2) }
     tlEvents = kept
   } else if (view === 'operator') {
     // 每种认知步类型取首次出现（8 步 Pipeline 骨架），过滤掉每候选的重复 PolicyCheck/Action
     const seen = new Set<string>()
     for (const step of COGNITIVE_STEPS) {
-      const e = events.find((ev) => ev.eventType === step && !seen.has(ev.id))
+      const e = ordered.find((ev) => ev.eventType === step && !seen.has(ev.id))
       if (e) {
         seen.add(e.id)
         tlEvents.push(toTimelineEvent(e, false))
       }
     }
   } else {
-    tlEvents = events.map((e) => toTimelineEvent(e, true))
+    tlEvents = ordered.map((e) => toTimelineEvent(e, true))
   }
 
   return { runId, agentId, status, progress, humanApproval, events: tlEvents, decision }

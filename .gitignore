@@ -30,3 +30,5 @@ opencode.json
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 graft/
+# Codex 本地状态（不入库）
+.codex/

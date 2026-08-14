@@ -166,22 +166,33 @@ pub struct RunTimeline {
 }
 
 /// 由事件列表推导运行状态（含进度与审批需求）。
+/// 与前端 `ui/src/view.ts` 同源实现：失败（ActionFailed / PolicyCheck Deny）优先于 Completed；
+/// 需人工审批（PolicyCheck Deny 或 PendingApproval 挂起中）→ Required。
 pub fn derive_run_state(events: &[TraceEvent]) -> (RunStatus, u8, String) {
     let step_count = COGNITIVE_STEPS
         .iter()
         .filter(|s| events.iter().any(|e| e.event_type == **s))
         .count();
     let progress = ((step_count as f64 / COGNITIVE_STEPS.len() as f64) * 100.0).round() as u8;
+    let denied = events.iter().any(|e| {
+        e.event_type == "PolicyCheck" && e.output == Some(Value::String("Deny".to_string()))
+    });
+    let failed = denied || events.iter().any(|e| e.event_type == "ActionFailed");
     let has_memory = events.iter().any(|e| e.event_type == "MemoryUpdate");
-    let status = if has_memory {
+    let status = if failed {
+        RunStatus::Failed
+    } else if has_memory {
         RunStatus::Completed
     } else {
         RunStatus::Running
     };
-    let denied = events.iter().any(|e| {
-        e.event_type == "PolicyCheck" && e.output == Some(Value::String("Deny".to_string()))
-    });
-    let human_approval = if denied { "Required" } else { "None" }.to_string();
+    let pending = events.iter().any(|e| e.event_type == "PendingApproval");
+    let human_approval = if denied || pending {
+        "Required"
+    } else {
+        "None"
+    }
+    .to_string();
     (status, progress, human_approval)
 }
 
@@ -201,11 +212,16 @@ fn to_timeline_event(e: &TraceEvent, detail: bool) -> TimelineEvent {
 
 /// 构建运行时间线并按视图裁剪（Executive 隐藏思考、Operator 仅 Pipeline、Developer 全量）。
 pub fn build_timeline(
-    events: Vec<TraceEvent>,
+    mut events: Vec<TraceEvent>,
     run_id: String,
     agent_id: String,
     view: View,
 ) -> RunTimeline {
+    // M8：不依赖调用方顺序，先按 (timestamp, id) 稳定排序再推导/裁剪
+    // （与前端 view.ts 同源：WS 到达序可能与时间序漂移）。
+    events.sort_by(|a, b| {
+        (a.timestamp.clone(), a.id.clone()).cmp(&(b.timestamp.clone(), b.id.clone()))
+    });
     let (status, progress, human_approval) = derive_run_state(&events);
 
     let (events_out, decision) = match view {
@@ -234,6 +250,8 @@ pub fn build_timeline(
                 .filter(|e| e.event_type == "Reasoning")
                 .filter_map(|e| e.confidence)
                 .fold(0.0_f64, f64::max);
+            // 风险 = 1 - 最高置信（低置信的推理才是高风险信号；与前端 view.ts 同源）。
+            let risk = 1.0 - risk;
             let summary = DecisionSummary {
                 mission,
                 decision: decision_text,

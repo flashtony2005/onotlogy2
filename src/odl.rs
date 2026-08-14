@@ -54,6 +54,7 @@ impl OdlError {
 
 // 错误码（语义明确，便于断言）
 const E_OBJECT_NAME: u32 = 1004; // object 声明缺少名称
+const E_DUP_OBJECT: u32 = 1006; // 重复对象定义（同名生成重复 struct）
 const E_NO_PROP_BLOCK: u32 = 1005; // 属性出现在 properties: 块外
 const E_EMPTY_PROP_NAME: u32 = 1003; // 属性名为空 / 无法解析行
 const E_UNKNOWN_TYPE: u32 = 1002; // 未知标量类型
@@ -146,22 +147,18 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                 Section::ActionUpdates => {
                     flush_update(&mut cur_update, &mut cur_action);
                     // 列表项语法：`- field: <字段名>`（field 为关键字，值为目标字段名）
-                    if let Some((k, v)) = content.split_once(':')
-                        && k.trim() == "field"
-                    {
+                    if let Some(v) = list_item_value(content, "field") {
                         cur_update = Some(FieldUpdate {
-                            field: v.trim().to_string(),
+                            field: v.to_string(),
                             value: ValueExpr::Literal(serde_json::Value::Null),
                         });
                     }
                 }
                 Section::ActionCreates => {
                     flush_create(&mut cur_create, &mut cur_action);
-                    if let Some((k, v)) = content.split_once(':')
-                        && k.trim() == "type"
-                    {
+                    if let Some(v) = list_item_value(content, "type") {
                         cur_create = Some(CreateEffect {
-                            object_type: v.trim().to_string(),
+                            object_type: v.to_string(),
                             id: None,
                             data: Vec::new(),
                             link_edge: None,
@@ -171,11 +168,9 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                 Section::ActionPrecondition => {
                     flush_clause(&mut cur_clause, &mut cur_action);
                     // 列表项语法：`- field: <字段或参数>`（field 为关键字，值为目标字段/参数）
-                    if let Some((k, v)) = content.split_once(':')
-                        && k.trim() == "field"
-                    {
+                    if let Some(v) = list_item_value(content, "field") {
                         cur_clause = Some(Clause {
-                            field: v.trim().to_string(),
+                            field: v.to_string(),
                             op: CompareOp::Eq,
                             value: ValueExpr::Literal(serde_json::Value::Null),
                         });
@@ -350,6 +345,15 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                 1,
             ));
         }
+        // 重复对象名检测：同名会生成重复 Rust struct 导致编译失败，编译期即拦截。
+        if ir.object_types.iter().any(|o| o.name == obj.name) {
+            return Err(OdlError::new(
+                E_DUP_OBJECT,
+                format!("重复对象定义 '{0}'（同名对象只能声明一次）", obj.name),
+                *ln,
+                1,
+            ));
+        }
         ir.object_types.push(obj.clone());
     }
 
@@ -369,10 +373,23 @@ fn parse_header(line: &str) -> Option<&str> {
     Some(k)
 }
 
+/// 列表项 key 匹配：`- <key>: <value>` → 返回 value（key 不匹配 / 无冒号 → None）。
+/// updates/creates/precondition 三条列表项解析共用，消除三处重复的 split_once 模式。
+fn list_item_value<'a>(content: &'a str, key: &str) -> Option<&'a str> {
+    content
+        .split_once(':')
+        .filter(|(k, _)| k.trim() == key)
+        .map(|(_, v)| v.trim())
+}
+
 /// 把 ODL 值文本解析为 `ValueExpr`：引用参数 / self / 字面量（数字 / 布尔 / 字符串）。
 fn parse_value_expr(v: &str, param_names: &[String]) -> ValueExpr {
-    if v.len() >= 2 && v.starts_with('"') && v.ends_with('"') {
-        return ValueExpr::Literal(serde_json::Value::String(v[1..v.len() - 1].to_string()));
+    if v.starts_with('"') {
+        // 字符串字面量：经 serde_json 校验闭合与转义（`"a\"b"` → `a"b`；
+        // 未闭合 / 非法转义 → 解析失败，按普通文本回落，不静默产出残缺字符串）。
+        if let Ok(serde_json::Value::String(s)) = serde_json::from_str::<serde_json::Value>(v) {
+            return ValueExpr::Literal(serde_json::Value::String(s));
+        }
     }
     if v == "self" {
         return ValueExpr::SelfId;

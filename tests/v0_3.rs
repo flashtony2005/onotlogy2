@@ -1,7 +1,10 @@
 //! V0.3 测试契约（对应 docs/07_测试文档/test-case.md TC-009~011 + 异常边界）
 //! 产品认知引擎仅 Pi（src/agent.rs），测试用 test-only Fake 引擎驱动 Planner 确定性跑通。
 
+mod common;
+
 use async_trait::async_trait;
+use common::FakeEngine;
 use futures_util::StreamExt;
 use openaip_os::action::{ActionEngine, ActionRegistry};
 use openaip_os::agent::{AgentEngine, AgentError, Context, Decision};
@@ -29,38 +32,6 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message;
 
 /// 确定性 Fake 认知引擎（仅测试，不发货）：按 step 返回结构化决策，绑定世界对象。
-struct FakeEngine;
-
-#[async_trait]
-impl AgentEngine for FakeEngine {
-    fn name(&self) -> &str {
-        "fake"
-    }
-    async fn reason(&self, ctx: &Context) -> Result<Decision, AgentError> {
-        let intent = match ctx.step.as_str() {
-            "Goal" => "Customer Retention",
-            "Intent" => "Reduce churn for at-risk customers",
-            "Reasoning" => "Payment delay and order drop signal churn risk",
-            "Planning" => "Create retention tasks and link relations",
-            _ => ctx.step.as_str(),
-        }
-        .to_string();
-        let refs: Vec<String> = ctx
-            .world
-            .objects
-            .iter()
-            .filter_map(|o| o.get("id").and_then(|x| x.as_str()).map(|s| s.to_string()))
-            .collect();
-        Ok(Decision {
-            intent,
-            reasoning: format!("fake reasoning for {}", ctx.step),
-            confidence: 0.9,
-            object_refs: refs,
-            output: json!({ "step": ctx.step }),
-        })
-    }
-}
-
 /// 不可用引擎：reason 直接返回 Unavailable（映射 WB2004，TC-010-b）。
 struct UnavailableEngine;
 
@@ -963,7 +934,11 @@ async fn tc_task_lifecycle_via_ontology_actions() {
     let engine = ActionEngine::new(&kernel);
 
     engine
-        .invoke(reg.get("Customer", "retain").unwrap(), "001", &HashMap::new())
+        .invoke(
+            reg.get("Customer", "retain").unwrap(),
+            "001",
+            &HashMap::new(),
+        )
         .await
         .unwrap();
     let tasks = kernel.query_objects("RetentionTask").await.unwrap();
@@ -972,7 +947,11 @@ async fn tc_task_lifecycle_via_ontology_actions() {
     let tid = tasks[0].id.clone();
 
     engine
-        .invoke(reg.get("RetentionTask", "start").unwrap(), &tid, &HashMap::new())
+        .invoke(
+            reg.get("RetentionTask", "start").unwrap(),
+            &tid,
+            &HashMap::new(),
+        )
         .await
         .unwrap();
     let t = kernel.get_object(&tid).await.unwrap().unwrap();
@@ -1002,7 +981,12 @@ async fn tc_planner_manages_task_lifecycle() {
     let reg = ActionRegistry::from_ir(&parse_odl(include_str!("../examples/crm.odl")).unwrap());
     let run_id = generate_run_id();
     Planner::with_actions(&kernel, reg)
-        .run_goal(&FakeEngine, "manage retention tasks", "retention-agent", &run_id)
+        .run_goal(
+            &FakeEngine,
+            "manage retention tasks",
+            "retention-agent",
+            &run_id,
+        )
         .await
         .expect("一轮目标应把任务推到 Completed");
     let tasks = kernel.query_objects("RetentionTask").await.unwrap();
@@ -1012,11 +996,11 @@ async fn tc_planner_manages_task_lifecycle() {
         .list_events(TraceQuery::for_run(&run_id))
         .await
         .unwrap();
-    let waves = evs
-        .iter()
-        .filter(|e| e.event_type == "Planning")
-        .count();
-    assert!(waves >= 3, "应至少 3 次规划（创建/start/complete），实际 {waves}");
+    let waves = evs.iter().filter(|e| e.event_type == "Planning").count();
+    assert!(
+        waves >= 3,
+        "应至少 3 次规划（创建/start/complete），实际 {waves}"
+    );
 }
 
 /// Intent 过滤：管任务时不跑 refund；退款意图不创建挽留任务。
@@ -1067,7 +1051,11 @@ async fn tc_planner_filters_actions_by_intent() {
         .await
         .expect("退款意图即使缺参也不应整轮失败");
     assert!(
-        kernel2.query_objects("RetentionTask").await.unwrap().is_empty(),
+        kernel2
+            .query_objects("RetentionTask")
+            .await
+            .unwrap()
+            .is_empty(),
         "退款意图不得创建 RetentionTask"
     );
 }
@@ -1099,7 +1087,11 @@ async fn tc_planner_extracts_refund_amount_from_goal() {
     let c = kernel.get_object("001").await.unwrap().unwrap();
     assert_eq!(c.data["balance"], json!(500.0));
     assert!(
-        kernel.query_objects("RetentionTask").await.unwrap().is_empty(),
+        kernel
+            .query_objects("RetentionTask")
+            .await
+            .unwrap()
+            .is_empty(),
         "退款不得创建挽留任务"
     );
 }
@@ -1179,7 +1171,12 @@ async fn tc_t3_retain_only_named_customer() {
     seed_two_customers(&kernel).await;
     let reg = ActionRegistry::from_ir(&parse_odl(include_str!("../examples/crm.odl")).unwrap());
     Planner::with_actions(&kernel, reg)
-        .run_goal(&FakeEngine, "retain 001", "retention-agent", &generate_run_id())
+        .run_goal(
+            &FakeEngine,
+            "retain 001",
+            "retention-agent",
+            &generate_run_id(),
+        )
         .await
         .unwrap();
     let tasks = kernel.query_objects("RetentionTask").await.unwrap();
@@ -1196,10 +1193,18 @@ async fn tc_t4_no_id_same_as_before() {
     seed_two_customers(&kernel).await;
     let reg = ActionRegistry::from_ir(&parse_odl(ODL_RETAIN).unwrap());
     Planner::with_actions(&kernel, reg)
-        .run_goal(&FakeEngine, "reduce churn", "retention-agent", &generate_run_id())
+        .run_goal(
+            &FakeEngine,
+            "reduce churn",
+            "retention-agent",
+            &generate_run_id(),
+        )
         .await
         .unwrap();
-    assert_eq!(kernel.query_objects("RetentionTask").await.unwrap().len(), 2);
+    assert_eq!(
+        kernel.query_objects("RetentionTask").await.unwrap().len(),
+        2
+    );
 }
 
 struct LintBackend;
@@ -1236,12 +1241,7 @@ impl ActionHook for DenyLintHook {
     fn name(&self) -> &str {
         "deny-lint"
     }
-    async fn pre(
-        &self,
-        _object_type: &str,
-        action: &str,
-        _target_id: &str,
-    ) -> Result<(), String> {
+    async fn pre(&self, _object_type: &str, action: &str, _target_id: &str) -> Result<(), String> {
         if action == "lint" {
             Err("lint gated".into())
         } else {
@@ -1261,7 +1261,12 @@ async fn tc_tool_backend_lint_creates_finding() {
     let reg = ActionRegistry::from_ir(&parse_odl(include_str!("../examples/code.odl")).unwrap());
     Planner::with_actions(&kernel, reg)
         .with_backend(Arc::new(LintBackend))
-        .run_goal(&FakeEngine, "lint src_foo", "code-agent", &generate_run_id())
+        .run_goal(
+            &FakeEngine,
+            "lint src_foo",
+            "code-agent",
+            &generate_run_id(),
+        )
         .await
         .expect("lint 应跑通");
     let findings = kernel.query_objects("Finding").await.unwrap();
@@ -1285,7 +1290,12 @@ async fn tc_action_hook_denies_before_backend() {
     let err = Planner::with_actions(&kernel, reg)
         .with_backend(Arc::new(LintBackend))
         .with_hook(Arc::new(DenyLintHook))
-        .run_goal(&FakeEngine, "lint src_foo", "code-agent", &generate_run_id())
+        .run_goal(
+            &FakeEngine,
+            "lint src_foo",
+            "code-agent",
+            &generate_run_id(),
+        )
         .await
         .expect_err("闸门应拒绝 lint");
     match err {
@@ -1337,7 +1347,7 @@ async fn tc022b_planner_memory_closed_loop() {
         .unwrap();
     let reg = ActionRegistry::from_ir(&parse_odl(ODL_RETAIN).unwrap());
 
-    // 第一轮：执行 retain → 沉淀 action.retain
+    // 第一轮：执行 retain → 沉淀 action.Customer.retain（H3：标签带对象类型，跨类型隔离）
     let rid1 = generate_run_id();
     let r1 = Planner::with_actions(&kernel, reg.clone())
         .run_goal(&FakeEngine, "reduce churn", "retention-agent", &rid1)
@@ -1347,8 +1357,8 @@ async fn tc022b_planner_memory_closed_loop() {
     let mem1 = kernel.recall_all().await.unwrap();
     assert!(
         mem1.iter()
-            .any(|m| m.label == "action.retain" && m.hits >= 1),
-        "首轮应沉淀 action.retain"
+            .any(|m| m.label == "action.Customer.retain" && m.hits >= 1),
+        "首轮应沉淀 action.Customer.retain"
     );
 
     // 第二轮：同 kernel 累加 hits，且应召回 MemoryRecall 事件（闭环可见）
@@ -1363,8 +1373,8 @@ async fn tc022b_planner_memory_closed_loop() {
         .await
         .unwrap()
         .into_iter()
-        .find(|m| m.label == "action.retain")
-        .expect("应存在 action.retain 记忆");
+        .find(|m| m.label == "action.Customer.retain")
+        .expect("应存在 action.Customer.retain 记忆");
     assert!(retain.hits >= 2, "两轮应累加 hits（自学习沉淀）");
     let cev2 = kernel
         .list_events(TraceQuery::for_run(&rid2))
@@ -2002,6 +2012,21 @@ async fn tc023c_server_http_approval_timeout_expired() {
         .and_then(|c| c.as_i64())
         .unwrap_or(0);
     assert_eq!(code3, 404, "超时(Expired)请求不应再接受裁决");
+
+    // M2：超时状态须同步落库（DB 真相源），重启后不得残留 Pending 幽灵
+    let db_rows = kernel
+        .storage()
+        .list_approvals_for_run(&run_id)
+        .await
+        .unwrap();
+    let row = db_rows
+        .iter()
+        .find(|r| r.id == req_id)
+        .expect("审批行应已持久化");
+    assert_eq!(
+        row.state, "Expired",
+        "DB 中审批行应同步为 Expired（非 Pending 幽灵）"
+    );
 }
 
 // ── TC-023d：超时 Expired 与人工 Rejected 状态可区分（Critical-3） ──────────────────
@@ -2733,7 +2758,7 @@ async fn tc026f_failure_blocks_auto_approve() {
         matches!(decision, PolicyDecision::Deny { .. }),
         "有失败（failure_count=1）应回退 Deny"
     );
-    // 验证 ActionFailed 埋点可被 count_action_failed 精确捕获（强判定数据源）
+    // 验证 ActionFailed 埋点可被 count_action_failed 精确捕获（强判定数据源；H3 限定键）
     kernel
         .emit_cognitive(
             "ActionFailed",
@@ -2741,14 +2766,17 @@ async fn tc026f_failure_blocks_auto_approve() {
             "agent",
             &["001".to_string()],
             Some("refund 执行失败"),
-            Some(json!({ "action": "refund" })),
+            Some(json!({ "action": "Customer.refund" })),
             Some(json!({ "error": "boom" })),
             Some(0.0),
         )
         .await
         .unwrap();
-    let cnt = kernel.count_action_failed("refund").await.unwrap();
+    let cnt = kernel.count_action_failed("Customer.refund").await.unwrap();
     assert_eq!(cnt, 1, "ActionFailed 埋点应被精确计数");
+    // 跨类型不串扰：其他类型的同名动作失败计数为 0
+    let other = kernel.count_action_failed("Account.refund").await.unwrap();
+    assert_eq!(other, 0, "限定键应隔离不同类型");
 }
 
 /// 审计写库必败的 Auditor：用于验证「审计失败 → 回退 Human」铁律。
@@ -2913,4 +2941,161 @@ async fn tc026h_audit_and_revoke_reversible() {
     )
     .await;
     assert_eq!(d3, PolicyDecision::Allow, "恢复资格后应再次自动放行");
+}
+
+// ── TC-026j：H3 跨类型隔离 — Customer 的知识不得放行 Account 的同名动作 ──
+// 两种类型声明同名 refund（require_approval + precondition → 满足低风险闸门）；
+// 只给 Customer.refund 沉淀已验证知识 → Customer 自动放行、Account 必须回退 Human。
+#[tokio::test]
+async fn tc026j_learned_isolated_by_object_type() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = Arc::new(RuntimeKernel::new(s));
+    let reg = ActionRegistry::from_ir(
+        &parse_odl(
+            r#"
+object Customer:
+  properties:
+    name: string
+    level: string
+  actions:
+    refund:
+      params:
+        amount: float
+      updates:
+        - field: balance
+          value: amount
+      policy:
+        require_approval: true
+        precondition:
+          - field: amount
+            op: le
+            value: 1000
+          - field: self.level
+            op: ne
+            value: "BLACKLIST"
+object Account:
+  properties:
+    name: string
+    level: string
+  actions:
+    refund:
+      params:
+        amount: float
+      updates:
+        - field: balance
+          value: amount
+      policy:
+        require_approval: true
+        precondition:
+          - field: amount
+            op: le
+            value: 1000
+          - field: self.level
+            op: ne
+            value: "BLACKLIST"
+"#,
+        )
+        .unwrap(),
+    );
+    kernel
+        .create_object(
+            "Customer",
+            "001",
+            json!({"name": "Apple", "level": "VIP", "balance": 2000.0}),
+        )
+        .await
+        .unwrap();
+    kernel
+        .create_object(
+            "Account",
+            "002",
+            json!({"name": "Acc", "level": "VIP", "balance": 2000.0}),
+        )
+        .await
+        .unwrap();
+
+    // 只给 Customer.refund 沉淀已验证知识（3 次成功、高置信、未撤销）
+    kernel
+        .save_learned(&mk_learned("Customer.refund", 0.9, 3, true))
+        .await
+        .unwrap();
+
+    let config = RuntimeConfig {
+        auto_approve_from_evolution: true,
+    };
+    // Customer.refund：5 道闸门全过（本类型知识）→ 自动放行 → 运行成功
+    let r1 = Planner::with_actions(&kernel, reg.clone())
+        .with_config(config)
+        .run_goal(
+            &FakeEngine,
+            "退款 001 500",
+            "retention-agent",
+            &generate_run_id(),
+        )
+        .await;
+    assert!(
+        r1.is_ok(),
+        "Customer.refund 应被自动放行（存在本类型已验证知识）"
+    );
+
+    // Account.refund：无 Account.refund 知识 → 回退 Human Approval → AutoApprover 拒 → PolicyDenied
+    let r2 = Planner::with_actions(&kernel, reg)
+        .with_config(config)
+        .run_goal(
+            &FakeEngine,
+            "退款 002 500",
+            "retention-agent",
+            &generate_run_id(),
+        )
+        .await;
+    assert!(
+        matches!(r2, Err(PlannerError::PolicyDenied(_))),
+        "Account.refund 不得被 Customer 的知识放行（H3 跨类型隔离）"
+    );
+}
+
+// ── TC-026k：count_action_failed LIKE 通配符转义（M6） ───────────────────
+// action 名含 `%`/`_` 时不得被当 SQL LIKE 通配符放大匹配。
+#[tokio::test]
+async fn tc026k_count_action_failed_escapes_like_wildcards() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    kernel
+        .emit_cognitive(
+            "ActionFailed",
+            "r1",
+            "agent",
+            &["001".to_string()],
+            Some("boom"),
+            Some(json!({ "action": "Customer.100%_refund" })),
+            Some(json!({ "error": "x" })),
+            Some(0.0),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        kernel
+            .count_action_failed("Customer.100%_refund")
+            .await
+            .unwrap(),
+        1,
+        "精确键应计数"
+    );
+    // `%` 不得匹配任意串、`_` 不得匹配任意字符
+    assert_eq!(
+        kernel
+            .count_action_failed("Customer.100X_refund")
+            .await
+            .unwrap(),
+        0,
+        "% 不得当通配符放大"
+    );
+    assert_eq!(
+        kernel
+            .count_action_failed("Customer.100%refundX")
+            .await
+            .unwrap(),
+        0,
+        "_ 不得当通配符放大"
+    );
 }

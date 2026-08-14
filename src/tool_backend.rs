@@ -62,22 +62,11 @@ impl ToolBackend for NullBackend {
 #[async_trait]
 pub trait ActionHook: Send + Sync {
     fn name(&self) -> &str;
-    async fn pre(
-        &self,
-        object_type: &str,
-        action: &str,
-        target_id: &str,
-    ) -> Result<(), String> {
+    async fn pre(&self, object_type: &str, action: &str, target_id: &str) -> Result<(), String> {
         let _ = (object_type, action, target_id);
         Ok(())
     }
-    async fn post(
-        &self,
-        object_type: &str,
-        action: &str,
-        target_id: &str,
-        outcome: &ToolOutcome,
-    ) {
+    async fn post(&self, object_type: &str, action: &str, target_id: &str, outcome: &ToolOutcome) {
         let _ = (object_type, action, target_id, outcome);
     }
 }

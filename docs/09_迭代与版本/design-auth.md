@@ -53,7 +53,7 @@ axum `from_fn` 鉴权层置于 `router()` 之前：
 
 ```
 pub async fn auth_layer(req: Request<Body>, next: Next) -> Response {
-    // 公共白名单：静态资源、/auth/login、/auth/me(无凭证)
+    // 公共白名单：静态资源、/auth/login（/auth/me 需鉴权，供前端初始化角色）
     if is_public(&req) { return next.run(req).await; }
     let Some(token) = bearer_token(&req) else { return unauthorized(); };
     match SESSION_STORE.verify(token).await {           // 查 wb_session + wb_user

@@ -19,7 +19,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::HeaderValue;
+use tokio_tungstenite::tungstenite::http::{HeaderValue, Request};
 
 /// 确定性 Fake 认知引擎：每个认知步都产出 reasoning + output（用于验证钳制是否剥离细节）。
 struct FakeEngine;
@@ -106,6 +106,18 @@ async fn collect_ws(addr: &SocketAddr, path: &str, token: Option<&str>) -> Resul
             HeaderValue::from_str(&format!("Bearer {t}")).unwrap(),
         );
     }
+    collect_ws_req(req).await
+}
+
+/// 连接 WS（不带 Authorization 头）——浏览器 WebSocket 场景：令牌经 `?token=` 查询参数传递。
+async fn collect_ws_query(addr: &SocketAddr, path: &str) -> Result<Vec<Value>, ()> {
+    let url = format!("ws://{addr}{path}");
+    let req = url.into_client_request().map_err(|_| ())?;
+    collect_ws_req(req).await
+}
+
+/// 共享收集逻辑：连接后收集消息至 2s 超时或关闭。
+async fn collect_ws_req(req: Request<()>) -> Result<Vec<Value>, ()> {
     let (mut ws, _resp) = tokio_tungstenite::connect_async(req)
         .await
         .map_err(|_| ())?;
@@ -232,6 +244,29 @@ async fn tc_ws_no_token_rejected() {
 
     let res = collect_ws(&addr, &format!("/api/v1/wb/agent/{run_id}/stream"), None).await;
     assert!(res.is_err(), "无令牌 WS 应被拒（401）");
+}
+
+// ── TC-ws-d：浏览器场景 — 令牌经 ?token= 查询参数（无 Authorization 头）可连接 ──
+// 浏览器 WebSocket 无法设置请求头；服务端须仅对 WS 流路径接受 `?token=`（REST 仍只认 Bearer）。
+#[tokio::test]
+async fn tc_ws_query_token_authenticates() {
+    let (addr, storage) = spawn_ws_server_raw().await;
+    let kernel = Arc::new(RuntimeKernel::new(storage.clone()));
+    seed_and_run(&kernel).await;
+    let run_id = last_run_id(&kernel).await;
+
+    let (_, tok) = login(addr, "admin", "adminpw").await;
+    let tok = tok.expect("admin 应登录");
+    let msgs = collect_ws_query(
+        &addr,
+        &format!("/api/v1/wb/agent/{run_id}/stream?token={tok}"),
+    )
+    .await;
+    assert!(msgs.is_ok(), "?token= 应通过 WS 鉴权");
+    assert!(
+        !msgs.unwrap().is_empty(),
+        "应收到历史事件（?token= 连接有效）"
+    );
 }
 
 /// 启动强制认证服务并直接返回 storage（供测试构造 kernel 触发运行）。

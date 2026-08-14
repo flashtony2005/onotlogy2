@@ -134,6 +134,17 @@ pub trait IdentityProvider: Send + Sync {
     async fn bootstrap_admin(&self, username: &str, password: &str) -> Result<(), AuthError>;
 }
 
+/// argon2id 实例：显式参数（内存 64MiB、t=3、p=4）——哈希与验证必须同参数，
+/// 且不依赖 crate 默认值漂移（LOW：`Argon2::default()` 参数隐式）。
+/// `Params::new` 对常量合法参数不会失败，expect 安全。
+fn argon2() -> Argon2<'static> {
+    Argon2::new(
+        argon2::Algorithm::Argon2id,
+        argon2::Version::V0x13,
+        argon2::Params::new(64 * 1024, 3, 4, None).expect("argon2id 64MiB/t=3/p=4 参数合法"),
+    )
+}
+
 /// 本地账号身份提供方（argon2id + `wb_user`）。
 pub struct LocalIdentityProvider {
     storage: LibSQLStorage,
@@ -147,7 +158,7 @@ impl LocalIdentityProvider {
     /// 计算 argon2id 口令哈希（测试/CLI 造账号复用同一实现）。
     pub fn hash_password(pw: &str) -> Result<String, AuthError> {
         let salt = SaltString::generate(&mut OsRng);
-        Argon2::default()
+        argon2()
             .hash_password(pw.as_bytes(), &salt)
             .map(|h| h.to_string())
             .map_err(|e| AuthError::Hash(e.to_string()))
@@ -173,10 +184,7 @@ impl IdentityProvider for LocalIdentityProvider {
             return Ok(None);
         }
         let ph = PasswordHash::new(&u.password_hash).map_err(|e| AuthError::Hash(e.to_string()))?;
-        if Argon2::default()
-            .verify_password(password.as_bytes(), &ph)
-            .is_err()
-        {
+        if argon2().verify_password(password.as_bytes(), &ph).is_err() {
             return Ok(None);
         }
         Ok(Some(AuthUser {
@@ -214,8 +222,19 @@ impl IdentityProvider for LocalIdentityProvider {
 }
 
 /// 会话存储（不透明令牌 + `wb_session`；无 FK，用户禁用时由应用层级联清会话）。
+///
+/// M4：入库前对令牌做 SHA-256 哈希——`wb_session` 存哈希而非明文，
+/// DB 泄漏不直接暴露可用会话令牌；校验/撤销时对输入同哈希比对。
 pub struct SessionStore {
     storage: LibSQLStorage,
+}
+
+/// 令牌 → SHA-256 十六进制（存储/查询键）。
+fn hash_token(token: &str) -> String {
+    use sha2::Digest;
+    let mut h = sha2::Sha256::new();
+    h.update(token.as_bytes());
+    hex::encode(h.finalize())
 }
 
 impl SessionStore {
@@ -226,14 +245,14 @@ impl SessionStore {
     /// 默认会话有效期（12h）。
     const TTL_SECS: i64 = 12 * 3600;
 
-    /// 签发新会话（32B 随机令牌，hex 编码）。
+    /// 签发新会话（32B 随机令牌，hex 编码；明文仅返回给用户，库中存哈希）。
     pub async fn issue(&self, user: &AuthUser) -> Result<String, AuthError> {
         let mut buf = [0u8; 32];
         OsRng.fill_bytes(&mut buf);
         let token = hex::encode(buf);
         let expires = (now_secs() + Self::TTL_SECS).to_string();
         self.storage
-            .save_session(&token, &user.id, &expires)
+            .save_session(&hash_token(&token), &user.id, &expires)
             .await
             .map_err(|e| AuthError::Storage(e.to_string()))?;
         Ok(token)
@@ -241,16 +260,17 @@ impl SessionStore {
 
     /// 校验令牌：存在 + 未过期 + 用户未禁用 → 返回 `AuthUser`；否则 `None`（过期/孤儿顺手清理）。
     pub async fn validate(&self, token: &str) -> Result<Option<AuthUser>, AuthError> {
+        let key = hash_token(token);
         let Some(s) = self
             .storage
-            .get_session(token)
+            .get_session(&key)
             .await
             .map_err(|e| AuthError::Storage(e.to_string()))?
         else {
             return Ok(None);
         };
         if s.expires_at.parse::<i64>().unwrap_or(0) < now_secs() {
-            let _ = self.storage.delete_session(token).await;
+            let _ = self.storage.delete_session(&key).await;
             return Ok(None);
         }
         let Some(u) = self
@@ -259,11 +279,11 @@ impl SessionStore {
             .await
             .map_err(|e| AuthError::Storage(e.to_string()))?
         else {
-            let _ = self.storage.delete_session(token).await;
+            let _ = self.storage.delete_session(&key).await;
             return Ok(None);
         };
         if u.disabled {
-            let _ = self.storage.delete_session(token).await;
+            let _ = self.storage.delete_session(&key).await;
             return Ok(None);
         }
         Ok(Some(AuthUser {
@@ -276,7 +296,7 @@ impl SessionStore {
     /// 撤销单条会话（登出）。
     pub async fn revoke(&self, token: &str) -> Result<(), AuthError> {
         self.storage
-            .delete_session(token)
+            .delete_session(&hash_token(token))
             .await
             .map_err(|e| AuthError::Storage(e.to_string()))
     }

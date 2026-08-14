@@ -1,22 +1,23 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
-  getApprovalAudit,
+  AuthError,
   getEvolution,
+  getMe,
   getMemory,
   getTasks,
-  postAutoApproveToggle,
+  postLogin,
+  postLogout,
   postRun,
 } from './api'
+import { EvolutionPanel } from './components/EvolutionPanel'
+import { LoginForm } from './components/LoginForm'
+import { MemoryPanel } from './components/MemoryPanel'
+import { TaskPanel } from './components/TaskPanel'
+import { debounce, fmtJson, fmtTime } from './format'
+import { clearToken, getToken, setToken } from './auth'
 import { useTraceStream } from './hooks/useTraceStream'
 import { buildTimeline } from './view'
-import type {
-  ApprovalAuditDto,
-  EvolutionStateDto,
-  MemoryRecord,
-  TaskRecord,
-  TraceEventDto,
-  ViewKind,
-} from './types'
+import type { AuthUserDto, EvolutionStateDto, MemoryRecord, TaskRecord, TraceEventDto, ViewKind } from './types'
 
 const STEP_ICON: Record<string, string> = {
   Goal: '🎯',
@@ -39,22 +40,6 @@ const VIEWS: { key: ViewKind; label: string; desc: string }[] = [
   { key: 'tasks', label: 'Tasks', desc: '任务状态 · Pending→Completed' },
 ]
 
-function fmtTime(ts: string): string {
-  const d = new Date(ts)
-  if (isNaN(d.getTime())) return ts
-  return d.toLocaleTimeString('zh-CN', { hour12: false })
-}
-
-function fmtJson(v: unknown): string {
-  if (v == null) return ''
-  if (typeof v === 'string') return v
-  try {
-    return JSON.stringify(v, null, 2)
-  } catch {
-    return String(v)
-  }
-}
-
 export default function App() {
   const [view, setView] = useState<ViewKind>('operator')
   const [agentId, setAgentId] = useState('retention-agent')
@@ -66,6 +51,68 @@ export default function App() {
   const [running, setRunning] = useState(false)
   const [memories, setMemories] = useState<MemoryRecord[]>([])
   const [memoryLoading, setMemoryLoading] = useState(false)
+
+  // ── V0.7 认证：会话恢复 + 登录 + 登出 ──────────────────────────────────
+  const [user, setUser] = useState<AuthUserDto | null>(null)
+  const [sessionChecking, setSessionChecking] = useState(true)
+  const [loginError, setLoginError] = useState<string | null>(null)
+
+  // 刷新/重开页面：用备份令牌调 /auth/me 恢复会话（无效则清令牌回登录页）
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      if (!getToken()) {
+        if (!cancelled) setSessionChecking(false)
+        return
+      }
+      try {
+        const me = await getMe()
+        if (!cancelled) setUser(me)
+      } catch {
+        clearToken()
+      } finally {
+        if (!cancelled) setSessionChecking(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  /** 统一 401 处理：清令牌并回登录页。 */
+  const handleAuthError = (e: unknown) => {
+    if (e instanceof AuthError) {
+      clearToken()
+      setUser(null)
+      setRunId(null)
+      setEvents([])
+      return true
+    }
+    return false
+  }
+
+  const doLogin = async (username: string, password: string) => {
+    setLoginError(null)
+    try {
+      const { token, user: u } = await postLogin(username, password)
+      setToken(token)
+      setUser(u)
+    } catch (e) {
+      setLoginError((e as Error).message || '登录失败')
+    }
+  }
+
+  const doLogout = async () => {
+    try {
+      await postLogout()
+    } catch {
+      /* 令牌已失效也照常清本地 */
+    }
+    clearToken()
+    setUser(null)
+    setRunId(null)
+    setEvents([])
+  }
 
   // Memory 视图刷新：从 REST /memory 拉取沉淀（hits 随轮次累加）。
   const reloadMemory = async () => {
@@ -110,15 +157,20 @@ export default function App() {
     }
   }
 
+  // 节流版刷新（useMemo 保持单例；内部只依赖稳定 setState，捕获旧闭包无碍）
+  const reloadMemoryDebounced = useMemo(() => debounce(() => void reloadMemory(), 300), [])
+  const reloadTasksDebounced = useMemo(() => debounce(() => void reloadTasks(), 300), [])
+
   useTraceStream(runId, {
     onEvent: (e) => {
       setEvents((prev) => (prev.some((p) => p.id === e.id) ? prev : [...prev, e]))
       // 记忆沉淀/召回事件 → 实时刷新 Memory 视图（hits 累加可见）
+      // U4：事件高频到达时合并刷新（300ms 窗口一次），避免并发 REST 互相覆盖
       if (e.eventType === 'MemoryUpdate' || e.eventType === 'MemoryRecall') {
-        void reloadMemory()
+        reloadMemoryDebounced()
       }
       if (e.eventType === 'Action' || e.eventType === 'Planning') {
-        void reloadTasks()
+        reloadTasksDebounced()
       }
     },
     onStatus: setConnected,
@@ -143,10 +195,49 @@ export default function App() {
       void reloadMemory()
       void reloadTasks()
     } catch (e) {
-      setError((e as Error).message)
+      if (!handleAuthError(e)) setError((e as Error).message)
     } finally {
       setRunning(false)
     }
+  }
+
+  // 未登录：渲染登录页（V0.7 认证强制）
+  if (sessionChecking) {
+    return (
+      <div className="app">
+        <header className="topbar">
+          <div className="brand">
+            <span className="logo">◈</span>
+            <div>
+              <h1>OpenAIP-OS · Agent 认知观察</h1>
+              <p className="sub">V0.7 · 本地账号认证</p>
+            </div>
+          </div>
+        </header>
+        <main className="timeline">
+          <div className="empty">正在恢复会话…</div>
+        </main>
+      </div>
+    )
+  }
+
+  if (!user) {
+    return (
+      <div className="app">
+        <header className="topbar">
+          <div className="brand">
+            <span className="logo">◈</span>
+            <div>
+              <h1>OpenAIP-OS · Agent 认知观察</h1>
+              <p className="sub">V0.7 · 本地账号认证</p>
+            </div>
+          </div>
+        </header>
+        <main className="timeline">
+          <LoginForm error={loginError} onLogin={doLogin} />
+        </main>
+      </div>
+    )
   }
 
   return (
@@ -156,12 +247,21 @@ export default function App() {
           <span className="logo">◈</span>
           <div>
             <h1>OpenAIP-OS · Agent 认知观察</h1>
-            <p className="sub">V0.6 · 声明式 Action · Memory 沉淀 · Evolution(Learn≠Permission)</p>
+            <p className="sub">V0.7 · 声明式 Action · Memory 沉淀 · Evolution(Learn≠Permission)</p>
           </div>
         </div>
-        <div className={`conn ${connected ? 'on' : 'off'}`}>
-          <span className="dot" />
-          {connected ? 'WS 已连接' : 'WS 未连接'}
+        <div className="conn-group">
+          <div className={`conn ${connected ? 'on' : 'off'}`}>
+            <span className="dot" />
+            {connected ? 'WS 已连接' : 'WS 未连接'}
+          </div>
+          <div className="user">
+            <span className="user-name">{user.username}</span>
+            <span className={`role role-${user.role.toLowerCase()}`}>{user.role}</span>
+            <button className="logout" onClick={() => void doLogout()}>
+              登出
+            </button>
+          </div>
         </div>
       </header>
 
@@ -235,7 +335,17 @@ export default function App() {
         )}
 
         {view === 'evolution' && (
-          <EvolutionPanel state={evolution} loading={evolutionLoading} onReload={reloadEvolution} />
+          <EvolutionPanel
+            state={evolution}
+            loading={evolutionLoading}
+            onReload={reloadEvolution}
+            onAuthError={() => {
+              clearToken()
+              setUser(null)
+              setRunId(null)
+              setEvents([])
+            }}
+          />
         )}
 
         {view === 'tasks' && (
@@ -300,240 +410,6 @@ export default function App() {
           </article>
         ))}
       </main>
-    </div>
-  )
-}
-
-function TaskPanel({
-  tasks,
-  loading,
-  onReload,
-}: {
-  tasks: TaskRecord[]
-  loading: boolean
-  onReload: () => void
-}) {
-  return (
-    <div className="memory">
-      <div className="memory-head">
-        <h3>📌 任务状态（本体 RetentionTask）</h3>
-        <button className="reload" onClick={onReload} disabled={loading}>
-          {loading ? '刷新中…' : '↻ 刷新'}
-        </button>
-      </div>
-      {tasks.length === 0 ? (
-        <div className="empty">
-          暂无任务。触发「manage retention tasks」类目标后，Planner 会创建
-          <code>RetentionTask</code> 并推进 Pending → InProgress → Completed。
-        </div>
-      ) : (
-        <div className="memory-list">
-          {tasks.map((t) => (
-            <article key={t.id} className="memory-item">
-              <div className="mem-head">
-                <code className="mem-label">{t.id}</code>
-                <span className={`task-status ${t.status.toLowerCase()}`}>{t.status || '—'}</span>
-                {t.priority && <span className="mem-hits">{t.priority}</span>}
-              </div>
-              <p className="task-title">{t.title || '（无标题）'}</p>
-              <p className="task-meta">客户 {t.customer || '—'}</p>
-            </article>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Memory 视图：记忆沉淀面板（V0.5 / BL-008）──────────────────────────────────
-function MemoryPanel({
-  memories,
-  loading,
-  onReload,
-}: {
-  memories: MemoryRecord[]
-  loading: boolean
-  onReload: () => void
-}) {
-  return (
-    <div className="memory">
-      <div className="memory-head">
-        <h3>💾 记忆沉淀（Action → Memory → 下次 Plan 闭环）</h3>
-        <button className="reload" onClick={onReload} disabled={loading}>
-          {loading ? '刷新中…' : '↻ 刷新'}
-        </button>
-      </div>
-      {memories.length === 0 ? (
-        <div className="empty">
-          暂无记忆。运行含动作执行的 Agent（如挽留计划）后，动作会按
-          <code>action.&lt;name&gt;</code> 沉淀为记忆，hits 随复用轮次累加。
-        </div>
-      ) : (
-        <div className="memory-list">
-          {memories.map((m) => (
-            <article key={m.label} className="memory-item">
-              <div className="mem-head">
-                <code className="mem-label">{m.label}</code>
-                <span className="mem-hits" title="复用次数（自学习指标）">
-                  复用 {m.hits}
-                </span>
-                <span className="mem-time">{fmtTime(m.updatedAt)}</span>
-              </div>
-              <pre className="mem-payload">{fmtJson(m.payload)}</pre>
-            </article>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Evolution 视图：自学习知识面板（V0.5 / BL-003 · REQ-017，Learn≠Permission；V0.6 / REQ-018 AutoApprove）──
-function EvolutionPanel({
-  state,
-  loading,
-  onReload,
-}: {
-  state: EvolutionStateDto | null
-  loading: boolean
-  onReload: () => void
-}) {
-  const [audits, setAudits] = useState<ApprovalAuditDto[] | null>(null)
-  const [busyId, setBusyId] = useState<string | null>(null)
-
-  const total =
-    (state?.patterns.length ?? 0) +
-    (state?.proposals.length ?? 0) +
-    (state?.learned.length ?? 0)
-
-  // 切换自动放行资格（REQ-018 可撤销，幂等）；成功后刷新 Evolution + 审计。
-  const toggleAutoApprove = async (id: string, enabled: boolean) => {
-    setBusyId(id)
-    try {
-      await postAutoApproveToggle(id, enabled)
-      await onReload()
-      const a = await getApprovalAudit()
-      setAudits(a)
-    } finally {
-      setBusyId(null)
-    }
-  }
-
-  const showAudit = async () => {
-    const a = await getApprovalAudit()
-    setAudits(a)
-  }
-
-  return (
-    <div className="evolution">
-      <div className="evo-head">
-        <h3>🧬 Evolution · Experience→Knowledge 闭环</h3>
-        <button className="reload" onClick={onReload} disabled={loading}>
-          {loading ? '刷新中…' : '↻ 刷新'}
-        </button>
-      </div>
-      <p className="evo-note">
-        Learn≠Permission：本视图仅暴露知识，<b>不修改 Policy、不绕过 Human Approval（WB2005）</b>。
-        证据链 Learned→Proposal→Pattern→Experience 全程可追溯。
-      </p>
-
-      {total === 0 ? (
-        <div className="empty">
-          暂无知识。运行多轮含复现动作的 Agent 后，经验会经 wb_memory 提炼为
-          Pattern（hits≥2）→ Proposal → Validated Knowledge。
-        </div>
-      ) : (
-        <div className="evo-body">
-          <section className="evo-section">
-            <h4>
-              Pattern <span className="evo-count">{state?.patterns.length ?? 0}</span>
-            </h4>
-            {(state?.patterns ?? []).map((p) => (
-              <article key={p.label} className="evo-item">
-                <div className="evo-line">
-                  <code className="evo-label">{p.label}</code>
-                  <span className="evo-tag action">action: {p.action}</span>
-                  <span className="evo-tag conf">conf {p.confidence.toFixed(2)}</span>
-                </div>
-                <div className="evo-evidence">
-                  来源 run：{p.runIds.length ? p.runIds.join(', ') : '—'}
-                </div>
-              </article>
-            ))}
-          </section>
-
-          <section className="evo-section">
-            <h4>
-              Proposal <span className="evo-count">{state?.proposals.length ?? 0}</span>
-            </h4>
-            {(state?.proposals ?? []).map((p) => (
-              <article key={p.id} className="evo-item">
-                <div className="evo-line">
-                  <code className="evo-label">{p.id}</code>
-                  <span className={`evo-tag status ${p.status.toLowerCase()}`}>{p.status}</span>
-                  <span className="evo-tag conf">conf {p.confidence.toFixed(2)}</span>
-                </div>
-                <div className="evo-evidence">
-                  来源 Pattern：{p.patternLabel} · run：
-                  {p.runIds.length ? p.runIds.join(', ') : '—'}
-                </div>
-              </article>
-            ))}
-          </section>
-
-          <section className="evo-section">
-            <h4>
-              Learned <span className="evo-count">{state?.learned.length ?? 0}</span>
-            </h4>
-            {(state?.learned ?? []).map((l) => (
-              <article key={l.id} className="evo-item">
-                <div className="evo-line">
-                  <code className="evo-label">{l.id}</code>
-                  <span className="evo-tag action">action: {l.action}</span>
-                  <span className="evo-tag conf">conf {l.confidence.toFixed(2)}</span>
-                  <span className={`evo-tag ${l.autoApproveEnabled ? 'aa-on' : 'aa-off'}`}>
-                    {l.autoApproveEnabled ? '自动放行:开' : '自动放行:关'}
-                  </span>
-                  <button
-                    className="evo-toggle"
-                    disabled={busyId === l.id}
-                    onClick={() => toggleAutoApprove(l.id, !l.autoApproveEnabled)}
-                  >
-                    {l.autoApproveEnabled ? '撤销' : '恢复'}
-                  </button>
-                </div>
-                <div className="evo-evidence">
-                  来源 Proposal：{l.proposalId} · run：
-                  {l.runIds.length ? l.runIds.join(', ') : '—'}
-                </div>
-              </article>
-            ))}
-            <button className="reload" onClick={showAudit} style={{ marginTop: 8 }}>
-              查看自动放行审计
-            </button>
-            {audits && (
-              <div className="evo-audit">
-                {audits.length === 0 ? (
-                  <div className="empty">暂无自动放行审计</div>
-                ) : (
-                  audits.map((a) => (
-                    <article key={a.id} className="evo-item">
-                      <div className="evo-line">
-                        <code className="evo-label">{a.action}</code>
-                        <span className={`evo-tag decision ${a.decision}`}>{a.decision}</span>
-                        <span className="evo-tag">run: {a.runId || '—'}</span>
-                      </div>
-                      <div className="evo-evidence">
-                        {a.reason} · {a.createdAt}
-                      </div>
-                    </article>
-                  ))
-                )}
-              </div>
-            )}
-          </section>
-        </div>
-      )}
     </div>
   )
 }
