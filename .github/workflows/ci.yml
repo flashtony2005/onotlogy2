@@ -33,6 +33,20 @@ jobs:
       - name: test
         run: cargo test --all-targets
 
+      - name: coverage (baseline >= 75%)
+        run: |
+          rustup component add llvm-tools-preview
+          cargo install cargo-llvm-cov --locked
+          cargo llvm-cov --all-targets --fail-under-lines 75
+
+      - name: cargo audit
+        # 白名单 = 经 libsql 传递且本地文件库不可达的 advisory（见 docs/07_测试文档/security-baseline.md）
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit --ignore RUSTSEC-2026-0104 --ignore RUSTSEC-2026-0098 \
+            --ignore RUSTSEC-2026-0099 --ignore RUSTSEC-2026-0049 \
+            --ignore RUSTSEC-2025-0141 --ignore RUSTSEC-2025-0134
+
   ui:
     runs-on: ubuntu-latest
     defaults:
@@ -46,5 +60,6 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - run: npm ci
+      - run: npm test
       - run: npm run build
       - run: npm audit --audit-level=high

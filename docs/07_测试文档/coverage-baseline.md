@@ -6,15 +6,15 @@
 | 工具 | cargo-llvm-cov v0.8.7（nightly-2026-07-17 + llvm-tools-preview） |
 | 范围 | `cargo llvm-cov --all-targets`（lib 单测 + 全部集成测试，118 用例） |
 | **行覆盖** | **75.73%**（7749 行 / 已覆盖 5868） |
-| 分支覆盖 | 78.43% |
-| 函数覆盖 | 79.93% |
+| 分支覆盖 | 78.87% |
+| 函数覆盖 | 81.12% |
 | lib 单测单独基线 | 19.41%（集成测试承载了主要覆盖） |
 
 ## 最低覆盖模块（提升优先级）
 
 | 模块 | 行覆盖 | 说明 |
 |------|--------|------|
-| `server/static_files.rs` | 0% | 静态托管/SPA fallback 无任何断言（serve_static/content_type） |
+| ~~`server/static_files.rs`~~ | ~~0%~~ ✅ 已补 | SPA fallback / MIME / API 404 断言（tc_static_*） |
 | `tool_backend.rs` | 25% | NullBackend 直通；真实 backend 需注入实现测试 |
 | `ir.rs` | 50% | IR 结构/序列化边界（部分经 codegen 间接覆盖） |
 | `planner/mod.rs` | 82% | 核心类型少量直接断言 |

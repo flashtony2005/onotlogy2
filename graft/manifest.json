@@ -1,0 +1,295 @@
+{
+  "version": 1,
+  "model": "openai:deepseek-chat",
+  "repoDigest": "d0c5f3b9973510d835656131138b90a8a9c68f5394e4abea7597f5781a424203",
+  "files": [
+    {
+      "path": "src/action.rs",
+      "hash": "64d2dce7c3f6d1748ef7c756476661d8cf31ff8a60324ddeb38069754cfeac6a"
+    },
+    {
+      "path": "src/agent.rs",
+      "hash": "b11ed6e71c84a66c007d69adb3abc8278dc33af338fd8e3b60be2a381fa6553a"
+    },
+    {
+      "path": "src/auth.rs",
+      "hash": "f40165b6efe820bd1726fd6245408fdf3b7218c1d8dec3b2f6a5610ab4d08a79"
+    },
+    {
+      "path": "src/bin/oaip.rs",
+      "hash": "46385ea7680f656020db69e4572168a44b3e0bd0807e6d16eb406622ed783ab4"
+    },
+    {
+      "path": "src/codegen.rs",
+      "hash": "3ccf64715b881949fdcc051ffded10833daa895820cfb753ec66aae6aba3a6ec"
+    },
+    {
+      "path": "src/evolution.rs",
+      "hash": "8b22e1db63cf8cb31cf6cdc3f9664b067373f58a2c20046e9cfc21657c44cef0"
+    },
+    {
+      "path": "src/ir.rs",
+      "hash": "450ff5fd7028f0c4fcb9bdbbeda3fa6c93b7c555934b5eb19d2838a598e4647f"
+    },
+    {
+      "path": "src/lib.rs",
+      "hash": "95d9554e1f3f9c985b55aa2a39aabe389a5be5b3412e590fb79dfef0e4e305e9"
+    },
+    {
+      "path": "src/odl.rs",
+      "hash": "234949cb0e91f44545f73701498000fb405d678202f2ce51b583506d75f2d169"
+    },
+    {
+      "path": "src/planner.rs",
+      "hash": "6731138539e062f8a3b9ca2b639536609861c30ea54fac8d5ffed8ea0d5f9a13"
+    },
+    {
+      "path": "src/runtime.rs",
+      "hash": "5f2cab0b89c4304f864d96ccf1b2be11dc741f2d472d3eae69974bfe62cec174"
+    },
+    {
+      "path": "src/server.rs",
+      "hash": "453cc3dbe5459733726e6d4412099744eda5e67d77abf9f5b946c84a670b5c4a"
+    },
+    {
+      "path": "src/storage.rs",
+      "hash": "e814f6bb191298d5ddc7cbfabd21208a16f55ce5c5464b6aeb8662f2c1b43439"
+    },
+    {
+      "path": "src/trace.rs",
+      "hash": "9bf0f678764ca231eca4ffed0cb6a4405cbeef02a0883444ceee3397c224d79e"
+    },
+    {
+      "path": "tests/v0_1.rs",
+      "hash": "2bf0838233b72b77468f7f936fc325cf82d469c91e1a0aeced877881f2f11442"
+    },
+    {
+      "path": "tests/v0_2.rs",
+      "hash": "39757773749ee020a794fed76465fcad36e3718f2705eb2c076281e853e6149b"
+    },
+    {
+      "path": "tests/v0_3.rs",
+      "hash": "36a45bc6af635916871b833f07de61d530477a4f6b3836010a92692759ccc5d2"
+    },
+    {
+      "path": "tests/v0_7_auth.rs",
+      "hash": "36f3a9cb8f9fbb0a22475daf5fd9b2300671457ef35397a8b159e892ec63c80c"
+    },
+    {
+      "path": "tests/v0_8_persistence.rs",
+      "hash": "5495f4360af933cd96f9565c37de67c5c2af0085df7972fa1d96bb4bbfe40459"
+    },
+    {
+      "path": "ui/src/api.ts",
+      "hash": "9877ae14f5d95f9c195b0c746714ec0a4efc5fa91ae8f5435a5fcf9ce14fd474"
+    },
+    {
+      "path": "ui/src/App.tsx",
+      "hash": "e18a74c3f078e5499cfa589ad4362aec60dc2bfde351545f3689eb7d75f226d6"
+    },
+    {
+      "path": "ui/src/hooks/useTraceStream.ts",
+      "hash": "8ada3c0fd41d879d9402cacc3afb036b9b9aaf80aecf32ee229e64d30bf064af"
+    },
+    {
+      "path": "ui/src/main.tsx",
+      "hash": "5f49dce6e6cc4b5d678cf529ef892af0ab7dfa6afb300b11ad559224019b8b05"
+    },
+    {
+      "path": "ui/src/types.ts",
+      "hash": "bfbb1589c4c32197b3f46e8b7dda8b86192ca1bd0e333b1e1f1fd198aaa3df7a"
+    },
+    {
+      "path": "ui/src/view.ts",
+      "hash": "0f697da5354c4991ca2e686c4611581aa9220e39162a9cad77b4ba2f9624f4e6"
+    },
+    {
+      "path": "ui/vite.config.ts",
+      "hash": "1eff51970c8b7a8899c843c173ed0e75079b60d0f9a04aabe61fef40f4a932cc"
+    }
+  ],
+  "nodes": [
+    {
+      "slug": "action-engine",
+      "name": "Action Engine",
+      "type": "system",
+      "sources": [
+        "src/action.rs"
+      ],
+      "sourcesDigest": "d527ba8278c7c859a6505daaabab107d4314c76e4814ab1e234123548cbdb1db"
+    },
+    {
+      "slug": "auth-persistence-integration-tests",
+      "name": "Auth & Persistence Integration Tests",
+      "type": "system",
+      "sources": [
+        "tests/v0_7_auth.rs",
+        "tests/v0_8_persistence.rs"
+      ],
+      "sourcesDigest": "f85cb0319f4839c27316e37f7fd4681b0a975c961b8c8801ff11d371a4b8bf1a"
+    },
+    {
+      "slug": "auth-rbac",
+      "name": "Auth & RBAC",
+      "type": "system",
+      "sources": [
+        "src/auth.rs"
+      ],
+      "sourcesDigest": "4a14e07890b8a8de73b48b34b0dec5fa64b413e83aa421d8c6c093c1ca2b0b19"
+    },
+    {
+      "slug": "cli-entry-point",
+      "name": "CLI Entry Point",
+      "type": "system",
+      "sources": [
+        "src/bin/oaip.rs"
+      ],
+      "sourcesDigest": "02ffa2e96daf7d46f8e4e86bc6ae1b63a8c1173a80cdf9a9e0b6c5a50ea9d4e2"
+    },
+    {
+      "slug": "code-generation",
+      "name": "Code Generation",
+      "type": "system",
+      "sources": [
+        "src/codegen.rs"
+      ],
+      "sourcesDigest": "9771858fa68359c846f6be02025855ddf2c0d334f60bc5c1dc259cf889687d8e"
+    },
+    {
+      "slug": "cognitive-engine-pi",
+      "name": "Cognitive Engine (Pi)",
+      "type": "system",
+      "sources": [
+        "src/agent.rs"
+      ],
+      "sourcesDigest": "3ccd74e9bba366a6f522e521733e9cedef78ceb3bf657312a5bcf5a6a44ac5a7"
+    },
+    {
+      "slug": "evolution-engine",
+      "name": "Evolution Engine",
+      "type": "system",
+      "sources": [
+        "src/evolution.rs"
+      ],
+      "sourcesDigest": "8533edaaaa60901516c990d942152cd4a38c83500e7b061b379cfe7b2ecc1506"
+    },
+    {
+      "slug": "idempotency-stable-ids",
+      "name": "Idempotency & Stable IDs",
+      "type": "concept",
+      "sources": [
+        "src/action.rs",
+        "src/evolution.rs",
+        "src/storage.rs",
+        "tests/v0_3.rs"
+      ],
+      "sourcesDigest": "19279c1b2ec548149c85de159a2b62c62905a65646beb6ed975fec674c6be334"
+    },
+    {
+      "slug": "learn-permission-invariant",
+      "name": "Learn≠Permission Invariant",
+      "type": "concept",
+      "sources": [
+        "src/evolution.rs",
+        "src/planner.rs",
+        "src/runtime.rs",
+        "ui/src/api.ts",
+        "ui/src/App.tsx"
+      ],
+      "sourcesDigest": "b6b660a91644fa18eeef20d1cfe218708561a1b54b7ff3e7b14b59f55b1c29d5"
+    },
+    {
+      "slug": "ontology-ir-odl-parsing",
+      "name": "Ontology IR & ODL Parsing",
+      "type": "system",
+      "sources": [
+        "src/ir.rs",
+        "src/odl.rs"
+      ],
+      "sourcesDigest": "f29249acf6c660265e2bf0610f1d20b72925fe8d520ab5dd98aa12cda6a4c5b2"
+    },
+    {
+      "slug": "persistence-layer",
+      "name": "Persistence Layer",
+      "type": "system",
+      "sources": [
+        "src/storage.rs"
+      ],
+      "sourcesDigest": "cdea642f9fff23d9935d4f45de249d1e58284cf06d7cae165477f54a5cc83a0d"
+    },
+    {
+      "slug": "planner-policy-engine",
+      "name": "Planner & Policy Engine",
+      "type": "system",
+      "sources": [
+        "src/planner.rs"
+      ],
+      "sourcesDigest": "14405aef52e43915a9cd6adfd524228aa7de7bf8491fc573d9d2119c8da973ae"
+    },
+    {
+      "slug": "runtime-kernel-observability",
+      "name": "Runtime Kernel & Observability",
+      "type": "system",
+      "sources": [
+        "src/runtime.rs"
+      ],
+      "sourcesDigest": "78414edc9f1dff05e9d55df046e41b0b1c06449f84d8948edc33088ef44a7343"
+    },
+    {
+      "slug": "server-api",
+      "name": "Server & API",
+      "type": "system",
+      "sources": [
+        "src/server.rs"
+      ],
+      "sourcesDigest": "42cb53b408eb7592b30a2791f305902bd86ce0c046ad4b88e85f1fd1ab74f6e0"
+    },
+    {
+      "slug": "server-side-view-clamping",
+      "name": "Server-Side View Clamping",
+      "type": "concept",
+      "sources": [
+        "src/auth.rs",
+        "src/server.rs",
+        "src/trace.rs",
+        "ui/src/view.ts"
+      ],
+      "sourcesDigest": "11e57618d2ca7f3be7914c5477fb1b86565977de0cd86c3e7d07c60cfa1c7280"
+    },
+    {
+      "slug": "timeline-views-dtos",
+      "name": "Timeline Views & DTOs",
+      "type": "system",
+      "sources": [
+        "src/trace.rs"
+      ],
+      "sourcesDigest": "abc97c6450bb7bb661ae2a4e1a698b6381a30b41a164107c882584b49d32b691"
+    },
+    {
+      "slug": "ui-dashboard",
+      "name": "UI Dashboard",
+      "type": "system",
+      "sources": [
+        "ui/src/api.ts",
+        "ui/src/App.tsx",
+        "ui/src/hooks/useTraceStream.ts",
+        "ui/src/main.tsx",
+        "ui/src/types.ts",
+        "ui/src/view.ts",
+        "ui/vite.config.ts"
+      ],
+      "sourcesDigest": "1af69b2eb4f7eca09c96f73f43a9e9e78c5e6e4e853190eb9194984f4afc0b42"
+    },
+    {
+      "slug": "v0-1-v0-3-integration-contract",
+      "name": "V0.1–V0.3 Integration Contract",
+      "type": "system",
+      "sources": [
+        "tests/v0_1.rs",
+        "tests/v0_2.rs",
+        "tests/v0_3.rs"
+      ],
+      "sourcesDigest": "66d8abb9d802da1b0585e75d6a1c0870af74dcdc4b9946c66c189178f32a7d0e"
+    }
+  ]
+}
