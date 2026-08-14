@@ -31,4 +31,19 @@ impl StateStore {
     pub fn keys(&self) -> impl Iterator<Item = &String> {
         self.map.keys()
     }
+
+    /// 全量快照（持久化用）。
+    pub fn snapshot(&self) -> Value {
+        serde_json::to_value(&self.map).unwrap_or(Value::Null)
+    }
+
+    /// 从快照恢复。
+    pub fn from_snapshot(v: Value) -> Self {
+        let map = v
+            .as_object()
+            .map(|o| o.iter().map(|(k, val)| (k.clone(), val.clone())).collect());
+        Self {
+            map: map.unwrap_or_default(),
+        }
+    }
 }

@@ -16,18 +16,22 @@
 //!
 //! Phase 0：纯内存实现 + 状态机 + 单测，不接持久化、不接业务层。
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
+pub mod compensation;
 pub mod context;
 pub mod effect;
 pub mod fiber;
+pub mod persistence;
 pub mod relation;
+pub mod scheduler;
 pub mod state;
 
+pub use compensation::{CompensationEngine, Compensator, NullCompensator, RecordingCompensator};
 pub use context::{Context, ContextId, ContextState, Scope};
 pub use effect::{Compensation, Effect, EffectId, EffectLedger, EffectState, Reversibility};
-pub use fiber::{Fiber, FiberId, FiberState};
+pub use fiber::{Fiber, FiberId, FiberState, WaitPattern};
 pub use relation::{Relation, RelationId};
 pub use state::StateStore;
 
@@ -77,6 +81,10 @@ pub struct Kernel {
     next_relation: u64,
     /// 可注入时钟（测试固定时间验证 P3 过期硬约束）。
     clock: fn() -> i64,
+    /// P1 补偿动作执行器（默认 Null）。
+    compensator: std::sync::Arc<dyn Compensator>,
+    /// 事实层事件（emit/relate/compensate 的审计记录；Phase 1 落 events 表）。
+    events: Vec<KernelEvent>,
 }
 
 impl Default for Kernel {
@@ -91,6 +99,8 @@ impl Default for Kernel {
             next_effect: 0,
             next_relation: 0,
             clock: now_secs,
+            compensator: std::sync::Arc::new(NullCompensator),
+            events: Vec::new(),
         }
     }
 }
@@ -109,6 +119,56 @@ impl Kernel {
 
     fn now(&self) -> i64 {
         (self.clock)()
+    }
+
+    /// 注入补偿执行器（P1）。
+    pub fn with_compensator(mut self, c: std::sync::Arc<dyn Compensator>) -> Self {
+        self.compensator = c;
+        self
+    }
+
+    pub(crate) fn compensator(&self) -> std::sync::Arc<dyn Compensator> {
+        self.compensator.clone()
+    }
+
+    /// 事实层事件（审计）。
+    pub fn events(&self) -> &[KernelEvent] {
+        &self.events
+    }
+
+    fn record_event(&mut self, fiber: Option<FiberId>, ty: &str, payload: Value) {
+        let ctx = fiber.and_then(|f| self.fibers.get(&f).map(|x| x.context));
+        self.events.push(KernelEvent {
+            context: ctx,
+            fiber,
+            ty: ty.to_string(),
+            payload,
+            timestamp: self.now(),
+        });
+    }
+
+    pub(crate) fn mark_effect_compensated(&mut self, id: EffectId) {
+        let fiber = self.effects.get(&id).map(|e| e.fiber);
+        if let Some(e) = self.effects.get_mut(&id) {
+            e.status = EffectState::Compensated;
+        }
+        self.record_event(
+            fiber,
+            "effect.compensated",
+            json!({ "effect": format!("{id}") }),
+        );
+    }
+
+    pub(crate) fn mark_effect_compensation_failed(&mut self, id: EffectId) {
+        let fiber = self.effects.get(&id).map(|e| e.fiber);
+        if let Some(e) = self.effects.get_mut(&id) {
+            e.status = EffectState::CompensationFailed;
+        }
+        self.record_event(
+            fiber,
+            "effect.compensation_failed",
+            json!({ "effect": format!("{id}") }),
+        );
     }
 
     // ── 核心动作 ─────────────────────────────────────────────────────────
@@ -180,12 +240,18 @@ impl Kernel {
         f.ledger.record(id);
         f.output = Some(effect.output.clone().unwrap_or(Value::Null));
         self.effects.insert(id, effect);
-        // 同步登记到 Context 的 fiber 输出（仅状态一致性；Phase 1 由 Relation 投影承担）
+        self.record_event(
+            Some(fiber),
+            "effect.committed",
+            json!({ "effect": format!("{id}") }),
+        );
         let _ = ctx;
         Ok(id)
     }
 
     /// 记录一条 Relation（外部世界事件进入点；Effect 的副作用投影在 Phase 1 原子化）。
+    /// 记录一条 Relation（外部世界事件进入点；Effect 的副作用投影在 Phase 1 原子化）。
+    /// 若存在 WAITING 且 `wait_for` 匹配该 Relation 的 Fiber，自动恢复（resume）。
     pub fn relate(&mut self, mut relation: Relation) -> Result<RelationId, KernelError> {
         if !self.contexts.contains_key(&relation.context) {
             return Err(KernelError::ContextNotFound(relation.context));
@@ -193,8 +259,40 @@ impl Kernel {
         self.next_relation += 1;
         let id = RelationId(self.next_relation);
         relation.id = id;
-        self.relations.insert(id, relation);
+        self.relations.insert(id, relation.clone());
+        self.record_event(
+            None,
+            "relation.created",
+            json!({ "relation": format!("{id}") }),
+        );
+        // 等待匹配：WAITING fiber 的 wait_for 命中 → 自动恢复（审批/定时器/外部事件统一入口）
+        let waiting: Vec<FiberId> = self
+            .fibers
+            .iter()
+            .filter(|(_, f)| f.state == FiberState::Waiting)
+            .filter(|(_, f)| {
+                f.wait_for
+                    .as_ref()
+                    .map(|w| w.matches(&relation))
+                    .unwrap_or(false)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for f in waiting {
+            let _ = self.advance(f, FiberState::Running);
+            self.record_event(Some(f), "fiber.resumed", json!({ "by": format!("{id}") }));
+        }
         Ok(id)
+    }
+
+    /// 声明 Fiber 的等待模式（进入 WAITING 前调用；恢复信号统一经 relate）。
+    pub fn wait_on(&mut self, fiber: FiberId, pattern: WaitPattern) -> Result<(), KernelError> {
+        let f = self
+            .fibers
+            .get_mut(&fiber)
+            .ok_or(KernelError::FiberNotFound(fiber))?;
+        f.wait_for = Some(pattern);
+        Ok(())
     }
 
     /// 状态推进（scheduler/lifecycle 使用；非法转换返回错误，绝不 panic）。
@@ -283,6 +381,40 @@ impl Kernel {
             .map(|f| f.id)
             .collect()
     }
+    pub fn all_contexts(&self) -> impl Iterator<Item = &Context> {
+        self.contexts.values()
+    }
+    pub fn all_fibers(&self) -> impl Iterator<Item = &Fiber> {
+        self.fibers.values()
+    }
+    pub fn all_effects(&self) -> impl Iterator<Item = &Effect> {
+        self.effects.values()
+    }
+    pub fn all_relations(&self) -> impl Iterator<Item = &Relation> {
+        self.relations.values()
+    }
+
+    // ── 恢复辅助（persistence::restore 使用；id 计数器随最大 id 推进） ──
+    pub(crate) fn restore_context(&mut self, ctx: Context) {
+        self.next_ctx = self.next_ctx.max(ctx.id.0 + 1);
+        self.contexts.insert(ctx.id, ctx);
+    }
+    pub(crate) fn restore_fiber(&mut self, f: Fiber) {
+        self.next_fiber = self.next_fiber.max(f.id.0 + 1);
+        self.fibers.insert(f.id, f);
+    }
+    pub(crate) fn restore_effect(&mut self, e: Effect) {
+        self.next_effect = self.next_effect.max(e.id.0 + 1);
+        self.effects.insert(e.id, e);
+    }
+    pub(crate) fn restore_relation(&mut self, r: Relation) {
+        self.next_relation = self.next_relation.max(r.id.0 + 1);
+        self.relations.insert(r.id, r);
+    }
+    pub(crate) fn restore_event(&mut self, ev: KernelEvent) {
+        self.events.push(ev);
+    }
+
     /// 某 Fiber 的已提交 Effect（按提交顺序）。
     pub fn committed_effects(&self, fiber: FiberId) -> Vec<&Effect> {
         self.fibers
@@ -296,6 +428,16 @@ impl Kernel {
             })
             .unwrap_or_default()
     }
+}
+
+/// 事实层事件（审计记录：effect 提交/补偿、relation 创建、fiber 恢复等）。
+#[derive(Debug, Clone)]
+pub struct KernelEvent {
+    pub context: Option<ContextId>,
+    pub fiber: Option<FiberId>,
+    pub ty: String,
+    pub payload: Value,
+    pub timestamp: i64,
 }
 
 #[cfg(test)]
