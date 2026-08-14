@@ -19,6 +19,7 @@ pub mod auth;
 pub mod codegen;
 pub mod evolution;
 pub mod ir;
+pub mod kernel;
 pub mod odl;
 pub mod planner;
 pub mod runtime;
