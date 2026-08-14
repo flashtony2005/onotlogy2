@@ -1,4 +1,4 @@
-//! OpenAIP-OS —— 可执行本体平台内核（V0.1: Object Kernel + 观察基建；V0.2: World Model；V0.3: Agent 闭环 MVP；V0.4: Action & Policy 引擎；V0.5: Memory 沉淀闭环）
+//! OpenAIP-OS —— 可执行本体平台内核（V0.1~V0.6：Object Kernel → World Model → Agent 闭环 → Action/Policy → Memory/Evolution → AutoApprove）
 //!
 //! 模块划分（对应 docs/03_架构设计/module-split.md）：
 //! - `ir`：语言无关的 Ontology IR（ObjectType / PropertyDef / ScalarType）
@@ -22,6 +22,7 @@ pub mod ir;
 pub mod odl;
 pub mod planner;
 pub mod runtime;
+pub mod tool_backend;
 pub mod server;
 pub mod storage;
 pub mod trace;
@@ -52,4 +53,5 @@ pub use storage::{
     ApprovalAudit, LibSQLStorage, MemoryRecord, ObjectEngine, ObjectRecord, RelationEngine,
     RelationRecord, SessionRecord, TraceQuery, UserRecord,
 };
+pub use tool_backend::{ActionHook, NullBackend, ToolBackend, ToolError, ToolOutcome};
 pub use trace::{RunTimeline, TraceEventDto, View};

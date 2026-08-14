@@ -437,13 +437,19 @@ impl LibSQLStorage {
         Ok(out)
     }
 
-    /// 渲染对象列表为 `id name level` 行（对应 TC-006）。
+    /// 渲染对象列表。客户：`id name level`（TC-006）；任务：`id title status`。
     pub fn render_object_list(records: &[ObjectRecord]) -> String {
         let mut lines = Vec::new();
         for r in records {
-            let name = r.data.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let level = r.data.get("level").and_then(|v| v.as_str()).unwrap_or("");
-            lines.push(format!("{} {} {}", r.id, name, level));
+            if r.data.get("status").is_some() {
+                let title = r.data.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                let status = r.data.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                lines.push(format!("{} {} {}", r.id, title, status));
+            } else {
+                let name = r.data.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let level = r.data.get("level").and_then(|v| v.as_str()).unwrap_or("");
+                lines.push(format!("{} {} {}", r.id, name, level));
+            }
         }
         lines.join("\n")
     }
@@ -1426,6 +1432,41 @@ impl LibSQLStorage {
             Some(r) => Ok(Some(user_from_row(&r)?)),
             None => Ok(None),
         }
+    }
+
+    /// 列出全部账号。
+    pub async fn list_users(&self) -> Result<Vec<UserRecord>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, username, password_hash, role, display_name, disabled FROM wb_user",
+                params![],
+            )
+            .await?;
+        let mut users = Vec::new();
+        while let Some(r) = rows.next().await? {
+            users.push(user_from_row(&r)?);
+        }
+        Ok(users)
+    }
+
+    /// 返回对象-关系图（GraphRAG 基础）：节点来自对象，边来自关系。
+    pub async fn get_object_graph(
+        &self,
+    ) -> Result<(Vec<ObjectRecord>, Vec<RelationRecord>), StorageError> {
+        Ok((self.list_all_objects().await?, self.list_all_relations().await?))
+    }
+
+    /// 删除账号（幂等：不存在则 NotFound）。
+    pub async fn delete_user(&self, username: &str) -> Result<(), StorageError> {
+        let Some(u) = self.get_user_by_username(username).await? else {
+            return Err(StorageError::NotFound(format!("user:{username}")));
+        };
+        self.conn
+            .execute("DELETE FROM wb_user WHERE username = ?1", params![username])
+            .await?;
+        self.delete_sessions_for_user(&u.id).await?;
+        Ok(())
     }
 
     /// 启停账号（禁用时级联清其全部会话，应用层替代外键 ON DELETE CASCADE）。

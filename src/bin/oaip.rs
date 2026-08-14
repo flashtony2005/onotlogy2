@@ -10,7 +10,7 @@ use openaip_os::planner::{
 };
 use openaip_os::runtime::RuntimeKernel;
 use openaip_os::server;
-use openaip_os::storage::{LibSQLStorage, ObjectEngine, TraceQuery};
+use openaip_os::storage::{LibSQLStorage, ObjectEngine, TraceQuery, UserRecord};
 use openaip_os::{codegen, parse_odl};
 use serde_json::json;
 use std::net::SocketAddr;
@@ -60,8 +60,8 @@ enum Cmd {
         host: String,
         #[arg(long, default_value = "ui/dist")]
         static_dir: String,
-        /// 可选 ODL 文件：声明对象自有动作（V0.4 完整 Action Engine）；缺省走 legacy 兜底。
-        #[arg(long)]
+        /// ODL 文件：声明对象自有动作（V0.4 完整 Action Engine）；缺省用 examples/crm.odl。
+        #[arg(long, default_value = "examples/crm.odl")]
         odl: Option<String>,
         /// 自动批准所有需审批动作（跳过 Human Approval）；默认 false → require_approval 动作被拒（WB2005）。
         #[arg(long, default_value_t = false)]
@@ -91,8 +91,8 @@ enum AgentCmd {
         /// Agent ID
         #[arg(long, default_value = "retention-agent")]
         agent_id: String,
-        /// 可选 ODL 文件：声明对象自有动作（V0.4 完整 Action Engine）；缺省走 legacy 兜底。
-        #[arg(long)]
+        /// ODL 文件：声明对象自有动作（V0.4 完整 Action Engine）；缺省用 examples/crm.odl。
+        #[arg(long, default_value = "examples/crm.odl")]
         odl: Option<String>,
         /// 自动批准所有需审批动作（跳过交互式 Human Approval）；默认 false → 经 stdin 交互确认。
         #[arg(long, default_value_t = false)]
@@ -146,12 +146,29 @@ enum DbCmd {
 
 #[derive(Subcommand)]
 enum UserCmd {
+    /// 列出所有用户账号（V0.7 认证支持）
+    List,
     /// 离线创建/确保管理员账号（默认 Developer 角色，幂等）；用于首次部署或 env 不便时。
     CreateAdmin {
         username: String,
         /// 口令（建议经环境变量传入，避免出现在 shell 历史）。
         #[arg(long)]
         password: String,
+    },
+    /// 通用创建账号（默认 Developer 角色）
+    Create {
+        username: String,
+        /// 口令
+        #[arg(long)]
+        password: String,
+        #[arg(long, default_value = "Developer")]
+        role: String,
+        #[arg(long, default_value = "")]
+        display_name: String,
+    },
+    /// 删除账号（幂等）
+    Delete {
+        username: String,
     },
 }
 
@@ -220,9 +237,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             DbCmd::Reset => cmd_db_reset(&cli.db).await?,
         },
         Cmd::User { cmd } => match cmd {
+            UserCmd::List => cmd_user_list(&cli.db).await?,
             UserCmd::CreateAdmin { username, password } => {
                 cmd_user_create_admin(&cli.db, &username, &password).await?
             }
+            UserCmd::Create {
+                username,
+                password,
+                role,
+                display_name,
+            } => cmd_user_create(&cli.db, &username, &password, &role, &display_name).await?,
+            UserCmd::Delete { username } => cmd_user_delete(&cli.db, &username).await?,
         },
     }
     Ok(())
@@ -492,14 +517,58 @@ async fn cmd_user_create_admin(
     Ok(())
 }
 
-/// 从 ODL 文件构建动作注册表（V0.4）；缺省返回空注册表（legacy 兜底）。
-fn load_registry(odl: Option<&str>) -> Result<ActionRegistry, Box<dyn std::error::Error>> {
-    match odl {
-        Some(path) => {
-            let src = std::fs::read_to_string(path)?;
-            let ir = parse_odl(&src)?;
-            Ok(ActionRegistry::from_ir(&ir))
-        }
-        None => Ok(ActionRegistry::empty()),
+/// 通用创建账号（默认 Developer 角色）
+async fn cmd_user_create(
+    db: &str,
+    username: &str,
+    password: &str,
+    role: &str,
+    display_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let storage = LibSQLStorage::open(db).await?;
+    let role_str = role.to_lowercase();
+    let rec = UserRecord {
+        id: format!("user.{username}"),
+        username: username.to_string(),
+        password_hash: LocalIdentityProvider::hash_password(password)?,
+        role: role_str,
+        display_name: display_name.to_string(),
+        disabled: false,
+    };
+    storage.create_user(&rec).await?;
+    println!("✅ 用户账号已创建：{username}（角色 {role}）");
+    Ok(())
+}
+
+/// 列出所有用户账号
+async fn cmd_user_list(db: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let storage = LibSQLStorage::open(db).await?;
+    let users = storage.list_users().await?;
+    if users.is_empty() {
+        println!("（无用户账号，先运行 `oaip user create-admin <用户名> --password <口令>`）");
+        return Ok(());
     }
+    for u in users {
+        println!(
+            "{} | {} | {} | disabled={}",
+            u.username, u.role, u.display_name, u.disabled
+        );
+    }
+    Ok(())
+}
+
+/// 删除账号（幂等）
+async fn cmd_user_delete(db: &str, username: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let storage = LibSQLStorage::open(db).await?;
+    storage.delete_user(username).await?;
+    println!("✅ 用户账号已删除：{username}");
+    Ok(())
+}
+
+/// 从 ODL 文件构建动作注册表（V0.4）。
+fn load_registry(odl: Option<&str>) -> Result<ActionRegistry, Box<dyn std::error::Error>> {
+    let path = odl.unwrap_or("examples/crm.odl");
+    let src = std::fs::read_to_string(path)?;
+    let ir = parse_odl(&src)?;
+    Ok(ActionRegistry::from_ir(&ir))
 }

@@ -1,6 +1,19 @@
 // 与 src/trace.rs / docs/05_接口文档/api-agent-trace.md 4.1 同源（camelCase，单一真相源）
 
-export type ViewKind = 'executive' | 'operator' | 'developer' | 'memory' | 'evolution'
+export type ViewKind = 'executive' | 'operator' | 'developer' | 'memory' | 'evolution' | 'tasks'
+
+export interface TaskRecord {
+  id: string
+  title: string
+  customer: string
+  status: string
+  priority: string
+}
+
+export interface TaskListDto {
+  total: number
+  list: TaskRecord[]
+}
 
 export interface TraceEventDto {
   id: string

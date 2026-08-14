@@ -5,7 +5,6 @@
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use openaip_os::action::ActionRegistry;
 use openaip_os::agent::{AgentEngine, AgentError, Context, Decision};
 use openaip_os::auth::{IdentityProvider, LocalIdentityProvider};
 use openaip_os::planner::generate_run_id;
@@ -130,6 +129,29 @@ async fn collect_ws(addr: &SocketAddr, path: &str, token: Option<&str>) -> Resul
 }
 
 // ── TC-ws-a：Developer 经 WS 看全量（reasoning/input/output） ───────────────
+
+fn retain_registry() -> openaip_os::action::ActionRegistry {
+    openaip_os::action::ActionRegistry::from_ir(
+        &openaip_os::parse_odl(
+            r#"
+object Customer:
+  properties:
+    name: string
+    level: string
+  actions:
+    retain:
+      creates:
+        - type: RetentionTask
+          data:
+            title: "客户挽留计划"
+            customer: self
+          link: needs_retention
+"#,
+        )
+        .expect("retain ODL"),
+    )
+}
+
 #[tokio::test]
 async fn tc_ws_developer_full_detail() {
     let (addr, storage) = spawn_ws_server_raw().await;
@@ -239,7 +261,7 @@ async fn spawn_ws_server_raw() -> (SocketAddr, LibSQLStorage) {
             engine,
             listener,
             "ui/dist",
-            ActionRegistry::empty(),
+            retain_registry(),
             false,
             false,
             true, // enforce_auth
@@ -259,7 +281,7 @@ async fn seed_and_run(kernel: &Arc<RuntimeKernel>) {
         .await
         .unwrap();
     let run_id = generate_run_id();
-    Planner::new(kernel.as_ref())
+    Planner::with_actions(kernel.as_ref(), retain_registry())
         .run_goal(&FakeEngine, "reduce churn", "retention-agent", &run_id)
         .await
         .expect("planner 应跑通");

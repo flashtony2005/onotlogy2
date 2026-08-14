@@ -15,8 +15,10 @@ object Customer:
         - type: RetentionTask
           data:
             title: "客户挽留计划"
-            customer: self        # self → 目标客户 ID
-          link: needs_retention   # 建立 Customer -needs_retention-> RetentionTask
+            customer: self
+            status: "Pending"
+            priority: "MEDIUM"
+          link: needs_retention
     # 退款动作：需人工审批（Human Approval），且金额须 <= 1000、非黑名单客户
     refund:
       params:
@@ -33,4 +35,32 @@ object Customer:
           - field: self.level
             op: ne
             value: "BLACKLIST"
+
+# 任务是一等本体对象。Planner 对世界里已有的 RetentionTask 执行声明式生命周期：
+# Pending → start → InProgress → complete → Completed（无需额外参数）。
+object RetentionTask:
+  properties:
+    title: string
+    customer: string
+    status: string
+    priority: string
+  actions:
+    start:
+      updates:
+        - field: status
+          value: "InProgress"
+      policy:
+        precondition:
+          - field: self.status
+            op: eq
+            value: "Pending"
+    complete:
+      updates:
+        - field: status
+          value: "Completed"
+      policy:
+        precondition:
+          - field: self.status
+            op: eq
+            value: "InProgress"
 

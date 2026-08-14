@@ -3,7 +3,7 @@
 | 项 | 内容 |
 |----|------|
 | 文档ID | WB-DOC-09-003 |
-| 所属模块 | WorkBuddy-Version |
+| 所属模块 | OpenAIP-OS-Version |
 | 版本 | V1.5 |
 | 创建人 | lushaohui |
 | 创建时间 | 2026-08-11 |

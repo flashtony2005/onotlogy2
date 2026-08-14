@@ -1,17 +1,21 @@
 # 本地与 CI 共用的质量门禁（与 docs/09_迭代与版本/design-ci.md 对齐）。
 # 用法：make check（fmt/clippy/test）| make ci（check + ui + audit）
+# 需 nightly（见 rust-toolchain.toml）；若 PATH 无 cargo，用 rustup 工具链 bin。
+
+CARGO ?= cargo
+export PATH := $(HOME)/.rustup/toolchains/nightly-2026-07-17-aarch64-apple-darwin/bin:$(HOME)/.cargo/bin:$(PATH)
 
 fmt:
-	cargo fmt
+	$(CARGO) fmt
 
 fmt-check:
-	cargo fmt --check
+	$(CARGO) fmt --check
 
 clippy:
-	cargo clippy --all-targets -- -D warnings
+	$(CARGO) clippy --all-targets -- -D warnings
 
 test:
-	cargo test --all-targets
+	$(CARGO) test --all-targets
 
 ui:
 	cd ui && npm ci && npm run build

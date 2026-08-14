@@ -22,7 +22,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-/// 与 v0_3 同源的可用引擎：每步固定返回决策，跑通 legacy 挽留闭环（无审批闸门）。
+/// 与 v0_3 同源的可用引擎：每步固定返回决策，跑通声明式挽留闭环（无审批闸门）。
 struct FakeEngine;
 
 #[async_trait]
@@ -67,7 +67,7 @@ async fn spawn_server(kernel: Arc<RuntimeKernel>) -> SocketAddr {
             engine,
             listener,
             "ui/dist",
-            ActionRegistry::empty(),
+            retain_registry(),
             false,
             false,
             false,
@@ -141,6 +141,30 @@ fn temp_db() -> String {
 }
 
 // ── TC-persist-a：run 生命周期持久化（先 Running，完成 Completed） ──────────────────────
+
+fn retain_registry() -> ActionRegistry {
+    use openaip_os::parse_odl;
+    ActionRegistry::from_ir(
+        &parse_odl(
+            r#"
+object Customer:
+  properties:
+    name: string
+    level: string
+  actions:
+    retain:
+      creates:
+        - type: RetentionTask
+          data:
+            title: "客户挽留计划"
+            customer: self
+          link: needs_retention
+"#,
+        )
+        .expect("retain ODL"),
+    )
+}
+
 #[tokio::test]
 async fn tc_persist_a_run_lifecycle_persisted() {
     let path = temp_db();
@@ -148,7 +172,7 @@ async fn tc_persist_a_run_lifecycle_persisted() {
     let kernel = Arc::new(RuntimeKernel::new(
         LibSQLStorage::open(&path).await.unwrap(),
     ));
-    // 种子一个客户，使 legacy 挽留闭环有候选
+    // 种子一个客户，使声明式挽留闭环有候选
     kernel
         .create_object("Customer", "001", json!({"name": "Apple"}))
         .await

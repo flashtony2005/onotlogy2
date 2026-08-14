@@ -3,7 +3,7 @@
 | 项 | 内容 |
 |----|------|
 | 文档ID | WB-DOC-02-006 |
-| 所属模块 | WorkBuddy-Requirement |
+| 所属模块 | OpenAIP-OS-Requirement |
 | 版本 | V1.1 |
 | 创建人 | lushaohui |
 | 创建时间 | 2026-08-11 |

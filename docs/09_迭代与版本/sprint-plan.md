@@ -3,7 +3,7 @@
 | 项 | 内容 |
 |----|------|
 | 文档ID | WB-DOC-09-001 |
-| 所属模块 | WorkBuddy-Version |
+| 所属模块 | OpenAIP-OS-Version |
 | 版本 | V1.8 |
 | 创建人 | lushaohui |
 | 创建时间 | 2026-08-11 |
@@ -75,7 +75,9 @@ V0.5 Agent 自治      让系统能学习       自学习 / Evolution / Memory �
 | V0.3 | Agent 闭环（= MVP） | REQ-009~011 | 已实现 |
 | V0.4 | Action & Policy | REQ-014（Action 引擎）/ REQ-015（Policy 引擎） | 已实现 |
 | V0.5 | Agent 自治（Memory 沉淀 + Evolution MVP） | REQ-016（已实现）；REQ-017 Evolution Engine MVP（已实现，Learn≠Permission） | 已实现 |
-| V0.6 | Evolution 第二阶段 AutoApprove（受控 Knowledge→Permission） | REQ-018（已实现：5 道闸门 + 默认关闭 + 可审计(wb_approval_audit) + 可撤销 + ActionFailed 埋点；TC-026a~h 全绿） | 已实现 |
+| V0.7 | 用户与账号管理（CLI + 服务器认证端点） | REQ-019 | 已实现 |
+| V0.8 | GraphRAG / Multi-Agent 基础（待世界模型成熟） | - | 待办 |
+| V0.9 | 完整 Action Engine 扩展 + Policy 优化 | - | 待办 |
 
 ## 5. 风险点 & 注意事项
 - 范围蔓延：V0.3 的 Agent 极易被提前"顺手"塞进 V0.1/V0.2，须以本表为卡点。

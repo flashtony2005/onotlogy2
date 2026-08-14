@@ -3,7 +3,7 @@
 | 项 | 内容 |
 |----|------|
 | 文档ID | WB-DOC-07-001 |
-| 所属模块 | WorkBuddy-Test |
+| 所属模块 | OpenAIP-OS-Test |
 | 版本 | V2.1 |
 | 创建人 | lushaohui |
 | 创建时间 | 2026-08-11 |

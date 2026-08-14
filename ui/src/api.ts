@@ -8,6 +8,7 @@ import type {
   MemoryListDto,
   RunStartDto,
   RunTimeline,
+  TaskListDto,
 } from './types'
 
 async function unwrap<T>(res: Response): Promise<T> {
@@ -38,6 +39,12 @@ export async function getTimeline(runId: string, view: string): Promise<RunTimel
 export async function getMemory(): Promise<MemoryListDto> {
   const res = await fetch('/api/v1/wb/agent/memory')
   return unwrap<MemoryListDto>(res)
+}
+
+/// `GET /api/v1/wb/agent/tasks`：RetentionTask 状态列表。
+export async function getTasks(): Promise<TaskListDto> {
+  const res = await fetch('/api/v1/wb/agent/tasks')
+  return unwrap<TaskListDto>(res)
 }
 
 /// `GET /api/v1/wb/agent/evolution`：Evolution 聚合状态（BL-003 · REQ-017）。

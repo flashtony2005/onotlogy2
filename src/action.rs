@@ -1,8 +1,7 @@
 //! 完整 Action Engine（对应 REQ-014 / V0.4）
 //!
-//! V0.3 的"最小 Action 执行"是 Planner 内硬编码的 `build_retention_plan` + `Capability` 枚举；
-//! V0.4 把它升级为**声明式、通用的 Action Engine**：动作写在对象上（ODL `actions:` → IR
-//! `ActionDef`），由本模块解释执行（updates / creates / link），不再为每类动作写专属分支。
+//! 声明式、通用的动作执行：动作写在对象上（ODL `actions:` → IR `ActionDef`），
+//! 由本模块解释执行（updates / creates / link），不为每类动作写专属分支。
 //!
 //! 设计要点：
 //! - `ActionRegistry`：从 IR 构建 `类型 → 动作名 → ActionDef` 映射，运行时驱动。
@@ -22,7 +21,7 @@ pub struct ActionRegistry {
 }
 
 impl ActionRegistry {
-    /// 空注册表（无 ODL 时，Planner 走 legacy 兜底）。
+    /// 空注册表（无 ODL 时，无声明动作）。
     pub fn empty() -> Self {
         Self::default()
     }
@@ -58,7 +57,7 @@ impl ActionRegistry {
         self.map.get(object_type).is_some_and(|m| !m.is_empty())
     }
 
-    /// 注册表是否为空（无 ODL 时为真，Planner 走 legacy 兜底）。
+    /// 注册表是否为空。
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
@@ -75,6 +74,9 @@ pub enum ActionError {
     /// 引用了动作未声明的参数。
     #[error("动作引用未知参数 '{0}'")]
     UnknownParam(String),
+    /// 出世界 ToolBackend 失败。
+    #[error("工具后端: {0}")]
+    Backend(String),
 }
 
 /// 一次动作执行的效应摘要（供 Planner / 观察层使用）。

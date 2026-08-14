@@ -4,7 +4,6 @@
 //! 前端 `?view=` 被钳制到角色上限，登录/登出/禁用生命周期正确。
 
 use async_trait::async_trait;
-use openaip_os::action::ActionRegistry;
 use openaip_os::agent::{AgentEngine, AgentError, Context, Decision};
 use openaip_os::auth::{IdentityProvider, LocalIdentityProvider};
 use openaip_os::runtime::RuntimeKernel;
@@ -115,7 +114,7 @@ async fn spawn_auth_server() -> (SocketAddr, LibSQLStorage) {
             engine,
             listener,
             "ui/dist",
-            ActionRegistry::empty(),
+            retain_registry(),
             false,
             false,
             true, // enforce_auth
@@ -128,6 +127,29 @@ async fn spawn_auth_server() -> (SocketAddr, LibSQLStorage) {
 }
 
 // ── TC-auth-a：无令牌访问受保护端点 → 401 ───────────────────────────────
+
+fn retain_registry() -> openaip_os::action::ActionRegistry {
+    openaip_os::action::ActionRegistry::from_ir(
+        &openaip_os::parse_odl(
+            r#"
+object Customer:
+  properties:
+    name: string
+    level: string
+  actions:
+    retain:
+      creates:
+        - type: RetentionTask
+          data:
+            title: "客户挽留计划"
+            customer: self
+          link: needs_retention
+"#,
+        )
+        .expect("retain ODL"),
+    )
+}
+
 #[tokio::test]
 async fn tc_auth_a_no_token_401() {
     let (addr, _s) = spawn_auth_server().await;

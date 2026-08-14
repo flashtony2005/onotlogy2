@@ -1,0 +1,45 @@
+# 代码世界本体：File / Finding。lint 的出世界执行由 ToolBackend 提供，
+# ActionEngine 只根据后端回填的 params 写 Finding。
+
+object File:
+  properties:
+    path: string
+  actions:
+    lint:
+      params:
+        summary: string
+        severity: string
+      creates:
+        - type: Finding
+          data:
+            title: summary
+            severity: severity
+            status: "Open"
+            file: self
+          link: has_finding
+
+object Finding:
+  properties:
+    title: string
+    severity: string
+    status: string
+    file: string
+  actions:
+    confirm:
+      updates:
+        - field: status
+          value: "Confirmed"
+      policy:
+        precondition:
+          - field: self.status
+            op: eq
+            value: "Open"
+    dismiss:
+      updates:
+        - field: status
+          value: "Dismissed"
+      policy:
+        precondition:
+          - field: self.status
+            op: eq
+            value: "Open"

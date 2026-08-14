@@ -3,7 +3,7 @@
 | 项 | 内容 |
 |----|------|
 | 文档ID | WB-DOC-10-002 |
-| 所属模块 | WorkBuddy-Retro |
+| 所属模块 | OpenAIP-OS-Retro |
 | 版本 | V1.0 |
 | 创建人 | lushaohui |
 | 创建时间 | 2026-08-11 |

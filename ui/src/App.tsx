@@ -1,11 +1,19 @@
 import { useMemo, useState } from 'react'
-import { getApprovalAudit, getEvolution, getMemory, postAutoApproveToggle, postRun } from './api'
+import {
+  getApprovalAudit,
+  getEvolution,
+  getMemory,
+  getTasks,
+  postAutoApproveToggle,
+  postRun,
+} from './api'
 import { useTraceStream } from './hooks/useTraceStream'
 import { buildTimeline } from './view'
 import type {
   ApprovalAuditDto,
   EvolutionStateDto,
   MemoryRecord,
+  TaskRecord,
   TraceEventDto,
   ViewKind,
 } from './types'
@@ -28,6 +36,7 @@ const VIEWS: { key: ViewKind; label: string; desc: string }[] = [
   { key: 'developer', label: 'Developer', desc: '开发者 · 全量 IO' },
   { key: 'memory', label: 'Memory', desc: '记忆沉淀 · Action→Memory 闭环' },
   { key: 'evolution', label: 'Evolution', desc: '自学习 · Experience→Knowledge 闭环' },
+  { key: 'tasks', label: 'Tasks', desc: '任务状态 · Pending→Completed' },
 ]
 
 function fmtTime(ts: string): string {
@@ -73,6 +82,20 @@ export default function App() {
 
   const [evolution, setEvolution] = useState<EvolutionStateDto | null>(null)
   const [evolutionLoading, setEvolutionLoading] = useState(false)
+  const [tasks, setTasks] = useState<TaskRecord[]>([])
+  const [tasksLoading, setTasksLoading] = useState(false)
+
+  const reloadTasks = async () => {
+    setTasksLoading(true)
+    try {
+      const dto = await getTasks()
+      setTasks(dto.list)
+    } catch {
+      /* 暂无任务或后端未就绪：保留上次结果 */
+    } finally {
+      setTasksLoading(false)
+    }
+  }
 
   // Evolution 视图刷新：从 REST /evolution 拉取聚合状态（仅可见性，不改 Policy）。
   const reloadEvolution = async () => {
@@ -94,6 +117,9 @@ export default function App() {
       if (e.eventType === 'MemoryUpdate' || e.eventType === 'MemoryRecall') {
         void reloadMemory()
       }
+      if (e.eventType === 'Action' || e.eventType === 'Planning') {
+        void reloadTasks()
+      }
     },
     onStatus: setConnected,
   })
@@ -114,7 +140,8 @@ export default function App() {
       const dto = await postRun(agentId, goal)
       setEvents([])
       setRunId(dto.runId)
-      void reloadMemory() // 运行前先载入已有记忆（MemoryRecall 起点）
+      void reloadMemory()
+      void reloadTasks()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -129,7 +156,7 @@ export default function App() {
           <span className="logo">◈</span>
           <div>
             <h1>OpenAIP-OS · Agent 认知观察</h1>
-            <p className="sub">V0.5 · 自有 Planner 闭环 · Memory 沉淀 · Evolution(Learn≠Permission)</p>
+            <p className="sub">V0.6 · 声明式 Action · Memory 沉淀 · Evolution(Learn≠Permission)</p>
           </div>
         </div>
         <div className={`conn ${connected ? 'on' : 'off'}`}>
@@ -186,6 +213,7 @@ export default function App() {
               setView(v.key)
               if (v.key === 'memory') void reloadMemory()
               if (v.key === 'evolution') void reloadEvolution()
+              if (v.key === 'tasks') void reloadTasks()
             }}
             title={v.desc}
           >
@@ -196,7 +224,7 @@ export default function App() {
       </nav>
 
       <main className="timeline">
-        {!runId && view !== 'memory' && view !== 'evolution' && (
+        {!runId && view !== 'memory' && view !== 'evolution' && view !== 'tasks' && (
           <div className="empty">
             输入目标并点击「触发 Agent 运行」，实时观察 Agent 认知闭环。
           </div>
@@ -210,7 +238,11 @@ export default function App() {
           <EvolutionPanel state={evolution} loading={evolutionLoading} onReload={reloadEvolution} />
         )}
 
-        {runId && timeline.decision && view !== 'memory' && view !== 'evolution' && (
+        {view === 'tasks' && (
+          <TaskPanel tasks={tasks} loading={tasksLoading} onReload={reloadTasks} />
+        )}
+
+        {runId && timeline.decision && view !== 'memory' && view !== 'evolution' && view !== 'tasks' && (
           <div className="decision">
             <h3>📊 决策摘要（Executive）</h3>
             <div>
@@ -228,11 +260,11 @@ export default function App() {
           </div>
         )}
 
-        {runId && view !== 'memory' && view !== 'evolution' && timeline.events.length === 0 && (
+        {runId && view !== 'memory' && view !== 'evolution' && view !== 'tasks' && timeline.events.length === 0 && (
           <div className="empty">等待认知事件…</div>
         )}
 
-        {view !== 'memory' && view !== 'evolution' && timeline.events.length > 0 &&
+        {view !== 'memory' && view !== 'evolution' && view !== 'tasks' && timeline.events.length > 0 &&
           timeline.events.map((ev) => (
           <article key={ev.id} className={`event ${ev.eventType.toLowerCase()}`}>
             <div className="ev-head">
@@ -268,6 +300,47 @@ export default function App() {
           </article>
         ))}
       </main>
+    </div>
+  )
+}
+
+function TaskPanel({
+  tasks,
+  loading,
+  onReload,
+}: {
+  tasks: TaskRecord[]
+  loading: boolean
+  onReload: () => void
+}) {
+  return (
+    <div className="memory">
+      <div className="memory-head">
+        <h3>📌 任务状态（本体 RetentionTask）</h3>
+        <button className="reload" onClick={onReload} disabled={loading}>
+          {loading ? '刷新中…' : '↻ 刷新'}
+        </button>
+      </div>
+      {tasks.length === 0 ? (
+        <div className="empty">
+          暂无任务。触发「manage retention tasks」类目标后，Planner 会创建
+          <code>RetentionTask</code> 并推进 Pending → InProgress → Completed。
+        </div>
+      ) : (
+        <div className="memory-list">
+          {tasks.map((t) => (
+            <article key={t.id} className="memory-item">
+              <div className="mem-head">
+                <code className="mem-label">{t.id}</code>
+                <span className={`task-status ${t.status.toLowerCase()}`}>{t.status || '—'}</span>
+                {t.priority && <span className="mem-hits">{t.priority}</span>}
+              </div>
+              <p className="task-title">{t.title || '（无标题）'}</p>
+              <p className="task-meta">客户 {t.customer || '—'}</p>
+            </article>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

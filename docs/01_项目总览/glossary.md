@@ -3,7 +3,7 @@
 | 项 | 内容 |
 |----|------|
 | 文档ID | WB-DOC-01-004 |
-| 所属模块 | WorkBuddy-Overview |
+| 所属模块 | OpenAIP-OS-Overview |
 | 版本 | V1.1 |
 | 创建人 | lushaohui |
 | 创建时间 | 2026-08-11 |

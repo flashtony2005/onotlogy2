@@ -421,6 +421,34 @@ body {
   font-size: 11px;
   color: var(--muted);
 }
+.task-status {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  color: var(--muted);
+  background: var(--panel-2);
+}
+.task-status.pending {
+  color: var(--amber);
+  background: rgba(210, 153, 34, 0.15);
+}
+.task-status.inprogress {
+  color: var(--accent);
+  background: rgba(88, 166, 255, 0.15);
+}
+.task-status.completed {
+  color: var(--green);
+  background: rgba(63, 185, 80, 0.12);
+}
+.task-title {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+.task-meta {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
 .mem-payload {
   margin: 0;
   background: var(--panel-2);

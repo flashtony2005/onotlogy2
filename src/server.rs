@@ -35,9 +35,14 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use tokio::net::TcpListener;
+
+/// poison 时恢复内层数据，避免 runs 映射路径 panic。
+fn lock_runs<'a, T>(m: &'a Mutex<T>) -> MutexGuard<'a, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// 运行记录（内存态，供 timeline 状态覆盖与 WB2004/2005 快速反馈）。
 struct RunRecord {
@@ -50,7 +55,7 @@ struct RunRecord {
 pub struct AppState {
     pub kernel: Arc<RuntimeKernel>,
     pub engine: Arc<dyn AgentEngine>,
-    /// 动作注册表（V0.4）：对象自有动作的声明式来源；空 → legacy 兜底。
+    /// 动作注册表（V0.4）：对象自有动作的声明式来源。
     pub registry: ActionRegistry,
     /// 是否自动批准需审批动作（Human Approval）：默认 false → require_approval 动作挂起等待 HTTP 审批。
     auto_approve: bool,
@@ -190,6 +195,24 @@ struct MemoryListDto {
     list: Vec<MemoryRecordDto>,
 }
 
+/// 任务观察 DTO：本体对象 `RetentionTask` 的状态投影。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskRecordDto {
+    id: String,
+    title: String,
+    customer: String,
+    status: String,
+    priority: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskListDto {
+    total: usize,
+    list: Vec<TaskRecordDto>,
+}
+
 // ── Evolution Engine（BL-003 · REQ-017）：Experience → Knowledge ────────────────────────
 
 #[derive(Serialize)]
@@ -245,6 +268,7 @@ fn router() -> Router<Arc<AppState>> {
         .route("/api/v1/wb/agent/trace/:id", get(get_trace))
         .route("/api/v1/wb/agent/run/:run_id/timeline", get(timeline))
         .route("/api/v1/wb/agent/memory", get(list_memory))
+        .route("/api/v1/wb/agent/tasks", get(list_tasks))
         .route("/api/v1/wb/agent/evolution", get(list_evolution))
         .route(
             "/api/v1/wb/agent/evolution/learned/:id",
@@ -271,8 +295,8 @@ fn router() -> Router<Arc<AppState>> {
         // ── V0.7 认证端点 ──
         .route("/api/v1/wb/auth/login", post(auth_login))
         .route("/api/v1/wb/auth/logout", post(auth_logout))
-        .route("/api/v1/wb/auth/me", get(auth_me))
-        .fallback(get(serve_static))
+        // ── V0.8 GraphRAG 基础（对象-关系图） ──
+        .route("/api/v1/wb/graph", get(list_graph))
 }
 
 /// 启动 HTTP + WS 服务（绑定已就绪的 listener，返回绑定地址供测试使用）。
@@ -353,7 +377,7 @@ async fn recover(state: &Arc<AppState>) {
         Ok(r) => r,
         Err(_) => return,
     };
-    let mut g = state.runs.lock().unwrap();
+    let mut g = lock_runs(&state.runs);
     for r in runs {
         g.insert(
             r.id.clone(),
@@ -466,13 +490,28 @@ async fn auth_logout(
     ApiResponse::ok(json!({ "loggedOut": true })).into_response()
 }
 
-/// `GET /api/v1/wb/auth/me`：返回当前认证用户（供前端初始化角色）。需鉴权。
-async fn auth_me(Extension(user): Extension<AuthUser>) -> Response {
-    ApiResponse::ok(json!({
-        "username": user.username,
-        "role": user.role
-    }))
-    .into_response()
+async fn list_graph(State(st): State<Arc<AppState>>, Extension(_auth): Extension<AuthUser>) -> Response {
+    let (objects, relations) = match st.kernel.storage().get_object_graph().await {
+        Ok(g) => g,
+        Err(_) => return ApiResponse::<()>::error(5000, "存储错误").into_response(),
+    };
+    let nodes: Vec<Value> = objects
+        .into_iter()
+        .map(|o| json!({ "id": o.id, "type": o.r#type, "data": o.data }))
+        .collect();
+    let edges: Vec<Value> = relations
+        .into_iter()
+        .map(|r| {
+            json!({
+                "id": r.id,
+                "source": r.source,
+                "target": r.target,
+                "type": r.relation,
+                "data": r.data
+            })
+        })
+        .collect();
+    ApiResponse::ok(json!({ "nodes": nodes, "edges": edges })).into_response()
 }
 
 // ──  handlers  ───────────────────────────────────────────────────────────
@@ -537,7 +576,7 @@ async fn timeline(
         .unwrap_or_default();
     let mut tl = build_timeline(events, run_id.clone(), agent_id, view);
     // 用运行记录覆盖状态：内存优先，重启后内存为空则回退 DB（捕捉 WB2004/2005 失败）。
-    if let Some(rec) = st.runs.lock().unwrap().get(&run_id) {
+    if let Some(rec) = lock_runs(&st.runs).get(&run_id) {
         tl.status = rec.status.as_str().to_string();
         if rec.human_approval {
             tl.human_approval = "Required".to_string();
@@ -572,6 +611,50 @@ async fn list_memory(
         .collect::<Vec<_>>();
     let total = list.len();
     ApiResponse::ok(MemoryListDto { total, list }).into_response()
+}
+
+fn task_field(data: &Value, key: &str) -> String {
+    data.get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn task_status_rank(status: &str) -> u8 {
+    match status {
+        "Pending" => 0,
+        "InProgress" => 1,
+        "Completed" => 2,
+        _ => 3,
+    }
+}
+
+/// `GET /api/v1/wb/agent/tasks`：RetentionTask 状态列表（观察层任务视图）。
+async fn list_tasks(
+    State(st): State<Arc<AppState>>,
+    Extension(_auth): Extension<AuthUser>,
+) -> Response {
+    let records = match st.kernel.query_objects("RetentionTask").await {
+        Ok(r) => r,
+        Err(_) => return ApiResponse::error(5000, "存储错误").into_response(),
+    };
+    let mut list: Vec<TaskRecordDto> = records
+        .into_iter()
+        .map(|o| TaskRecordDto {
+            id: o.id,
+            title: task_field(&o.data, "title"),
+            customer: task_field(&o.data, "customer"),
+            status: task_field(&o.data, "status"),
+            priority: task_field(&o.data, "priority"),
+        })
+        .collect();
+    list.sort_by(|a, b| {
+        task_status_rank(&a.status)
+            .cmp(&task_status_rank(&b.status))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    let total = list.len();
+    ApiResponse::ok(TaskListDto { total, list }).into_response()
 }
 
 /// `GET /api/v1/wb/agent/evolution`：Evolution 聚合状态（BL-003 · REQ-017）。
@@ -853,7 +936,7 @@ async fn run_start(
     }
 
     let run_id = generate_run_id();
-    st.runs.lock().unwrap().insert(
+    lock_runs(&st.runs).insert(
         run_id.clone(),
         RunRecord {
             status: RunStatus::Running,
@@ -916,7 +999,7 @@ async fn run_start(
             .storage()
             .update_run_status(&rid, rec.status.as_str(), Some(&now_micros()))
             .await;
-        st2.runs.lock().unwrap().insert(rid, rec);
+        lock_runs(&st2.runs).insert(rid, rec);
     });
 
     let dto = RunStartDto {
@@ -954,7 +1037,9 @@ async fn handle_ws(
     let history = collect_history(&st, &id, after.as_deref(), view).await;
     for dto in history {
         if sender
-            .send(Message::Text(serde_json::to_string(&dto).unwrap()))
+            .send(Message::Text(
+                serde_json::to_string(&dto).unwrap_or_else(|_| "{}".into()),
+            ))
             .await
             .is_err()
         {
@@ -977,7 +1062,7 @@ async fn handle_ws(
                                 continue;
                             };
                             if sender
-                                .send(Message::Text(serde_json::to_string(&dto).unwrap()))
+                                .send(Message::Text(serde_json::to_string(&dto).unwrap_or_else(|_| "{}".into())))
                                 .await
                                 .is_err()
                             {

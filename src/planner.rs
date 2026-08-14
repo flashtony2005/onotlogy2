@@ -8,22 +8,29 @@
 use crate::action::{ActionEngine, ActionError, ActionRegistry};
 use crate::agent::{AgentEngine, AgentError, Context, Decision, WorldSnapshot};
 use crate::evolution::LearnedKnowledge;
-use crate::ir::{ActionDef, CompareOp, PolicyDef, ValueExpr};
+use crate::ir::{ActionDef, CompareOp, PolicyDef, ScalarType, ValueExpr};
 use crate::runtime::RuntimeKernel;
 use crate::storage::StorageError;
+use crate::tool_backend::{ActionHook, NullBackend, ToolBackend, ToolError, ToolOutcome};
 use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::MutexGuard;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::oneshot;
 
 /// HTTP 审批挂起的最长等待时间；超时按拒绝处理（不授予权限）。
 pub const APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// 获取互斥锁：poison 时恢复内层数据（不 panic），避免审批/缓存路径因 poison 整进程崩溃。
+fn lock_mutex<'a, T>(m: &'a Mutex<T>) -> MutexGuard<'a, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// REQ-018 运行时配置：Evolution 第二阶段 AutoApprove 的全局开关。
 /// **默认关闭**——不显式开启，行为等同 MVP（require_approval 动作仍走 Human Approval）。
@@ -242,14 +249,14 @@ impl Default for ConsoleApprover {
 impl PolicyApprover for ConsoleApprover {
     async fn approve(&self, step: &PlanStep) -> bool {
         let key = Self::key_of(step);
-        if let Some(v) = self.cache.lock().unwrap().get(&key) {
+        if let Some(v) = lock_mutex(&self.cache).get(&key) {
             return *v;
         }
         let ans = prompt(&format!(
             "⚠️ 需 Human Approval：{}？[y/N] ",
             step.description
         ));
-        self.cache.lock().unwrap().insert(key, ans);
+        lock_mutex(&self.cache).insert(key, ans);
         ans
     }
 }
@@ -383,7 +390,7 @@ impl ApprovalStore {
     /// 内部：注册待审批并挂起（由 `ServerApprover` 调用，返回裁决信道接收端）。
     fn register(&self, req: ApprovalRequest) -> oneshot::Receiver<bool> {
         let (tx, rx) = oneshot::channel();
-        self.requests.lock().unwrap().insert(
+        lock_mutex(&self.requests).insert(
             req.req_id.clone(),
             ApprovalEntry {
                 request: req,
@@ -398,7 +405,7 @@ impl ApprovalStore {
     /// 导致的 UI 幽灵待审批（Critical-1/2）；Expired 与人工 Rejected 可区分（Critical-3）。
     /// 已裁决（tx 为 None）或已 Expired 的请求幂等：直接返回。
     pub fn expire(&self, req_id: &str) {
-        let mut g = self.requests.lock().unwrap();
+        let mut g = lock_mutex(&self.requests);
         if let Some(e) = g.get_mut(req_id) {
             e.tx = None;
             if e.request.state == ApprovalState::Pending {
@@ -417,7 +424,7 @@ impl ApprovalStore {
         tx: Option<oneshot::Sender<bool>>,
     ) {
         use crate::planner::ApprovalRequest;
-        self.requests.lock().unwrap().insert(
+        lock_mutex(&self.requests).insert(
             req_id.to_string(),
             ApprovalEntry {
                 request: ApprovalRequest {
@@ -436,7 +443,7 @@ impl ApprovalStore {
     /// 裁决：发信号唤醒挂起的 Planner，更新状态；返回是否成功裁决。
     /// 请求不存在 / 已裁决（tx 已被取走）/ 已超时 Expired → 返回 false（HTTP 端点映射 404）。
     pub fn resolve(&self, req_id: &str, approve: bool) -> bool {
-        let mut g = self.requests.lock().unwrap();
+        let mut g = lock_mutex(&self.requests);
         let Some(e) = g.get_mut(req_id) else {
             return false;
         };
@@ -636,11 +643,15 @@ impl Policy {
             if may_auto_approve(config, learned, success_runs, failure_count, &def.policy) {
                 match auditor {
                     // 审计成功 → 自动放行（替代 Human Approval）
-                    Some(a) => match a.record(learned.unwrap().id.as_str(), &def.name).await {
-                        Ok(()) => return PolicyDecision::Allow,
-                        // 审计写库失败 → 回退 Human Approval（绝不静默放行）
-                        Err(_) => { /* fall through to approver */ }
-                    },
+                    Some(a) => {
+                        if let Some(lk) = learned {
+                            match a.record(lk.id.as_str(), &def.name).await {
+                                Ok(()) => return PolicyDecision::Allow,
+                                // 审计写库失败 → 回退 Human Approval（绝不静默放行）
+                                Err(_) => { /* fall through to approver */ }
+                            }
+                        }
+                    }
                     // 纯单元测试无 auditor：直接放行（审计留待集成层）
                     None => return PolicyDecision::Allow,
                 }
@@ -683,10 +694,244 @@ fn resolve_value(
         ValueExpr::Param(p) => args.get(p).cloned().unwrap_or(Value::Null),
         ValueExpr::SelfId => Value::String(target_id.to_string()),
         ValueExpr::SelfField(f) => target
-            .and_then(|t| t.get(f))
-            .cloned()
+            .and_then(|t| {
+                t.get(f)
+                    .cloned()
+                    .or_else(|| t.get("data").and_then(|d| d.get(f)).cloned())
+            })
             .unwrap_or(Value::Null),
     }
+}
+
+fn step_key(step: &PlanStep) -> Option<String> {
+    match &step.capability {
+        Capability::Action {
+            object_type,
+            action,
+            target_id,
+            ..
+        } => Some(format!("{object_type}:{action}:{target_id}")),
+        _ => None,
+    }
+}
+
+/// 用户目标优先，其次解析出的 Intent；都认不出则不过滤（只靠前置条件）。
+fn action_matches_intent(action: &str, goal: &str, intent: &str) -> bool {
+    match intent_action_allowlist(goal, intent) {
+        None => true,
+        Some(allow) => allow
+            .iter()
+            .any(|a| a.eq_ignore_ascii_case(action)),
+    }
+}
+
+fn intent_action_allowlist(goal: &str, intent: &str) -> Option<&'static [&'static str]> {
+    classify_intent_text(goal).or_else(|| classify_intent_text(intent))
+}
+
+fn classify_intent_text(text: &str) -> Option<&'static [&'static str]> {
+    let t = text.to_ascii_lowercase();
+    if contains_any(&t, &["lint", "clippy", "质量", "静态检查"]) {
+        return Some(&["lint"]);
+    }
+    if contains_any(&t, &["refund", "退款"]) {
+        return Some(&["refund"]);
+    }
+    if contains_any(&t, &["close account", "closeaccount", "关闭账号", "关闭账户"]) {
+        return Some(&["closeaccount"]);
+    }
+    if contains_any(
+        &t,
+        &[
+            "retain",
+            "retention",
+            "churn",
+            "挽留",
+            "task",
+            "任务",
+        ],
+    ) {
+        return Some(&["retain", "start", "complete"]);
+    }
+    None
+}
+
+fn contains_any(hay: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|n| hay.contains(n))
+}
+
+/// 从目标/Intent 抽取动作参数：只填 ODL `params:` 声明过的字段。
+/// 具名 `amount=500` 优先；否则 Int/Float 取文本中最后一个数字（避免把对象 id 当成金额）。
+fn extract_action_args(
+    act: &ActionDef,
+    goal: &str,
+    intent: &str,
+    world_ids: &[String],
+) -> HashMap<String, Value> {
+    let hay = format!("{goal} {intent}");
+    let for_nums = strip_object_ids(&hay, world_ids);
+    let nums = scan_numbers(&for_nums);
+    let mut out = HashMap::new();
+    for p in &act.params {
+        if let Some(v) = extract_named_param(&hay, &p.name, p.ty) {
+            out.insert(p.name.clone(), v);
+            continue;
+        }
+        match p.ty {
+            ScalarType::Int | ScalarType::Float => {
+                if let Some(&n) = nums.last() {
+                    out.insert(p.name.clone(), number_as(p.ty, n));
+                }
+            }
+            ScalarType::Bool => {
+                if let Some(b) = extract_bool(&hay) {
+                    out.insert(p.name.clone(), Value::Bool(b));
+                }
+            }
+            ScalarType::String => {}
+        }
+    }
+    out
+}
+
+fn extract_named_param(hay: &str, name: &str, ty: ScalarType) -> Option<Value> {
+    let lower = hay.to_ascii_lowercase();
+    let key = name.to_ascii_lowercase();
+    let idx = lower.find(&key)?;
+    let rest = hay[idx + name.len()..].trim_start();
+    let rest = rest
+        .strip_prefix(['=', ':', '：'])
+        .map(str::trim_start)
+        .unwrap_or(rest);
+    match ty {
+        ScalarType::Int | ScalarType::Float => {
+            let n = scan_numbers(rest).into_iter().next()?;
+            Some(number_as(ty, n))
+        }
+        ScalarType::Bool => extract_bool(rest).map(Value::Bool),
+        ScalarType::String => {
+            let tok = rest.split_whitespace().next()?;
+            Some(Value::String(tok.trim_matches(|c| c == '"' || c == '\'').to_string()))
+        }
+    }
+}
+
+fn strip_object_ids(hay: &str, ids: &[String]) -> String {
+    hay.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '.' && c != '-')
+        .filter(|t| !t.is_empty() && !ids.iter().any(|id| id == t))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn token_in_text(text: &str, id: &str) -> bool {
+    text.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '.' && c != '-')
+        .any(|t| t == id)
+}
+
+/// 目标文本点名优先；否则用解析 refs（去掉 world 哨兵）；都没有则不限制（None）。
+fn resolve_target_ids(
+    goal: &str,
+    parsed_refs: &[String],
+    world_ids: &[String],
+) -> Option<Vec<String>> {
+    let mentioned: Vec<String> = world_ids
+        .iter()
+        .filter(|id| token_in_text(goal, id))
+        .cloned()
+        .collect();
+    if !mentioned.is_empty() {
+        return Some(mentioned);
+    }
+    let parsed: Vec<String> = parsed_refs
+        .iter()
+        .filter(|r| !r.is_empty() && r.as_str() != "world" && world_ids.iter().any(|id| id == *r))
+        .cloned()
+        .collect();
+    if parsed.is_empty() {
+        None
+    } else {
+        Some(parsed)
+    }
+}
+
+fn world_object_ids(world: &WorldSnapshot) -> Vec<String> {
+    world
+        .objects
+        .iter()
+        .filter_map(|o| o.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .collect()
+}
+
+fn object_in_scope(obj: &Value, scope: &[String]) -> bool {
+    let id = obj.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    if scope.iter().any(|s| s == id) {
+        return true;
+    }
+    if scope.iter().any(|s| id.starts_with(&format!("{s}_"))) {
+        return true;
+    }
+    if let Some(cust) = obj
+        .get("data")
+        .and_then(|d| d.get("customer"))
+        .and_then(|v| v.as_str())
+    {
+        return scope.iter().any(|s| s == cust);
+    }
+    false
+}
+
+fn scan_numbers(s: &str) -> Vec<f64> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for ch in s.chars() {
+        if ch.is_ascii_digit() || ch == '.' || (ch == '-' && cur.is_empty()) {
+            cur.push(ch);
+        } else if !cur.is_empty() {
+            if let Ok(n) = cur.parse::<f64>() {
+                out.push(n);
+            }
+            cur.clear();
+        }
+    }
+    if !cur.is_empty() {
+        if let Ok(n) = cur.parse::<f64>() {
+            out.push(n);
+        }
+    }
+    out
+}
+
+fn number_as(ty: ScalarType, n: f64) -> Value {
+    match ty {
+        ScalarType::Int => Value::from(n as i64),
+        _ => Value::from(n),
+    }
+}
+
+fn extract_bool(s: &str) -> Option<bool> {
+    let t = s.to_ascii_lowercase();
+    if t.contains("true") || t.contains("yes") || t.contains("是") {
+        Some(true)
+    } else if t.contains("false") || t.contains("no") || t.contains("否") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn action_preconditions_hold(
+    act: &ActionDef,
+    target: Option<&Value>,
+    args: &HashMap<String, Value>,
+) -> bool {
+    for clause in &act.policy.precondition {
+        let lhs = resolve_policy_field(&clause.field, args, target);
+        let rhs = resolve_value(&clause.value, args, target, "");
+        if !compare_values(&lhs, &rhs, clause.op) {
+            return false;
+        }
+    }
+    true
 }
 
 /// 按运算符比较两个 JSON 值：Eq/Ne 走全相等；其余按数值（f64）比较，非数则 false。
@@ -757,25 +1002,14 @@ pub struct Goal {
 /// Planner：OpenAIP 自有决策编排核心。
 pub struct Planner<'a> {
     kernel: &'a RuntimeKernel,
-    /// 动作注册表（V0.4）：对象自有动作的声明式来源；空 → legacy 兜底。
     registry: ActionRegistry,
-    /// Policy 审批器（Human Approval 闸门）；默认 `AutoApprover { allow: false }`（拒，等待人工）。
     approver: Arc<dyn PolicyApprover>,
-    /// REQ-018 运行时配置：Evolution 第二阶段 AutoApprove 全局开关（默认关闭）。
     config: RuntimeConfig,
+    backend: Arc<dyn ToolBackend>,
+    hooks: Vec<Arc<dyn ActionHook>>,
 }
 
 impl<'a> Planner<'a> {
-    /// 无动作注册表（legacy 兜底：硬编码挽留计划）。
-    pub fn new(kernel: &'a RuntimeKernel) -> Self {
-        Self {
-            kernel,
-            registry: ActionRegistry::empty(),
-            approver: Arc::new(AutoApprover { allow: false }),
-            config: RuntimeConfig::default(),
-        }
-    }
-
     /// 带动作注册表（V0.4 完整 Action Engine）：候选对象经声明式动作执行。
     pub fn with_actions(kernel: &'a RuntimeKernel, registry: ActionRegistry) -> Self {
         Self {
@@ -783,7 +1017,21 @@ impl<'a> Planner<'a> {
             registry,
             approver: Arc::new(AutoApprover { allow: false }),
             config: RuntimeConfig::default(),
+            backend: Arc::new(NullBackend),
+            hooks: Vec::new(),
         }
+    }
+
+    /// 注入出世界 ToolBackend（不支持的动作仍只跑 ActionEngine）。
+    pub fn with_backend(mut self, backend: Arc<dyn ToolBackend>) -> Self {
+        self.backend = backend;
+        self
+    }
+
+    /// 追加一条流水线闸门（pre Deny 则本步不执行）。
+    pub fn with_hook(mut self, hook: Arc<dyn ActionHook>) -> Self {
+        self.hooks.push(hook);
+        self
     }
 
     /// 注入 REQ-018 运行时配置（Evolution 第二阶段 AutoApprove 开关）。
@@ -798,45 +1046,52 @@ impl<'a> Planner<'a> {
         self
     }
 
-    /// 候选对象选择：注册表非空 → 声明了 actions 的对象；否则 legacy 仅 Customer。
-    /// 均排除派生对象（如 RetentionTask），二次运行保持幂等。
-    fn select_candidates(&self, world: &WorldSnapshot) -> Vec<String> {
+    /// 候选对象：有 actions 的对象；若 scope 有值则只保留范围内（含派生任务）。
+    fn select_candidates(&self, world: &WorldSnapshot, scope: Option<&[String]>) -> Vec<String> {
         world
             .objects
             .iter()
             .filter(|o| {
                 let t = o.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                if self.registry.is_empty() {
-                    t == "Customer"
-                } else {
-                    self.registry.has_actions(t)
-                }
+                self.registry.has_actions(t)
             })
+            .filter(|o| scope.map(|s| object_in_scope(o, s)).unwrap_or(true))
             .filter_map(|o| o.get("id").and_then(|x| x.as_str()).map(|s| s.to_string()))
             .collect()
     }
 
-    /// 计划构建：候选对象声明了动作 → `Capability::Action`（经 ActionEngine 执行）；
-    /// 否则 legacy 挽留计划（无 ODL 时保持 V0.3 行为）。
-    fn build_plan(&self, world: &WorldSnapshot, candidates: &[String]) -> Vec<PlanStep> {
-        if self.registry.is_empty() {
-            return build_retention_plan(candidates);
-        }
+    /// 计划构建：候选对象上、意图允许且当前快照满足前置条件的动作 → `Capability::Action`。
+    fn build_plan(
+        &self,
+        world: &WorldSnapshot,
+        candidates: &[String],
+        goal: &str,
+        intent: &str,
+    ) -> Vec<PlanStep> {
         let mut steps = Vec::new();
         for c in candidates {
-            let otype = world
+            let obj = world
                 .objects
                 .iter()
-                .find(|o| o.get("id").and_then(|v| v.as_str()) == Some(c.as_str()))
+                .find(|o| o.get("id").and_then(|v| v.as_str()) == Some(c.as_str()));
+            let otype = obj
                 .and_then(|o| o.get("type").and_then(|v| v.as_str()))
                 .unwrap_or("");
             for act in self.registry.actions_of(otype) {
+                if !action_matches_intent(&act.name, goal, intent) {
+                    continue;
+                }
+                let world_ids = world_object_ids(world);
+                let args = extract_action_args(act, goal, intent, &world_ids);
+                if !action_preconditions_hold(act, obj, &args) {
+                    continue;
+                }
                 steps.push(PlanStep {
                     capability: Capability::Action {
                         object_type: otype.to_string(),
                         action: act.name.clone(),
                         target_id: c.clone(),
-                        args: json!({}),
+                        args: json!(args),
                     },
                     object_refs: vec![c.clone()],
                     description: format!("对 {c} 执行声明式动作 {}", act.name),
@@ -844,6 +1099,105 @@ impl<'a> Planner<'a> {
             }
         }
         steps
+    }
+
+    async fn apply_steps(
+        &self,
+        steps: &[PlanStep],
+        world: &WorldSnapshot,
+        run_id: &str,
+        agent_id: &str,
+        executed_actions: &mut Vec<String>,
+        executed_keys: &mut HashSet<String>,
+    ) -> Result<(), PlannerError> {
+        for step in steps {
+            let decision = match &step.capability {
+                Capability::Action {
+                    object_type,
+                    action,
+                    target_id,
+                    args,
+                } => {
+                    let def = self.registry.get(object_type, action);
+                    let target = world.objects.iter().find(|o| {
+                        o.get("id").and_then(|v| v.as_str()) == Some(target_id.as_str())
+                    });
+                    let args_map: HashMap<String, Value> = args
+                        .as_object()
+                        .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                        .unwrap_or_default();
+                    let learned = self.kernel.evolution_state().await.ok().and_then(|st| {
+                        st.learned.into_iter().find(|l| l.action == *action)
+                    });
+                    let failure_count = self.kernel.count_action_failed(action).await.unwrap_or(0);
+                    let auditor = RunAuditor::new(self.kernel, run_id);
+                    Policy::check_action(
+                        step,
+                        def,
+                        self.approver.as_ref(),
+                        target,
+                        &args_map,
+                        &self.config,
+                        learned.as_ref(),
+                        failure_count,
+                        Some(&auditor),
+                    )
+                    .await
+                }
+                _ => Policy::check(step),
+            };
+            match decision {
+                PolicyDecision::Deny { reason } => {
+                    self.kernel
+                        .emit_cognitive(
+                            "PolicyCheck",
+                            run_id,
+                            agent_id,
+                            &step.object_refs,
+                            Some(&format!("DENY: {reason}")),
+                            Some(json!({ "capability": step.description })),
+                            Some(json!("Deny")),
+                            Some(0.0),
+                        )
+                        .await?;
+                    return Err(PlannerError::PolicyDenied(reason));
+                }
+                PolicyDecision::Allow => {
+                    self.kernel
+                        .emit_cognitive(
+                            "PolicyCheck",
+                            run_id,
+                            agent_id,
+                            &step.object_refs,
+                            Some("ALLOW"),
+                            Some(json!({ "capability": step.description })),
+                            Some(json!("Allow")),
+                            Some(0.95),
+                        )
+                        .await?;
+                    self.execute_step(step, run_id, agent_id).await?;
+                    if let Capability::Action { action, .. } = &step.capability {
+                        executed_actions.push(action.clone());
+                    }
+                    if let Some(k) = step_key(step) {
+                        executed_keys.insert(k);
+                    }
+                    self.kernel
+                        .emit_cognitive(
+                            "Action",
+                            run_id,
+                            agent_id,
+                            &step.object_refs,
+                            Some(&step.description),
+                            Some(json!({ "capability": step.description })),
+                            Some(json!("Success")),
+                            Some(0.9),
+                        )
+                        .await?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// 运行一个目标，跑通完整认知闭环并返回运行结果。
@@ -890,9 +1244,13 @@ impl<'a> Planner<'a> {
         let _ = intent_dec;
 
         // 3) OntologyQuery：从世界模型找出目标作用对象。
-        //    V0.4：若注册表非空，候选 = 声明了 actions 的对象（避免把派生对象再当候选）；
-        //    legacy 兜底：仅 Customer（保持 V0.3 行为幂等）。
-        let candidates = self.select_candidates(&world);
+        //    候选 = 声明了 actions 的对象（避免把派生对象再当候选）。
+        let root_scope = resolve_target_ids(
+            goal,
+            &goal_parsed.object_refs,
+            &world_object_ids(&world),
+        );
+        let candidates = self.select_candidates(&world, root_scope.as_deref());
         let scope_refs = non_empty(candidates.clone());
         self.kernel
             .emit_cognitive(
@@ -953,8 +1311,12 @@ impl<'a> Planner<'a> {
                 &world,
             )
             .await?;
-        // 5') 计划构建：注册表驱动的声明式动作 → Capability::Action；否则 legacy 挽留计划。
-        let steps = self.build_plan(&world, &candidates);
+        // 5') 计划构建：注册表驱动的声明式动作 → Capability::Action。
+        //     世界因动作改变后重快照、重规划，直到无新适用动作（一轮目标推到稳态）。
+        const MAX_PLAN_WAVES: usize = 8;
+        let mut world = world;
+        let mut scope_refs = scope_refs;
+        let mut steps = self.build_plan(&world, &candidates, goal, &goal_parsed.intent);
         self.kernel
             .emit_cognitive(
                 "Planning",
@@ -962,103 +1324,50 @@ impl<'a> Planner<'a> {
                 agent_id,
                 &scope_refs,
                 Some(&plan_dec.reasoning),
-                Some(json!({ "candidates": candidates })),
+                Some(json!({ "candidates": candidates, "wave": 0 })),
                 Some(json!({ "steps": steps.iter().map(|s| json!({ "description": s.description, "object_refs": s.object_refs })).collect::<Vec<_>>() })),
                 Some(plan_dec.confidence),
             )
             .await?;
 
-        // 6) PolicyCheck + Action：逐步经 Policy 校验后执行（最小闭环）
         let mut executed_actions: Vec<String> = Vec::new();
-        for step in &steps {
-            // 声明式动作结合其自带 PolicyDef（前置条件 + 审批闸门）校验；
-            // 其余能力走通用 Policy（破坏性动作默认拒）。
-            let decision =
-                match &step.capability {
-                    Capability::Action {
-                        object_type,
-                        action,
-                        target_id,
-                        args,
-                    } => {
-                        let def = self.registry.get(object_type, action);
-                        let target = world.objects.iter().find(|o| {
-                            o.get("id").and_then(|v| v.as_str()) == Some(target_id.as_str())
-                        });
-                        let args_map: HashMap<String, Value> = args
-                            .as_object()
-                            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-                            .unwrap_or_default();
-                        // REQ-018：取该 action 已沉淀知识 + 历史失败数，供自动放行判定（异常→视为无知识→回退 Human）。
-                        let learned =
-                            self.kernel.evolution_state().await.ok().and_then(|st| {
-                                st.learned.into_iter().find(|l| l.action == *action)
-                            });
-                        let failure_count =
-                            self.kernel.count_action_failed(action).await.unwrap_or(0);
-                        let auditor = RunAuditor::new(self.kernel, &run_id);
-                        Policy::check_action(
-                            step,
-                            def,
-                            self.approver.as_ref(),
-                            target,
-                            &args_map,
-                            &self.config,
-                            learned.as_ref(),
-                            failure_count,
-                            Some(&auditor),
-                        )
-                        .await
-                    }
-                    _ => Policy::check(step),
-                };
-            match decision {
-                PolicyDecision::Deny { reason } => {
-                    self.kernel
-                        .emit_cognitive(
-                            "PolicyCheck",
-                            &run_id,
-                            agent_id,
-                            &step.object_refs,
-                            Some(&format!("DENY: {reason}")),
-                            Some(json!({ "capability": step.description })),
-                            Some(json!("Deny")),
-                            Some(0.0),
-                        )
-                        .await?;
-                    return Err(PlannerError::PolicyDenied(reason));
+        let mut executed_keys: HashSet<String> = HashSet::new();
+        for wave in 0..MAX_PLAN_WAVES {
+            if wave > 0 {
+                world = self.kernel.snapshot_world().await?;
+                let next = self.select_candidates(&world, root_scope.as_deref());
+                scope_refs = non_empty(next.clone());
+                steps = self.build_plan(&world, &next, goal, &goal_parsed.intent);
+                steps.retain(|s| {
+                    step_key(s)
+                        .map(|k| !executed_keys.contains(&k))
+                        .unwrap_or(true)
+                });
+                if steps.is_empty() {
+                    break;
                 }
-                PolicyDecision::Allow => {
-                    self.kernel
-                        .emit_cognitive(
-                            "PolicyCheck",
-                            &run_id,
-                            agent_id,
-                            &step.object_refs,
-                            Some("ALLOW"),
-                            Some(json!({ "capability": step.description })),
-                            Some(json!("Allow")),
-                            Some(0.95),
-                        )
-                        .await?;
-                    self.execute_step(step, &run_id, agent_id).await?;
-                    if let Capability::Action { action, .. } = &step.capability {
-                        executed_actions.push(action.clone());
-                    }
-                    self.kernel
-                        .emit_cognitive(
-                            "Action",
-                            &run_id,
-                            agent_id,
-                            &step.object_refs,
-                            Some(&step.description),
-                            Some(json!({ "capability": step.description })),
-                            Some(json!("Success")),
-                            Some(0.9),
-                        )
-                        .await?;
-                }
+                self.kernel
+                    .emit_cognitive(
+                        "Planning",
+                        &run_id,
+                        agent_id,
+                        &scope_refs,
+                        Some(&format!("重规划 wave={wave}（世界已变，推进未完成任务）")),
+                        Some(json!({ "wave": wave, "candidates": next })),
+                        Some(json!({ "steps": steps.iter().map(|s| json!({ "description": s.description })).collect::<Vec<_>>() })),
+                        Some(0.9),
+                    )
+                    .await?;
             }
+            self.apply_steps(
+                &steps,
+                &world,
+                &run_id,
+                agent_id,
+                &mut executed_actions,
+                &mut executed_keys,
+            )
+            .await?;
         }
 
         // 7) MemoryUpdate：记录挽留经验模式（认知闭环收尾）
@@ -1203,63 +1512,72 @@ impl<'a> Planner<'a> {
                             "动作 {action}@{object_type} 未注册"
                         )))
                     })?;
-                let args_map: HashMap<String, Value> = args
+                let mut args_map: HashMap<String, Value> = args
                     .as_object()
                     .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
                     .unwrap_or_default();
-                let engine = ActionEngine::new(self.kernel);
-                match engine.invoke(&def, target_id, &args_map).await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        // REQ-018 埋点：动作执行失败 → 发 ActionFailed 认知事件（强判定「无失败」闸门）。
-                        // 绑定目标对象，避免 WB2006 拦截；action 名写入 input 供精确计数。
-                        let _ = self
-                            .kernel
-                            .emit_cognitive(
-                                "ActionFailed",
-                                run_id,
-                                agent_id,
-                                std::slice::from_ref(target_id),
-                                Some(&format!("动作 {action}@{object_type} 执行失败：{e}")),
-                                Some(json!({ "action": action })),
-                                Some(json!({ "error": e.to_string() })),
-                                Some(0.0),
-                            )
-                            .await;
-                        return Err(PlannerError::Action(e));
+                for hook in &self.hooks {
+                    if let Err(reason) = hook.pre(object_type, action, target_id).await {
+                        return Err(PlannerError::PolicyDenied(format!(
+                            "闸门 {} 拒绝: {reason}",
+                            hook.name()
+                        )));
                     }
+                }
+                let mut outcome = ToolOutcome::default();
+                if self.backend.supports(object_type, action) {
+                    let target = self.kernel.get_object(target_id).await?.ok_or_else(|| {
+                        PlannerError::Action(ActionError::TargetNotFound(target_id.clone()))
+                    })?;
+                    let _ = self
+                        .kernel
+                        .emit_cognitive(
+                            "ToolBackend",
+                            run_id,
+                            agent_id,
+                            std::slice::from_ref(target_id),
+                            Some(&format!("后端 {} 执行 {action}@{object_type}", self.backend.name())),
+                            Some(json!({ "backend": self.backend.name(), "action": action })),
+                            None,
+                            Some(0.9),
+                        )
+                        .await;
+                    outcome = self
+                        .backend
+                        .execute(object_type, action, &target, &args_map)
+                        .await
+                        .map_err(|e: ToolError| PlannerError::Action(ActionError::Backend(e.to_string())))?;
+                    args_map.extend(outcome.extra_args.clone());
+                }
+                if !outcome.skip_world {
+                    let engine = ActionEngine::new(self.kernel);
+                    match engine.invoke(&def, target_id, &args_map).await {
+                        Ok(_) => {}
+                        Err(e) => {
+                            let _ = self
+                                .kernel
+                                .emit_cognitive(
+                                    "ActionFailed",
+                                    run_id,
+                                    agent_id,
+                                    std::slice::from_ref(target_id),
+                                    Some(&format!("动作 {action}@{object_type} 执行失败：{e}")),
+                                    Some(json!({ "action": action })),
+                                    Some(json!({ "error": e.to_string() })),
+                                    Some(0.0),
+                                )
+                                .await;
+                            return Err(PlannerError::Action(e));
+                        }
+                    }
+                }
+                for hook in &self.hooks {
+                    hook.post(object_type, action, target_id, &outcome).await;
                 }
             }
         }
         Ok(())
     }
-}
-
-/// 由候选客户对象生成挽留计划步（OpenAIP 自有规划：每客户创建挽留任务并建边）。
-fn build_retention_plan(candidates: &[String]) -> Vec<PlanStep> {
-    let mut steps = Vec::new();
-    for c in candidates {
-        let task_id = format!("task_{c}");
-        steps.push(PlanStep {
-            capability: Capability::CreateObject {
-                object_type: "RetentionTask".to_string(),
-                id: task_id.clone(),
-                data: json!({ "title": "客户挽留计划", "customer": c }),
-            },
-            object_refs: vec![c.clone(), task_id.clone()],
-            description: format!("为 {c} 创建挽留任务 {task_id}"),
-        });
-        steps.push(PlanStep {
-            capability: Capability::LinkRelation {
-                source: c.clone(),
-                edge: "needs_retention".to_string(),
-                target: task_id,
-            },
-            object_refs: vec![c.clone()],
-            description: format!("建立 {c} -needs_retention-> 挽留任务"),
-        });
-    }
-    steps
 }
 
 /// 调用认知引擎（统一处理 WB2004 映射）；`emit=true` 时发认知事件。
@@ -1312,4 +1630,117 @@ fn new_run_id() -> String {
 /// 预生成运行 ID（server 在触发运行前占坑状态映射）。
 pub fn generate_run_id() -> String {
     new_run_id()
+}
+
+#[cfg(test)]
+mod intent_filter_tests {
+    use super::*;
+
+    #[test]
+    fn goal_text_wins_over_generic_intent() {
+        assert!(action_matches_intent(
+            "closeAccount",
+            "close account",
+            "Customer Retention"
+        ));
+        assert!(!action_matches_intent(
+            "retain",
+            "close account",
+            "Customer Retention"
+        ));
+    }
+
+    #[test]
+    fn retention_goal_excludes_refund() {
+        assert!(action_matches_intent("retain", "manage retention tasks", ""));
+        assert!(action_matches_intent("start", "manage retention tasks", ""));
+        assert!(action_matches_intent("complete", "manage retention tasks", ""));
+        assert!(!action_matches_intent("refund", "manage retention tasks", ""));
+    }
+
+    #[test]
+    fn refund_goal_only_allows_refund() {
+        assert!(action_matches_intent("refund", "退款", "Customer Retention"));
+        assert!(!action_matches_intent("retain", "退款", "Customer Retention"));
+    }
+
+    #[test]
+    fn unknown_goal_does_not_filter() {
+        assert!(action_matches_intent("refund", "hello world", "unrelated"));
+        assert!(action_matches_intent("retain", "hello world", "unrelated"));
+    }
+
+    fn amount_param() -> ActionDef {
+        ActionDef {
+            name: "refund".into(),
+            params: vec![crate::ir::ParamDef {
+                name: "amount".into(),
+                ty: ScalarType::Float,
+            }],
+            updates: vec![],
+            creates: vec![],
+            policy: crate::ir::PolicyDef::default(),
+        }
+    }
+
+    #[test]
+    fn extract_last_number_as_amount() {
+        let args = extract_action_args(&amount_param(), "refund this customer 500", "", &[]);
+        assert_eq!(args.get("amount").and_then(|v| v.as_f64()), Some(500.0));
+    }
+
+    #[test]
+    fn extract_named_amount_wins() {
+        let args = extract_action_args(
+            &amount_param(),
+            "refund customer 001 amount=80",
+            "",
+            &["001".into()],
+        );
+        assert_eq!(args.get("amount").and_then(|v| v.as_f64()), Some(80.0));
+    }
+
+    #[test]
+    fn extract_skips_when_no_number() {
+        let args = extract_action_args(&amount_param(), "manage retention tasks", "", &[]);
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn extract_skips_object_id_as_amount() {
+        let args = extract_action_args(
+            &amount_param(),
+            "refund 001 500",
+            "",
+            &["001".into()],
+        );
+        assert_eq!(args.get("amount").and_then(|v| v.as_f64()), Some(500.0));
+    }
+
+    #[test]
+    fn resolve_prefers_goal_mentioned_ids() {
+        let world = vec!["001".into(), "002".into()];
+        let got = resolve_target_ids("refund 001 500", &["002".into()], &world);
+        assert_eq!(got, Some(vec!["001".into()]));
+    }
+
+    #[test]
+    fn resolve_falls_back_to_parsed_refs() {
+        let world = vec!["001".into(), "002".into()];
+        let got = resolve_target_ids(
+            "manage retention tasks",
+            &["001".into(), "world".into()],
+            &world,
+        );
+        assert_eq!(got, Some(vec!["001".into()]));
+    }
+
+    #[test]
+    fn resolve_unrestricted_when_nothing_named() {
+        let world = vec!["001".into()];
+        assert_eq!(
+            resolve_target_ids("hello", &["world".into()], &world),
+            None
+        );
+    }
 }

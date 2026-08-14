@@ -58,8 +58,7 @@ export function buildTimeline(
   let tlEvents: TimelineEvent[] = []
   let decision: DecisionSummary | undefined
 
-  if (view === 'memory') {
-    // Memory 视图不渲染认知时间线（由 App 单独渲染记忆列表）
+  if (view === 'memory' || view === 'evolution' || view === 'tasks') {
     return { runId, agentId, status, progress, humanApproval, events: [], decision: undefined }
   } else if (view === 'executive') {
     // 仅 Mission(Goal) + Decision/Outcome(Action)，隐藏思考细节

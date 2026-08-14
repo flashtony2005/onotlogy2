@@ -17,3 +17,16 @@
 # 前端（ui/）：依赖与构建产物
 /ui/node_modules/
 /ui/dist/
+
+# IDE / 多 Agent 工具本地配置（不入库）
+.claude/
+.cursor/
+.gemini/
+.kiro/
+.windsurf/
+.mcp.json
+.ignore
+opencode.json
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+graft/

@@ -16,7 +16,8 @@ use openaip_os::planner::{
 };
 use openaip_os::runtime::RuntimeKernel;
 use openaip_os::server;
-use openaip_os::storage::{LibSQLStorage, TraceQuery};
+use openaip_os::storage::{LibSQLStorage, ObjectRecord, TraceQuery};
+use openaip_os::tool_backend::{ActionHook, ToolBackend, ToolError, ToolOutcome};
 use openaip_os::trace::{View, build_timeline};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -78,6 +79,29 @@ impl AgentEngine for UnavailableEngine {
     }
 }
 
+/// 默认挽留动作注册表（声明式 retain，替代已移除的 legacy 硬编码计划）。
+fn retain_registry() -> ActionRegistry {
+    ActionRegistry::from_ir(
+        &parse_odl(
+            r#"
+object Customer:
+  properties:
+    name: string
+    level: string
+  actions:
+    retain:
+      creates:
+        - type: RetentionTask
+          data:
+            title: "客户挽留计划"
+            customer: self
+          link: needs_retention
+"#,
+        )
+        .expect("retain ODL"),
+    )
+}
+
 /// 种子一个客户并跑通 Planner 闭环，返回 (kernel, run_id)。
 async fn seed_and_run(engine: &dyn AgentEngine) -> (RuntimeKernel, String) {
     let s = LibSQLStorage::open(":memory:").await.unwrap();
@@ -87,7 +111,7 @@ async fn seed_and_run(engine: &dyn AgentEngine) -> (RuntimeKernel, String) {
         .await
         .unwrap();
     let run_id = generate_run_id();
-    Planner::new(&kernel)
+    Planner::with_actions(&kernel, retain_registry())
         .run_goal(engine, "reduce churn", "retention-agent", &run_id)
         .await
         .expect("planner 应跑通");
@@ -173,7 +197,7 @@ async fn tc010b_engine_unavailable_wb2004() {
     let s = LibSQLStorage::open(":memory:").await.unwrap();
     let kernel = RuntimeKernel::new(s);
     let run_id = generate_run_id();
-    let err = Planner::new(&kernel)
+    let err = Planner::with_actions(&kernel, retain_registry())
         .run_goal(
             &UnavailableEngine,
             "reduce churn",
@@ -280,7 +304,7 @@ async fn tc009_ws_stream_and_reconnect() {
             engine,
             listener,
             "ui/dist",
-            ActionRegistry::empty(),
+            retain_registry(),
             false,
             false,
             false,
@@ -289,7 +313,7 @@ async fn tc009_ws_stream_and_reconnect() {
     });
 
     // 先跑完 Planner（事件已落库，WS 连接时由 history 补齐）
-    Planner::new(kernel.as_ref())
+    Planner::with_actions(kernel.as_ref(), retain_registry())
         .run_goal(&FakeEngine, "reduce churn", "retention-agent", &run_id)
         .await
         .unwrap();
@@ -401,7 +425,7 @@ async fn spawn_server(kernel: std::sync::Arc<RuntimeKernel>) -> SocketAddr {
             engine,
             listener,
             "ui/dist",
-            ActionRegistry::empty(),
+            retain_registry(),
             false,
             false,
             false,
@@ -424,7 +448,7 @@ async fn tc012_multi_candidate_closed_loop() {
             .unwrap();
     }
     let run_id = generate_run_id();
-    Planner::new(&kernel)
+    Planner::with_actions(&kernel, retain_registry())
         .run_goal(&FakeEngine, "reduce churn", "retention-agent", &run_id)
         .await
         .expect("多候选也应跑通");
@@ -492,7 +516,7 @@ async fn tc012b_empty_world_object_refs_sentinel() {
     let s = LibSQLStorage::open(":memory:").await.unwrap();
     let kernel = RuntimeKernel::new(s);
     let run_id = generate_run_id();
-    Planner::new(&kernel)
+    Planner::with_actions(&kernel, retain_registry())
         .run_goal(&FakeEngine, "reduce churn", "retention-agent", &run_id)
         .await
         .expect("空世界也应跑通");
@@ -572,7 +596,7 @@ async fn tc_rest_trace_list_and_404() {
     let addr = spawn_server(kernel.clone()).await;
 
     let run_id = generate_run_id();
-    Planner::new(kernel.as_ref())
+    Planner::with_actions(kernel.as_ref(), retain_registry())
         .run_goal(&FakeEngine, "reduce churn", "retention-agent", &run_id)
         .await
         .unwrap();
@@ -698,7 +722,7 @@ async fn tc_ws_run_scoped() {
 async fn tc011_repeated_run_is_idempotent() {
     let (kernel, _) = seed_and_run(&FakeEngine).await;
     let run_id = generate_run_id();
-    Planner::new(&kernel)
+    Planner::with_actions(&kernel, retain_registry())
         .run_goal(&FakeEngine, "reduce churn", "retention-agent", &run_id)
         .await
         .expect("同一库二次运行应幂等成功");
@@ -919,6 +943,356 @@ async fn tc014c_planner_via_registry_closed_loop() {
         policy.iter().all(|p| *p == "Allow"),
         "Policy 应 Allow 声明式动作"
     );
+}
+
+/// 本体论任务管理：retain 创建 Pending 任务 → start → complete（无需 Planner 传参）。
+#[tokio::test]
+async fn tc_task_lifecycle_via_ontology_actions() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    kernel
+        .create_object("Customer", "001", json!({"name": "Apple", "level": "VIP"}))
+        .await
+        .unwrap();
+    let ir = parse_odl(include_str!("../examples/crm.odl")).unwrap();
+    assert!(
+        ir.object_types.iter().any(|t| t.name == "RetentionTask"),
+        "crm.odl 须声明 RetentionTask 为一等对象"
+    );
+    let reg = ActionRegistry::from_ir(&ir);
+    let engine = ActionEngine::new(&kernel);
+
+    engine
+        .invoke(reg.get("Customer", "retain").unwrap(), "001", &HashMap::new())
+        .await
+        .unwrap();
+    let tasks = kernel.query_objects("RetentionTask").await.unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].data["status"], json!("Pending"));
+    let tid = tasks[0].id.clone();
+
+    engine
+        .invoke(reg.get("RetentionTask", "start").unwrap(), &tid, &HashMap::new())
+        .await
+        .unwrap();
+    let t = kernel.get_object(&tid).await.unwrap().unwrap();
+    assert_eq!(t.data["status"], json!("InProgress"));
+
+    engine
+        .invoke(
+            reg.get("RetentionTask", "complete").unwrap(),
+            &tid,
+            &HashMap::new(),
+        )
+        .await
+        .unwrap();
+    let t = kernel.get_object(&tid).await.unwrap().unwrap();
+    assert_eq!(t.data["status"], json!("Completed"));
+}
+
+/// 一轮目标：重规划直到任务稳态（retain → start → complete）。
+#[tokio::test]
+async fn tc_planner_manages_task_lifecycle() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    kernel
+        .create_object("Customer", "001", json!({"name": "Apple", "level": "VIP"}))
+        .await
+        .unwrap();
+    let reg = ActionRegistry::from_ir(&parse_odl(include_str!("../examples/crm.odl")).unwrap());
+    let run_id = generate_run_id();
+    Planner::with_actions(&kernel, reg)
+        .run_goal(&FakeEngine, "manage retention tasks", "retention-agent", &run_id)
+        .await
+        .expect("一轮目标应把任务推到 Completed");
+    let tasks = kernel.query_objects("RetentionTask").await.unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].data["status"], json!("Completed"));
+    let evs = kernel
+        .list_events(TraceQuery::for_run(&run_id))
+        .await
+        .unwrap();
+    let waves = evs
+        .iter()
+        .filter(|e| e.event_type == "Planning")
+        .count();
+    assert!(waves >= 3, "应至少 3 次规划（创建/start/complete），实际 {waves}");
+}
+
+/// Intent 过滤：管任务时不跑 refund；退款意图不创建挽留任务。
+#[tokio::test]
+async fn tc_planner_filters_actions_by_intent() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    kernel
+        .create_object("Customer", "001", json!({"name": "Apple", "level": "VIP"}))
+        .await
+        .unwrap();
+    let reg = ActionRegistry::from_ir(&parse_odl(include_str!("../examples/crm.odl")).unwrap());
+
+    Planner::with_actions(&kernel, reg.clone())
+        .run_goal(
+            &FakeEngine,
+            "manage retention tasks",
+            "retention-agent",
+            &generate_run_id(),
+        )
+        .await
+        .expect("任务意图应跑通");
+    let wevents = kernel.list_world_events().await.unwrap();
+    assert!(wevents.iter().any(|e| e.event_type == "action.retain"));
+    assert!(
+        wevents.iter().all(|e| e.event_type != "action.refund"),
+        "管任务不得执行 refund"
+    );
+    assert_eq!(
+        kernel.query_objects("RetentionTask").await.unwrap()[0].data["status"],
+        json!("Completed")
+    );
+
+    let s2 = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel2 = RuntimeKernel::new(s2);
+    kernel2
+        .create_object("Customer", "001", json!({"name": "Apple", "level": "VIP"}))
+        .await
+        .unwrap();
+    Planner::with_actions(&kernel2, reg)
+        .with_approver(Arc::new(AutoApprover { allow: true }))
+        .run_goal(
+            &FakeEngine,
+            "refund this customer",
+            "retention-agent",
+            &generate_run_id(),
+        )
+        .await
+        .expect("退款意图即使缺参也不应整轮失败");
+    assert!(
+        kernel2.query_objects("RetentionTask").await.unwrap().is_empty(),
+        "退款意图不得创建 RetentionTask"
+    );
+}
+
+/// 目标里的数字填入 ODL 声明的 amount，退款真改 balance。
+#[tokio::test]
+async fn tc_planner_extracts_refund_amount_from_goal() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    kernel
+        .create_object(
+            "Customer",
+            "001",
+            json!({"name": "Apple", "level": "VIP", "balance": 1000.0}),
+        )
+        .await
+        .unwrap();
+    let reg = ActionRegistry::from_ir(&parse_odl(include_str!("../examples/crm.odl")).unwrap());
+    Planner::with_actions(&kernel, reg)
+        .with_approver(Arc::new(AutoApprover { allow: true }))
+        .run_goal(
+            &FakeEngine,
+            "refund this customer 500",
+            "retention-agent",
+            &generate_run_id(),
+        )
+        .await
+        .expect("带金额的退款应执行");
+    let c = kernel.get_object("001").await.unwrap().unwrap();
+    assert_eq!(c.data["balance"], json!(500.0));
+    assert!(
+        kernel.query_objects("RetentionTask").await.unwrap().is_empty(),
+        "退款不得创建挽留任务"
+    );
+}
+
+async fn seed_two_customers(kernel: &RuntimeKernel) {
+    kernel
+        .create_object(
+            "Customer",
+            "001",
+            json!({"name": "Apple", "level": "VIP", "balance": 1000.0}),
+        )
+        .await
+        .unwrap();
+    kernel
+        .create_object(
+            "Customer",
+            "002",
+            json!({"name": "Tesla", "level": "GOLD", "balance": 1000.0}),
+        )
+        .await
+        .unwrap();
+}
+
+/// T1：点名退款只改 001。
+#[tokio::test]
+async fn tc_t1_refund_only_named_customer() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    seed_two_customers(&kernel).await;
+    let reg = ActionRegistry::from_ir(&parse_odl(include_str!("../examples/crm.odl")).unwrap());
+    Planner::with_actions(&kernel, reg)
+        .with_approver(Arc::new(AutoApprover { allow: true }))
+        .run_goal(
+            &FakeEngine,
+            "refund 001 500",
+            "retention-agent",
+            &generate_run_id(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        kernel.get_object("001").await.unwrap().unwrap().data["balance"],
+        json!(500.0)
+    );
+    assert_eq!(
+        kernel.get_object("002").await.unwrap().unwrap().data["balance"],
+        json!(1000.0)
+    );
+}
+
+/// T2：不点名则两个客户都建任务并完成。
+#[tokio::test]
+async fn tc_t2_manage_tasks_all_customers() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    seed_two_customers(&kernel).await;
+    let reg = ActionRegistry::from_ir(&parse_odl(include_str!("../examples/crm.odl")).unwrap());
+    Planner::with_actions(&kernel, reg)
+        .run_goal(
+            &FakeEngine,
+            "manage retention tasks",
+            "retention-agent",
+            &generate_run_id(),
+        )
+        .await
+        .unwrap();
+    let tasks = kernel.query_objects("RetentionTask").await.unwrap();
+    assert_eq!(tasks.len(), 2);
+    assert!(tasks.iter().all(|t| t.data["status"] == json!("Completed")));
+}
+
+/// T3：retain 001 只产生 001 的任务。
+#[tokio::test]
+async fn tc_t3_retain_only_named_customer() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    seed_two_customers(&kernel).await;
+    let reg = ActionRegistry::from_ir(&parse_odl(include_str!("../examples/crm.odl")).unwrap());
+    Planner::with_actions(&kernel, reg)
+        .run_goal(&FakeEngine, "retain 001", "retention-agent", &generate_run_id())
+        .await
+        .unwrap();
+    let tasks = kernel.query_objects("RetentionTask").await.unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].data["customer"], json!("001"));
+    assert_eq!(tasks[0].data["status"], json!("Completed"));
+}
+
+/// T4：目标里没有 id，行为与改前相同（两个客户都处理）。
+#[tokio::test]
+async fn tc_t4_no_id_same_as_before() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    seed_two_customers(&kernel).await;
+    let reg = ActionRegistry::from_ir(&parse_odl(ODL_RETAIN).unwrap());
+    Planner::with_actions(&kernel, reg)
+        .run_goal(&FakeEngine, "reduce churn", "retention-agent", &generate_run_id())
+        .await
+        .unwrap();
+    assert_eq!(kernel.query_objects("RetentionTask").await.unwrap().len(), 2);
+}
+
+struct LintBackend;
+
+#[async_trait]
+impl ToolBackend for LintBackend {
+    fn name(&self) -> &str {
+        "lint-stub"
+    }
+    fn supports(&self, object_type: &str, action: &str) -> bool {
+        object_type == "File" && action == "lint"
+    }
+    async fn execute(
+        &self,
+        _object_type: &str,
+        _action: &str,
+        _target: &ObjectRecord,
+        _args: &HashMap<String, Value>,
+    ) -> Result<ToolOutcome, ToolError> {
+        let mut extra_args = HashMap::new();
+        extra_args.insert("summary".into(), json!("unused variable"));
+        extra_args.insert("severity".into(), json!("high"));
+        Ok(ToolOutcome {
+            extra_args,
+            skip_world: false,
+        })
+    }
+}
+
+struct DenyLintHook;
+
+#[async_trait]
+impl ActionHook for DenyLintHook {
+    fn name(&self) -> &str {
+        "deny-lint"
+    }
+    async fn pre(
+        &self,
+        _object_type: &str,
+        action: &str,
+        _target_id: &str,
+    ) -> Result<(), String> {
+        if action == "lint" {
+            Err("lint gated".into())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[tokio::test]
+async fn tc_tool_backend_lint_creates_finding() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    kernel
+        .create_object("File", "src_foo", json!({"path": "src/foo.rs"}))
+        .await
+        .unwrap();
+    let reg = ActionRegistry::from_ir(&parse_odl(include_str!("../examples/code.odl")).unwrap());
+    Planner::with_actions(&kernel, reg)
+        .with_backend(Arc::new(LintBackend))
+        .run_goal(&FakeEngine, "lint src_foo", "code-agent", &generate_run_id())
+        .await
+        .expect("lint 应跑通");
+    let findings = kernel.query_objects("Finding").await.unwrap();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].data["title"], json!("unused variable"));
+    assert_eq!(findings[0].data["severity"], json!("high"));
+    assert_eq!(findings[0].data["status"], json!("Open"));
+    let edges = kernel.neighbors("src_foo").await.unwrap();
+    assert!(edges.iter().any(|e| e.relation == "has_finding"));
+}
+
+#[tokio::test]
+async fn tc_action_hook_denies_before_backend() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = RuntimeKernel::new(s);
+    kernel
+        .create_object("File", "src_foo", json!({"path": "src/foo.rs"}))
+        .await
+        .unwrap();
+    let reg = ActionRegistry::from_ir(&parse_odl(include_str!("../examples/code.odl")).unwrap());
+    let err = Planner::with_actions(&kernel, reg)
+        .with_backend(Arc::new(LintBackend))
+        .with_hook(Arc::new(DenyLintHook))
+        .run_goal(&FakeEngine, "lint src_foo", "code-agent", &generate_run_id())
+        .await
+        .expect_err("闸门应拒绝 lint");
+    match err {
+        PlannerError::PolicyDenied(m) => assert!(m.contains("lint gated"), "{m}"),
+        other => panic!("期望 PolicyDenied，得到 {other:?}"),
+    }
+    assert!(kernel.query_objects("Finding").await.unwrap().is_empty());
 }
 
 // ── TC-022a：记忆沉淀存储往返（V0.5 Memory = Event 积累；BL-008）──────────────────────
@@ -1784,6 +2158,36 @@ async fn tc024a_server_memory_endpoint() {
         list[0]["payload"].get("experience").is_some(),
         "payload 应回传"
     );
+}
+
+#[tokio::test]
+async fn tc_server_tasks_endpoint() {
+    let s = LibSQLStorage::open(":memory:").await.unwrap();
+    let kernel = std::sync::Arc::new(RuntimeKernel::new(s));
+    kernel
+        .create_object(
+            "RetentionTask",
+            "001_retain",
+            json!({
+                "title": "客户挽留计划",
+                "customer": "001",
+                "status": "Pending",
+                "priority": "MEDIUM"
+            }),
+        )
+        .await
+        .unwrap();
+    let addr = spawn_server(kernel).await;
+    let (st, body) = http_call(addr, "GET", "/api/v1/wb/agent/tasks", None).await;
+    assert_eq!(st, 200);
+    let v = serde_json::from_str::<Value>(&body).unwrap();
+    assert_eq!(v["code"], 0);
+    assert_eq!(v["data"]["total"].as_i64().unwrap(), 1);
+    let item = &v["data"]["list"][0];
+    assert_eq!(item["id"], "001_retain");
+    assert_eq!(item["status"], "Pending");
+    assert_eq!(item["title"], "客户挽留计划");
+    assert_eq!(item["customer"], "001");
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════
