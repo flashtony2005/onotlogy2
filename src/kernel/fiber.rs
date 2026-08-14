@@ -91,6 +91,8 @@ pub struct Fiber {
     pub relations: Vec<super::RelationId>,
     /// WAITING 时等待的恢复信号（relate 匹配则自动 resume）。
     pub wait_for: Option<WaitPattern>,
+    /// 是否已获得人工审批（relate 匹配恢复时置位；组合层 Policy 据此放行一次门禁）。
+    pub approved: bool,
     pub created_at: i64,
 }
 
@@ -114,6 +116,7 @@ impl Fiber {
             ledger: EffectLedger::new(),
             relations: Vec::new(),
             wait_for: None,
+            approved: false,
             created_at: now,
         }
     }

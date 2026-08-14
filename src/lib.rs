@@ -17,6 +17,7 @@ pub mod action;
 pub mod agent;
 pub mod auth;
 pub mod codegen;
+pub mod compose;
 pub mod evolution;
 pub mod ir;
 pub mod kernel;

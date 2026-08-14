@@ -117,7 +117,8 @@ impl Kernel {
         k
     }
 
-    fn now(&self) -> i64 {
+    /// 当前内核时钟（组合层/上层使用）。
+    pub fn now(&self) -> i64 {
         (self.clock)()
     }
 
@@ -145,6 +146,15 @@ impl Kernel {
             payload,
             timestamp: self.now(),
         });
+    }
+
+    /// 组合层：记录一次策略拒绝（业务拒绝，非运行失败；Effect 未提交）。
+    pub(crate) fn record_policy_denied(&mut self, fiber: FiberId, capability: &str, reason: &str) {
+        self.record_event(
+            Some(fiber),
+            "policy.denied",
+            json!({ "capability": capability, "reason": reason }),
+        );
     }
 
     pub(crate) fn mark_effect_compensated(&mut self, id: EffectId) {
@@ -279,6 +289,9 @@ impl Kernel {
             .map(|(id, _)| *id)
             .collect();
         for f in waiting {
+            if let Some(fb) = self.fibers.get_mut(&f) {
+                fb.approved = true; // 恢复信号 = 审批门禁通过（组合层据此放行）
+            }
             let _ = self.advance(f, FiberState::Running);
             self.record_event(Some(f), "fiber.resumed", json!({ "by": format!("{id}") }));
         }
