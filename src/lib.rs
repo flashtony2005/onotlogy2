@@ -20,6 +20,7 @@ pub mod codegen;
 pub mod cognitive;
 pub mod compose;
 pub mod evolution;
+pub mod evolution2;
 pub mod ir;
 pub mod kernel;
 pub mod odl;

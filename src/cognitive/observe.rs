@@ -11,12 +11,14 @@ use crate::kernel::Kernel;
 
 /// 构建观察视图（D5 输入：Agent 据此确认世界状态，而非相信自己执行过）。
 /// Phase 5：观察 = World Model 投影（实体 + 子图 + 关系）→ AgentView。
+/// Phase 6：演化风险信号（FailurePattern → RiskSignal）注入认知层。
 pub fn observe(
     kernel: &Kernel,
     ctx: crate::kernel::ContextId,
     goal: &str,
     memory: &Memory,
     capabilities: &[String],
+    evolution: Option<&crate::evolution2::EvolutionEngine>,
 ) -> AgentView {
     let now = kernel.now();
     let related: Vec<(String, String, String)> = kernel
@@ -37,5 +39,6 @@ pub fn observe(
         capabilities: capabilities.to_vec(),
         entities,
         subgraph,
+        evolution: evolution.map(|e| e.risk_signals()).unwrap_or_default(),
     }
 }

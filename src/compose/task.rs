@@ -132,11 +132,35 @@ impl<'k> TaskExecutor<'k> {
     ///
     /// 链路：allowed 校验 → Policy 校验（Deny / RequireApproval / Allow）
     /// → emit(Effect) → relate(投影)。Fiber 必须 RUNNING。
+    /// 常规 step（无 EvolutionGate：审批一律人工）。
     pub fn step(
         &mut self,
         fiber: FiberId,
         capability: &Capability,
         args: Value,
+    ) -> Result<StepOutcome, KernelError> {
+        self.step_inner(fiber, capability, args, false)
+    }
+
+    /// Phase 6：带 EvolutionGate 判定的 step（gate_pass 由调用方预计算）。
+    /// 只影响 RequireApproval 分支：通过 → 受控替代人工审批（审计进事实层）；
+    /// 否则回退人工审批（WAIT——不能替代审批 ≠ 权限拒绝，I3）。
+    pub fn step_with_gate(
+        &mut self,
+        fiber: FiberId,
+        capability: &Capability,
+        args: Value,
+        gate_pass: bool,
+    ) -> Result<StepOutcome, KernelError> {
+        self.step_inner(fiber, capability, args, gate_pass)
+    }
+
+    fn step_inner(
+        &mut self,
+        fiber: FiberId,
+        capability: &Capability,
+        args: Value,
+        gate_pass: bool,
     ) -> Result<StepOutcome, KernelError> {
         let f = self
             .kernel
@@ -173,16 +197,27 @@ impl<'k> TaskExecutor<'k> {
                     .map(|f| f.approved)
                     .unwrap_or(false);
                 if !approved {
-                    self.kernel.wait_on(
-                        fiber,
-                        WaitPattern {
-                            source: None,
-                            predicate: "Approval".into(),
-                            target: None,
-                        },
-                    )?;
-                    self.kernel.advance(fiber, FiberState::Waiting)?;
-                    return Ok(StepOutcome::Waiting);
+                    if gate_pass {
+                        // Phase 6：EvolutionGate 受控替代人工审批（7 条件 AND 已由
+                        // 调用方预计算）——审计进事实层，可观察/可撤销（D5）。
+                        self.kernel.record_evolution_gate(
+                            fiber,
+                            &capability.name,
+                            &capability.action,
+                        );
+                    } else {
+                        // Gate 失败 = 不能替代审批 → 回退人工（WAIT），不是 DENY（I3）
+                        self.kernel.wait_on(
+                            fiber,
+                            WaitPattern {
+                                source: None,
+                                predicate: "Approval".into(),
+                                target: None,
+                            },
+                        )?;
+                        self.kernel.advance(fiber, FiberState::Waiting)?;
+                        return Ok(StepOutcome::Waiting);
+                    }
                 }
             }
             PolicyVerdict::Allow => {}

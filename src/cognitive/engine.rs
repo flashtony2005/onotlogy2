@@ -43,6 +43,9 @@ pub struct AgentView {
     pub entities: Vec<crate::world::EntityView>,
     /// 语义子图（Phase 5 · D3：图遍历检索）。
     pub subgraph: Option<crate::world::Subgraph>,
+    /// 演化风险信号（Phase 6：FailurePattern → RiskSignal，认知层）。
+    /// **只影响决策质量，永不进入 Policy**（I2）。
+    pub evolution: Vec<crate::evolution2::RiskSignal>,
 }
 
 impl AgentView {

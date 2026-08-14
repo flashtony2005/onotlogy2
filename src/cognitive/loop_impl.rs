@@ -55,6 +55,8 @@ pub struct AgentLoop<'k> {
     engine: &'k dyn CognitiveEngine,
     /// Phase 5：世界效应声明（注入后 Effect 真实改变 World，D5 重投影闭环）。
     effect_defs: Option<Vec<crate::ontology::RuntimeDefinition>>,
+    /// Phase 6：演化引擎（认知状态；None = 不采集不 Gate）。
+    evolution: Option<&'k mut crate::evolution2::EvolutionEngine>,
 }
 
 impl<'k> AgentLoop<'k> {
@@ -70,12 +72,19 @@ impl<'k> AgentLoop<'k> {
             services,
             engine,
             effect_defs: None,
+            evolution: None,
         }
     }
 
     /// 注入世界效应声明（RelationEffectExecutor 生效：Effect 真实改变 World）。
     pub fn with_effect_defs(mut self, defs: Vec<crate::ontology::RuntimeDefinition>) -> Self {
         self.effect_defs = Some(defs);
+        self
+    }
+
+    /// 注入演化引擎（Phase 6：outcome 采集 + Gate 判定）。
+    pub fn with_evolution(mut self, ev: &'k mut crate::evolution2::EvolutionEngine) -> Self {
+        self.evolution = Some(ev);
         self
     }
 
@@ -107,6 +116,7 @@ impl<'k> AgentLoop<'k> {
             &task.goal,
             &self.agent.memory,
             &caps,
+            self.evolution.as_deref(),
         );
 
         // 2) 决策（认知引擎）
@@ -133,24 +143,52 @@ impl<'k> AgentLoop<'k> {
         // 3) 执行（能力查找 → TaskExecutor step：Policy→审批→Effect→投影）
         let Some(cap) = self.find_capability(&decision.capability) else {
             self.kernel.advance(fiber, FiberState::Failed)?;
+            // 埋点（D1：outcome 分账；按能力名归因）
+            if let Some(ev) = &mut self.evolution {
+                ev.record(&decision.capability, crate::evolution2::OutcomeKind::Failed);
+            }
             return Ok(LoopOutcome::Failed(format!(
                 "未知能力: {}",
                 decision.capability
             )));
         };
-        let outcome = self.task_executor().step(fiber, cap, decision.args)?;
+        // Phase 6：预计算 EvolutionGate（只影响 RequireApproval 分支）
+        let gate_pass = self
+            .evolution
+            .as_ref()
+            .map(|ev| ev.gate(&cap.action, cap.reversibility))
+            .unwrap_or(false);
+        let outcome = self
+            .task_executor()
+            .step_with_gate(fiber, cap, decision.args, gate_pass)?;
         match outcome {
             StepOutcome::Committed => {
                 // 沉淀记忆（D3：Effect 成功后认知状态更新）
                 self.agent
                     .memory
                     .record(cap.action.clone(), json!({ "capability": cap.name }));
+                // 埋点（D1：Success 分账）
+                if let Some(ev) = &mut self.evolution {
+                    ev.record(&cap.action, crate::evolution2::OutcomeKind::Success);
+                }
                 Ok(LoopOutcome::Continue)
             }
             StepOutcome::Waiting => Ok(LoopOutcome::Waiting),
             StepOutcome::Denied(reason) => {
                 // 已 FAILED（空补偿链）→ 明确走补偿收尾
-                let _ = self.task_executor().compensate(fiber);
+                let compensated = self.task_executor().compensate(fiber).is_ok()
+                    && self
+                        .kernel
+                        .fiber(fiber)
+                        .map(|f| f.state == FiberState::Compensated)
+                        .unwrap_or(false);
+                // 埋点（D1：Denied / Compensated 分账）
+                if let Some(ev) = &mut self.evolution {
+                    ev.record(&cap.action, crate::evolution2::OutcomeKind::Denied);
+                    if compensated {
+                        ev.record(&cap.action, crate::evolution2::OutcomeKind::Compensated);
+                    }
+                }
                 Ok(LoopOutcome::Denied(reason))
             }
         }

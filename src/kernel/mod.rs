@@ -159,6 +159,16 @@ impl Kernel {
         );
     }
 
+    /// Phase 6：EvolutionGate 放行审计（事实层，可观察/可撤销依据）。
+    /// 记录一次「学习替代人工审批」——Learning ≠ Authority 的可审计证据。
+    pub(crate) fn record_evolution_gate(&mut self, fiber: FiberId, capability: &str, action: &str) {
+        self.record_event(
+            Some(fiber),
+            "evolution.gate_approved",
+            json!({ "capability": capability, "action": action }),
+        );
+    }
+
     pub(crate) fn mark_effect_compensated(&mut self, id: EffectId) {
         let fiber = self.effects.get(&id).map(|e| e.fiber);
         if let Some(e) = self.effects.get_mut(&id) {
