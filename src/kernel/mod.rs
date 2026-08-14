@@ -54,6 +54,8 @@ pub enum KernelError {
     FiberNotRunning(String),
     #[error("fiber {0} 已在其 context {1} 之外运行")]
     FiberContextMismatch(FiberId, ContextId),
+    #[error("Relation 不存在: {0}")]
+    RelationNotFound(RelationId),
     #[error("无法生成新动作：{0}")]
     Closed(String),
 }
@@ -296,6 +298,16 @@ impl Kernel {
             self.record_event(Some(f), "fiber.resumed", json!({ "by": format!("{id}") }));
         }
         Ok(id)
+    }
+
+    /// 闭合一条关系的时间窗（valid_until = at；as_of 时间旅行的数据基础）。
+    pub fn expire_relation(&mut self, id: RelationId, at: i64) -> Result<(), KernelError> {
+        let r = self
+            .relations
+            .get_mut(&id)
+            .ok_or(KernelError::RelationNotFound(id))?;
+        r.valid_until = Some(at);
+        Ok(())
     }
 
     /// 声明 Fiber 的等待模式（进入 WAITING 前调用；恢复信号统一经 relate）。

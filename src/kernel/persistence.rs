@@ -172,6 +172,103 @@ impl Persistence {
         Ok(())
     }
 
+    // ── Temporal World 查询（Phase 4：as_of / diff / replay 的数据源） ──
+
+    /// 全部事件日志（append-only，按 id 升序；diff/replay 基础）。
+    pub async fn event_log(&self) -> Result<Vec<StoredEvent>, PersistError> {
+        self.query_events("SELECT context_id, fiber_id, type, payload_json, timestamp FROM events ORDER BY id ASC")
+            .await
+    }
+
+    /// 时间区间事件（(t1, t2]；World::diff）。
+    pub async fn events_between(&self, t1: i64, t2: i64) -> Result<Vec<StoredEvent>, PersistError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT context_id, fiber_id, type, payload_json, timestamp FROM events                  WHERE timestamp > ?1 AND timestamp <= ?2 ORDER BY id ASC",
+                params![t1, t2],
+            )
+            .await?;
+        let mut out = Vec::new();
+        while let Some(r) = rows.next().await? {
+            out.push(row_to_event(&r)?);
+        }
+        Ok(out)
+    }
+
+    /// 单 fiber 事件序列（World::replay）。
+    pub async fn events_of_fiber(&self, fiber: &str) -> Result<Vec<StoredEvent>, PersistError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT context_id, fiber_id, type, payload_json, timestamp FROM events                  WHERE fiber_id = ?1 ORDER BY id ASC",
+                params![fiber],
+            )
+            .await?;
+        let mut out = Vec::new();
+        while let Some(r) = rows.next().await? {
+            out.push(row_to_event(&r)?);
+        }
+        Ok(out)
+    }
+
+    /// t 时刻有效的关系（valid 时间窗过滤；World::as_of）。
+    pub async fn relations_valid_at(&self, t: i64) -> Result<Vec<StoredRelation>, PersistError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, context_id, source, predicate, target, valid_from, valid_until FROM relations                  WHERE valid_from <= ?1 AND (valid_until IS NULL OR valid_until > ?1) ORDER BY id ASC",
+                params![t],
+            )
+            .await?;
+        let mut out = Vec::new();
+        while let Some(r) = rows.next().await? {
+            out.push(StoredRelation {
+                id: r.get(0)?,
+                context: r.get(1)?,
+                source: r.get(2)?,
+                predicate: r.get(3)?,
+                target: r.get(4)?,
+                valid_from: r.get(5)?,
+                valid_until: r.get(6)?,
+            });
+        }
+        Ok(out)
+    }
+
+    /// t 时刻有效的 Context（valid 时间窗过滤；World::as_of）。
+    pub async fn contexts_valid_at(&self, t: i64) -> Result<Vec<StoredContext>, PersistError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, parent_id, entity_id, scope, state, valid_from, valid_until FROM contexts                  WHERE valid_from <= ?1 AND (valid_until IS NULL OR valid_until > ?1) ORDER BY id ASC",
+                params![t],
+            )
+            .await?;
+        let mut out = Vec::new();
+        while let Some(r) = rows.next().await? {
+            out.push(StoredContext {
+                id: r.get(0)?,
+                parent: r.get(1)?,
+                entity_id: r.get(2)?,
+                scope: r.get(3)?,
+                state: r.get(4)?,
+                valid_from: r.get(5)?,
+                valid_until: r.get(6)?,
+            });
+        }
+        Ok(out)
+    }
+
+    async fn query_events(&self, sql: &str) -> Result<Vec<StoredEvent>, PersistError> {
+        let mut rows = self.conn.query(sql, params![]).await?;
+        let mut out = Vec::new();
+        while let Some(r) = rows.next().await? {
+            out.push(row_to_event(&r)?);
+        }
+        Ok(out)
+    }
+
     /// 从快照恢复 Kernel（id 计数器取 max+1）。
     pub async fn restore(&self) -> Result<Kernel, PersistError> {
         let mut k = Kernel::new();
@@ -428,3 +525,49 @@ impl_id_codec!(ContextId, "ctx_");
 impl_id_codec!(FiberId, "fiber_");
 impl_id_codec!(EffectId, "fx_");
 impl_id_codec!(RelationId, "rel_");
+
+// ── Temporal World 存储视图（Phase 4） ─────────────────────────────────────
+
+/// 事件日志行（append-only）。
+#[derive(Debug, Clone)]
+pub struct StoredEvent {
+    pub context: Option<String>,
+    pub fiber: Option<String>,
+    pub ty: String,
+    pub payload: Value,
+    pub timestamp: i64,
+}
+
+/// 关系行（含时间窗）。
+#[derive(Debug, Clone)]
+pub struct StoredRelation {
+    pub id: String,
+    pub context: String,
+    pub source: String,
+    pub predicate: String,
+    pub target: String,
+    pub valid_from: i64,
+    pub valid_until: Option<i64>,
+}
+
+/// Context 行（含时间窗）。
+#[derive(Debug, Clone)]
+pub struct StoredContext {
+    pub id: String,
+    pub parent: Option<String>,
+    pub entity_id: String,
+    pub scope: String,
+    pub state: String,
+    pub valid_from: i64,
+    pub valid_until: Option<i64>,
+}
+
+fn row_to_event(r: &libsql::Row) -> Result<StoredEvent, PersistError> {
+    Ok(StoredEvent {
+        context: r.get(0)?,
+        fiber: r.get(1)?,
+        ty: r.get(2)?,
+        payload: serde_json::from_str(&r.get::<String>(3)?)?,
+        timestamp: r.get(4)?,
+    })
+}

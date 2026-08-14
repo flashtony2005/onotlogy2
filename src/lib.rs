@@ -29,6 +29,7 @@ pub mod server;
 pub mod storage;
 pub mod tool_backend;
 pub mod trace;
+pub mod world;
 
 pub use action::{ActionEffect, ActionEngine, ActionError, ActionRegistry};
 pub use agent::{AgentEngine, AgentError, Context, Decision, PiAgentEngine, WorldSnapshot};
