@@ -11,6 +11,7 @@ import {
 } from './api'
 import { EvolutionPanel } from './components/EvolutionPanel'
 import { LoginForm } from './components/LoginForm'
+import { LoginScene } from './components/LoginScene'
 import { MemoryPanel } from './components/MemoryPanel'
 import { TaskPanel } from './components/TaskPanel'
 import { V2Panel } from './components/V2Panel'
@@ -216,24 +217,38 @@ export default function App() {
     }
   }
 
-  // 未登录：渲染登录页（V0.7 认证强制）
+  // 未登录：渲染治愈插画风登录页（V0.7 认证强制）
   if (sessionChecking) {
     return (
-      <div className="app-shell">
-        <div className="login-wrap">
-          <div className="empty">❯ 正在恢复会话…</div>
-        </div>
+      <div className="auth-page">
+        <div className="auth-empty">❯ 正在恢复会话…</div>
       </div>
     )
   }
 
   if (!user) {
     return (
-      <div className="app-shell">
-        <div className="login-wrap">
-          <div className="login-brand">
-            <span className="logo">❯_</span> OpenAIP-OS
+      <div className="auth-page">
+        {/* 顶部导航 */}
+        <nav className="auth-nav">
+          <div className="auth-brand">
+            <span className="auth-brand-leaf">🌿</span> OpenAIP-OS
           </div>
+          <div className="auth-nav-links">
+            <a href="#" onClick={(e) => e.preventDefault()}>功能</a>
+            <a href="#" onClick={(e) => e.preventDefault()}>文档</a>
+            <a href="#" onClick={(e) => e.preventDefault()}>关于</a>
+            <button className="auth-nav-btn" type="button">LOGIN</button>
+          </div>
+        </nav>
+
+        {/* 山水插画背景 */}
+        <div className="auth-scene">
+          <LoginScene />
+        </div>
+
+        {/* 悬浮登录卡片 */}
+        <div className="auth-form-wrap">
           <LoginForm error={loginError} onLogin={doLogin} />
         </div>
       </div>
