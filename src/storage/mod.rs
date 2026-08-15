@@ -222,9 +222,36 @@ fn is_no_such_table(e: &libsql::Error) -> bool {
 }
 
 impl LibSQLStorage {
+    /// 是否远程/本地 server 连接（libsql:// ws:// http:// https://）——Turso/libSQL server 形态。
+    pub fn is_remote_url(path: &str) -> bool {
+        let p = path.to_ascii_lowercase();
+        p.starts_with("libsql://")
+            || p.starts_with("ws://")
+            || p.starts_with("wss://")
+            || p.starts_with("http://")
+            || p.starts_with("https://")
+    }
+
     /// 打开（或创建）数据库并初始化核心表，含旧 schema 拦截（WB2101）。
+    ///
+    /// - 本地路径 / `:memory:` → 本地文件形态
+    /// - `libsql://` / `ws://` / `http(s)://` → 连接 Turso/libSQL **server**（本地或远端），
+    ///   auth token 从环境变量 `TURSO_AUTH_TOKEN` 读取（本地 dev server 可为空）
     pub async fn open(path: &str) -> Result<Self, StorageError> {
+        if Self::is_remote_url(path) {
+            let token = std::env::var("TURSO_AUTH_TOKEN").ok();
+            return Self::open_remote(path, token.as_deref()).await;
+        }
         let db = libsql::Builder::new_local(path).build().await?;
+        let conn = db.connect()?;
+        Self::ensure_schema(&conn).await?;
+        Ok(Self { conn })
+    }
+
+    /// 显式连接 Turso/libSQL server（URL + 可选 auth token）。
+    pub async fn open_remote(url: &str, token: Option<&str>) -> Result<Self, StorageError> {
+        let builder = libsql::Builder::new_remote(url.to_string(), token.unwrap_or("").to_string());
+        let db = builder.build().await.map_err(StorageError::Db)?;
         let conn = db.connect()?;
         Self::ensure_schema(&conn).await?;
         Ok(Self { conn })
@@ -459,6 +486,35 @@ fn escape_like(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Turso/libSQL server 远程形态 ────────────────────────────────────
+    #[test]
+    fn remote_url_classification() {
+        // 远程/本地 server：libsql:// ws:// http(s)://
+        for url in [
+            "libsql://127.0.0.1:8080",
+            "libsql://localhost:8080",
+            "ws://127.0.0.1:8080",
+            "wss://host.example",
+            "http://127.0.0.1:8080",
+            "https://db.turso.io",
+        ] {
+            assert!(
+                LibSQLStorage::is_remote_url(url),
+                "{url} 应识别为 server 连接"
+            );
+        }
+        // 本地文件 / 内存
+        for p in [":memory:", "/tmp/a.db", "data.db", "file:db?mode=ro"] {
+            assert!(!LibSQLStorage::is_remote_url(p), "{p} 应为本地形态");
+        }
+    }
+
+    #[test]
+    fn remote_url_case_insensitive() {
+        assert!(LibSQLStorage::is_remote_url("LIBSQL://127.0.0.1:8080"));
+        assert!(LibSQLStorage::is_remote_url("HTTPS://db.turso.io"));
+    }
 
     // 旧 schema（有对象表但无 wb_meta / 版本）→ ensure_schema 拒绝 WB2101
     #[tokio::test]

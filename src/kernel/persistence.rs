@@ -63,7 +63,19 @@ pub struct Persistence {
 
 impl Persistence {
     pub async fn open(path: &str) -> Result<Self, PersistError> {
-        let db = Builder::new_local(path).build().await?;
+        // Turso/libSQL server（libsql:// ws:// http(s)://）→ 远程连接；否则本地文件
+        let p = path.to_ascii_lowercase();
+        let remote = p.starts_with("libsql://")
+            || p.starts_with("ws://")
+            || p.starts_with("wss://")
+            || p.starts_with("http://")
+            || p.starts_with("https://");
+        let db = if remote {
+            let token = std::env::var("TURSO_AUTH_TOKEN").unwrap_or_default();
+            Builder::new_remote(path.to_string(), token).build().await?
+        } else {
+            Builder::new_local(path).build().await?
+        };
         let conn = db.connect()?;
         conn.execute_batch(DDL).await?;
         Ok(Self { conn })
