@@ -9,7 +9,7 @@ use super::resolver::{CapabilityResolution, ResolutionStatus};
 use crate::skill::ir::SkillIR;
 
 /// 生命周期（MVP 链式推进 + 终态）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SkillStatus {
     Imported,
     Parsed,
@@ -27,7 +27,7 @@ pub enum SkillStatus {
 }
 
 /// Skill Asset（canonical internal representation）。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SkillAsset {
     pub id: String,
     pub name: String,

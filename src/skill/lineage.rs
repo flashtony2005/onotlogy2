@@ -1,7 +1,7 @@
 //! Lineage —— Skill 版本与来源（可追溯：source/origin/parent/derived_from）。
 
 /// 谱系（Lineage Graph 的节点属性）。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Lineage {
     pub parent: Option<String>,
     pub derived_from: Option<String>,

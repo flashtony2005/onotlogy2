@@ -13,6 +13,7 @@ import { EvolutionPanel } from './components/EvolutionPanel'
 import { LoginForm } from './components/LoginForm'
 import { MemoryPanel } from './components/MemoryPanel'
 import { TaskPanel } from './components/TaskPanel'
+import { V2Panel } from './components/V2Panel'
 import { debounce, fmtJson, fmtTime } from './format'
 import { clearToken, getToken, setToken } from './auth'
 import { useTraceStream } from './hooks/useTraceStream'
@@ -38,6 +39,7 @@ const VIEWS: { key: ViewKind; label: string; desc: string }[] = [
   { key: 'memory', label: 'Memory', desc: '记忆沉淀 · Action→Memory 闭环' },
   { key: 'evolution', label: 'Evolution', desc: '自学习 · Experience→Knowledge 闭环' },
   { key: 'tasks', label: 'Tasks', desc: '任务状态 · Pending→Completed' },
+  { key: 'v2', label: 'V2 Runtime', desc: 'Skill · Plugin · Session（Phase 9-10）' },
 ]
 
 export default function App() {
@@ -324,7 +326,7 @@ export default function App() {
       </nav>
 
       <main className="timeline">
-        {!runId && view !== 'memory' && view !== 'evolution' && view !== 'tasks' && (
+        {!runId && view !== 'memory' && view !== 'evolution' && view !== 'tasks' && view !== 'v2' && (
           <div className="empty">
             输入目标并点击「触发 Agent 运行」，实时观察 Agent 认知闭环。
           </div>
@@ -333,6 +335,8 @@ export default function App() {
         {view === 'memory' && (
           <MemoryPanel memories={memories} loading={memoryLoading} onReload={reloadMemory} />
         )}
+
+        {view === 'v2' && <V2Panel />}
 
         {view === 'evolution' && (
           <EvolutionPanel
@@ -352,7 +356,7 @@ export default function App() {
           <TaskPanel tasks={tasks} loading={tasksLoading} onReload={reloadTasks} />
         )}
 
-        {runId && timeline.decision && view !== 'memory' && view !== 'evolution' && view !== 'tasks' && (
+        {runId && timeline.decision && view !== 'memory' && view !== 'evolution' && view !== 'tasks' && view !== 'v2' && (
           <div className="decision">
             <h3>📊 决策摘要（Executive）</h3>
             <div>
@@ -370,11 +374,11 @@ export default function App() {
           </div>
         )}
 
-        {runId && view !== 'memory' && view !== 'evolution' && view !== 'tasks' && timeline.events.length === 0 && (
+        {runId && view !== 'memory' && view !== 'evolution' && view !== 'tasks' && view !== 'v2' && timeline.events.length === 0 && (
           <div className="empty">等待认知事件…</div>
         )}
 
-        {view !== 'memory' && view !== 'evolution' && view !== 'tasks' && timeline.events.length > 0 &&
+        {view !== 'memory' && view !== 'evolution' && view !== 'tasks' && view !== 'v2' && timeline.events.length > 0 &&
           timeline.events.map((ev) => (
           <article key={ev.id} className={`event ${ev.eventType.toLowerCase()}`}>
             <div className="ev-head">

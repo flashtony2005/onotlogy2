@@ -1,6 +1,6 @@
 // 与 src/trace.rs / docs/05_接口文档/api-agent-trace.md 4.1 同源（camelCase，单一真相源）
 
-export type ViewKind = 'executive' | 'operator' | 'developer' | 'memory' | 'evolution' | 'tasks'
+export type ViewKind = 'executive' | 'operator' | 'developer' | 'memory' | 'evolution' | 'tasks' | 'v2'
 
 /// V0.7 认证用户（对应 server `GET /api/v1/wb/auth/me` / 登录响应 user）。
 export interface AuthUserDto {
@@ -129,6 +129,38 @@ export interface ApprovalAuditDto {
   decision: 'auto_approve' | 'auto_approve_enabled' | 'revoke_disabled'
   reason: string
   createdAt: string
+}
+
+// ── Phase 10 V2 认知面板（Skill / Plugin / Session）────────────────────
+export interface SkillDto {
+  id: string
+  name: string
+  version: string
+  skill_type: string
+  status: string
+  goal: string
+  capabilities: string[]
+}
+
+export interface PluginDto {
+  id: string
+  name: string
+  status: string
+  runtime: string
+  endpoint?: string | null
+  capabilities: string[]
+}
+
+export interface SessionEventDto {
+  seq: number
+  event_type: string
+  timestamp: number
+  data: Record<string, unknown>
+}
+
+export interface SessionDto {
+  session_id: string
+  events: SessionEventDto[]
 }
 
 export interface EvolutionStateDto {

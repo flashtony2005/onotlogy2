@@ -9,6 +9,7 @@ pub mod episode;
 pub mod loop_impl;
 pub mod memory;
 pub mod observe;
+pub mod persist;
 
 pub use engine::{
     AgentView, CognitiveEngine, CognitiveError, Decision, FakeEngine, NoOpEngine, PlanStep,

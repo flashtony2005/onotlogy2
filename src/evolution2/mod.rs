@@ -36,7 +36,7 @@ pub enum OutcomeKind {
 }
 
 /// 经验分账（单动作；key 即 action，故无冗余字段）。
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Experience {
     pub success: u64,
     pub failed: u64,
@@ -94,7 +94,7 @@ pub struct RiskSignal {
 }
 
 /// Proposal 校验状态。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ProposalStatus {
     Proposed,
     Validated,
@@ -118,7 +118,7 @@ pub struct Proposal {
 /// - `Enabled`：已启用（可 Gate 放行）
 /// - `Revoked`：曾获得 Evolution Permission 但已撤销——**此后即使重新满足
 ///   全部条件也永不 Gate 放行**（杜绝 `enabled = false → 重新满足 → 复活`）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum EvolutionPermissionState {
     Disabled,
     Candidate,
@@ -128,7 +128,7 @@ pub enum EvolutionPermissionState {
 }
 
 /// 单动作演化权限记录。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LearnedPermission {
     pub action: String,
     pub state: EvolutionPermissionState,
@@ -323,6 +323,33 @@ impl EvolutionEngine {
     pub fn permission(&self, action: &str) -> Option<&LearnedPermission> {
         self.permissions.get(action)
     }
+
+    /// 持久化快照（patterns/proposals 可由 mine/propose/validate 重建——只存不可再生的状态）。
+    pub fn snapshot(&self) -> EvolutionSnapshot {
+        EvolutionSnapshot {
+            experiences: self.experiences.clone(),
+            permissions: self.permissions.clone(),
+            gate_enabled: self.gate_enabled,
+        }
+    }
+
+    pub fn restore(snap: EvolutionSnapshot) -> Self {
+        Self {
+            experiences: snap.experiences,
+            patterns: Vec::new(),
+            proposals: HashMap::new(),
+            permissions: snap.permissions,
+            gate_enabled: snap.gate_enabled,
+        }
+    }
+}
+
+/// EvolutionEngine 持久化快照（经验 + 权限 + 开关；模式/提案重建）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EvolutionSnapshot {
+    pub experiences: HashMap<String, Experience>,
+    pub permissions: HashMap<String, LearnedPermission>,
+    pub gate_enabled: bool,
 }
 
 #[cfg(test)]

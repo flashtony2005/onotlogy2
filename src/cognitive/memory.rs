@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 /// 一条记忆。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MemoryItem {
     pub label: String,
     pub payload: Value,
@@ -16,7 +16,7 @@ pub struct MemoryItem {
 }
 
 /// Agent 记忆（认知状态）。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Memory {
     items: HashMap<String, MemoryItem>,
 }

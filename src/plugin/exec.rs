@@ -37,6 +37,24 @@ impl Plugin for LocalFunctionPlugin {
     }
 }
 
+/// 同步占位（AsyncPlugin 的 plugin 槽位；execute 永不成功——真实执行走 execute_async）。
+pub struct NoopPlugin;
+
+fn noop_manifest() -> &'static PluginManifest {
+    static M: std::sync::OnceLock<PluginManifest> = std::sync::OnceLock::new();
+    M.get_or_init(|| PluginManifest::new("noop", "Noop", "0", RuntimeType::Local))
+}
+
+impl Plugin for NoopPlugin {
+    fn manifest(&self) -> &PluginManifest {
+        noop_manifest()
+    }
+
+    fn execute(&self, _capability: &str, _input: Value) -> Result<Value, PluginError> {
+        Err(PluginError::Failed("异步插件需经 execute_async".into()))
+    }
+}
+
 /// 声明式 Http/AI 插件（MVP：与 Local 同构——真实网络接入列 Non-goal；
 /// runtime 类型字段保留，供未来适配器使用）。
 pub fn declare_plugin(

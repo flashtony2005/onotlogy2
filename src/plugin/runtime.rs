@@ -107,6 +107,53 @@ impl<'a> PluginRuntime<'a> {
         Ok(result)
     }
 
+    /// 异步执行（真实网络插件：HTTP / MCP / AI Provider）。
+    /// 与 execute 同一路径：Resolve → Policy → Provider → Invoke → Result + Session 审计。
+    pub async fn execute_async(
+        &mut self,
+        capability: &str,
+        input: Value,
+    ) -> Result<Value, RuntimeError> {
+        if self.caps.contract(capability).is_none() {
+            self.emit(
+                EventType::Error,
+                json!({ "message": format!("no contract: {capability}") }),
+            );
+            return Err(RuntimeError::NoContract(capability.to_string()));
+        }
+        let binding = self.router.route(self.caps, capability).ok_or_else(|| {
+            self.emit(
+                EventType::Error,
+                json!({ "message": format!("unresolved: {capability}") }),
+            );
+            RuntimeError::Unresolved(capability.to_string())
+        })?;
+        let inst = self.plugins.get(&binding.plugin_id).ok_or_else(|| {
+            RuntimeError::PluginFailed(format!("plugin missing: {}", binding.plugin_id))
+        })?;
+        self.emit(
+            EventType::CapabilitySelected,
+            json!({ "capability": capability }),
+        );
+        let sanitized = sanitize_secrets(&input, inst.manifest());
+        self.emit(
+            EventType::PluginCall,
+            json!({ "plugin": inst.manifest().id, "capability": capability, "input": sanitized }),
+        );
+        let async_plugin = inst.async_plugin.as_ref().ok_or_else(|| {
+            RuntimeError::PluginFailed(format!("插件 {} 不是异步插件", inst.manifest().id))
+        })?;
+        let result = async_plugin
+            .execute_async(capability, input)
+            .await
+            .map_err(|e| RuntimeError::PluginFailed(e.to_string()))?;
+        self.emit(
+            EventType::PluginResult,
+            json!({ "plugin": inst.manifest().id, "ok": true }),
+        );
+        Ok(result)
+    }
+
     /// 权限检查（执行前：请求超出 manifest 声明 → DENY，fail-closed）。
     pub fn check_permission(
         manifest: &PluginManifest,

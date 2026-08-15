@@ -51,6 +51,8 @@ pub struct PluginManifest {
     pub config: Vec<ConfigField>,
     pub permissions: Permissions,
     pub sandbox: bool,
+    /// Http/Mcp 插件的端点（真实网络接入；None = 本地执行）。
+    pub endpoint: Option<String>,
 }
 
 impl PluginManifest {
@@ -64,7 +66,14 @@ impl PluginManifest {
             config: Vec::new(),
             permissions: Permissions::default(),
             sandbox: false,
+            endpoint: None,
         }
+    }
+
+    /// 声明端点（Http/Mcp 插件）。
+    pub fn with_endpoint(mut self, url: &str) -> Self {
+        self.endpoint = Some(url.to_string());
+        self
     }
 
     pub fn with_capability(mut self, id: &str) -> Self {

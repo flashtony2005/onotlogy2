@@ -17,7 +17,7 @@ use super::BehaviorRule;
 // ── 规则级经验（D4：双尺度分账，rule 粒度）─────────────────────────────
 
 /// 单条规则的 outcome 分账。
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RuleStats {
     pub rule_id: String,
     pub success: u64,
@@ -52,7 +52,7 @@ impl RuleStats {
 }
 
 /// 规则级经验分账（与 Phase 6 action 级并存——双尺度）。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct RuleStatsStore {
     stats: HashMap<String, RuleStats>,
 }

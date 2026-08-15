@@ -39,7 +39,7 @@ fn transition_allowed(from: SkillStatus, to: SkillStatus) -> bool {
 }
 
 /// Skill Registry。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SkillRegistry {
     assets: HashMap<String, SkillAsset>,
 }

@@ -4,7 +4,7 @@
 //! （P5：AI 推断可追溯）。
 
 /// 源跨度（行号区间，1-based）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SourceSpan {
     pub start: usize,
     pub end: usize,
@@ -20,7 +20,7 @@ impl SourceSpan {
 }
 
 /// 带追溯的推断值（confidence + evidence + source_span）。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Inferred<T> {
     pub value: T,
     pub confidence: f64,
@@ -40,7 +40,7 @@ impl<T> Inferred<T> {
 }
 
 /// Skill 类型。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SkillType {
     Atomic,
     Composite,
@@ -62,27 +62,27 @@ impl SkillType {
 }
 
 /// 工作流步骤（阶段）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WorkflowStep {
     pub name: String,
     pub description: String,
 }
 
 /// 能力引用（`- capability: video.generate`）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CapabilityRef {
     pub capability: String,
 }
 
 /// 工件引用（`- artifact: VideoScript`）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ArtifactRef {
     pub name: String,
     pub artifact_type: String,
 }
 
 /// 关系引用（Ontology Discovery：`- relation: Storyboard contains Scene`）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RelationIR {
     pub source: String,
     pub predicate: String,
@@ -90,35 +90,35 @@ pub struct RelationIR {
 }
 
 /// 策略推断（自然语言 → 结构化候选）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PolicyIR {
     pub condition: String,
     pub requirement: String,
 }
 
 /// 指标。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MetricIR {
     pub name: String,
     pub domain: Option<String>,
 }
 
 /// 反馈环（`- feedback: A -> B`）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FeedbackLoop {
     pub from: String,
     pub to: String,
 }
 
 /// 来源（可追溯至 RawSkill）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Provenance {
     pub raw_skill_id: String,
     pub parser: String,
 }
 
 /// SkillIR：AI 标准语义理解（MVP 14 段子集）。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SkillIR {
     pub identity: SkillIdentity,
     pub skill_type: SkillType,
@@ -142,7 +142,7 @@ pub struct SkillIR {
 }
 
 /// 身份段。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SkillIdentity {
     pub name: String,
     pub description: String,

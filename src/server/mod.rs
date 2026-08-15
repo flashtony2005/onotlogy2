@@ -10,6 +10,7 @@ pub mod graph;
 pub mod run;
 pub mod static_files;
 pub mod trace;
+pub mod v2;
 pub mod views;
 
 use std::collections::HashMap;
@@ -58,6 +59,8 @@ struct RunRecord {
 
 /// 共享应用状态。
 pub struct AppState {
+    /// Phase 10 V2 认知状态（Skill/Plugin/Session）。
+    pub v2: v2::SharedV2,
     pub kernel: Arc<RuntimeKernel>,
     pub engine: Arc<dyn AgentEngine>,
     /// 动作注册表（V0.4）：对象自有动作的声明式来源。
@@ -217,6 +220,18 @@ fn router() -> Router<Arc<AppState>> {
         .route("/api/v1/wb/auth/me", get(auth_me))
         // ── V0.8 GraphRAG 基础（对象-关系图） ──
         .route("/api/v1/wb/graph", get(list_graph))
+        // ── Phase 10 V2 认知面板（Skill / Plugin / Session） ──
+        .route("/api/v1/v2/skills", get(v2::list_skills))
+        .route(
+            "/api/v1/v2/skills/import",
+            axum::routing::post(v2::import_skill),
+        )
+        .route("/api/v1/v2/plugins", get(v2::list_plugins))
+        .route("/api/v1/v2/sessions/:id", get(v2::get_session))
+        .route(
+            "/api/v1/v2/sessions/:id/create",
+            axum::routing::post(v2::create_session),
+        )
         // 静态文件托管（SPA 兜底 index.html），保留原始请求路径。
         .fallback(get(serve_static))
 }
@@ -270,6 +285,7 @@ pub async fn serve_with_timeout(
     let idp: Arc<dyn IdentityProvider> = Arc::new(LocalIdentityProvider::new(storage.clone()));
     let sessions = SessionStore::new(storage);
     let state = Arc::new(AppState {
+        v2: Arc::new(v2::V2State::default()),
         kernel,
         engine,
         registry,

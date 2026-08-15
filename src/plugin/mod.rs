@@ -5,7 +5,9 @@
 
 pub mod capability;
 pub mod exec;
+pub mod http;
 pub mod manifest;
+pub mod mcp;
 pub mod registry;
 pub mod runtime;
 
@@ -21,7 +23,15 @@ pub enum PluginError {
 }
 
 /// Plugin SDK：第三方实现此 trait 即可接入系统（install → register → execute）。
-pub trait Plugin {
+/// `Send + Sync`：可跨线程调度（server 内 tokio::spawn 共享）。
+pub trait Plugin: Send + Sync {
     fn manifest(&self) -> &PluginManifest;
     fn execute(&self, capability: &str, input: Value) -> Result<Value, PluginError>;
+}
+
+/// 异步插件（真实网络接入：HTTP / MCP / AI Provider）。
+#[async_trait::async_trait]
+pub trait AsyncPlugin: Send + Sync {
+    fn manifest(&self) -> &PluginManifest;
+    async fn execute_async(&self, capability: &str, input: Value) -> Result<Value, PluginError>;
 }

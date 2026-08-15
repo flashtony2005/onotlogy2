@@ -9,7 +9,10 @@ import type {
   AuthUserDto,
   EvolutionStateDto,
   MemoryListDto,
+  PluginDto,
   RunStartDto,
+  SessionDto,
+  SkillDto,
   TaskListDto,
 } from './types'
 
@@ -127,6 +130,47 @@ export async function getTasks(): Promise<TaskListDto> {
 
 /// `GET /api/v1/wb/agent/evolution`：Evolution 聚合状态（BL-003 · REQ-017）。
 /// 仅暴露知识，不含任何改写 Policy / 绕过 Human Approval 的能力（Learn≠Permission）。
+// ── Phase 10 V2 认知面板 API ───────────────────────────────────────────
+export async function getSkills(): Promise<SkillDto[]> {
+  const res = await fetchWithTimeout('/api/v1/v2/skills')
+  if (!res.ok) throw new Error(`skills ${res.status}`)
+  return await res.json()
+}
+
+export async function importSkill(
+  name: string,
+  content: string,
+  knownCapabilities: string[],
+): Promise<SkillDto> {
+  const res = await fetchWithTimeout('/api/v1/v2/skills/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, content, known_capabilities: knownCapabilities }),
+  })
+  if (!res.ok) throw new Error(`import ${res.status}`)
+  return await res.json()
+}
+
+export async function getPlugins(): Promise<PluginDto[]> {
+  const res = await fetchWithTimeout('/api/v1/v2/plugins')
+  if (!res.ok) throw new Error(`plugins ${res.status}`)
+  return await res.json()
+}
+
+export async function getSession(sessionId: string): Promise<SessionDto> {
+  const res = await fetchWithTimeout(`/api/v1/v2/sessions/${sessionId}`)
+  if (!res.ok) throw new Error(`session ${res.status}`)
+  return await res.json()
+}
+
+export async function createSession(sessionId: string): Promise<SessionDto> {
+  const res = await fetchWithTimeout(`/api/v1/v2/sessions/${sessionId}/create`, {
+    method: 'POST',
+  })
+  if (!res.ok) throw new Error(`session create ${res.status}`)
+  return await res.json()
+}
+
 export async function getEvolution(): Promise<EvolutionStateDto> {
   const res = await authFetch('/api/v1/wb/agent/evolution')
   return unwrap<EvolutionStateDto>(res)
