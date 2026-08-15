@@ -1,19 +1,19 @@
-/* OpenAIP-OS — Codex 风格终端 UI
-   近黑背景 · 等宽字体 · 琥珀橙强调 · 扁平极简 · 无卡片阴影 */
+/* OpenAIP-OS — 治愈系亮色 UI（与登录页同风格）
+   浅蓝渐变底 · 白色圆角卡片 · 柔和阴影 · 蓝色强调 · 绿松石点缀 */
 
 :root {
-  --bg: #0a0a0a;
-  --panel: #131313;
-  --panel-2: #1b1b1b;
-  --border: #262626;
-  --border-soft: #1e1e1e;
-  --text: #ececec;
-  --muted: #8f8f8f;
-  --accent: #f1a33c; /* OpenAI 琥珀橙 */
-  --green: #4cc38a;
-  --red: #ff6b6b;
-  --amber: #f1a33c;
-  --purple: #c9a2ff;
+  --bg: #eef7fb;
+  --panel: #ffffff;
+  --panel-2: #f2f8f5;
+  --border: #d8e6e0;
+  --border-soft: #e6f0eb;
+  --text: #2c3e35;
+  --muted: #7d958b;
+  --accent: #4c9ee6; /* 治愈蓝 */
+  --green: #3fae7f;
+  --red: #e06a63;
+  --amber: #e8a04c;
+  --purple: #9f8fd6;
   --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, 'PingFang SC',
     monospace;
 }
@@ -30,9 +30,11 @@ body,
 }
 
 body {
-  background: var(--bg);
+  background: linear-gradient(180deg, #d9eff9 0%, #eef9f1 100%);
+  background-attachment: fixed;
   color: var(--text);
-  font-family: var(--mono);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
   font-size: 13px;
   line-height: 1.55;
 }
@@ -114,14 +116,14 @@ pre {
 .role {
   padding: 0 7px;
   font-size: 10px;
-  border-radius: 2px;
+  border-radius: 8px;
   border: 1px solid var(--border);
   text-transform: uppercase;
   letter-spacing: 0.4px;
 }
 .role-developer {
   color: var(--accent);
-  border-color: rgba(241, 163, 60, 0.4);
+  border-color: rgba(76, 158, 230, 0.4);
 }
 .role-operator {
   color: var(--green);
@@ -129,12 +131,12 @@ pre {
 }
 .role-executive {
   color: var(--amber);
-  border-color: rgba(241, 163, 60, 0.4);
+  border-color: rgba(76, 158, 230, 0.4);
 }
 .logout {
   padding: 1px 9px;
   font-size: 11px;
-  border-radius: 2px;
+  border-radius: 8px;
   border: 1px solid var(--border);
   background: transparent;
   color: var(--muted);
@@ -155,7 +157,7 @@ pre {
   padding: 8px 10px;
   background: var(--panel);
   border: 1px solid var(--border-soft);
-  border-radius: 3px;
+  border-radius: 10px;
 }
 .controls .prompt {
   color: var(--accent);
@@ -190,12 +192,12 @@ pre {
 .controls .run {
   flex: none;
   background: var(--accent);
-  color: #0a0a0a;
+  color: #ffffff;
   font-weight: 700;
   font-size: 12px;
   font-family: var(--mono);
   border: none;
-  border-radius: 2px;
+  border-radius: 8px;
   padding: 7px 14px;
   cursor: pointer;
   letter-spacing: 0.3px;
@@ -213,7 +215,7 @@ pre {
   border: 1px solid rgba(255, 107, 107, 0.5);
   color: var(--red);
   padding: 8px 12px;
-  border-radius: 3px;
+  border-radius: 10px;
   margin-bottom: 10px;
   font-size: 12px;
 }
@@ -223,7 +225,7 @@ pre {
   padding: 10px 12px;
   margin-bottom: 12px;
   border: 1px solid var(--border-soft);
-  border-radius: 3px;
+  border-radius: 10px;
   background: var(--panel);
 }
 .status .meta {
@@ -238,7 +240,7 @@ pre {
   color: var(--text);
   background: var(--panel-2);
   padding: 0 6px;
-  border-radius: 2px;
+  border-radius: 8px;
 }
 .status .meta b.completed {
   color: var(--green);
@@ -256,7 +258,7 @@ pre {
 }
 .progress .bar {
   height: 4px;
-  border-radius: 2px;
+  border-radius: 8px;
   background: var(--accent);
   transition: width 0.3s ease;
   min-width: 2px;
@@ -265,7 +267,7 @@ pre {
   content: '';
   flex: 1;
   height: 4px;
-  border-radius: 2px;
+  border-radius: 8px;
   background: var(--panel-2);
 }
 .progress span {
@@ -321,15 +323,15 @@ pre {
   padding: 48px 0;
   font-size: 12px;
   border: 1px dashed var(--border);
-  border-radius: 3px;
+  border-radius: 10px;
 }
 
 .decision {
-  border: 1px solid rgba(241, 163, 60, 0.4);
-  border-radius: 3px;
+  border: 1px solid rgba(76, 158, 230, 0.4);
+  border-radius: 10px;
   padding: 12px 14px;
   margin-bottom: 10px;
-  background: rgba(241, 163, 60, 0.04);
+  background: rgba(76, 158, 230, 0.04);
 }
 .decision h3 {
   margin: 0 0 10px;
@@ -416,7 +418,7 @@ pre {
 .chip {
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 2px;
+  border-radius: 8px;
   padding: 0 7px;
   font-size: 11px;
   color: var(--accent);
@@ -444,7 +446,7 @@ pre {
   margin: 0;
   background: var(--panel);
   border: 1px solid var(--border-soft);
-  border-radius: 2px;
+  border-radius: 8px;
   padding: 8px 10px;
   font-size: 11.5px;
   line-height: 1.5;
@@ -480,7 +482,7 @@ pre {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--muted);
-  border-radius: 2px;
+  border-radius: 8px;
   padding: 3px 11px;
   cursor: pointer;
   font-size: 11px;
@@ -514,7 +516,7 @@ pre {
   color: var(--accent);
   background: var(--panel-2);
   padding: 0 7px;
-  border-radius: 2px;
+  border-radius: 8px;
   font-size: 12px;
 }
 .mem-hits {
@@ -530,7 +532,7 @@ pre {
   margin: 0;
   background: var(--panel);
   border: 1px solid var(--border-soft);
-  border-radius: 2px;
+  border-radius: 8px;
   padding: 8px 10px;
   font-size: 11.5px;
   line-height: 1.5;
@@ -542,7 +544,7 @@ pre {
 .task-status {
   font-size: 10px;
   padding: 0 7px;
-  border-radius: 2px;
+  border-radius: 8px;
   border: 1px solid var(--border);
   color: var(--muted);
   text-transform: uppercase;
@@ -550,11 +552,11 @@ pre {
 }
 .task-status.pending {
   color: var(--amber);
-  border-color: rgba(241, 163, 60, 0.4);
+  border-color: rgba(76, 158, 230, 0.4);
 }
 .task-status.inprogress {
   color: var(--accent);
-  border-color: rgba(241, 163, 60, 0.5);
+  border-color: rgba(76, 158, 230, 0.5);
 }
 .task-status.completed {
   color: var(--green);
@@ -584,9 +586,9 @@ pre {
 .evo-note {
   margin: 0;
   padding: 8px 12px;
-  background: rgba(241, 163, 60, 0.06);
-  border: 1px solid rgba(241, 163, 60, 0.35);
-  border-radius: 3px;
+  background: rgba(76, 158, 230, 0.06);
+  border: 1px solid rgba(76, 158, 230, 0.35);
+  border-radius: 10px;
   font-size: 11.5px;
   color: var(--amber);
   line-height: 1.6;
@@ -612,7 +614,7 @@ pre {
 .evo-count {
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 2px;
+  border-radius: 8px;
   padding: 0 7px;
   font-size: 10px;
   color: var(--text);
@@ -634,13 +636,13 @@ pre {
   color: var(--accent);
   background: var(--panel-2);
   padding: 0 7px;
-  border-radius: 2px;
+  border-radius: 8px;
   font-size: 12px;
 }
 .evo-tag {
   font-size: 10px;
   padding: 0 7px;
-  border-radius: 2px;
+  border-radius: 8px;
   background: transparent;
   border: 1px solid var(--border);
   color: var(--muted);
@@ -664,7 +666,7 @@ pre {
 }
 .evo-tag.status.proposed {
   color: var(--amber);
-  border-color: rgba(241, 163, 60, 0.5);
+  border-color: rgba(76, 158, 230, 0.5);
 }
 .evo-evidence {
   font-size: 11px;
@@ -686,13 +688,13 @@ pre {
 .evo-tag.decision.revoke_disabled,
 .evo-tag.decision.auto_approve_enabled {
   color: var(--amber);
-  border-color: rgba(241, 163, 60, 0.5);
+  border-color: rgba(76, 158, 230, 0.5);
 }
 .evo-toggle {
   margin-left: auto;
   padding: 0 8px;
   font-size: 10px;
-  border-radius: 2px;
+  border-radius: 8px;
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text);
@@ -767,7 +769,7 @@ pre {
 .badge {
   font-size: 10px;
   padding: 0 7px;
-  border-radius: 2px;
+  border-radius: 8px;
   border: 1px solid var(--border);
   color: var(--muted);
   text-transform: uppercase;
@@ -789,7 +791,7 @@ pre {
 .cap {
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 2px;
+  border-radius: 8px;
   padding: 0 7px;
   font-size: 11px;
   color: var(--accent);
@@ -831,7 +833,7 @@ pre {
   border: 1px solid rgba(76, 195, 138, 0.4);
   color: var(--green);
   font-size: 12px;
-  border-radius: 2px;
+  border-radius: 8px;
   background: rgba(76, 195, 138, 0.05);
 }
 .err-msg {
@@ -840,67 +842,10 @@ pre {
   border: 1px solid rgba(255, 107, 107, 0.4);
   color: var(--red);
   font-size: 12px;
-  border-radius: 2px;
+  border-radius: 8px;
   background: rgba(255, 107, 107, 0.05);
 }
 
-/* ── 认证：登录页（居中极简终端卡片）── */
-.login-card {
-  max-width: 360px;
-  margin: 80px auto;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 26px 24px;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: var(--panel);
-}
-.login-card h3 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-}
-.login-card h3::before {
-  content: '❯ ';
-  color: var(--accent);
-}
-.login-note {
-  margin: 0 0 6px;
-  font-size: 11.5px;
-  color: var(--muted);
-  line-height: 1.7;
-}
-.login-input {
-  padding: 8px 10px;
-  font-size: 13px;
-  border-radius: 2px;
-  border: 1px solid var(--border);
-  background: #0e0e0e;
-  color: var(--text);
-  font-family: var(--mono);
-}
-.login-input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-.login-btn {
-  margin-top: 4px;
-  background: var(--accent);
-  color: #0a0a0a;
-  font-weight: 700;
-  font-family: var(--mono);
-  border: none;
-  border-radius: 2px;
-  padding: 9px 0;
-  cursor: pointer;
-  letter-spacing: 0.3px;
-}
-.login-btn:hover:not(:disabled) {
-  filter: brightness(1.1);
-}
-.login-btn:disabled {
-  opacity: 0.55;
   cursor: default;
 }
 
@@ -911,14 +856,14 @@ pre {
 }
 ::-webkit-scrollbar-thumb {
   background: var(--border);
-  border-radius: 4px;
+  border-radius: 10px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 
 ::selection {
-  background: rgba(241, 163, 60, 0.3);
+  background: rgba(76, 158, 230, 0.3);
 }
 
 /* ── Codex 式布局：左侧分组边栏 + 主列 + 底部 composer ── */
@@ -933,7 +878,9 @@ pre {
   flex-direction: column;
   padding: 12px 10px 10px;
   border-right: 1px solid var(--border-soft);
-  background: var(--bg);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   overflow-y: auto;
 }
 .side-brand {
@@ -982,7 +929,7 @@ pre {
   padding: 7px 8px;
   background: transparent;
   border: none;
-  border-radius: 4px;
+  border-radius: 10px;
   color: var(--muted);
   cursor: pointer;
   font-family: var(--mono);
@@ -994,7 +941,7 @@ pre {
 }
 .side-btn.active {
   color: var(--text);
-  background: rgba(241, 163, 60, 0.1);
+  background: rgba(76, 158, 230, 0.1);
   box-shadow: inset 2px 0 0 var(--accent);
 }
 .side-ic {
@@ -1071,6 +1018,9 @@ pre {
   justify-content: space-between;
   padding: 10px 18px;
   border-bottom: 1px solid var(--border-soft);
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 .mini-title {
   display: flex;
@@ -1105,9 +1055,10 @@ pre {
   padding: 9px 12px;
   width: calc(100% - 40px);
   max-width: 780px;
-  background: var(--panel);
+  background: #ffffff;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 14px;
+  box-shadow: 0 6px 20px rgba(64, 110, 140, 0.1);
 }
 .composer:focus-within {
   border-color: var(--accent);
@@ -1144,10 +1095,10 @@ pre {
   width: 34px;
   height: 30px;
   background: var(--accent);
-  color: #0a0a0a;
+  color: #ffffff;
   font-weight: 700;
   border: none;
-  border-radius: 3px;
+  border-radius: 10px;
   cursor: pointer;
   font-family: var(--mono);
 }
@@ -1159,25 +1110,6 @@ pre {
   cursor: default;
 }
 
-/* 登录页居中于全屏 */
-.login-wrap {
-  height: 100%;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-}
-.login-brand {
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 0.3px;
-}
-.login-brand .logo {
-  color: var(--accent);
-}
-.login-card {
   margin: 0;
 }
 
@@ -1210,7 +1142,7 @@ pre {
 }
 .dash-card {
   border: 1px solid var(--border-soft);
-  border-radius: 4px;
+  border-radius: 10px;
   padding: 14px 14px 12px;
   background: var(--panel);
 }
@@ -1254,7 +1186,7 @@ pre {
 }
 .arch {
   border: 1px solid var(--border-soft);
-  border-radius: 4px;
+  border-radius: 10px;
   overflow: hidden;
 }
 .arch-row {
@@ -1283,7 +1215,7 @@ pre {
   margin: 0;
   padding: 0;
   border: 1px solid var(--border-soft);
-  border-radius: 4px;
+  border-radius: 10px;
 }
 .dash-sessions li {
   display: flex;
@@ -1308,7 +1240,7 @@ pre {
 .empty-sm {
   padding: 14px;
   border: 1px dashed var(--border);
-  border-radius: 4px;
+  border-radius: 10px;
   color: var(--muted);
   font-size: 11.5px;
   text-align: center;
@@ -1322,7 +1254,7 @@ pre {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--muted);
-  border-radius: 4px;
+  border-radius: 10px;
   padding: 8px 14px;
   font-size: 12px;
   font-family: var(--mono);
@@ -1331,7 +1263,7 @@ pre {
 .dash-quick button:hover {
   color: var(--text);
   border-color: var(--accent);
-  background: rgba(241, 163, 60, 0.06);
+  background: rgba(76, 158, 230, 0.06);
 }
 
 /* ── Dashboard 图形与动画 ── */
@@ -1382,7 +1314,7 @@ pre {
   align-items: center;
   gap: 14px;
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: 12px;
   padding: 14px;
   background: var(--panel);
 }
@@ -1445,7 +1377,7 @@ pre {
 .dash-legend-item i {
   width: 9px;
   height: 9px;
-  border-radius: 2px;
+  border-radius: 8px;
   flex: none;
 }
 .dash-legend-item b {
@@ -1454,7 +1386,7 @@ pre {
 }
 .dash-hero-bars {
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: 12px;
   padding: 14px;
   background: var(--panel);
 }
@@ -1480,13 +1412,13 @@ pre {
 .dash-bar-track {
   height: 10px;
   background: var(--panel-2);
-  border-radius: 2px;
+  border-radius: 8px;
   overflow: hidden;
 }
 .dash-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, rgba(241, 163, 60, 0.55), var(--accent));
-  border-radius: 2px;
+  background: linear-gradient(90deg, rgba(76, 158, 230, 0.55), var(--accent));
+  border-radius: 8px;
   transition: width 0.9s cubic-bezier(0.22, 1, 0.36, 1);
   min-width: 2px;
 }
@@ -1502,7 +1434,7 @@ pre {
 }
 .dash-card {
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: 12px;
   padding: 14px 14px 12px;
   background: var(--panel);
   animation: card-in 0.5s ease-out both;
@@ -1536,8 +1468,8 @@ pre {
   }
 }
 .dash-card:hover {
-  border-color: rgba(241, 163, 60, 0.5);
-  box-shadow: 0 0 0 1px rgba(241, 163, 60, 0.15);
+  border-color: rgba(76, 158, 230, 0.5);
+  box-shadow: 0 0 0 1px rgba(76, 158, 230, 0.15);
 }
 .dash-num {
   font-size: 28px;
@@ -1568,7 +1500,7 @@ pre {
 /* 架构流动图 */
 .arch-flow {
   border: 1px solid var(--border-soft);
-  border-radius: 6px;
+  border-radius: 12px;
   padding: 16px 18px;
   background: var(--panel);
 }
@@ -1585,7 +1517,7 @@ pre {
   max-width: 480px;
   padding: 9px 14px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 12px;
   background: var(--panel-2);
   animation: node-in 0.5s ease-out both;
 }
@@ -1615,7 +1547,7 @@ pre {
   }
 }
 .arch-flow-node:hover {
-  border-color: rgba(241, 163, 60, 0.5);
+  border-color: rgba(76, 158, 230, 0.5);
 }
 .arch-flow-ic {
   font-size: 15px;
@@ -1677,7 +1609,7 @@ pre {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--muted);
-  border-radius: 4px;
+  border-radius: 10px;
   padding: 8px 14px;
   font-size: 12px;
   font-family: var(--mono);
@@ -1687,13 +1619,13 @@ pre {
 .dash-quick button:hover {
   color: var(--text);
   border-color: var(--accent);
-  background: rgba(241, 163, 60, 0.06);
+  background: rgba(76, 158, 230, 0.06);
   transform: translateY(-1px);
 }
 .empty-sm {
   padding: 14px;
   border: 1px dashed var(--border);
-  border-radius: 4px;
+  border-radius: 10px;
   color: var(--muted);
   font-size: 11.5px;
   text-align: center;
@@ -1722,45 +1654,42 @@ button:active {
   transform: translateY(1px);
 }
 
-/* ── 主按钮：实底琥珀橙 + 辉光 ── */
-.run,
-.login-btn {
-  background: linear-gradient(180deg, #f8b45f 0%, var(--accent) 100%);
-  color: #0a0a0a;
+/* ── 主按钮：实底蓝渐变 + 柔和辉光 ── */
+.run {
+  background: linear-gradient(135deg, #5fb4f2 0%, var(--accent) 100%);
+  color: #ffffff;
   font-weight: 700;
   border: none;
-  border-radius: 4px;
+  border-radius: 10px;
   cursor: pointer;
   box-shadow:
-    0 1px 0 rgba(0, 0, 0, 0.35),
-    0 0 0 rgba(241, 163, 60, 0);
+    0 1px 0 rgba(64, 110, 140, 0.3),
+    0 0 0 rgba(76, 158, 230, 0);
   letter-spacing: 0.4px;
 }
-.run:hover:not(:disabled),
-.login-btn:hover:not(:disabled) {
+.run:hover:not(:disabled) {
   filter: brightness(1.07);
   transform: translateY(-1px);
   box-shadow:
-    0 1px 0 rgba(0, 0, 0, 0.35),
-    0 0 14px rgba(241, 163, 60, 0.4);
+    0 1px 0 rgba(64, 110, 140, 0.3),
+    0 0 14px rgba(76, 158, 230, 0.4);
 }
-.run:active:not(:disabled),
-.login-btn:active:not(:disabled) {
+.run:active:not(:disabled) {
   transform: translateY(1px);
   filter: brightness(0.96);
   box-shadow:
-    0 0 0 rgba(0, 0, 0, 0.35),
-    0 0 6px rgba(241, 163, 60, 0.25);
+    0 0 0 rgba(64, 110, 140, 0.3),
+    0 0 6px rgba(76, 158, 230, 0.25);
 }
 
-/* ── 次按钮：透明描边 + hover 橙色 ── */
+/* ── 次按钮：透明描边 + hover 蓝色 ── */
 .reload,
 .evo-toggle,
 .dash-quick button {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--muted);
-  border-radius: 4px;
+  border-radius: 10px;
   cursor: pointer;
   letter-spacing: 0.2px;
 }
@@ -1769,15 +1698,15 @@ button:active {
 .dash-quick button:hover {
   color: var(--text);
   border-color: var(--accent);
-  background: rgba(241, 163, 60, 0.07);
+  background: rgba(76, 158, 230, 0.07);
   transform: translateY(-1px);
-  box-shadow: 0 0 10px rgba(241, 163, 60, 0.15);
+  box-shadow: 0 0 10px rgba(76, 158, 230, 0.15);
 }
 .reload:active:not(:disabled),
 .evo-toggle:active:not(:disabled),
 .dash-quick button:active {
   transform: translateY(0);
-  background: rgba(241, 163, 60, 0.12);
+  background: rgba(76, 158, 230, 0.12);
 }
 .reload:disabled,
 .evo-toggle:disabled {
@@ -1830,11 +1759,11 @@ button:active {
 /* ── Tab 按钮：hover 微亮 ── */
 .v2-tab:hover {
   color: var(--text);
-  background: rgba(241, 163, 60, 0.05);
+  background: rgba(76, 158, 230, 0.05);
 }
 .views button:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(76, 158, 230, 0.06);
 }
 .views button:active,
 .v2-tab:active {
@@ -1844,7 +1773,7 @@ button:active {
 /* ── Skill 上传表单 + 原始内容查看 ── */
 .up-form {
   border: 1px solid var(--border-soft);
-  border-radius: 5px;
+  border-radius: 12px;
   padding: 12px;
   background: var(--panel);
   margin-bottom: 12px;
@@ -1863,10 +1792,10 @@ button:active {
   flex: 1;
 }
 .up-form input {
-  background: #0e0e0e;
+  background: #f4f9f6;
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 3px;
+  border-radius: 10px;
   padding: 7px 9px;
   font-size: 12px;
   font-family: var(--mono);
@@ -1882,10 +1811,10 @@ button:active {
 }
 .up-textarea {
   width: 100%;
-  background: #0e0e0e;
+  background: #f4f9f6;
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 3px;
+  border-radius: 10px;
   padding: 9px 10px;
   font-size: 12px;
   font-family: var(--mono);
@@ -1912,8 +1841,8 @@ button:active {
 }
 .raw-box {
   margin-top: 10px;
-  border: 1px solid rgba(241, 163, 60, 0.3);
-  border-radius: 4px;
+  border: 1px solid rgba(76, 158, 230, 0.3);
+  border-radius: 10px;
   overflow: hidden;
   animation: card-in 0.25s ease-out;
 }
@@ -1921,8 +1850,8 @@ button:active {
   display: flex;
   gap: 14px;
   padding: 6px 10px;
-  background: rgba(241, 163, 60, 0.06);
-  border-bottom: 1px solid rgba(241, 163, 60, 0.15);
+  background: rgba(76, 158, 230, 0.06);
+  border-bottom: 1px solid rgba(76, 158, 230, 0.15);
   font-size: 10.5px;
   color: var(--muted);
 }
@@ -1939,257 +1868,10 @@ button:active {
   line-height: 1.6;
   white-space: pre-wrap;
   color: var(--text);
-  background: #0c0c0c;
+  background: #f4f9f6;
 }
 
-/* ══ 登录页 — 科技感终端（网格背景 + 光晕 + 毛玻璃发光卡片）══ */
-.login-wrap {
-  position: relative;
-  overflow: hidden;
-}
-/* 网格背景（终端矩阵） */
-.login-wrap::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(241, 163, 60, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(241, 163, 60, 0.05) 1px, transparent 1px);
-  background-size: 34px 34px;
-  mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
-  -webkit-mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
-  pointer-events: none;
-}
-/* 中心光晕 */
-.login-wrap::after {
-  content: '';
-  position: absolute;
-  width: 560px;
-  height: 560px;
-  left: 50%;
-  top: 42%;
-  transform: translate(-50%, -50%);
-  background: radial-gradient(
-    circle,
-    rgba(241, 163, 60, 0.14) 0%,
-    rgba(88, 166, 255, 0.07) 45%,
-    transparent 70%
-  );
-  pointer-events: none;
-  animation: halo-breathe 4s ease-in-out infinite;
-}
-@keyframes halo-breathe {
-  0%,
-  100% {
-    opacity: 0.7;
-    transform: translate(-50%, -50%) scale(1);
-  }
-  50% {
-    opacity: 1;
-    transform: translate(-50%, -50%) scale(1.06);
-  }
-}
-.login-brand {
-  position: relative;
-  z-index: 1;
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: 2px;
-  color: var(--text);
-  text-shadow:
-    0 0 12px rgba(241, 163, 60, 0.55),
-    0 0 40px rgba(241, 163, 60, 0.2);
-}
-.login-brand .logo {
-  color: var(--accent);
-  animation: cursor-blink 1.1s steps(2) infinite;
-}
-@keyframes cursor-blink {
-  0%,
-  60% {
-    opacity: 1;
-  }
-  61%,
-  100% {
-    opacity: 0.25;
-  }
-}
-.login-brand::after {
-  content: 'AGENT RUNTIME · V10.1';
-  display: block;
-  font-size: 9px;
-  letter-spacing: 4px;
-  color: var(--muted);
-  text-align: center;
-  margin-top: 5px;
-  text-shadow: none;
-  opacity: 0.85;
-}
-.login-card {
-  position: relative;
-  z-index: 1;
-  border: 1px solid rgba(241, 163, 60, 0.25);
-  background: rgba(19, 19, 19, 0.72);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.02),
-    0 0 32px rgba(241, 163, 60, 0.08),
-    0 18px 50px rgba(0, 0, 0, 0.55);
-  animation: card-in 0.5s ease-out both;
-}
-/* 卡片顶部扫描光条 */
-.login-card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 8%;
-  right: 8%;
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgba(241, 163, 60, 0.9),
-    transparent
-  );
-  animation: scan-sweep 3.2s ease-in-out infinite;
-}
-@keyframes scan-sweep {
-  0% {
-    opacity: 0.2;
-    transform: translateX(-12%);
-  }
-  50% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0.2;
-    transform: translateX(12%);
-  }
-}
-.login-card h3 {
-  color: var(--text);
-  text-shadow: 0 0 14px rgba(241, 163, 60, 0.35);
-}
-.login-card h3::after {
-  content: '_';
-  color: var(--accent);
-  animation: cursor-blink 1.1s steps(2) infinite;
-}
-.login-note {
-  color: var(--muted);
-}
-.login-input {
-  background: rgba(14, 14, 14, 0.6);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  transition:
-    border-color 0.2s ease,
-    box-shadow 0.2s ease;
-}
-.login-input:focus {
-  border-color: var(--accent);
-  box-shadow:
-    0 0 0 1px rgba(241, 163, 60, 0.25),
-    0 0 18px rgba(241, 163, 60, 0.15);
-}
-/* 登录按钮：科技感强化——三色渐变 + 呼吸辉光 + 强流光 + 文字发光 + 顶部高光 */
-.login-btn {
-  position: relative;
-  overflow: hidden;
-  background: linear-gradient(135deg, #ffd27a 0%, #f1a33c 45%, #e8669c 100%);
-  background-size: 160% 160%;
-  border-radius: 4px;
-  font-size: 14px;
-  padding: 12px 0;
-  text-shadow:
-    0 0 10px rgba(255, 255, 255, 0.35),
-    0 1px 2px rgba(0, 0, 0, 0.3);
-  animation:
-    btn-breathe 2.2s ease-in-out infinite,
-    btn-gradient-shift 4s ease-in-out infinite;
-}
-/* 渐变流动：背景位置左右往复，三色不断流动 */
-@keyframes btn-gradient-shift {
-  0%,
-  100% {
-    background-position: 0% 50%;
-  }
-  50% {
-    background-position: 100% 50%;
-  }
-}
-.login-btn:hover:not(:disabled) {
-  background: linear-gradient(135deg, #ffdc8f 0%, #f5ad47 45%, #f078ab 100%);
-  background-size: 160% 160%;
-}
-@keyframes btn-breathe {
-  0%,
-  100% {
-    box-shadow:
-      0 0 10px rgba(241, 163, 60, 0.3),
-      0 2px 8px rgba(0, 0, 0, 0.45);
-  }
-  50% {
-    box-shadow:
-      0 0 28px rgba(241, 163, 60, 0.7),
-      0 2px 8px rgba(0, 0, 0, 0.45);
-  }
-}
-/* 顶部高光细线（扫描条） */
-.login-btn::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 10%;
-  right: 10%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.9), transparent);
-  animation: scan-sweep 2s ease-in-out infinite;
-  pointer-events: none;
-}
-/* 强流光扫过 */
-.login-btn::after {
-  content: '';
-  position: absolute;
-  top: -10%;
-  left: -110%;
-  width: 80%;
-  height: 120%;
-  background: linear-gradient(
-    105deg,
-    transparent 0%,
-    rgba(255, 255, 255, 0.65) 50%,
-    transparent 100%
-  );
-  transform: skewX(-20deg);
-  animation: shine-sweep 1.8s ease-in-out infinite;
-  pointer-events: none;
-}
-@keyframes shine-sweep {
-  0% {
-    left: -110%;
-  }
-  55% {
-    left: 140%;
-  }
-  100% {
-    left: 140%;
-  }
-}
-.login-btn:hover:not(:disabled) {
-  filter: brightness(1.12);
-  transform: translateY(-1px);
-}
-.login-btn:disabled::after,
-.login-btn:disabled::before {
-  display: none;
-}
-.login-btn:disabled {
-  animation: none;
-}
-
-/* ============ 治愈插画风登录页（亮色，独立于主应用暗色主题） ============ */
+/* ============ 治愈插画风登录页（亮色，与主应用同风格） ============ */
 .auth-page {
   position: relative;
   min-height: 100vh;

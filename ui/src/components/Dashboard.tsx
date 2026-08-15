@@ -192,16 +192,16 @@ export function Dashboard({ onNavigate }: { onNavigate: (v: ViewKind) => void })
   // Skill 类型分布（donut 段）
   const typeCount = (t: string) => skills.filter((s) => s.skill_type === t).length
   const typeSegs = [
-    { label: 'Composite', value: typeCount('Composite'), color: '#f1a33c' },
-    { label: 'Workflow', value: typeCount('Workflow'), color: '#4cc38a' },
-    { label: 'Atomic', value: typeCount('Atomic'), color: '#58a6ff' },
+    { label: 'Composite', value: typeCount('Composite'), color: '#4c9ee6' },
+    { label: 'Workflow', value: typeCount('Workflow'), color: '#3fae7f' },
+    { label: 'Atomic', value: typeCount('Atomic'), color: '#9f8fd6' },
     {
       label: 'Other',
       value: Math.max(
         0,
         skills.length - typeCount('Composite') - typeCount('Workflow') - typeCount('Atomic'),
       ),
-      color: '#8f8f8f',
+      color: '#b3c6bd',
     },
   ].filter((s) => s.value > 0)
 
@@ -241,7 +241,7 @@ export function Dashboard({ onNavigate }: { onNavigate: (v: ViewKind) => void })
         <div className="dash-hero-donut">
           <Donut
             segments={
-              typeSegs.length > 0 ? typeSegs : [{ label: 'Empty', value: 1, color: '#262626' }]
+              typeSegs.length > 0 ? typeSegs : [{ label: 'Empty', value: 1, color: '#e2efe8' }]
             }
             center={nSkills}
             centerLabel="SKILLS"
