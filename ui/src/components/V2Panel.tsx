@@ -112,7 +112,6 @@ export function V2Panel() {
             onClick={() => {
               setTab(t)
               if (t === 'plugins') void reloadPlugins()
-              if (t === 'sessions' && !session) void reloadSession('swe-1')
             }}
           >
             {t === 'skills' ? '🛠 Skill Registry' : t === 'plugins' ? '🔌 Plugin Registry' : '📜 Session Log'}
