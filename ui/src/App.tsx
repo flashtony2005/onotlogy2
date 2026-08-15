@@ -44,15 +44,78 @@ const VIEW_GROUPS: { name: string; items: ViewKind[] }[] = [
   { name: '能力', items: ['v2'] },
 ]
 
-const VIEWS: { key: ViewKind; label: string; cn: string; icon: string; desc: string }[] = [
-  { key: 'overview', label: 'Overview', cn: '总览', icon: '◎', desc: '系统总览 · 指标/架构/活动' },
-  { key: 'executive', label: 'Executive', cn: '高管', icon: '◈', desc: '管理者 · 决策 / 风险' },
-  { key: 'operator', label: 'Operator', cn: '操作台', icon: '▶', desc: '流水线进度 · 运行控制' },
-  { key: 'developer', label: 'Developer', cn: '开发者', icon: '</>', desc: '全量 IO · 事件详情' },
-  { key: 'memory', label: 'Memory', cn: '记忆', icon: '💾', desc: '记忆沉淀 · 动作→记忆闭环' },
-  { key: 'evolution', label: 'Evolution', cn: '进化', icon: '◉', desc: '自学习 · 经验→知识' },
-  { key: 'tasks', label: 'Tasks', cn: '任务', icon: '☑', desc: '任务状态 · 待办→完成' },
-  { key: 'v2', label: 'V2 Runtime', cn: '运行时', icon: '▣', desc: 'Skill · Plugin · Session' },
+const VIEWS: {
+  key: ViewKind
+  label: string
+  cn: string
+  q: string
+  icon: string
+  desc: string
+}[] = [
+  {
+    key: 'overview',
+    label: 'Overview',
+    cn: '总览',
+    icon: '◎',
+    q: '现在系统怎么样？',
+    desc: '整个系统当前状态、运行情况、重要指标、有没有异常',
+  },
+  {
+    key: 'executive',
+    label: 'Executive',
+    cn: '高管',
+    icon: '◈',
+    q: '现在有什么重要事情需要我决定？',
+    desc: '风险、重大任务、需要人工决策的事情、整体经营/管理情况',
+  },
+  {
+    key: 'operator',
+    label: 'Operator',
+    cn: '操作台',
+    icon: '▶',
+    q: '系统现在正在干什么？我能不能控制它？',
+    desc: '正在运行的任务、流水线走到哪一步、暂停/继续/停止/重试',
+  },
+  {
+    key: 'developer',
+    label: 'Developer',
+    cn: '开发者',
+    icon: '</>',
+    q: '系统内部到底发生了什么？',
+    desc: '输入、输出、API、Tool 调用、事件、错误、完整技术日志',
+  },
+  {
+    key: 'memory',
+    label: 'Memory',
+    cn: '记忆',
+    icon: '💾',
+    q: '系统以前记住了什么？',
+    desc: 'Agent 从过去任务中留下的事实、经验、偏好、结论',
+  },
+  {
+    key: 'evolution',
+    label: 'Evolution',
+    cn: '进化',
+    icon: '◉',
+    q: '系统有没有因为做事情而变聪明？',
+    desc: '哪些经验被总结成知识、规则、Skill，系统能力如何增长',
+  },
+  {
+    key: 'tasks',
+    label: 'Tasks',
+    cn: '任务',
+    icon: '☑',
+    q: '我要做什么？现在做到哪了？',
+    desc: '所有任务：待办、执行中、成功、失败、暂停、已完成',
+  },
+  {
+    key: 'v2',
+    label: 'V2 Runtime',
+    cn: '运行时',
+    icon: '▣',
+    q: 'AI 干活的底层机器是怎么运转的？',
+    desc: 'Skill、Plugin、Session，以及 Agent 实际执行任务的运行环境',
+  },
 ]
 
 export default function App() {
@@ -284,7 +347,7 @@ export default function App() {
                   >
                     <span className="side-ic">{v.icon}</span>
                     <span className="side-label">{v.cn}</span>
-                    <span className="side-desc">{v.label} · {v.desc}</span>
+                    <span className="side-desc">{v.q}</span>
                   </button>
                 )
               })}
