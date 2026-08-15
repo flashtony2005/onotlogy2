@@ -30,6 +30,7 @@ pub mod rule;
 pub mod runtime;
 pub mod runtime_exec;
 pub mod server;
+pub mod skill;
 pub mod storage;
 pub mod tool_backend;
 pub mod trace;
