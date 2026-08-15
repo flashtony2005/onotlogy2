@@ -259,7 +259,14 @@ async fn tc_mu5_end_to_end_persisted() {
     for r in base.iter().chain(cand.iter()) {
         storage.save_evaluation(r).await.unwrap();
     }
-    assert_eq!(storage.list_evaluations(None, 100).await.unwrap().len(), 6);
+    assert_eq!(
+        storage
+            .list_evaluations(None, None, 100)
+            .await
+            .unwrap()
+            .len(),
+        6
+    );
 
     // 提案 → 校验 → Benchmark → EXPERIMENTAL → 落 wb_mutation
     let mut p = MutationProposal::propose(

@@ -252,3 +252,140 @@ async fn tc_sv5_evaluation_endpoint() {
     assert_eq!(s3, 200);
     assert_eq!(body3["data"]["total"], 0);
 }
+
+// ── SV6：Phase 11B 诊断环端点（提案列表 + 人工评审 + Apply）─────────
+#[tokio::test]
+async fn tc_sv6_mutation_review_endpoint() {
+    let storage = openaip_os::storage::LibSQLStorage::open(":memory:")
+        .await
+        .unwrap();
+    let kernel = std::sync::Arc::new(openaip_os::runtime::RuntimeKernel::new(storage.clone()));
+    let addr = common::spawn_server(kernel).await;
+
+    let reducer = openaip_os::evaluation::EvaluationReducer::default();
+    let task = openaip_os::evaluation::TaskDefinition {
+        task_id: "fix-java-bug".into(),
+        expected_relations: vec![],
+        expected_artifacts: vec![],
+        time_budget_secs: 10.0,
+    };
+    // 种子 2 条评测：执行但无正确性证据 → T1 诊断
+    for i in 0..2 {
+        let mut log = openaip_os::session::log::SessionLog::new(
+            openaip_os::session::event::SessionId::new(&format!("run_{i}")),
+        );
+        log.append(
+            openaip_os::session::event::EventType::WorkerStarted,
+            json!({ "worker": "w1" }),
+        );
+        log.append(
+            openaip_os::session::event::EventType::WorkerCompleted,
+            json!({ "worker": "w1", "duration_ms": 5000.0 }),
+        );
+        let r = reducer.evaluate(log.events(), &format!("run_{i}"), &task);
+        storage.save_evaluation(&r).await.unwrap();
+    }
+    let proposals = openaip_os::run_diagnosis(
+        &storage,
+        "fix-java-bug",
+        "v1",
+        None,
+        &openaip_os::DiagnosisConfig::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(proposals.len(), 1, "T1 命中：执行无正确性证据");
+    let pid = proposals[0].id.clone();
+
+    // 列表可见（Operator 读）+ 新提案 = PROPOSED（等待人工评审）
+    let (s0, body0) = call(addr, "GET", "/api/v1/wb/agent/mutation", None).await;
+    assert_eq!(s0, 200);
+    assert_eq!(body0["data"]["total"], 1);
+    assert_eq!(body0["data"]["list"][0]["id"], json!(pid));
+    assert_eq!(body0["data"]["list"][0]["status"], "PROPOSED");
+
+    // 状态过滤
+    let (s1, body1) = call(
+        addr,
+        "GET",
+        "/api/v1/wb/agent/mutation?status=PROPOSED",
+        None,
+    )
+    .await;
+    assert_eq!(s1, 200);
+    assert_eq!(body1["data"]["total"], 1);
+
+    // 人工评审 approve → VALIDATED；Apply 因基准 Skill 不在 Registry 失败（提示人工细化，不影响评审）
+    let (s2, body2) = call(
+        addr,
+        "POST",
+        &format!("/api/v1/wb/agent/mutation/{pid}/review"),
+        Some(json!({ "decision": "approve" })),
+    )
+    .await;
+    assert_eq!(s2, 200, "评审: {body2}");
+    assert_eq!(body2["data"]["status"], "VALIDATED");
+    assert!(
+        body2["data"]["promotionReason"]
+            .as_str()
+            .unwrap()
+            .contains("apply failed")
+    );
+
+    // 已评审提案不被重新生成
+    let rerun = openaip_os::run_diagnosis(
+        &storage,
+        "fix-java-bug",
+        "v1",
+        None,
+        &openaip_os::DiagnosisConfig::default(),
+    )
+    .await
+    .unwrap();
+    assert!(rerun.is_empty(), "已评审提案不重复");
+
+    // 第二条诊断场景：失败模式重复（T2）→ reject → REJECTED（失败保留）
+    for i in 2..4 {
+        let mut log = openaip_os::session::log::SessionLog::new(
+            openaip_os::session::event::SessionId::new(&format!("run_{i}")),
+        );
+        log.append(
+            openaip_os::session::event::EventType::WorkerStarted,
+            json!({ "worker": "w1", "attempt": 1 }),
+        );
+        log.append(
+            openaip_os::session::event::EventType::WorkerFailed,
+            json!({ "worker": "w1", "error": "integration timeout" }),
+        );
+        let r = reducer.evaluate(log.events(), &format!("run_{i}"), &task);
+        storage.save_evaluation(&r).await.unwrap();
+    }
+    let proposals2 = openaip_os::run_diagnosis(
+        &storage,
+        "fix-java-bug",
+        "v1",
+        None,
+        &openaip_os::DiagnosisConfig::default(),
+    )
+    .await
+    .unwrap();
+    let t2 = proposals2
+        .iter()
+        .find(|p| p.id.contains("integration-timeout"))
+        .expect("T2 命中");
+    let (s3, body3) = call(
+        addr,
+        "POST",
+        &format!("/api/v1/wb/agent/mutation/{}/review", t2.id),
+        Some(json!({ "decision": "reject", "reason": "draft 步骤需细化" })),
+    )
+    .await;
+    assert_eq!(s3, 200, "评审: {body3}");
+    assert_eq!(body3["data"]["status"], "REJECTED");
+    assert!(
+        body3["data"]["promotionReason"]
+            .as_str()
+            .unwrap()
+            .contains("draft 步骤需细化")
+    );
+}

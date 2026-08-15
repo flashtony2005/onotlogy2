@@ -473,8 +473,9 @@ async fn cmd_agent_run(
     let trace = kernel.list_events(TraceQuery::for_run(&run_id)).await?;
     append_bridged(&mut log, trace_to_session_events(&trace));
     log.append(EventType::SessionCompleted, json!({ "run_id": run_id }));
+    // task_id = goal（稳定键）：同目标跨 run 聚合，供诊断环累计证据
     let task = TaskDefinition {
-        task_id: run_id.clone(),
+        task_id: goal.to_string(),
         expected_relations: vec![],
         expected_artifacts: vec![],
         time_budget_secs: 0.0,
@@ -500,6 +501,28 @@ async fn cmd_agent_run(
             );
         }
         Err(e) => println!("⚠️ 评测失败（不影响运行结果）：{e}"),
+    }
+    // Phase 11B 诊断环：失败模式 → Mutation Proposal（等待人工评审，Proposal ≠ Mutation）
+    match openaip_os::run_diagnosis(
+        &kernel.storage(),
+        agent_id,
+        "v1",
+        Some(goal),
+        &openaip_os::DiagnosisConfig::default(),
+    )
+    .await
+    {
+        Ok(proposals) if !proposals.is_empty() => {
+            println!(
+                "🔬 Phase 11 诊断（新提案 {} 条，待人工评审）：",
+                proposals.len()
+            );
+            for p in &proposals {
+                println!("   {} → {}（{}）", p.id, p.root_cause, p.candidate_version);
+            }
+        }
+        Ok(_) => {}
+        Err(e) => println!("⚠️ 诊断失败（不影响运行结果）：{e}"),
     }
     Ok(())
 }

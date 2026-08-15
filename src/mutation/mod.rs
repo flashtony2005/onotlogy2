@@ -54,6 +54,22 @@ impl std::fmt::Display for MutationStatus {
     }
 }
 
+impl std::str::FromStr for MutationStatus {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "PROPOSED" => Ok(MutationStatus::Proposed),
+            "VALIDATED" => Ok(MutationStatus::Validated),
+            "BENCHMARKING" => Ok(MutationStatus::Benchmarking),
+            "EXPERIMENTAL" => Ok(MutationStatus::Experimental),
+            "ACTIVE" => Ok(MutationStatus::Active),
+            "REJECTED" => Ok(MutationStatus::Rejected),
+            "ARCHIVED" => Ok(MutationStatus::Archived),
+            other => Err(format!("未知状态：{other}")),
+        }
+    }
+}
+
 /// Mutation 错误。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum MutationError {
@@ -163,6 +179,34 @@ impl MutationProposal {
         }
         validate_delta(&self.delta)?;
         self.status = MutationStatus::Validated;
+        Ok(())
+    }
+
+    // ── Phase 11B 诊断环：Human Review（Proposal ≠ Mutation）────────────
+    /// 人工评审通过：PROPOSED → VALIDATED（评审记录进 promotion_reason；可审计）。
+    pub fn review_approve(&mut self, reviewer: &str) -> Result<(), MutationError> {
+        if self.status != MutationStatus::Proposed {
+            return Err(MutationError::IllegalTransition {
+                from: self.status,
+                to: MutationStatus::Validated,
+            });
+        }
+        validate_delta(&self.delta)?;
+        self.status = MutationStatus::Validated;
+        self.promotion_reason = Some(format!("human approved by {reviewer}"));
+        Ok(())
+    }
+
+    /// 人工评审拒绝：PROPOSED → REJECTED（失败/否决保留，不删除）。
+    pub fn review_reject(&mut self, reviewer: &str, reason: &str) -> Result<(), MutationError> {
+        if self.status != MutationStatus::Proposed {
+            return Err(MutationError::IllegalTransition {
+                from: self.status,
+                to: MutationStatus::Rejected,
+            });
+        }
+        self.status = MutationStatus::Rejected;
+        self.promotion_reason = Some(format!("human rejected by {reviewer}: {reason}"));
         Ok(())
     }
 
@@ -325,7 +369,8 @@ fn new_modes(base: &[EvaluationResult], cand: &[EvaluationResult]) -> Vec<String
 }
 
 /// Delta 白名单校验（结构化变更；AI 自由文本改 Skill 一律拒绝）。
-fn validate_delta(delta: &serde_json::Value) -> Result<(), MutationError> {
+/// `insert_step.after` 可选（缺省 = 追加到工作流末尾）——供诊断环自动产出的草稿使用。
+pub fn validate_delta(delta: &serde_json::Value) -> Result<(), MutationError> {
     let obj = delta.as_object().ok_or(MutationError::DeltaNotObject)?;
     if obj.is_empty() {
         return Err(MutationError::DeltaNotObject);
@@ -339,8 +384,13 @@ fn validate_delta(delta: &serde_json::Value) -> Result<(), MutationError> {
             .ok_or_else(|| MutationError::MissingField(format!("{op}: 操作体必须是对象")))?;
         match op.as_str() {
             "insert_step" => {
-                require_str(spec_obj, "after", op)?;
                 require_str(spec_obj, "step", op)?;
+                if spec_obj
+                    .get("after")
+                    .is_some_and(|a| !a.is_string() || a.as_str().unwrap_or("").is_empty())
+                {
+                    return Err(MutationError::MissingField(format!("{op}.after")));
+                }
             }
             "modify" => require_str(spec_obj, "step", op)?,
             "delete_step" => require_str(spec_obj, "step", op)?,

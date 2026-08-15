@@ -320,3 +320,55 @@
 | V1.5 | lushaohui | 2026-08-12 | REQ-018 Evolution 第二阶段 AutoApprove 接口：4.9.1 POST /evolution/learned/{id}/auto-approve（可撤销切换 auto_approve_enabled，幂等）；4.9.2 GET /evolution/audit（wb_approval_audit 审计列表，可追溯至 LearnedKnowledge+run）；4.9 特殊逻辑补 REQ-018 升级已落地说明 |
 | V1.5 | lushaohui | 2026-08-12 | 新增 4.10 GET /run/:run_id/approvals 与 4.11 POST /run/:run_id/approval/:req_id（V0.4 挂起式 HTTP 审批端点，Human-in-the-loop 三态之一；重复裁决返回 404 code） |
 | V1.6 | lushaohui | 2026-08-15 | 新增 4.12 GET /api/v1/wb/agent/evaluation（Phase 11 · 11A 证据系统：每维度 Score{value,confidence,evidence} + unknowns + aggregate；派生表语义，Event Log 永远是 Source of Truth；Operator 及以上可读） |
+### 4.13 Mutation 提案（Phase 11B 诊断环）
+
+#### 4.13.1 列出 Mutation 提案
+- [强制] 请求方式：GET
+- [强制] 接口路径：/api/v1/wb/agent/mutation
+- [强制] 权限要求：登录用户（Operator 及以上可读）
+- 请求参数：`status`（可选：PROPOSED/VALIDATED/EXPERIMENTAL/ACTIVE/REJECTED/ARCHIVED）
+- 响应成功示例：
+```json
+{
+  "code": 0, "msg": "success",
+  "data": {
+    "total": 1,
+    "list": [
+      {
+        "id": "mutation.fix-java-bug.v1+missing-test-evidence",
+        "targetAsset": "fix-java-bug",
+        "sourceVersion": "v1",
+        "candidateVersion": "v1+missing-test-evidence",
+        "rootCause": "执行路径没有产生 TestResult / relation / judge 证据——",
+        "evidence": ["run_1", "run_2"],
+        "delta": { "insert_step": { "step": "run_tests" } },
+        "status": "PROPOSED",
+        "promotionReason": null
+      }
+    ]
+  }
+}
+```
+- 特殊逻辑：数据来源 `wb_mutation`；诊断环自动产出提案（CLI run 尾部 / 显式调用），**状态 PROPOSED 等待人工评审**（Proposal ≠ Mutation）
+
+#### 4.13.2 人工评审 Mutation 提案
+- [强制] 请求方式：POST
+- [强制] 接口路径：/api/v1/wb/agent/mutation/{id}/review
+- [强制] 权限要求：登录用户（Developer 角色可写）
+- 请求体（JSON）：
+```json
+{ "decision": "approve", "reason": "可选，仅 reject 时记录" }
+```
+- 响应成功示例（approve）：
+```json
+{
+  "code": 0, "msg": "success",
+  "data": {
+    "id": "mutation.fix-java-bug.v1+missing-test-evidence",
+    "status": "VALIDATED",
+    "promotionReason": "human approved by admin; apply failed: 基准 Skill 不存在：fix-java-bug（请人工细化 Delta）",
+    "apply": { "candidateId": "fix-java-bug@v1+missing-test-evidence", "status": "EXPERIMENTAL" }
+  }
+}
+```
+- 特殊逻辑：`approve` → PROPOSED→VALIDATED（评审记录进 promotion_reason，可审计），并尝试 **Apply**：结构化 Delta 应用到基准 Skill（Fork）→ 注册 EXPERIMENTAL 候选（原资产保留）；基准不存在 / Delta 引用了不存在的步骤 → apply 失败但评审状态不受影响（提示人工细化）。`reject` → PROPOSED→REJECTED（失败保留不删除）。已评审提案不会被诊断环重新生成（否决决定持久）。Learn ≠ Permission：评审（人工）才是从提案到应用的唯一通道

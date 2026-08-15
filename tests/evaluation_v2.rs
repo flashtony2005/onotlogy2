@@ -247,7 +247,10 @@ async fn tc_ev6_persistence_derived_table() {
     let r = reducer.evaluate(&events, "run_9", &task());
     storage.save_evaluation(&r).await.unwrap();
 
-    let loaded = storage.list_evaluations(Some("run_9"), 100).await.unwrap();
+    let loaded = storage
+        .list_evaluations(Some("run_9"), None, 100)
+        .await
+        .unwrap();
     assert_eq!(loaded.len(), 1);
     assert_eq!(loaded[0].aggregate, r.aggregate);
     assert_eq!(loaded[0].failure_modes, r.failure_modes);
@@ -260,7 +263,7 @@ async fn tc_ev6_persistence_derived_table() {
     // 幂等 upsert：同 run 重算覆盖（派生表语义）
     let r2 = reducer.evaluate(&events, "run_9", &task());
     storage.save_evaluation(&r2).await.unwrap();
-    let loaded2 = storage.list_evaluations(None, 100).await.unwrap();
+    let loaded2 = storage.list_evaluations(None, None, 100).await.unwrap();
     assert_eq!(loaded2.len(), 1, "同 run 覆盖，不重复");
 }
 

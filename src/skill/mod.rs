@@ -9,6 +9,7 @@
 //! - P4 Capability 不凭空创造：未注册能力只产生 CapabilityCandidate（UNRESOLVED）
 //! - P5 所有 AI 推断可追溯：原始 Skill + Source Span + Interpretation + Confidence
 
+pub mod apply;
 pub mod asset;
 pub mod compose;
 pub mod export;

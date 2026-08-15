@@ -44,10 +44,11 @@ impl LibSQLStorage {
         Ok(())
     }
 
-    /// 查询评测结果（run 过滤可选；升序；派生表——永远可经 Reducer 重建）。
+    /// 查询评测结果（run/task 过滤可选；升序；派生表——永远可经 Reducer 重建）。
     pub async fn list_evaluations(
         &self,
         run_id: Option<&str>,
+        task_id: Option<&str>,
         limit: usize,
     ) -> Result<Vec<EvaluationResult>, StorageError> {
         let mut sql = String::from(
@@ -59,6 +60,10 @@ impl LibSQLStorage {
         if let Some(r) = run_id {
             sql.push_str(" AND run_id = ?");
             params.push(libsql::Value::Text(r.to_string()));
+        }
+        if let Some(t) = task_id {
+            sql.push_str(" AND task_id = ?");
+            params.push(libsql::Value::Text(t.to_string()));
         }
         sql.push_str(&format!(
             " ORDER BY created_at ASC LIMIT {}",
@@ -111,6 +116,23 @@ impl LibSQLStorage {
             )
             .await?;
         Ok(())
+    }
+
+    /// 按 id 取单条 Mutation 提案（供评审端点；缺失返 None）。
+    pub async fn get_mutation(&self, id: &str) -> Result<Option<MutationProposal>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, target_asset, source_version, candidate_version, root_cause, evidence, delta, status, promotion_reason \
+                 FROM wb_mutation WHERE id = ?",
+                params![id],
+            )
+            .await?;
+        if let Some(row) = rows.next().await? {
+            Ok(Some(row_to_mutation(&row)?))
+        } else {
+            Ok(None)
+        }
     }
 
     /// 查询 Mutation 提案（按状态过滤可选）。

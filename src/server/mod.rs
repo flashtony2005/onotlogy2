@@ -22,7 +22,7 @@ use crate::agent::AgentEngine;
 use crate::auth::{AuthUser, IdentityProvider, LocalIdentityProvider, Role, SessionStore};
 use crate::planner::{ApprovalStore, RunStatus, lock_mutex};
 use crate::runtime::RuntimeKernel;
-use axum::extract::{Extension, Path, Request};
+use axum::extract::{Extension, Request};
 use axum::http::{StatusCode, header::AUTHORIZATION};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -48,7 +48,9 @@ use views::list_approval_audit_handler;
 use views::list_evaluations;
 use views::list_evolution;
 use views::list_memory;
+use views::list_mutations;
 use views::list_tasks;
+use views::review_mutation;
 use views::revoke_learned;
 use views::toggle_auto_approve;
 
@@ -194,6 +196,11 @@ fn router() -> Router<Arc<AppState>> {
         .route("/api/v1/wb/agent/tasks", get(list_tasks))
         .route("/api/v1/wb/agent/evolution", get(list_evolution))
         .route("/api/v1/wb/agent/evaluation", get(list_evaluations))
+        .route("/api/v1/wb/agent/mutation", get(list_mutations))
+        .route(
+            "/api/v1/wb/agent/mutation/:id/review",
+            post(review_mutation),
+        )
         .route(
             "/api/v1/wb/agent/evolution/learned/:id",
             delete(revoke_learned),

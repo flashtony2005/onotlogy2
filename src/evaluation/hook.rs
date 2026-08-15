@@ -211,7 +211,10 @@ mod tests {
         assert_eq!(r.correctness.value, Some(0.9));
 
         // wb_evaluation 可查询
-        let loaded = storage.list_evaluations(Some("run_1"), 100).await.unwrap();
+        let loaded = storage
+            .list_evaluations(Some("run_1"), None, 100)
+            .await
+            .unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].correctness.value, Some(0.9));
 

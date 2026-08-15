@@ -19,6 +19,7 @@ pub mod auth;
 pub mod codegen;
 pub mod cognitive;
 pub mod compose;
+pub mod diagnosis;
 pub mod evaluation;
 pub mod evolution;
 pub mod evolution2;
@@ -47,6 +48,7 @@ pub use auth::{
     AuthError, AuthUser, IdentityProvider, LocalIdentityProvider, Role, SessionStore, clamp_view,
 };
 pub use codegen::{CodegenOutput, ObjectDef, codegen};
+pub use diagnosis::{Diagnoser, Diagnosis, DiagnosisConfig, propose_from_diagnosis, run_diagnosis};
 pub use evaluation::hook::on_run_end;
 pub use evaluation::{
     EVALUATOR_VERSION, EvaluationPolicy, EvaluationReducer, EvaluationResult, EventRef, Score,
