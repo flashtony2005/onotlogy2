@@ -503,3 +503,60 @@ async fn tc_sv7_offline_benchmark_endpoint() {
     assert_eq!(s3, 200, "WB 错误码在 body 中");
     assert_eq!(body3["code"], 4001, "REJECTED 不可复活: {body3}");
 }
+
+// ── SV8：Loop Health 端点（四平面六指标派生）────────────────────────
+#[tokio::test]
+async fn tc_sv8_loop_health_endpoint() {
+    let storage = openaip_os::storage::LibSQLStorage::open(":memory:")
+        .await
+        .unwrap();
+    let kernel = std::sync::Arc::new(openaip_os::runtime::RuntimeKernel::new(storage.clone()));
+    let addr = common::spawn_server(kernel).await;
+
+    // 种子：1 run + 1 评测（skill_version 基线）→ closure=1.0
+    storage
+        .insert_run("run_h1", "agent-1", "goal")
+        .await
+        .unwrap();
+    let reducer = openaip_os::evaluation::EvaluationReducer::default();
+    let task = openaip_os::evaluation::TaskDefinition {
+        task_id: "t1".into(),
+        expected_relations: vec![],
+        expected_artifacts: vec![],
+        time_budget_secs: 10.0,
+        skill_version: Some("fix@v1".into()),
+    };
+    let mut log = openaip_os::session::log::SessionLog::new(
+        openaip_os::session::event::SessionId::new("run_h1"),
+    );
+    log.append(
+        openaip_os::session::event::EventType::WorkerStarted,
+        json!({ "worker": "w1", "attempt": 1 }),
+    );
+    log.append(
+        openaip_os::session::event::EventType::WorkerCompleted,
+        json!({ "worker": "w1", "ok": true, "duration_ms": 1000.0 }),
+    );
+    let r = reducer.evaluate(log.events(), "run_h1", &task);
+    storage.save_evaluation(&r).await.unwrap();
+
+    let (s0, body0) = call(addr, "GET", "/api/v1/wb/agent/health", None).await;
+    assert_eq!(s0, 200, "health: {body0}");
+    assert_eq!(body0["data"]["execution"]["totalRuns"], 1);
+    assert_eq!(
+        body0["data"]["execution"]["closureRate"],
+        json!(1.0),
+        "1 run 全评测"
+    );
+    assert!(
+        body0["data"]["observation"]["evaluationCoverage"]
+            .as_f64()
+            .unwrap()
+            > 0.0
+    );
+    assert_eq!(body0["data"]["evolution"]["experimentalOrActive"], 0);
+    assert_eq!(
+        body0["data"]["governance"]["policyChecks"], 0,
+        "无 trace 事件 → 0"
+    );
+}

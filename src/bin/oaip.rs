@@ -61,6 +61,8 @@ enum Cmd {
         #[command(subcommand)]
         cmd: WorkerCmd,
     },
+    /// Loop Health（V2 多速率环元评估）：四平面六指标
+    Health,
     /// 启动 Agent 观察服务（HTTP + WebSocket + 三层观察 UI）
     Serve {
         #[arg(long, default_value_t = 8080)]
@@ -273,6 +275,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await?
             }
         },
+        Cmd::Health => cmd_health(&cli.db).await?,
         Cmd::Serve {
             port,
             host,
@@ -829,6 +832,36 @@ async fn cmd_worker_run(
             Err(e) => println!("⚠️ 评测失败（不影响运行结果）：{e}"),
         }
     }
+    Ok(())
+}
+
+/// Loop Health：从持久化数据派生四平面六指标（确定性、可回放）。
+async fn cmd_health(db: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let storage = LibSQLStorage::open(db).await?;
+    let h = openaip_os::health::collect(&storage).await?;
+    println!("🩺 Loop Health（V2 多速率环元评估）");
+    println!(
+        "   EXECUTION   closure_rate={:.2} action_success={:.2} world_change={:.2} (runs={})",
+        h.execution.closure_rate,
+        h.execution.action_success_rate,
+        h.execution.world_change_rate,
+        h.execution.total_runs
+    );
+    println!(
+        "   OBSERVATION evaluation_coverage={:.2} (evaluated_runs={})",
+        h.observation.evaluation_coverage, h.observation.evaluated_runs
+    );
+    println!(
+        "   EVOLUTION   mutation_consumption={:.2} learning_effectiveness={:+.3} regression={:.2} (candidates={})",
+        h.evolution.mutation_consumption,
+        h.evolution.learning_effectiveness,
+        h.evolution.regression_rate,
+        h.evolution.experimental_or_active
+    );
+    println!(
+        "   GOVERNANCE  violation_rate={:.2} (policy_checks={})",
+        h.governance.violation_rate, h.governance.policy_checks
+    );
     Ok(())
 }
 

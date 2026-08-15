@@ -552,6 +552,20 @@ pub(crate) async fn offline_benchmark_mutation(
     }
 }
 
+/// `GET /api/v1/wb/agent/health`：Loop Health（V2 多速率环元评估，Operator 及以上）。
+pub(crate) async fn loop_health(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+) -> Response {
+    if !user.can_read_evaluation() {
+        return forbidden("当前角色无权读取 Loop Health（需 Operator 及以上）").into_response();
+    }
+    match crate::health::collect(&st.kernel.storage()).await {
+        Ok(h) => ApiResponse::ok(h).into_response(),
+        Err(_) => ApiResponse::error(5000, "存储错误").into_response(),
+    }
+}
+
 /// `DELETE /api/v1/wb/agent/evolution/learned/:id`：撤销一条 LearnedKnowledge（可撤销承诺）。
 pub(crate) async fn revoke_learned(
     State(st): State<Arc<AppState>>,

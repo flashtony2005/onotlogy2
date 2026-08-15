@@ -23,6 +23,7 @@ pub mod diagnosis;
 pub mod evaluation;
 pub mod evolution;
 pub mod evolution2;
+pub mod health;
 pub mod ir;
 pub mod kernel;
 pub mod mutation;
@@ -58,6 +59,7 @@ pub use evolution::{
     EvolutionState, Experience, LearnedKnowledge, PATTERN_MIN_HITS, Pattern, Proposal,
     ProposalKind, ProposalStatus, VALIDATE_THRESHOLD,
 };
+pub use health::{LoopHealth, collect};
 pub use ir::{
     ActionDef, Clause, CompareOp, CreateEffect, FieldUpdate, ObjectType, OntologyIR, ParamDef,
     PolicyDef, PropertyDef, ScalarType, ValueExpr,

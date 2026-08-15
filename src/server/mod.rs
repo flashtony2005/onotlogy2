@@ -50,6 +50,7 @@ use views::list_evolution;
 use views::list_memory;
 use views::list_mutations;
 use views::list_tasks;
+use views::loop_health;
 use views::offline_benchmark_mutation;
 use views::review_mutation;
 use views::revoke_learned;
@@ -198,6 +199,7 @@ fn router() -> Router<Arc<AppState>> {
         .route("/api/v1/wb/agent/evolution", get(list_evolution))
         .route("/api/v1/wb/agent/evaluation", get(list_evaluations))
         .route("/api/v1/wb/agent/mutation", get(list_mutations))
+        .route("/api/v1/wb/agent/health", get(loop_health))
         .route(
             "/api/v1/wb/agent/mutation/:id/review",
             post(review_mutation),
