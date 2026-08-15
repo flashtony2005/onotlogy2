@@ -350,7 +350,7 @@ async fn tc_o6_agent_view_v2_injection() {
     let memory = Memory::new();
     let caps = vec!["Customer.retain".to_string()];
 
-    let view = observe(&k, ctx, "reduce churn", &memory, &caps);
+    let view = observe(&k, ctx, "reduce churn", &memory, &caps, None);
     // 实体视图注入
     assert!(
         view.entities.iter().any(|e| e.id == "cust-01"),
@@ -423,7 +423,7 @@ async fn tc_o7_odl_end_to_end_closed_loop() {
 
     // ② World Model 重投影：实体 + 子图回喂认知层（D5：Agent 重新观察世界）
     let memory = Memory::new();
-    let view = observe(&k, ctx, "reduce churn", &memory, &[]);
+    let view = observe(&k, ctx, "reduce churn", &memory, &[], None);
     let sg = view.subgraph.as_ref().expect("重投影子图");
     assert!(
         sg.relations
