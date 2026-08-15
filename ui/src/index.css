@@ -2093,18 +2093,35 @@ button:active {
     0 0 0 1px rgba(241, 163, 60, 0.25),
     0 0 18px rgba(241, 163, 60, 0.15);
 }
-/* 登录按钮：科技感强化——呼吸辉光 + 强流光 + 文字发光 + 顶部高光 */
+/* 登录按钮：科技感强化——三色渐变 + 呼吸辉光 + 强流光 + 文字发光 + 顶部高光 */
 .login-btn {
   position: relative;
   overflow: hidden;
-  background: linear-gradient(180deg, #f8b45f 0%, var(--accent) 100%);
+  background: linear-gradient(135deg, #ffd27a 0%, #f1a33c 45%, #e8669c 100%);
+  background-size: 160% 160%;
   border-radius: 4px;
   font-size: 14px;
   padding: 12px 0;
   text-shadow:
     0 0 10px rgba(255, 255, 255, 0.35),
     0 1px 2px rgba(0, 0, 0, 0.3);
-  animation: btn-breathe 2.2s ease-in-out infinite;
+  animation:
+    btn-breathe 2.2s ease-in-out infinite,
+    btn-gradient-shift 4s ease-in-out infinite;
+}
+/* 渐变流动：背景位置左右往复，三色不断流动 */
+@keyframes btn-gradient-shift {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+.login-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #ffdc8f 0%, #f5ad47 45%, #f078ab 100%);
+  background-size: 160% 160%;
 }
 @keyframes btn-breathe {
   0%,
