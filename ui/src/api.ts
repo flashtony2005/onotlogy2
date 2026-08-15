@@ -16,6 +16,7 @@ import type {
   SessionSummaryDto,
   SkillDto,
   TaskListDto,
+  WorkerDto,
 } from './types'
 
 /** 401（令牌缺失/过期/禁用）→ UI 据此清令牌并跳登录。 */
@@ -162,6 +163,12 @@ export async function importSkill(
 export async function getPlugins(): Promise<PluginDto[]> {
   const res = await authFetch('/api/v1/v2/plugins')
   if (!res.ok) throw new Error(`plugins ${res.status}`)
+  return await res.json()
+}
+
+export async function getWorkers(): Promise<WorkerDto[]> {
+  const res = await authFetch('/api/v1/v2/workers')
+  if (!res.ok) throw new Error(`workers ${res.status}`)
   return await res.json()
 }
 

@@ -158,6 +158,16 @@ export interface SessionEventDto {
   data: Record<string, unknown>
 }
 
+export interface WorkerDto {
+  id: string
+  worker_type: string
+  capabilities: string[]
+  execution: string
+  quality: number
+  cost: number
+  status: string
+}
+
 export interface RawSkillDto {
   id: string
   name: string

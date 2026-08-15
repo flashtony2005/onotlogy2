@@ -14,12 +14,14 @@ use crate::plugin::registry::PluginRegistry;
 use crate::session::event::{EventType, SessionId};
 use crate::session::log::SessionLog;
 use crate::skill::registry::SkillRegistry;
+use crate::worker::registry::WorkerRegistry;
 
 /// V2 认知状态容器（挂载到 AppState）。
 #[derive(Default)]
 pub struct V2State {
     pub skills: RwLock<SkillRegistry>,
     pub plugins: RwLock<PluginRegistry>,
+    pub workers: RwLock<WorkerRegistry>,
     pub sessions: Mutex<HashMap<String, SessionLog>>,
 }
 
@@ -245,6 +247,43 @@ pub async fn create_session(
 pub struct SessionSummaryDto {
     pub session_id: String,
     pub events: usize,
+}
+
+/// Worker 摘要 DTO。
+#[derive(Serialize)]
+pub struct WorkerDto {
+    pub id: String,
+    pub worker_type: String,
+    pub capabilities: Vec<String>,
+    pub execution: String,
+    pub quality: f64,
+    pub cost: u32,
+    pub status: String,
+}
+
+pub async fn list_workers(
+    State(state): State<Arc<crate::server::AppState>>,
+) -> Json<Vec<WorkerDto>> {
+    let reg = state.v2.workers.read().unwrap();
+    let mut out: Vec<WorkerDto> = reg
+        .all()
+        .into_iter()
+        .map(|(id, st)| {
+            let w = reg.get(id).expect("registered");
+            let m = w.manifest();
+            WorkerDto {
+                id: m.id.clone(),
+                worker_type: m.worker_type.clone(),
+                capabilities: m.capabilities.clone(),
+                execution: format!("{:?}", m.execution),
+                quality: m.quality,
+                cost: m.cost,
+                status: format!("{st:?}"),
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    Json(out)
 }
 
 pub async fn list_sessions(

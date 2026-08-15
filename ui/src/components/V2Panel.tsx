@@ -5,9 +5,10 @@ import {
   getSession,
   getSkillRaw,
   getSkills,
+  getWorkers,
   importSkill,
 } from '../api'
-import type { PluginDto, RawSkillDto, SessionDto, SkillDto } from '../types'
+import type { PluginDto, RawSkillDto, SessionDto, SkillDto, WorkerDto } from '../types'
 
 const DEMO_SKILL_MD = `# YouTube Channel Growth
 
@@ -34,9 +35,10 @@ const KNOWN = ['web.search', 'video.generate', 'llm.reason']
 
 /** Phase 10 V2 认知面板：Skill Registry / Plugin Registry / Session Log。 */
 export function V2Panel() {
-  const [tab, setTab] = useState<'skills' | 'plugins' | 'sessions'>('skills')
+  const [tab, setTab] = useState<'skills' | 'plugins' | 'workers' | 'sessions'>('skills')
   const [skills, setSkills] = useState<SkillDto[]>([])
   const [plugins, setPlugins] = useState<PluginDto[]>([])
+  const [workers, setWorkers] = useState<WorkerDto[]>([])
   const [session, setSession] = useState<SessionDto | null>(null)
   const [loading, setLoading] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
@@ -72,6 +74,18 @@ export function V2Panel() {
       setLoading(false)
     }
   }
+  const reloadWorkers = async () => {
+    setLoading(true)
+    try {
+      setWorkers(await getWorkers())
+      setErr(null)
+    } catch (e) {
+      setErr(String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const reloadSession = async (id: string) => {
     setLoading(true)
     try {
@@ -157,16 +171,23 @@ export function V2Panel() {
   return (
     <div className="v2">
       <div className="v2-tabs">
-        {(['skills', 'plugins', 'sessions'] as const).map((t) => (
+        {(['skills', 'plugins', 'workers', 'sessions'] as const).map((t) => (
           <button
             key={t}
             className={tab === t ? 'v2-tab active' : 'v2-tab'}
             onClick={() => {
               setTab(t)
               if (t === 'plugins') void reloadPlugins()
+              if (t === 'workers') void reloadWorkers()
             }}
           >
-            {t === 'skills' ? '🛠 Skill Registry' : t === 'plugins' ? '🔌 Plugin Registry' : '📜 Session Log'}
+            {t === 'skills'
+              ? '🛠 Skill Registry'
+              : t === 'plugins'
+                ? '🔌 Plugin Registry'
+                : t === 'workers'
+                  ? '⚙ Worker Registry'
+                  : '📜 Session Log'}
           </button>
         ))}
       </div>
@@ -289,6 +310,44 @@ export function V2Panel() {
                   {p.endpoint && <div className="v2-item-desc">endpoint: {p.endpoint}</div>}
                   <div className="v2-item-caps">
                     {p.capabilities.map((c) => (
+                      <code key={c} className="cap">
+                        {c}
+                      </code>
+                    ))}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {tab === 'workers' && (
+        <div className="v2-section">
+          <div className="v2-head">
+            <h3>Worker Registry —「谁来完成」</h3>
+            <button className="reload" onClick={() => void reloadWorkers()} disabled={loading}>
+              {loading ? '刷新中…' : '↻ 刷新'}
+            </button>
+          </div>
+          {workers.length === 0 ? (
+            <div className="empty">
+              暂无 Worker。Worker 由 Rust 侧注册（Process / HTTP / MCP）——任何能完成某
+              Capability 的外部系统都可作为 Worker。
+            </div>
+          ) : (
+            <ul className="v2-list">
+              {workers.map((w) => (
+                <li key={w.id} className="v2-item">
+                  <div className="v2-item-head">
+                    <code>{w.id}</code>
+                    <span className="badge">{w.worker_type}</span>
+                    <span className="badge">{w.execution}</span>
+                    <span className="badge dim">q {w.quality.toFixed(2)}</span>
+                    <span className="badge dim">{w.status}</span>
+                  </div>
+                  <div className="v2-item-caps">
+                    {w.capabilities.map((c) => (
                       <code key={c} className="cap">
                         {c}
                       </code>

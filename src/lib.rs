@@ -36,6 +36,7 @@ pub mod skill;
 pub mod storage;
 pub mod tool_backend;
 pub mod trace;
+pub mod worker;
 pub mod world;
 
 pub use action::{ActionEffect, ActionEngine, ActionError, ActionRegistry};

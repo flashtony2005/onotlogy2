@@ -228,6 +228,7 @@ fn router() -> Router<Arc<AppState>> {
         )
         .route("/api/v1/v2/skills/:id/raw", get(v2::get_skill_raw))
         .route("/api/v1/v2/plugins", get(v2::list_plugins))
+        .route("/api/v1/v2/workers", get(v2::list_workers))
         .route("/api/v1/v2/sessions", get(v2::list_sessions))
         .route("/api/v1/v2/sessions/:id", get(v2::get_session))
         .route(
