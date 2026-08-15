@@ -1,36 +1,42 @@
 //! Phase 11 存储：wb_evaluation（派生结果表）+ wb_mutation（提案 + Benchmark）。
 //!
 //! 派生语义：wb_evaluation 可删表经 Evaluation Reducer 重建——Event Log 永远是 Source of Truth。
+//! 11A 证据系统：evidence 列存每维度 `{ evidence: [EventRef], confidence }`，Unknown ≠ Success。
+
+use std::collections::BTreeMap;
 
 use libsql::params;
 
 use super::*;
-use crate::evaluation::EvaluationResult;
+use crate::evaluation::{EvaluationResult, Score};
 use crate::mutation::{MutationProposal, MutationStatus};
+use serde_json::{Value, json};
 
 impl LibSQLStorage {
     /// 保存评测结果（幂等 upsert：`eval.<run_id>`；同 run 重算覆盖）。
     pub async fn save_evaluation(&self, r: &EvaluationResult) -> Result<(), StorageError> {
         let id = format!("eval.{}", r.run_id);
         let modes = serde_json::to_string(&r.failure_modes)?;
+        let evidence = serde_json::to_string(&evidence_map(r))?;
         self.conn
             .execute(
                 "INSERT OR REPLACE INTO wb_evaluation \
                  (id, run_id, task_id, skill_version, correctness, completeness, efficiency, \
-                  reliability, policy_compliance, output_quality, aggregate_score, failure_modes, evaluator_version) \
-                 VALUES (?1,?2,?3,NULL,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+                  reliability, policy_compliance, output_quality, aggregate_score, failure_modes, evidence, evaluator_version) \
+                 VALUES (?1,?2,?3,NULL,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
                 params![
                     id,
                     r.run_id.clone(),
                     r.task_id.clone(),
-                    r.correctness,
-                    r.completeness,
-                    r.efficiency,
-                    r.reliability,
-                    r.policy_compliance,
-                    r.output_quality,
+                    r.correctness.value,
+                    r.completeness.value,
+                    r.efficiency.value,
+                    r.reliability.value,
+                    r.policy_compliance.value,
+                    r.output_quality.value,
                     r.aggregate,
                     modes,
+                    evidence,
                     r.evaluator_version.clone()
                 ],
             )
@@ -46,7 +52,7 @@ impl LibSQLStorage {
     ) -> Result<Vec<EvaluationResult>, StorageError> {
         let mut sql = String::from(
             "SELECT run_id, task_id, skill_version, correctness, completeness, efficiency, \
-             reliability, policy_compliance, output_quality, aggregate_score, failure_modes, evaluator_version \
+             reliability, policy_compliance, output_quality, aggregate_score, failure_modes, evidence, evaluator_version \
              FROM wb_evaluation WHERE 1=1",
         );
         let mut params: Vec<libsql::Value> = Vec::new();
@@ -135,20 +141,59 @@ impl LibSQLStorage {
     }
 }
 
+/// 每维度 `{ evidence: [EventRef], confidence }`（BTreeMap 保证键序确定性）。
+fn evidence_map(r: &EvaluationResult) -> BTreeMap<&'static str, Value> {
+    let mut m = BTreeMap::new();
+    for (name, score) in [
+        ("correctness", &r.correctness),
+        ("completeness", &r.completeness),
+        ("efficiency", &r.efficiency),
+        ("reliability", &r.reliability),
+        ("policy_compliance", &r.policy_compliance),
+        ("output_quality", &r.output_quality),
+    ] {
+        m.insert(
+            name,
+            json!({
+                "evidence": score.evidence,
+                "confidence": score.confidence,
+            }),
+        );
+    }
+    m
+}
+
+/// 从 evidence JSON 还原 Score（value 来自列；缺失条目 → unknown）。
+fn score_from(value: Option<f64>, entry: Option<&Value>) -> Score {
+    match entry {
+        Some(e) => Score {
+            value,
+            evidence: e
+                .get("evidence")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default(),
+            confidence: e.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        },
+        None => Score::unknown(),
+    }
+}
+
 fn row_to_evaluation(row: &libsql::Row) -> Result<EvaluationResult, StorageError> {
     let modes: String = row.get(10)?;
+    let evidence: String = row.get(11)?;
+    let map: BTreeMap<String, Value> = serde_json::from_str(&evidence)?;
     Ok(EvaluationResult {
         run_id: row.get(0)?,
         task_id: row.get(1)?,
-        correctness: row.get(3)?,
-        completeness: row.get(4)?,
-        efficiency: row.get(5)?,
-        reliability: row.get(6)?,
-        policy_compliance: row.get(7)?,
-        output_quality: row.get(8)?,
+        correctness: score_from(row.get(3)?, map.get("correctness")),
+        completeness: score_from(row.get(4)?, map.get("completeness")),
+        efficiency: score_from(row.get(5)?, map.get("efficiency")),
+        reliability: score_from(row.get(6)?, map.get("reliability")),
+        policy_compliance: score_from(row.get(7)?, map.get("policy_compliance")),
+        output_quality: score_from(row.get(8)?, map.get("output_quality")),
         aggregate: row.get(9)?,
         failure_modes: serde_json::from_str(&modes)?,
-        evaluator_version: row.get(11)?,
+        evaluator_version: row.get(12)?,
     })
 }
 

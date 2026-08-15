@@ -276,6 +276,39 @@
 - [../02_需求设计/requirement-all.md](../02_需求设计/requirement-all.md)
 - [../02_需求设计/prd-agent-integration.md](../02_需求设计/prd-agent-integration.md)
 
+### 4.12 获取评测结果（Phase 11 · Domain Agent Evolution）
+- [强制] 请求方式：GET
+- [强制] 接口路径：/api/v1/wb/agent/evaluation
+- [强制] 权限要求：登录用户（Operator 及以上可读；写由 Runtime RunEnd 钩子独占）
+- 请求参数：`runId`（可选，按 run 过滤）
+- 响应成功示例：
+```json
+{
+  "code": 0, "msg": "success",
+  "data": {
+    "total": 1,
+    "list": [
+      {
+        "runId": "RUN-1",
+        "taskId": "t1",
+        "correctness": { "value": 0.8, "confidence": 1.0, "evidence": [ { "seq": 4, "eventType": "test.result" } ] },
+        "completeness": { "value": null, "confidence": 0.0, "evidence": [] },
+        "efficiency": { "value": 0.5, "confidence": 1.0, "evidence": [ { "seq": 3, "eventType": "worker.completed" } ] },
+        "reliability": { "value": 1.0, "confidence": 1.0, "evidence": [ { "seq": 2, "eventType": "worker.started" } ] },
+        "policyCompliance": { "value": 1.0, "confidence": 1.0, "evidence": [ { "seq": 0, "eventType": "policy.checked" } ] },
+        "outputQuality": { "value": null, "confidence": 0.0, "evidence": [] },
+        "aggregate": 0.825,
+        "unknowns": ["completeness", "outputQuality"],
+        "failureModes": [],
+        "evaluatorVersion": "11.1.0"
+      }
+    ]
+  }
+}
+```
+- 特殊逻辑：数据来源 `wb_evaluation`（**派生表**——Evaluation = Pure Function(Event Log)，删表可经 Evaluation Reducer 重建）；**Unknown ≠ Success**：无证据维度 value=null（aggregate 剔除）；judge 维度 confidence 来自 judge.submitted 事件；写路径只有 RunEnd 钩子（`on_run_end`），本端点只读
+
+
 ## 修订日志
 | 版本 | 修改人 | 修改日期 | 修改内容 |
 |------|--------|----------|----------|
@@ -286,3 +319,4 @@
 | V1.4 | lushaohui | 2026-08-12 | 新增 4.8 GET /api/v1/wb/agent/memory（wb_memory 记忆沉淀视图源）、4.9 GET /api/v1/wb/agent/evolution（wb_pattern/wb_proposal/wb_learned Evolution 状态，含可追溯证据链与 Learn≠Permission 约束） |
 | V1.5 | lushaohui | 2026-08-12 | REQ-018 Evolution 第二阶段 AutoApprove 接口：4.9.1 POST /evolution/learned/{id}/auto-approve（可撤销切换 auto_approve_enabled，幂等）；4.9.2 GET /evolution/audit（wb_approval_audit 审计列表，可追溯至 LearnedKnowledge+run）；4.9 特殊逻辑补 REQ-018 升级已落地说明 |
 | V1.5 | lushaohui | 2026-08-12 | 新增 4.10 GET /run/:run_id/approvals 与 4.11 POST /run/:run_id/approval/:req_id（V0.4 挂起式 HTTP 审批端点，Human-in-the-loop 三态之一；重复裁决返回 404 code） |
+| V1.6 | lushaohui | 2026-08-15 | 新增 4.12 GET /api/v1/wb/agent/evaluation（Phase 11 · 11A 证据系统：每维度 Score{value,confidence,evidence} + unknowns + aggregate；派生表语义，Event Log 永远是 Source of Truth；Operator 及以上可读） |

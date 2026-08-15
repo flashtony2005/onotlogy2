@@ -47,6 +47,8 @@ pub enum EventType {
     ApprovalResolved,
     /// Phase 11：Human / LLM 判断信号（Fact/Judgment 分离——judge 本身成为可审计事实）。
     JudgeSubmitted,
+    /// Phase 11：RunEnd 评测完成（Runtime 热路径钩子产物）。
+    EvaluationCreated,
     ArtifactCreated,
     CodeChanged,
     TestStarted,
@@ -86,6 +88,7 @@ impl EventType {
             EventType::ApprovalRequested => "approval.requested",
             EventType::ApprovalResolved => "approval.resolved",
             EventType::JudgeSubmitted => "judge.submitted",
+            EventType::EvaluationCreated => "evaluation.created",
             EventType::ArtifactCreated => "artifact.created",
             EventType::CodeChanged => "code.changed",
             EventType::TestStarted => "test.started",

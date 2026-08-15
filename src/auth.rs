@@ -108,6 +108,10 @@ impl AuthUser {
     pub fn can_read_audit(&self) -> bool {
         self.role.rank() >= Role::Operator.rank()
     }
+    /// 可读取 Evaluation（Phase 11 派生表）—— Operator 及以上；写由 Runtime 钩子独占。
+    pub fn can_read_evaluation(&self) -> bool {
+        self.role.rank() >= Role::Operator.rank()
+    }
 }
 
 /// 认证错误。

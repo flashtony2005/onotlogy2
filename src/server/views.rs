@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 /// 静态文件托管（SPA 兜底 index.html）。作为 Router::fallback，保留原始请求路径。
 use crate::auth::AuthUser;
+use crate::evaluation::{EvaluationResult, EventRef};
 use crate::evolution::{
     EvolutionState, LearnedKnowledge, Pattern, Proposal, ProposalKind, ProposalStatus,
 };
 use crate::storage::ApprovalAudit;
-use axum::extract::{Extension, State};
+use axum::extract::{Extension, Query, State};
 use axum::response::Response;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -228,6 +229,105 @@ pub(crate) async fn list_evolution(
         learned,
     })
     .into_response()
+}
+
+/// `GET /api/v1/wb/agent/evaluation`：Phase 11 评测结果（11A 证据系统，Operator 及以上）。
+/// 返回每维度 Score{value, confidence, evidence} + unknowns + aggregate（派生表，可经 Reducer 重建）。
+#[derive(serde::Deserialize)]
+pub(crate) struct EvalQuery {
+    #[serde(rename = "runId", default)]
+    run_id: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EventRefDto {
+    seq: u64,
+    event_type: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScoreDto {
+    value: Option<f64>,
+    confidence: f64,
+    evidence: Vec<EventRefDto>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvaluationDto {
+    run_id: String,
+    task_id: String,
+    correctness: ScoreDto,
+    completeness: ScoreDto,
+    efficiency: ScoreDto,
+    reliability: ScoreDto,
+    policy_compliance: ScoreDto,
+    output_quality: ScoreDto,
+    aggregate: f64,
+    unknowns: Vec<String>,
+    failure_modes: Vec<String>,
+    evaluator_version: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvaluationListDto {
+    total: usize,
+    list: Vec<EvaluationDto>,
+}
+
+pub(crate) async fn list_evaluations(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Query(q): Query<EvalQuery>,
+) -> Response {
+    if !user.can_read_evaluation() {
+        return forbidden("当前角色无权读取评测（需 Operator 及以上）").into_response();
+    }
+    let list = match st
+        .kernel
+        .storage()
+        .list_evaluations(q.run_id.as_deref(), 500)
+        .await
+    {
+        Ok(l) => l,
+        Err(_) => return ApiResponse::error(5000, "存储错误").into_response(),
+    };
+    let total = list.len();
+    let dtos: Vec<EvaluationDto> = list.into_iter().map(eval_dto).collect();
+    ApiResponse::ok(EvaluationListDto { total, list: dtos }).into_response()
+}
+
+fn eval_dto(e: EvaluationResult) -> EvaluationDto {
+    let score = |s: &crate::evaluation::Score| ScoreDto {
+        value: s.value,
+        confidence: s.confidence,
+        evidence: s
+            .evidence
+            .iter()
+            .map(|r: &EventRef| EventRefDto {
+                seq: r.seq,
+                event_type: r.event_type.clone(),
+            })
+            .collect(),
+    };
+    let unknowns: Vec<String> = e.unknowns().into_iter().map(String::from).collect();
+    EvaluationDto {
+        run_id: e.run_id,
+        task_id: e.task_id,
+        correctness: score(&e.correctness),
+        completeness: score(&e.completeness),
+        efficiency: score(&e.efficiency),
+        reliability: score(&e.reliability),
+        policy_compliance: score(&e.policy_compliance),
+        output_quality: score(&e.output_quality),
+        aggregate: e.aggregate,
+        unknowns,
+        failure_modes: e.failure_modes,
+        evaluator_version: e.evaluator_version,
+    }
 }
 
 /// `DELETE /api/v1/wb/agent/evolution/learned/:id`：撤销一条 LearnedKnowledge（可撤销承诺）。

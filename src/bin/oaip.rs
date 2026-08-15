@@ -4,12 +4,16 @@ use clap::{Parser, Subcommand};
 use openaip_os::action::ActionRegistry;
 use openaip_os::agent::{AgentEngine, PiAgentEngine};
 use openaip_os::auth::{IdentityProvider, LocalIdentityProvider};
+use openaip_os::evaluation::hook::{append_bridged, on_run_end, trace_to_session_events};
+use openaip_os::evaluation::{EvaluationPolicy, TaskDefinition};
 use openaip_os::planner::{
     AutoApprover, ConsoleApprover, Planner, PlannerError, PolicyApprover, RuntimeConfig,
     generate_run_id,
 };
 use openaip_os::runtime::RuntimeKernel;
 use openaip_os::server;
+use openaip_os::session::event::{EventType, SessionId};
+use openaip_os::session::log::SessionLog;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine, TraceQuery, UserRecord};
 use openaip_os::{codegen, parse_odl};
 use serde_json::json;
@@ -410,14 +414,28 @@ async fn cmd_agent_run(
     };
 
     let run_id = generate_run_id();
-    match Planner::with_actions(&kernel, registry)
+    // Phase 11 11A：Run 级 SessionLog（事实源）。Context Assembly 事实先落
+    // （run 级上下文输入；planner 内部装配的细化发射为下一迭代项）。
+    let mut log = SessionLog::new(SessionId::new(&run_id));
+    log.append(
+        EventType::ContextAssembled,
+        json!({
+            "run_id": run_id,
+            "assets": [
+                { "asset_id": "goal", "selection_reason": goal, "relevance": 1.0 },
+                { "asset_id": "agent", "selection_reason": agent_id, "relevance": 1.0 },
+                { "asset_id": "ontology", "selection_reason": odl.unwrap_or(""), "relevance": 1.0 },
+            ],
+        }),
+    );
+    let outcome = Planner::with_actions(&kernel, registry)
         .with_approver(approver)
         .with_config(RuntimeConfig {
             auto_approve_from_evolution: auto_approve_evolution,
         })
         .run_goal(&engine, goal, agent_id, &run_id)
-        .await
-    {
+        .await;
+    match &outcome {
         Ok(res) => {
             println!(
                 "✅ Agent 运行完成：run_id={} status={}",
@@ -447,6 +465,41 @@ async fn cmd_agent_run(
         Err(PlannerError::Action(e)) => {
             println!("❌ 动作执行失败（V0.4 Action Engine）：{e}");
         }
+    }
+    // Phase 11 11A：RunEnd → Evaluation（真实热路径）。
+    // 1) kernel trace 事实桥进 SessionLog（policy.checked / tool.call / approval.*）
+    // 2) on_run_end：evaluate（纯函数）→ 落 wb_evaluation → 发射 evaluation.created
+    // 3) 成败皆评（失败 run 的评测同样有诊断价值）
+    let trace = kernel.list_events(TraceQuery::for_run(&run_id)).await?;
+    append_bridged(&mut log, trace_to_session_events(&trace));
+    log.append(EventType::SessionCompleted, json!({ "run_id": run_id }));
+    let task = TaskDefinition {
+        task_id: run_id.clone(),
+        expected_relations: vec![],
+        expected_artifacts: vec![],
+        time_budget_secs: 0.0,
+    };
+    match on_run_end(
+        &mut log,
+        &run_id,
+        &task,
+        &EvaluationPolicy::default(),
+        &kernel.storage(),
+    )
+    .await
+    {
+        Ok(r) => {
+            println!(
+                "📊 Phase 11 评测（wb_evaluation）：aggregate={:.3} unknowns={:?}",
+                r.aggregate,
+                r.unknowns()
+            );
+            println!(
+                "   correctness={:?} policy_compliance={:?} reliability={:?}",
+                r.correctness.value, r.policy_compliance.value, r.reliability.value
+            );
+        }
+        Err(e) => println!("⚠️ 评测失败（不影响运行结果）：{e}"),
     }
     Ok(())
 }

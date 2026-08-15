@@ -174,3 +174,81 @@ async fn tc_sv3_session_create_and_read() {
     let (s3, _) = call(addr, "GET", "/api/v1/v2/sessions/nope", None).await;
     assert_eq!(s3, 404);
 }
+
+// ── SV5：Phase 11 评测端点（证据系统 DTO）───────────────────────────
+#[tokio::test]
+async fn tc_sv5_evaluation_endpoint() {
+    let storage = openaip_os::storage::LibSQLStorage::open(":memory:")
+        .await
+        .unwrap();
+    let kernel = std::sync::Arc::new(openaip_os::runtime::RuntimeKernel::new(storage.clone()));
+    let addr = common::spawn_server(kernel).await;
+
+    // 空列表
+    let (s0, body0) = call(addr, "GET", "/api/v1/wb/agent/evaluation", None).await;
+    assert_eq!(s0, 200);
+    assert_eq!(body0["data"]["total"], 0);
+
+    // 种子一条评测（RunEnd 钩子产物）
+    let mut log = openaip_os::session::log::SessionLog::new(
+        openaip_os::session::event::SessionId::new("run_e1"),
+    );
+    log.append(
+        openaip_os::session::event::EventType::TestResult,
+        json!({ "tests_total": 10, "tests_passed": 8 }),
+    );
+    log.append(
+        openaip_os::session::event::EventType::PolicyChecked,
+        json!({ "capability": "code.test", "verdict": "allow" }),
+    );
+    let task = openaip_os::evaluation::TaskDefinition {
+        task_id: "t1".into(),
+        expected_relations: vec![],
+        expected_artifacts: vec![],
+        time_budget_secs: 0.0,
+    };
+    openaip_os::evaluation::hook::on_run_end(
+        &mut log,
+        "run_e1",
+        &task,
+        &openaip_os::evaluation::EvaluationPolicy::default(),
+        &storage,
+    )
+    .await
+    .unwrap();
+
+    // 列表可见（派生表 DTO：value/confidence/evidence/unknowns）
+    let (s1, body1) = call(addr, "GET", "/api/v1/wb/agent/evaluation", None).await;
+    assert_eq!(s1, 200);
+    assert_eq!(body1["data"]["total"], 1);
+    assert_eq!(body1["data"]["list"][0]["runId"], "run_e1");
+    assert_eq!(body1["data"]["list"][0]["correctness"]["value"], json!(0.8));
+    assert_eq!(
+        body1["data"]["list"][0]["correctness"]["evidence"][0]["eventType"],
+        json!("test.result")
+    );
+    assert_eq!(
+        body1["data"]["list"][0]["policyCompliance"]["value"],
+        json!(1.0)
+    );
+    assert!(
+        body1["data"]["list"][0]["unknowns"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("efficiency"))
+    );
+
+    // runId 过滤
+    let (s2, body2) = call(
+        addr,
+        "GET",
+        "/api/v1/wb/agent/evaluation?runId=run_e1",
+        None,
+    )
+    .await;
+    assert_eq!(s2, 200);
+    assert_eq!(body2["data"]["total"], 1);
+    let (s3, body3) = call(addr, "GET", "/api/v1/wb/agent/evaluation?runId=nope", None).await;
+    assert_eq!(s3, 200);
+    assert_eq!(body3["data"]["total"], 0);
+}

@@ -47,8 +47,10 @@ pub use auth::{
     AuthError, AuthUser, IdentityProvider, LocalIdentityProvider, Role, SessionStore, clamp_view,
 };
 pub use codegen::{CodegenOutput, ObjectDef, codegen};
+pub use evaluation::hook::on_run_end;
 pub use evaluation::{
-    EVALUATOR_VERSION, EvaluationPolicy, EvaluationReducer, EvaluationResult, TaskDefinition,
+    EVALUATOR_VERSION, EvaluationPolicy, EvaluationReducer, EvaluationResult, EventRef, Score,
+    TaskDefinition,
 };
 pub use evolution::{
     EvolutionState, Experience, LearnedKnowledge, PATTERN_MIN_HITS, Pattern, Proposal,

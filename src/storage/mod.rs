@@ -203,7 +203,7 @@ pub struct LibSQLStorage {
 
 /// 当前 schema 版本。每次 schema 变更（加列 / 改列名）递增；
 /// 旧库 open 时按 `MIGRATIONS` 顺序自动迁移（事务化），不再要求 `db reset`。
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 /// 版本化迁移注册表：`(from_version, sql)`，按版本升序执行；每步成功后推进
 /// `wb_meta.schema_version`。迁移在事务内执行（失败整体回滚，版本不推进，可安全重试）。
@@ -253,6 +253,12 @@ CREATE TABLE IF NOT EXISTS wb_mutation (
 );
 CREATE INDEX IF NOT EXISTS idx_mutation_status ON wb_mutation(status);
 CREATE INDEX IF NOT EXISTS idx_mutation_target ON wb_mutation(target_asset);",
+    ),
+    // V3 → V4：Phase 11 11A 证据系统（WB-DOC-03-V11.0）。
+    // wb_evaluation 加 evidence 列（每维度证据+置信度 JSON；Unknown ≠ Success 语义）。
+    (
+        3,
+        "ALTER TABLE wb_evaluation ADD COLUMN evidence TEXT NOT NULL DEFAULT '{}'",
     ),
 ];
 

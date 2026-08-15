@@ -299,7 +299,7 @@ fn failure_rate(results: &[EvaluationResult]) -> f64 {
     }
     let fails: f64 = results
         .iter()
-        .map(|r| 1.0 - r.reliability.unwrap_or(1.0))
+        .map(|r| 1.0 - r.reliability.value.unwrap_or(1.0))
         .sum();
     fails / results.len() as f64
 }
@@ -401,12 +401,15 @@ mod tests {
         EvaluationResult {
             run_id: run_id.into(),
             task_id: "t1".into(),
-            correctness: Some(aggregate),
-            completeness: Some(aggregate),
-            efficiency: Some(aggregate),
-            reliability,
-            policy_compliance: Some(aggregate),
-            output_quality: None,
+            correctness: crate::evaluation::Score::known(aggregate, vec![]),
+            completeness: crate::evaluation::Score::known(aggregate, vec![]),
+            efficiency: crate::evaluation::Score::known(aggregate, vec![]),
+            reliability: match reliability {
+                Some(v) => crate::evaluation::Score::known(v, vec![]),
+                None => crate::evaluation::Score::unknown(),
+            },
+            policy_compliance: crate::evaluation::Score::known(aggregate, vec![]),
+            output_quality: crate::evaluation::Score::unknown(),
             aggregate,
             failure_modes: modes.iter().map(|s| s.to_string()).collect(),
             evaluator_version: crate::evaluation::EVALUATOR_VERSION.into(),

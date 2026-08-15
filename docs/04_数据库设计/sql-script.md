@@ -166,6 +166,7 @@ CREATE TABLE wb_evaluation (
   output_quality     REAL,
   aggregate_score    REAL NOT NULL DEFAULT 0.0,  -- 派生视图：已出现维度均值
   failure_modes      TEXT NOT NULL DEFAULT '[]', -- worker.failed error 去重排序
+  evidence           TEXT NOT NULL DEFAULT '{}', -- 每维度证据+置信度 JSON（11A 证据系统）
   evaluator_version  TEXT NOT NULL,
   created_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -216,4 +217,5 @@ CREATE INDEX idx_mutation_target ON wb_mutation(target_asset);
 | V1.6 | lushaohui | 2026-08-12 | 新增 wb_memory（V0.5·REQ-016 记忆沉淀）+ wb_pattern / wb_proposal / wb_learned（BL-003·REQ-017 Evolution Engine）建表 DDL，与 codegen canonical_schema 完全一致 |
 | V1.7 | lushaohui | 2026-08-12 | REQ-018 Evolution 第二阶段 AutoApprove：wb_learned 加 `auto_approve_enabled INTEGER NOT NULL DEFAULT 1`；新增 wb_approval_audit 审计表（decision=auto_approve/auto_approve_enabled/revoke_disabled），与 codegen canonical_schema 完全一致 |
 | V1.8 | lushaohui | 2026-08-15 | Phase 11 Domain Agent Evolution（WB-DOC-03-V11.0）：新增 wb_evaluation（Event Log 派生结果表，可重建）+ wb_mutation（提案 + Benchmark，失败保留）建表 DDL 与索引，与 codegen canonical_schema 完全一致 |
+| V1.9 | lushaohui | 2026-08-15 | Phase 11 · 11A 证据系统：wb_evaluation 加 `evidence` 列（每维度 Score{evidence,confidence} JSON，Unknown ≠ Success），与 codegen canonical_schema 完全一致 |
 

@@ -45,6 +45,7 @@ use trace::list_trace;
 use trace::timeline;
 use trace::ws_handler;
 use views::list_approval_audit_handler;
+use views::list_evaluations;
 use views::list_evolution;
 use views::list_memory;
 use views::list_tasks;
@@ -192,6 +193,7 @@ fn router() -> Router<Arc<AppState>> {
         .route("/api/v1/wb/agent/memory", get(list_memory))
         .route("/api/v1/wb/agent/tasks", get(list_tasks))
         .route("/api/v1/wb/agent/evolution", get(list_evolution))
+        .route("/api/v1/wb/agent/evaluation", get(list_evaluations))
         .route(
             "/api/v1/wb/agent/evolution/learned/:id",
             delete(revoke_learned),

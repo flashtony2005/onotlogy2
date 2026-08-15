@@ -210,6 +210,7 @@
 | output_quality | real | 否 | - | 主观：judge.submitted | - |
 | aggregate_score | real | 是 | 0.0 | 派生视图：已出现维度均值 | - |
 | failure_modes | text | 是 | '[]' | worker.failed error 去重排序（Benchmark 判「无新增失败模式」） | - |
+| evidence | text | 是 | '{}' | 每维度 Score{evidence,confidence} JSON（11A 证据系统；Unknown ≠ Success） | - |
 | evaluator_version | text | 是 | - | Reducer 版本（口径区分） | - |
 | created_at | text | 是 | CURRENT_TIMESTAMP | 创建时间 | - |
 
@@ -253,4 +254,5 @@
 | V1.3 | lushaohui | 2026-08-12 | 新增 Agent 自治四表：wb_memory（V0.5·REQ-016 记忆沉淀）、wb_pattern / wb_proposal / wb_learned（BL-003·REQ-017 Evolution Engine，Learn≠Permission）；表清单 4.1 补 4 行，新增 4.6~4.9 结构详情 |
 | V1.4 | lushaohui | 2026-08-12 | REQ-018 Evolution 第二阶段 AutoApprove：wb_learned 加 `auto_approve_enabled`（integer 0/1，可撤销资格，默认 1）；新增 wb_approval_audit 审计表（4.10，decision=auto_approve/auto_approve_enabled/revoke_disabled，可追溯至 LearnedKnowledge+run） |
 | V1.5 | lushaohui | 2026-08-15 | Phase 11 Domain Agent Evolution（WB-DOC-03-V11.0）：表清单补 wb_evaluation（派生结果表）/ wb_mutation（提案 + Benchmark），新增 4.11 / 4.12 结构详情 |
+| V1.6 | lushaohui | 2026-08-15 | Phase 11 · 11A 证据系统：4.11 wb_evaluation 加 `evidence` 列（每维度 Score{evidence,confidence}，Unknown ≠ Success）；表清单 wb_evaluation 描述同步 |
 
