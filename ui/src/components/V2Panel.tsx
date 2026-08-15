@@ -210,10 +210,10 @@ export function V2Panel() {
               </button>
               <button
                 className="reload"
-                onClick={() => void reloadSession('swe-1')}
-                disabled={loading}
+                onClick={() => session && void reloadSession(session.session_id)}
+                disabled={loading || !session}
               >
-                ↻ swe-1
+                ↻ 刷新当前 Session
               </button>
             </div>
           </div>
