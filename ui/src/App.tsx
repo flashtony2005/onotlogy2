@@ -210,10 +210,10 @@ export default function App() {
       <div className="app">
         <header className="topbar">
           <div className="brand">
-            <span className="logo">◈</span>
+            <span className="logo">❯_</span>
             <div>
               <h1>OpenAIP-OS · Agent 认知观察</h1>
-              <p className="sub">V0.8 · 本地账号认证</p>
+              <p className="sub">agent runtime · v2</p>
             </div>
           </div>
         </header>
@@ -229,10 +229,10 @@ export default function App() {
       <div className="app">
         <header className="topbar">
           <div className="brand">
-            <span className="logo">◈</span>
+            <span className="logo">❯_</span>
             <div>
               <h1>OpenAIP-OS · Agent 认知观察</h1>
-              <p className="sub">V0.8 · 本地账号认证</p>
+              <p className="sub">agent runtime · v2</p>
             </div>
           </div>
         </header>
@@ -247,10 +247,10 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <span className="logo">◈</span>
+          <span className="logo">❯_</span>
           <div>
             <h1>OpenAIP-OS · Agent 认知观察</h1>
-            <p className="sub">V0.8 · GraphRAG 基础 · 认证 · 声明式 Action</p>
+            <p className="sub">agent runtime · v0.9</p>
           </div>
         </div>
         <div className="conn-group">
@@ -269,6 +269,7 @@ export default function App() {
       </header>
 
       <section className="controls">
+        <span className="prompt">❯</span>
         <input
           className="agent"
           value={agentId}
