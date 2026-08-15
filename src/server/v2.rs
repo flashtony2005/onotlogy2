@@ -126,6 +126,7 @@ pub async fn import_skill(
         .compile(&raw, &ir, &resolutions)
         .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e.to_string()))?;
     let mut reg = v2.skills.write().unwrap();
+    reg.attach_raw(&raw.id, raw.clone());
     reg.register(asset.clone())
         .map_err(|e| (axum::http::StatusCode::CONFLICT, e.to_string()))?;
     Ok(Json(SkillDto {
@@ -136,6 +137,35 @@ pub async fn import_skill(
         status: format!("{:?}", asset.status),
         goal: asset.goal.clone(),
         capabilities: asset.capabilities.clone(),
+    }))
+}
+
+/// 原始内容 DTO（P1：Raw 不修改，只读展示）。
+#[derive(Serialize)]
+pub struct RawSkillDto {
+    pub id: String,
+    pub name: String,
+    pub source_type: String,
+    pub content_hash: String,
+    pub content: String,
+}
+
+/// GET /api/v1/v2/skills/:id/raw —— 查看 Skill 的原始内容。
+pub async fn get_skill_raw(
+    State(state): State<Arc<crate::server::AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<RawSkillDto>, (axum::http::StatusCode, String)> {
+    let reg = state.v2.skills.read().unwrap();
+    let raw = reg.raw_of(&id).ok_or((
+        axum::http::StatusCode::NOT_FOUND,
+        format!("skill {id} 无原始快照"),
+    ))?;
+    Ok(Json(RawSkillDto {
+        id: raw.id.clone(),
+        name: raw.name.clone(),
+        source_type: format!("{:?}", raw.source_type),
+        content_hash: raw.content_hash.clone(),
+        content: raw.content.clone(),
     }))
 }
 

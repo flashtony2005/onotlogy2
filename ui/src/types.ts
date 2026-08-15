@@ -158,6 +158,14 @@ export interface SessionEventDto {
   data: Record<string, unknown>
 }
 
+export interface RawSkillDto {
+  id: string
+  name: string
+  source_type: string
+  content_hash: string
+  content: string
+}
+
 export interface SessionSummaryDto {
   session_id: string
   events: number

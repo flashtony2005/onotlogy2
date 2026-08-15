@@ -3,10 +3,11 @@ import {
   createSession,
   getPlugins,
   getSession,
+  getSkillRaw,
   getSkills,
   importSkill,
 } from '../api'
-import type { PluginDto, SessionDto, SkillDto } from '../types'
+import type { PluginDto, RawSkillDto, SessionDto, SkillDto } from '../types'
 
 const DEMO_SKILL_MD = `# YouTube Channel Growth
 
@@ -40,6 +41,14 @@ export function V2Panel() {
   const [loading, setLoading] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  // 上传表单
+  const [upName, setUpName] = useState('my-skill')
+  const [upContent, setUpContent] = useState('')
+  const [upKnown, setUpKnown] = useState('')
+  const [upOpen, setUpOpen] = useState(false)
+  // 原始内容展开（skill id → raw）
+  const [raws, setRaws] = useState<Record<string, RawSkillDto>>({})
+  const [rawLoading, setRawLoading] = useState<string | null>(null)
 
   const reloadSkills = async () => {
     setLoading(true)
@@ -90,6 +99,49 @@ export function V2Panel() {
       setErr(String(e))
     }
   }
+  const onToggleRaw = async (id: string) => {
+    if (raws[id]) {
+      setRaws((r) => {
+        const next = { ...r }
+        delete next[id]
+        return next
+      })
+      return
+    }
+    setRawLoading(id)
+    setErr(null)
+    try {
+      const raw = await getSkillRaw(id)
+      setRaws((r) => ({ ...r, [id]: raw }))
+    } catch (e) {
+      setErr(String(e))
+    } finally {
+      setRawLoading(null)
+    }
+  }
+
+  const onUpload = async () => {
+    if (!upContent.trim()) {
+      setErr('请粘贴 SKILL.md 原始内容')
+      return
+    }
+    setMsg(null)
+    setErr(null)
+    try {
+      const known = upKnown
+        .split(/[,，]/)
+        .map((x) => x.trim())
+        .filter(Boolean)
+      const s = await importSkill(upName.trim() || 'my-skill', upContent, known)
+      setMsg(`✅ 已上传 ${s.id}（${s.skill_type}，${s.capabilities.length} 个能力解析）`)
+      setUpContent('')
+      setUpOpen(false)
+      await reloadSkills()
+    } catch (e) {
+      setErr(String(e))
+    }
+  }
+
   const onNewSession = async () => {
     setMsg(null)
     setErr(null)
@@ -131,12 +183,50 @@ export function V2Panel() {
                 {loading ? '刷新中…' : '↻ 刷新'}
               </button>
               <button className="reload" onClick={onImport} disabled={loading}>
-                ⬇ Import YouTube 示例
+                ⬇ YouTube 示例
+              </button>
+              <button className="reload" onClick={() => setUpOpen((o) => !o)}>
+                {upOpen ? '✕ 收起上传' : '⬆ 上传 SKILL.md'}
               </button>
             </div>
           </div>
+
+          {upOpen && (
+            <div className="up-form">
+              <div className="up-row">
+                <input
+                  className="up-name"
+                  value={upName}
+                  onChange={(e) => setUpName(e.target.value)}
+                  placeholder="skill id"
+                />
+                <input
+                  className="up-known"
+                  value={upKnown}
+                  onChange={(e) => setUpKnown(e.target.value)}
+                  placeholder="已知能力（逗号分隔，可选）"
+                />
+              </div>
+              <textarea
+                className="up-textarea"
+                value={upContent}
+                onChange={(e) => setUpContent(e.target.value)}
+                placeholder={'# My Skill\n\n- goal: ...\n## Stage 1: ...\n- capability: ...'}
+                rows={7}
+              />
+              <div className="up-actions">
+                <button className="run up-run" onClick={onUpload}>
+                  ⬆ 解析并注册
+                </button>
+                <span className="up-hint">
+                  原始内容永久保留（Raw 不修改），解析后可在列表展开查看
+                </span>
+              </div>
+            </div>
+          )}
+
           {skills.length === 0 ? (
-            <div className="empty">暂无 Skill。点击「Import YouTube 示例」导入演示资产。</div>
+            <div className="empty">暂无 Skill。上传 SKILL.md 或导入示例。</div>
           ) : (
             <ul className="v2-list">
               {skills.map((s) => (
@@ -146,6 +236,9 @@ export function V2Panel() {
                     <span className="badge">{s.skill_type}</span>
                     <span className="badge dim">v{s.version}</span>
                     <span className="badge dim">{s.status}</span>
+                    <button className="reload raw-btn" onClick={() => void onToggleRaw(s.id)}>
+                      {rawLoading === s.id ? '…' : raws[s.id] ? '▾ 收起原始' : '▸ 原始内容'}
+                    </button>
                   </div>
                   <div className="v2-item-desc">{s.goal}</div>
                   <div className="v2-item-caps">
@@ -155,6 +248,15 @@ export function V2Panel() {
                       </code>
                     ))}
                   </div>
+                  {raws[s.id] && (
+                    <div className="raw-box">
+                      <div className="raw-meta">
+                        <code>{raws[s.id].source_type}</code>
+                        <code>hash {raws[s.id].content_hash.slice(0, 12)}…</code>
+                      </div>
+                      <pre className="raw-content">{raws[s.id].content}</pre>
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>

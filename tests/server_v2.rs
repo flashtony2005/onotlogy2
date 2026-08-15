@@ -77,6 +77,39 @@ async fn tc_sv1_import_skill_then_list() {
 }
 
 #[tokio::test]
+async fn tc_sv1b_skill_raw_view() {
+    let kernel = std::sync::Arc::new(RuntimeKernel::new(
+        openaip_os::storage::LibSQLStorage::open(":memory:")
+            .await
+            .unwrap(),
+    ));
+    let addr = common::spawn_server(kernel).await;
+
+    let md = "# Demo Skill\n\n- goal: 演示\n## Stage 1: A\n- capability: x.y\n## Stage 2: B\n- capability: x.z\n";
+    let (s0, _) = call(
+        addr,
+        "POST",
+        "/api/v1/v2/skills/import",
+        Some(json!({ "name": "demo-skill", "content": md, "known_capabilities": ["x.y", "x.z"] })),
+    )
+    .await;
+    assert_eq!(s0, 200);
+
+    // 原始内容可查看（Raw 不修改）
+    let (s1, body1) = call(addr, "GET", "/api/v1/v2/skills/demo-skill/raw", None).await;
+    assert_eq!(s1, 200, "raw 端点: {body1}");
+    assert_eq!(body1["content"], md, "原始内容逐字保留");
+    assert!(
+        !body1["content_hash"].as_str().unwrap().is_empty(),
+        "hash 可追溯"
+    );
+
+    // 不存在 → 404
+    let (s2, _) = call(addr, "GET", "/api/v1/v2/skills/nope/raw", None).await;
+    assert_eq!(s2, 404);
+}
+
+#[tokio::test]
 async fn tc_sv2_plugins_list() {
     let kernel = std::sync::Arc::new(RuntimeKernel::new(
         openaip_os::storage::LibSQLStorage::open(":memory:")

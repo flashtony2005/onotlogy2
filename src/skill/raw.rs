@@ -3,7 +3,7 @@
 use std::hash::{Hash, Hasher};
 
 /// 来源格式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SourceType {
     Markdown,
     Txt,
@@ -17,7 +17,7 @@ pub enum SourceType {
 /// 第三方资产只读快照。
 ///
 /// **Raw 不修改**：任何 AI 转换都是派生资产；本结构不提供修改 API。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RawSkill {
     pub id: String,
     pub name: String,

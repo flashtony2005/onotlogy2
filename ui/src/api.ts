@@ -10,6 +10,7 @@ import type {
   EvolutionStateDto,
   MemoryListDto,
   PluginDto,
+  RawSkillDto,
   RunStartDto,
   SessionDto,
   SessionSummaryDto,
@@ -135,6 +136,12 @@ export async function getTasks(): Promise<TaskListDto> {
 export async function getSkills(): Promise<SkillDto[]> {
   const res = await authFetch('/api/v1/v2/skills')
   if (!res.ok) throw new Error(`skills ${res.status}`)
+  return await res.json()
+}
+
+export async function getSkillRaw(skillId: string): Promise<RawSkillDto> {
+  const res = await authFetch(`/api/v1/v2/skills/${skillId}/raw`)
+  if (!res.ok) throw new Error(`skill raw ${res.status}`)
   return await res.json()
 }
 

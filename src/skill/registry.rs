@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use super::asset::{SkillAsset, SkillStatus};
+use super::raw::RawSkill;
 
 /// 注册表错误。
 #[derive(Debug, thiserror::Error)]
@@ -42,6 +43,8 @@ fn transition_allowed(from: SkillStatus, to: SkillStatus) -> bool {
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SkillRegistry {
     assets: HashMap<String, SkillAsset>,
+    /// 原始快照（P1 Raw 不修改：与编译资产并存，可追溯）。
+    raws: HashMap<String, RawSkill>,
 }
 
 impl SkillRegistry {
@@ -60,6 +63,15 @@ impl SkillRegistry {
 
     pub fn get(&self, id: &str) -> Option<&SkillAsset> {
         self.assets.get(id)
+    }
+
+    /// 关联原始快照（导入时调用；重复 attach 以首次为准——Raw 不可变）。
+    pub fn attach_raw(&mut self, id: &str, raw: RawSkill) {
+        self.raws.entry(id.to_string()).or_insert(raw);
+    }
+
+    pub fn raw_of(&self, id: &str) -> Option<&RawSkill> {
+        self.raws.get(id)
     }
 
     pub fn all(&self) -> Vec<&SkillAsset> {
