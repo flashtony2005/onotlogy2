@@ -310,7 +310,34 @@ pub async fn serve_with_timeout(
         .with_state(state.clone());
     // 重启恢复：重建 runs 内存映射；崩溃残留 Running→Interrupted、orphan Pending→Expired。
     recover(&state).await;
+    // V10.1：预置 Worker（echo / git / codex / claude 壳）。
+    bootstrap_v2_workers(&state);
     axum::serve(listener, app).await
+}
+
+/// 预置 Worker（V10.1）：echo / git / codex / claude 壳注册进 V2 Worker Registry。
+/// Codex/Claude 命令可经环境变量覆盖（OPENAI_OS_CODEX_CMD / OPENAI_OS_CLAUDE_CMD）；
+/// 未安装时注册仍成功（能力声明可见），执行阶段才失败。
+fn bootstrap_v2_workers(state: &Arc<AppState>) {
+    use crate::worker::adapters::{claude_worker, codex_worker};
+    use crate::worker::manifest::{ExecutionProtocol, WorkerManifest};
+    use crate::worker::process::ProcessWorker;
+
+    let mut reg = state.v2.workers.write().unwrap();
+    // echo CLI（text.echo）
+    let mut echo_m = WorkerManifest::new("echo", "cli").with_capabilities(&["text.echo"]);
+    echo_m.execution = ExecutionProtocol::Process;
+    let _ = reg.register(Box::new(ProcessWorker::new(echo_m, "echo")));
+    // git CLI（git.version / git.status）
+    let mut git_m =
+        WorkerManifest::new("git", "cli").with_capabilities(&["git.version", "git.status"]);
+    git_m.execution = ExecutionProtocol::Process;
+    let _ = reg.register(Box::new(ProcessWorker::new(git_m, "git")));
+    // Codex / Claude 适配器壳（能力声明就位，命令可覆盖）
+    let codex_cmd = std::env::var("OPENAI_OS_CODEX_CMD").unwrap_or_else(|_| "codex".into());
+    let _ = reg.register(Box::new(codex_worker(Some(&codex_cmd))));
+    let claude_cmd = std::env::var("OPENAI_OS_CLAUDE_CMD").unwrap_or_else(|_| "claude".into());
+    let _ = reg.register(Box::new(claude_worker(Some(&claude_cmd))));
 }
 
 /// 重启恢复（V0.7 持久化）：重建 runs 内存映射；崩溃残留 Running→Interrupted、orphan Pending→Expired

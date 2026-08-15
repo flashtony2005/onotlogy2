@@ -123,6 +123,36 @@ async fn tc_sv2_plugins_list() {
 }
 
 #[tokio::test]
+async fn tc_sv4_workers_preseeded() {
+    let kernel = std::sync::Arc::new(RuntimeKernel::new(
+        openaip_os::storage::LibSQLStorage::open(":memory:")
+            .await
+            .unwrap(),
+    ));
+    let addr = common::spawn_server(kernel).await;
+    let (s, body) = call(addr, "GET", "/api/v1/v2/workers", None).await;
+    assert_eq!(s, 200);
+    let arr = body.as_array().unwrap();
+    // 预置 4 个 Worker：echo / git / codex / claude-code
+    let ids: Vec<&str> = arr.iter().map(|w| w["id"].as_str().unwrap()).collect();
+    for expected in ["echo", "git", "codex", "claude-code"] {
+        assert!(
+            ids.contains(&expected),
+            "预置 worker {expected} 缺失: {ids:?}"
+        );
+    }
+    let codex = arr.iter().find(|w| w["id"] == "codex").unwrap();
+    assert!(
+        codex["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c == "code.write"),
+        "codex 壳声明 code.write"
+    );
+}
+
+#[tokio::test]
 async fn tc_sv3_session_create_and_read() {
     let kernel = std::sync::Arc::new(RuntimeKernel::new(
         openaip_os::storage::LibSQLStorage::open(":memory:")
