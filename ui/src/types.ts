@@ -1,6 +1,6 @@
 // 与 src/trace.rs / docs/05_接口文档/api-agent-trace.md 4.1 同源（camelCase，单一真相源）
 
-export type ViewKind = 'executive' | 'operator' | 'developer' | 'memory' | 'evolution' | 'tasks' | 'v2'
+export type ViewKind = 'overview' | 'executive' | 'operator' | 'developer' | 'memory' | 'evolution' | 'tasks' | 'v2'
 
 /// V0.7 认证用户（对应 server `GET /api/v1/wb/auth/me` / 登录响应 user）。
 export interface AuthUserDto {
@@ -156,6 +156,11 @@ export interface SessionEventDto {
   event_type: string
   timestamp: number
   data: Record<string, unknown>
+}
+
+export interface SessionSummaryDto {
+  session_id: string
+  events: number
 }
 
 export interface SessionDto {

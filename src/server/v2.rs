@@ -209,3 +209,25 @@ pub async fn create_session(
             .collect(),
     })
 }
+
+/// Session 概览（dashboard 用：id + 事件数）。
+#[derive(Serialize)]
+pub struct SessionSummaryDto {
+    pub session_id: String,
+    pub events: usize,
+}
+
+pub async fn list_sessions(
+    State(state): State<Arc<crate::server::AppState>>,
+) -> Json<Vec<SessionSummaryDto>> {
+    let sessions = state.v2.sessions.lock().await;
+    let mut out: Vec<SessionSummaryDto> = sessions
+        .iter()
+        .map(|(id, log)| SessionSummaryDto {
+            session_id: id.clone(),
+            events: log.len(),
+        })
+        .collect();
+    out.sort_by(|a, b| b.session_id.cmp(&a.session_id));
+    Json(out)
+}

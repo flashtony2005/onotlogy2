@@ -14,6 +14,7 @@ import { LoginForm } from './components/LoginForm'
 import { MemoryPanel } from './components/MemoryPanel'
 import { TaskPanel } from './components/TaskPanel'
 import { V2Panel } from './components/V2Panel'
+import { Dashboard } from './components/Dashboard'
 import { debounce, fmtJson, fmtTime } from './format'
 import { clearToken, getToken, setToken } from './auth'
 import { useTraceStream } from './hooks/useTraceStream'
@@ -33,6 +34,7 @@ const STEP_ICON: Record<string, string> = {
 }
 
 const VIEW_GROUPS: { name: string; items: ViewKind[] }[] = [
+  { name: '总览', items: ['overview'] },
   {
     name: 'Agent 观察',
     items: ['executive', 'operator', 'developer'],
@@ -42,6 +44,7 @@ const VIEW_GROUPS: { name: string; items: ViewKind[] }[] = [
 ]
 
 const VIEWS: { key: ViewKind; label: string; icon: string; desc: string }[] = [
+  { key: 'overview', label: 'Overview', icon: '◎', desc: '系统总览 · 指标/架构/活动' },
   { key: 'executive', label: 'Executive', icon: '◈', desc: '管理者 · 决策 / 风险' },
   { key: 'operator', label: 'Operator', icon: '▶', desc: '操作台 · 流水线进度' },
   { key: 'developer', label: 'Developer', icon: '</>', desc: '开发者 · 全量 IO' },
@@ -327,7 +330,7 @@ export default function App() {
         {error && <div className="error">⚠ {error}</div>}
 
         <main className="content">
-        {!runId && view !== 'memory' && view !== 'evolution' && view !== 'tasks' && view !== 'v2' && (
+        {!runId && view !== 'overview' && view !== 'memory' && view !== 'evolution' && view !== 'tasks' && view !== 'v2' && (
           <div className="empty">
             输入目标并点击「触发 Agent 运行」，实时观察 Agent 认知闭环。
           </div>
@@ -336,6 +339,8 @@ export default function App() {
         {view === 'memory' && (
           <MemoryPanel memories={memories} loading={memoryLoading} onReload={reloadMemory} />
         )}
+
+        {view === 'overview' && <Dashboard onNavigate={(v) => setView(v)} />}
 
         {view === 'v2' && <V2Panel />}
 
@@ -357,7 +362,7 @@ export default function App() {
           <TaskPanel tasks={tasks} loading={tasksLoading} onReload={reloadTasks} />
         )}
 
-        {runId && timeline.decision && view !== 'memory' && view !== 'evolution' && view !== 'tasks' && view !== 'v2' && (
+        {runId && timeline.decision && view !== 'overview' && view !== 'memory' && view !== 'evolution' && view !== 'tasks' && view !== 'v2' && (
           <div className="decision">
             <h3>📊 决策摘要（Executive）</h3>
             <div>
@@ -375,11 +380,11 @@ export default function App() {
           </div>
         )}
 
-        {runId && view !== 'memory' && view !== 'evolution' && view !== 'tasks' && view !== 'v2' && timeline.events.length === 0 && (
+        {runId && view !== 'overview' && view !== 'memory' && view !== 'evolution' && view !== 'tasks' && view !== 'v2' && timeline.events.length === 0 && (
           <div className="empty">等待认知事件…</div>
         )}
 
-        {view !== 'memory' && view !== 'evolution' && view !== 'tasks' && view !== 'v2' && timeline.events.length > 0 &&
+        {view !== 'overview' && view !== 'memory' && view !== 'evolution' && view !== 'tasks' && view !== 'v2' && timeline.events.length > 0 &&
           timeline.events.map((ev) => (
           <article key={ev.id} className={`event ${ev.eventType.toLowerCase()}`}>
             <div className="ev-head">

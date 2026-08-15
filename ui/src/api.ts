@@ -12,6 +12,7 @@ import type {
   PluginDto,
   RunStartDto,
   SessionDto,
+  SessionSummaryDto,
   SkillDto,
   TaskListDto,
 } from './types'
@@ -154,6 +155,12 @@ export async function importSkill(
 export async function getPlugins(): Promise<PluginDto[]> {
   const res = await authFetch('/api/v1/v2/plugins')
   if (!res.ok) throw new Error(`plugins ${res.status}`)
+  return await res.json()
+}
+
+export async function getSessions(): Promise<SessionSummaryDto[]> {
+  const res = await authFetch('/api/v1/v2/sessions')
+  if (!res.ok) throw new Error(`sessions ${res.status}`)
   return await res.json()
 }
 
