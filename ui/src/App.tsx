@@ -32,14 +32,23 @@ const STEP_ICON: Record<string, string> = {
   MemoryRecall: '🔎',
 }
 
+const VIEW_GROUPS: { name: string; items: ViewKind[] }[] = [
+  {
+    name: 'Agent 观察',
+    items: ['executive', 'operator', 'developer'],
+  },
+  { name: '认知', items: ['memory', 'evolution', 'tasks'] },
+  { name: '能力', items: ['v2'] },
+]
+
 const VIEWS: { key: ViewKind; label: string; icon: string; desc: string }[] = [
-  { key: 'executive', label: 'Executive', icon: '◈', desc: '管理者 · Mission/Decision/Risk' },
-  { key: 'operator', label: 'Operator', icon: '▶', desc: '管理员 · Pipeline 进度' },
+  { key: 'executive', label: 'Executive', icon: '◈', desc: '管理者 · 决策 / 风险' },
+  { key: 'operator', label: 'Operator', icon: '▶', desc: '操作台 · 流水线进度' },
   { key: 'developer', label: 'Developer', icon: '</>', desc: '开发者 · 全量 IO' },
-  { key: 'memory', label: 'Memory', icon: '💾', desc: '记忆沉淀 · Action→Memory 闭环' },
-  { key: 'evolution', label: 'Evolution', icon: '◉', desc: '自学习 · Experience→Knowledge 闭环' },
-  { key: 'tasks', label: 'Tasks', icon: '☑', desc: '任务状态 · Pending→Completed' },
-  { key: 'v2', label: 'V2 Runtime', icon: '▣', desc: 'Skill · Plugin · Session（Phase 9-10）' },
+  { key: 'memory', label: 'Memory', icon: '💾', desc: '记忆沉淀 · 动作→记忆闭环' },
+  { key: 'evolution', label: 'Evolution', icon: '◉', desc: '自学习 · 经验→知识' },
+  { key: 'tasks', label: 'Tasks', icon: '☑', desc: '任务状态 · 待办→完成' },
+  { key: 'v2', label: 'V2 Runtime', icon: '▣', desc: 'Skill · Plugin · Session' },
 ]
 
 export default function App() {
@@ -230,31 +239,49 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      {/* Codex 式左侧 icon 边栏 */}
+      {/* Codex 式左侧边栏：品牌 + 分组导航 + 状态/登出 */}
       <aside className="sidebar">
-        <div className="side-logo" title="OpenAIP-OS">
-          ❯_
+        <div className="side-brand">
+          <span className="side-logo">❯_</span>
+          <span className="side-title">OpenAIP-OS</span>
         </div>
+
         <nav className="side-nav">
-          {VIEWS.map((v) => (
-            <button
-              key={v.key}
-              className={view === v.key ? 'side-btn active' : 'side-btn'}
-              onClick={() => {
-                setView(v.key)
-                if (v.key === 'memory') void reloadMemory()
-                if (v.key === 'evolution') void reloadEvolution()
-                if (v.key === 'tasks') void reloadTasks()
-              }}
-              title={`${v.label} — ${v.desc}`}
-            >
-              {v.icon}
-            </button>
+          {VIEW_GROUPS.map((g) => (
+            <div key={g.name} className="side-group">
+              <div className="side-group-name">{g.name}</div>
+              {g.items.map((k) => {
+                const v = VIEWS.find((x) => x.key === k)!
+                return (
+                  <button
+                    key={k}
+                    className={view === k ? 'side-btn active' : 'side-btn'}
+                    onClick={() => {
+                      setView(k)
+                      if (k === 'memory') void reloadMemory()
+                      if (k === 'evolution') void reloadEvolution()
+                      if (k === 'tasks') void reloadTasks()
+                    }}
+                    title={v.desc}
+                  >
+                    <span className="side-ic">{v.icon}</span>
+                    <span className="side-label">{v.label}</span>
+                    <span className="side-desc">{v.desc}</span>
+                  </button>
+                )
+              })}
+            </div>
           ))}
         </nav>
+
         <div className="side-bottom">
-          <button className="side-btn" onClick={() => void doLogout()} title="登出">
-            ⎋
+          <div className={`side-conn ${connected ? 'on' : 'off'}`}>
+            <span className="dot" />
+            <span>{connected ? 'WS 已连接' : 'WS 未连接'}</span>
+          </div>
+          <button className="side-btn side-logout" onClick={() => void doLogout()}>
+            <span className="side-ic">⎋</span>
+            <span className="side-label">登出</span>
           </button>
         </div>
       </aside>
