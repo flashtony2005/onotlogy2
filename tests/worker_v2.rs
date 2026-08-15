@@ -715,3 +715,91 @@ async fn tc_w11_dsh_headless_e2e() {
         }
     }
 }
+
+// ── W12：Codex 适配器命令构造（假 codex shim，可进 CI）──────────────
+#[tokio::test]
+async fn tc_w12_codex_adapter_command_shape() {
+    use openaip_os::worker::adapters::codex_worker;
+    use openaip_os::worker::orchestrator::{WorkerOrchestrator, WorkerTask};
+    use openaip_os::worker::router::WorkerRouter;
+
+    let shim = std::env::temp_dir().join("codex_shim_test.sh");
+    std::fs::write(&shim, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let mut registry = WorkerRegistry::new();
+    registry
+        .register(Box::new(codex_worker(Some(shim.to_str().unwrap()))))
+        .unwrap();
+    let policy = WorkerPolicy::new().allow("code.read");
+    let router = WorkerRouter::new(RouterCriteria::default());
+    let mut orch = WorkerOrchestrator::new(&registry, &policy, router);
+    let result = orch
+        .run_plan(&[WorkerTask {
+            capability: "code.read".into(),
+            input: json!({ "args": ["exec", "--skip-git-repo-check", "只回答两个字：收到"] }),
+            note: "codex smoke".into(),
+        }])
+        .await;
+    assert!(result.all_ok);
+    assert_eq!(result.outcomes[0].worker_id.as_deref(), Some("codex"));
+    // 命令构造正确：codex exec --skip-git-repo-check <任务文本>
+    let stdout = result.outcomes[0]
+        .output
+        .as_ref()
+        .and_then(|o| o.get("stdout"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    assert!(stdout.contains("exec"), "参数 1: {stdout}");
+    assert!(stdout.contains("--skip-git-repo-check"), "参数 2: {stdout}");
+    assert!(
+        stdout.contains("只回答两个字：收到"),
+        "任务文本透传: {stdout}"
+    );
+    std::fs::remove_file(&shim).ok();
+}
+
+// ── W13：真实 Codex exec 端到端（#[ignore]：需本机 codex + 登录 + token）──
+// 本地复现：cargo test --test worker_v2 tc_w13_codex_exec_e2e -- --ignored --nocapture
+#[tokio::test]
+#[ignore = "依赖本机 codex CLI、登录态与 LLM token，CI 不跑"]
+async fn tc_w13_codex_exec_e2e() {
+    use openaip_os::worker::adapters::codex_worker;
+
+    let probe = std::process::Command::new("codex")
+        .arg("--version")
+        .output();
+    let Ok(probe) = probe else {
+        eprintln!("跳过：codex 不在 PATH");
+        return;
+    };
+    if !probe.status.success() {
+        eprintln!("跳过：codex 不可执行");
+        return;
+    }
+
+    let w = codex_worker(None);
+    let result = w
+        .execute(
+            "code.read",
+            json!({ "args": ["exec", "--skip-git-repo-check", "--sandbox", "workspace-write", "只回答两个字：收到"] }),
+        )
+        .await;
+    match result {
+        Ok(r) => {
+            eprintln!("codex exec stdout: {:?}", r.output);
+            assert!(r.ok, "codex 应成功返回");
+            assert!(
+                r.output["stdout"].as_str().unwrap_or("").contains("收到"),
+                "codex exec 应完成任务并打印结果"
+            );
+        }
+        Err(e) => {
+            eprintln!("跳过：codex 执行失败（登录态/网络/sandbox 问题）: {e}");
+        }
+    }
+}

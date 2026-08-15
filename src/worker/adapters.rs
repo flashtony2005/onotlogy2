@@ -95,4 +95,16 @@ mod tests {
         let overridden = dsh_worker(Some("/custom/dsh"));
         assert_eq!(overridden.command(), "/custom/dsh");
     }
+
+    /// Codex 适配器声明（能力市场身份证）——纯内存，可进 CI。
+    #[test]
+    fn codex_worker_manifest_declares_capability_market() {
+        let w = codex_worker(None);
+        let m = w.manifest();
+        assert_eq!(m.id, "codex");
+        assert!(m.supports("code.read") && m.supports("code.write") && m.supports("code.test"));
+        assert_eq!(m.execution, ExecutionProtocol::Process);
+        let overridden = codex_worker(Some("/custom/codex"));
+        assert_eq!(overridden.command(), "/custom/codex");
+    }
 }
