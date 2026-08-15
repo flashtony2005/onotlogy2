@@ -109,6 +109,12 @@ enum AgentCmd {
         /// REQ-018 Evolution 第二阶段 AutoApprove：允许基于已验证 LearnedKnowledge 自动放行 require_approval 动作。默认 false → 等同 MVP。
         #[arg(long, default_value_t = false)]
         auto_approve_evolution: bool,
+        /// V2 桥：计划经 Worker ABI 执行（Thinker 规划 → Worker 干活），而非 ActionEngine
+        #[arg(long, default_value_t = false)]
+        via_workers: bool,
+        /// 执行所用 Skill 版本（写入 wb_evaluation.skill_version，learning_effectiveness 观测前提）
+        #[arg(long)]
+        skill: Option<String>,
     },
 }
 
@@ -232,6 +238,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 odl,
                 auto_approve,
                 auto_approve_evolution,
+                via_workers,
+                skill,
             } => {
                 cmd_agent_run(
                     &cli.db,
@@ -240,6 +248,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     odl.as_deref(),
                     auto_approve,
                     auto_approve_evolution,
+                    via_workers,
+                    skill.as_deref(),
                 )
                 .await?
             }
@@ -433,6 +443,8 @@ async fn cmd_db_reset(db: &str) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// 触发 Agent 运行（V0.3）：Pi 作 Cognitive Engine，OpenAIP Planner 闭环。
+/// `via_workers=true` 时走 V2 桥：Thinker 规划（plan()）→ Worker ABI 执行。
+#[allow(clippy::too_many_arguments)]
 async fn cmd_agent_run(
     db: &str,
     goal: &str,
@@ -440,11 +452,13 @@ async fn cmd_agent_run(
     odl: Option<&str>,
     auto_approve: bool,
     auto_approve_evolution: bool,
+    via_workers: bool,
+    skill: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage = LibSQLStorage::open(db).await?;
     let kernel = RuntimeKernel::new(storage);
     let engine = PiAgentEngine::new(agent_id.to_string());
-    let registry = load_registry(odl)?;
+    let action_registry = load_registry(odl)?;
 
     if !engine.health().await {
         println!(
@@ -452,13 +466,6 @@ async fn cmd_agent_run(
         );
         return Ok(());
     }
-
-    // Human Approval 闸门：默认 ConsoleApprover（stdin 交互确认）；--auto-approve 直接放行。
-    let approver: Arc<dyn PolicyApprover> = if auto_approve {
-        Arc::new(AutoApprover { allow: true })
-    } else {
-        Arc::new(ConsoleApprover::new())
-    };
 
     let run_id = generate_run_id();
     // Phase 11 11A：Run 级 SessionLog（事实源）。Context Assembly 事实先落
@@ -475,7 +482,108 @@ async fn cmd_agent_run(
             ],
         }),
     );
-    let outcome = Planner::with_actions(&kernel, registry)
+
+    // V2 桥：Thinker 规划 → Worker 执行（Worker ≠ Authority：Policy 由 worker 层 fail-closed 治理）
+    if via_workers {
+        use openaip_os::planner::PlanStep;
+        use openaip_os::worker::orchestrator::{WorkerOrchestrator, WorkerTask};
+        use openaip_os::worker::router::{RouterCriteria, WorkerRouter};
+
+        let (wregistry, _) = default_worker_env();
+        let planner = Planner::with_actions(&kernel, action_registry);
+        let planned = planner
+            .plan(&engine, goal, agent_id, &run_id)
+            .await
+            .map_err(|e| format!("规划失败: {e}"))?;
+        let caps: Vec<String> = planned
+            .steps
+            .iter()
+            .filter_map(PlanStep::worker_capability)
+            .collect();
+        let wpolicy = policy_for_capabilities(&caps);
+        println!(
+            "🧠 Thinker 规划：{} 个步骤（{} 个经 Worker ABI）",
+            planned.steps.len(),
+            caps.len()
+        );
+        for s in &planned.steps {
+            match s.worker_capability() {
+                Some(cap) => println!("   - {cap} ({})", s.description),
+                None => println!(
+                    "   - ⏭️ kernel 内部操作（不经 Worker ABI）：{}",
+                    s.description
+                ),
+            }
+        }
+        let tasks: Vec<WorkerTask> = planned
+            .steps
+            .iter()
+            .filter_map(|s| {
+                s.worker_capability().map(|cap| WorkerTask {
+                    capability: cap,
+                    input: json!({ "object_refs": s.object_refs }),
+                    note: s.description.clone(),
+                })
+            })
+            .collect();
+        let mut orch = WorkerOrchestrator::new(
+            &wregistry,
+            &wpolicy,
+            WorkerRouter::new(RouterCriteria::default()),
+        );
+        let result = orch.run_plan(&tasks).await;
+        println!(
+            "🧠 Worker 计划执行：run_id={} all_ok={}",
+            result.run_id, result.all_ok
+        );
+        for o in &result.outcomes {
+            println!(
+                "   [{}] {} → {:?} (worker={:?})",
+                o.status.status_str(),
+                o.capability,
+                o.error.as_deref().unwrap_or(""),
+                o.worker_id
+            );
+        }
+        orch.session_log()
+            .append(EventType::SessionCompleted, json!({ "run_id": run_id }));
+        let task = TaskDefinition {
+            task_id: goal.to_string(),
+            expected_relations: vec![],
+            expected_artifacts: vec![],
+            time_budget_secs: 0.0,
+            skill_version: skill
+                .map(String::from)
+                .or_else(|| Some(agent_id.to_string())),
+        };
+        match on_run_end(
+            orch.session_log(),
+            &run_id,
+            &task,
+            &EvaluationPolicy::default(),
+            &kernel.storage(),
+        )
+        .await
+        {
+            Ok(r) => {
+                println!(
+                    "📊 Phase 11 评测：aggregate={:.3} skill_version={:?} reliability={:?} policy_compliance={:?}",
+                    r.aggregate, r.skill_version, r.reliability.value, r.policy_compliance.value
+                );
+            }
+            Err(e) => println!("⚠️ 评测失败（不影响运行结果）：{e}"),
+        }
+        return Ok(());
+    }
+
+    // Human Approval 闸门：默认 ConsoleApprover（stdin 交互确认）；--auto-approve 直接放行。
+    let approver: Arc<dyn PolicyApprover> = if auto_approve {
+        Arc::new(AutoApprover { allow: true })
+    } else {
+        Arc::new(ConsoleApprover::new())
+    };
+
+    let outcome = Planner::with_actions(&kernel, action_registry)
         .with_approver(approver)
         .with_config(RuntimeConfig {
             auto_approve_from_evolution: auto_approve_evolution,
@@ -526,6 +634,7 @@ async fn cmd_agent_run(
         expected_relations: vec![],
         expected_artifacts: vec![],
         time_budget_secs: 0.0,
+        skill_version: None,
     };
     match on_run_end(
         &mut log,
@@ -574,6 +683,49 @@ async fn cmd_agent_run(
     Ok(())
 }
 
+/// 预置 Worker 环境（能力市场）：echo / git 真实 + codex / claude / dsh / pi 适配器。
+/// Policy：fail-closed（未配置 = DENY）；shell.execute / code.write 需审批——Worker ≠ Authority。
+fn default_worker_env() -> (
+    openaip_os::worker::registry::WorkerRegistry,
+    openaip_os::worker::policy::WorkerPolicy,
+) {
+    use openaip_os::worker::adapters;
+    use openaip_os::worker::manifest::WorkerManifest;
+    use openaip_os::worker::process::ProcessWorker;
+
+    let mut registry = openaip_os::worker::registry::WorkerRegistry::new();
+    let _ = registry.register(Box::new(ProcessWorker::new(
+        WorkerManifest::new("echo", "cli").with_capabilities(&["text.echo"]),
+        "echo",
+    )));
+    let _ = registry.register(Box::new(ProcessWorker::new(
+        WorkerManifest::new("git", "cli")
+            .with_capabilities(&["git.version", "git.status", "git.diff"])
+            .with_quality(0.98),
+        "git",
+    )));
+    let _ = registry.register(Box::new(adapters::codex_worker(None)));
+    let _ = registry.register(Box::new(adapters::claude_worker(None)));
+    let dsh_cmd = std::env::var("OPENAI_OS_DSH_CMD").unwrap_or_else(|_| "dsh".into());
+    let _ = registry.register(Box::new(adapters::dsh_worker(Some(&dsh_cmd))));
+    let pi_cmd = std::env::var("OPENAI_OS_PI_CMD").unwrap_or_else(|_| "pi".into());
+    let _ = registry.register(Box::new(adapters::pi_worker(Some(&pi_cmd))));
+    (registry, openaip_os::worker::policy::WorkerPolicy::new())
+}
+
+/// 按计划能力构造 fail-closed policy（shell.execute/code.write 需审批）。
+fn policy_for_capabilities(caps: &[String]) -> openaip_os::worker::policy::WorkerPolicy {
+    use openaip_os::worker::policy::WorkerPolicy;
+    let mut policy = WorkerPolicy::new();
+    for c in caps {
+        match c.as_str() {
+            "shell.execute" | "code.write" => policy = policy.require_approval(c),
+            _ => policy = policy.allow(c),
+        }
+    }
+    policy
+}
+
 /// Worker ABI 执行（Phase 11D）：capability 计划 → Router → Policy → Worker → Event Log → Evaluation。
 /// OpenAIP-OS 是 Thinker：只选择谁来做、怎么安全地做，不亲自执行。
 async fn cmd_worker_run(
@@ -584,10 +736,8 @@ async fn cmd_worker_run(
     explicit_worker: Option<&str>,
     evaluate: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use openaip_os::worker::policy::WorkerPolicy;
-    use openaip_os::worker::registry::WorkerRegistry;
+    use openaip_os::worker::orchestrator::WorkerOrchestrator;
     use openaip_os::worker::router::{RouterCriteria, WorkerRouter};
-    use openaip_os::worker::{adapters, orchestrator::WorkerOrchestrator};
 
     let storage = openaip_os::storage::LibSQLStorage::open(db).await?;
     let input: serde_json::Value = match input_json {
@@ -595,44 +745,13 @@ async fn cmd_worker_run(
         None => serde_json::json!({}),
     };
 
-    // 预置 Worker（能力市场）：echo / git 真实 + codex / claude / deepseek 适配器壳
-    let mut registry = WorkerRegistry::new();
-    let _ = registry.register(Box::new(openaip_os::worker::process::ProcessWorker::new(
-        openaip_os::worker::manifest::WorkerManifest::new("echo", "cli")
-            .with_capabilities(&["text.echo"]),
-        "echo",
-    )));
-    let _ = registry.register(Box::new(openaip_os::worker::process::ProcessWorker::new(
-        openaip_os::worker::manifest::WorkerManifest::new("git", "cli")
-            .with_capabilities(&["git.version", "git.status", "git.diff"])
-            .with_quality(0.98),
-        "git",
-    )));
-    let _ = registry.register(Box::new(adapters::codex_worker(None)));
-    let _ = registry.register(Box::new(adapters::claude_worker(None)));
-    // DSH（DeepSeek Harness）Worker：dsh --profile headless "<任务>"（已验证真实可执行）
-    let dsh_cmd = std::env::var("OPENAI_OS_DSH_CMD").unwrap_or_else(|_| "dsh".into());
-    let _ = registry.register(Box::new(adapters::dsh_worker(Some(&dsh_cmd))));
-    // Pi Agent Worker（Worker 形态，放开工具；Thinker 形态在 oaip agent run）
-    let pi_cmd = std::env::var("OPENAI_OS_PI_CMD").unwrap_or_else(|_| "pi".into());
-    let _ = registry.register(Box::new(adapters::pi_worker(Some(&pi_cmd))));
-
-    // Policy：fail-closed（未配置 = DENY）；高风险能力需审批——Worker ≠ Authority
-    let mut policy = WorkerPolicy::new();
-    for c in capabilities
+    let caps: Vec<String> = capabilities
         .split(',')
-        .map(|c| c.trim())
+        .map(|c| c.trim().to_string())
         .filter(|c| !c.is_empty())
-    {
-        match c {
-            "shell.execute" | "code.write" => {
-                policy = policy.require_approval(c);
-            }
-            _ => {
-                policy = policy.allow(c);
-            }
-        }
-    }
+        .collect();
+    let (registry, _) = default_worker_env();
+    let policy = policy_for_capabilities(&caps);
 
     let router = WorkerRouter::new(RouterCriteria {
         min_quality: 0.0,
@@ -686,6 +805,7 @@ async fn cmd_worker_run(
             expected_relations: vec![],
             expected_artifacts: vec![],
             time_budget_secs: 0.0,
+            skill_version: None,
         };
         match openaip_os::on_run_end(
             orch.session_log(),

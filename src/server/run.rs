@@ -149,6 +149,7 @@ pub(crate) async fn run_start(
             expected_relations: vec![],
             expected_artifacts: vec![],
             time_budget_secs: 0.0,
+            skill_version: None,
         };
         let _ = on_run_end(
             &mut eval_log,

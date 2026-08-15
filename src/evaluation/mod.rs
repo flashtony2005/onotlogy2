@@ -95,6 +95,8 @@ pub struct TaskDefinition {
     pub expected_artifacts: Vec<String>,
     /// 时间预算（秒；efficiency 客观基准，对照 worker.completed.duration_ms）。
     pub time_budget_secs: f64,
+    /// 执行所用 Skill 版本（learning_effectiveness 的观测前提；None = 未指定）。
+    pub skill_version: Option<String>,
 }
 
 /// 评测策略（纯数据；不改变 reducer 的确定性）。
@@ -120,6 +122,8 @@ impl Default for EvaluationPolicy {
 pub struct EvaluationResult {
     pub run_id: String,
     pub task_id: String,
+    /// 执行所用 Skill 版本（I7 观测：EveryRun→Evaluation 携带 skill 身份）。
+    pub skill_version: Option<String>,
     pub correctness: Score,
     pub completeness: Score,
     pub efficiency: Score,
@@ -192,6 +196,7 @@ impl EvaluationReducer {
         EvaluationResult {
             run_id: run_id.to_string(),
             task_id: task.task_id.clone(),
+            skill_version: task.skill_version.clone(),
             correctness,
             completeness,
             efficiency,
@@ -462,6 +467,7 @@ mod tests {
             expected_relations: vec!["order.active".into()],
             expected_artifacts: vec!["report.md".into()],
             time_budget_secs: 10.0,
+            skill_version: None,
         }
     }
 

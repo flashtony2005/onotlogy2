@@ -33,6 +33,7 @@ fn task() -> TaskDefinition {
         expected_relations: vec!["order.active".into()],
         expected_artifacts: vec!["report.md".into()],
         time_budget_secs: 10.0,
+        skill_version: None,
     }
 }
 

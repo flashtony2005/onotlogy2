@@ -133,6 +133,22 @@ pub struct PlanStep {
     pub description: String,
 }
 
+impl PlanStep {
+    /// V2 桥映射：kernel 世界操作 → Worker capability 词汇。
+    /// 只有声明式动作（Action 变体）过桥（`{object_type}.{action}`）；kernel 内部操作
+    /// （QueryObjects/CreateObject/LinkRelation/EmitEvent/DeleteObject）不经 Worker ABI。
+    pub fn worker_capability(&self) -> Option<String> {
+        match &self.capability {
+            Capability::Action {
+                object_type,
+                action,
+                ..
+            } => Some(format!("{}.{}", object_type.to_lowercase(), action)),
+            _ => None,
+        }
+    }
+}
+
 /// Policy 引擎：对 Action（PlanStep）做约束与审批。破坏性动作默认拒；声明式动作经
 /// 自带 `PolicyDef`（前置条件 + 审批闸门）校验；拒 → WB2005，等待 Human Approval。
 pub struct Policy;

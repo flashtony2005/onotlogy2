@@ -71,11 +71,12 @@ impl LibSQLStorage {
                 "INSERT OR REPLACE INTO wb_evaluation \
                  (id, run_id, task_id, skill_version, correctness, completeness, efficiency, \
                   reliability, policy_compliance, output_quality, aggregate_score, failure_modes, evidence, evaluator_version) \
-                 VALUES (?1,?2,?3,NULL,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
                 params![
                     id,
                     r.run_id.clone(),
                     r.task_id.clone(),
+                    r.skill_version.clone(),
                     r.correctness.value,
                     r.completeness.value,
                     r.efficiency.value,
@@ -255,6 +256,7 @@ fn row_to_evaluation(row: &libsql::Row) -> Result<EvaluationResult, StorageError
     Ok(EvaluationResult {
         run_id: row.get(0)?,
         task_id: row.get(1)?,
+        skill_version: row.get(2)?,
         correctness: score_from(row.get(3)?, map.get("correctness")),
         completeness: score_from(row.get(4)?, map.get("completeness")),
         efficiency: score_from(row.get(5)?, map.get("efficiency")),

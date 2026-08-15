@@ -57,6 +57,17 @@ pub struct Goal {
     pub object_refs: Vec<String>,
 }
 
+/// 规划产物（Thinker 第一步的输出；执行由调用方选择 ActionEngine 或 Worker ABI）。
+#[derive(Debug, Clone)]
+pub struct PlannedRun {
+    pub world: WorldSnapshot,
+    /// capability 计划（PlanStep.capability.name = Worker 词汇）。
+    pub steps: Vec<PlanStep>,
+    pub scope_refs: Vec<String>,
+    pub root_scope: Option<Vec<String>>,
+    pub goal_parsed: Goal,
+}
+
 /// Planner：OpenAIP 自有决策编排核心。
 pub struct Planner<'a> {
     kernel: &'a RuntimeKernel,
@@ -272,15 +283,16 @@ impl<'a> Planner<'a> {
         Ok(())
     }
 
-    /// 运行一个目标，跑通完整认知闭环并返回运行结果。
-    /// `run_id` 由调用方预生成（server 需先占坑状态映射）。
-    pub async fn run_goal(
+    /// 规划（Thinker 第一步）：Goal → Intent → OntologyQuery → Reasoning → Planning →
+    /// 注册表驱动的 PlanStep（capability 计划）。**只规划不执行**——执行由调用方决定
+    /// （ActionEngine 或 Worker ABI）。V2 桥：`plan()` 的产物可喂给 WorkerOrchestrator。
+    pub async fn plan(
         &self,
         engine: &dyn AgentEngine,
         goal: &str,
         agent_id: &str,
         run_id: &str,
-    ) -> Result<AgentRunResult, PlannerError> {
+    ) -> Result<PlannedRun, PlannerError> {
         let run_id = run_id.to_string();
         let world = self.kernel.snapshot_world().await?;
 
@@ -381,11 +393,7 @@ impl<'a> Planner<'a> {
             )
             .await?;
         // 5') 计划构建：注册表驱动的声明式动作 → Capability::Action。
-        //     世界因动作改变后重快照、重规划，直到无新适用动作（一轮目标推到稳态）。
-        const MAX_PLAN_WAVES: usize = 8;
-        let mut world = world;
-        let mut scope_refs = scope_refs;
-        let mut steps = self.build_plan(&world, &candidates, goal, &goal_parsed.intent);
+        let steps = self.build_plan(&world, &candidates, goal, &goal_parsed.intent);
         self.kernel
             .emit_cognitive(
                 "Planning",
@@ -399,6 +407,37 @@ impl<'a> Planner<'a> {
             )
             .await?;
 
+        Ok(PlannedRun {
+            world,
+            steps,
+            scope_refs,
+            root_scope,
+            goal_parsed,
+        })
+    }
+
+    /// 运行一个目标，跑通完整认知闭环并返回运行结果。
+    /// `run_id` 由调用方预生成（server 需先占坑状态映射）。
+    pub async fn run_goal(
+        &self,
+        engine: &dyn AgentEngine,
+        goal: &str,
+        agent_id: &str,
+        run_id: &str,
+    ) -> Result<AgentRunResult, PlannerError> {
+        let run_id = run_id.to_string();
+        // 规划（V2：与执行分离——plan() 产物可经 ActionEngine 或 Worker ABI 执行）
+        let planned = self.plan(engine, goal, agent_id, &run_id).await?;
+        let PlannedRun {
+            mut world,
+            mut steps,
+            mut scope_refs,
+            root_scope,
+            goal_parsed,
+        } = planned;
+
+        // 世界因动作改变后重快照、重规划，直到无新适用动作（一轮目标推到稳态）。
+        const MAX_PLAN_WAVES: usize = 8;
         let mut executed_actions: Vec<(String, String)> = Vec::new();
         let mut executed_keys: HashSet<String> = HashSet::new();
         // 设计决策（无 Saga 补偿）：中途失败/被拒不回滚已执行步骤的副作用。

@@ -609,6 +609,7 @@ mod tests {
             expected_relations: vec!["order.active".into()],
             expected_artifacts: vec!["report.md".into()],
             time_budget_secs: 10.0,
+            skill_version: None,
         }
     }
 
@@ -622,6 +623,7 @@ mod tests {
         EvaluationResult {
             run_id: run_id.into(),
             task_id: "t1".into(),
+            skill_version: None,
             correctness: crate::evaluation::Score::known(aggregate, vec![]),
             completeness: crate::evaluation::Score::known(aggregate, vec![]),
             efficiency: crate::evaluation::Score::known(aggregate, vec![]),
@@ -944,6 +946,7 @@ mod tests {
             expected_relations: vec![],
             expected_artifacts: vec![],
             time_budget_secs: 10.0,
+            skill_version: None,
         };
         // 5 个历史 run：执行但无正确性证据（T1 模式）
         for i in 0..5 {

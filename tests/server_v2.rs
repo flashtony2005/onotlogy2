@@ -206,6 +206,7 @@ async fn tc_sv5_evaluation_endpoint() {
         expected_relations: vec![],
         expected_artifacts: vec![],
         time_budget_secs: 0.0,
+        skill_version: None,
     };
     openaip_os::evaluation::hook::on_run_end(
         &mut log,
@@ -268,6 +269,7 @@ async fn tc_sv6_mutation_review_endpoint() {
         expected_relations: vec![],
         expected_artifacts: vec![],
         time_budget_secs: 10.0,
+        skill_version: None,
     };
     // 种子 2 条评测：执行但无正确性证据 → T1 诊断
     for i in 0..2 {
@@ -405,6 +407,7 @@ async fn tc_sv7_offline_benchmark_endpoint() {
         expected_relations: vec![],
         expected_artifacts: vec![],
         time_budget_secs: 10.0,
+        skill_version: None,
     };
     // 5 个历史 run：执行但无正确性证据（T1 模式）
     for i in 0..5 {

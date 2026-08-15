@@ -200,6 +200,7 @@ mod tests {
             expected_relations: vec![],
             expected_artifacts: vec![],
             time_budget_secs: 0.0,
+            skill_version: None,
         };
         let r = on_run_end(
             &mut log,

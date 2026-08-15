@@ -397,6 +397,7 @@ fn eval_result(
     openaip_os::evaluation::EvaluationResult {
         run_id: run_id.into(),
         task_id: "t1".into(),
+        skill_version: None,
         correctness: Score::known(aggregate, vec![]),
         completeness: Score::known(aggregate, vec![]),
         efficiency: Score::known(aggregate, vec![]),

@@ -30,6 +30,7 @@ fn task() -> TaskDefinition {
         expected_relations: vec!["order.active".into()],
         expected_artifacts: vec!["report.md".into()],
         time_budget_secs: 10.0,
+        skill_version: None,
     }
 }
 
@@ -50,6 +51,7 @@ fn result(
     openaip_os::evaluation::EvaluationResult {
         run_id: run_id.into(),
         task_id: "t1".into(),
+        skill_version: None,
         correctness: openaip_os::evaluation::Score::known(aggregate, vec![]),
         completeness: openaip_os::evaluation::Score::known(aggregate, vec![]),
         efficiency: openaip_os::evaluation::Score::known(aggregate, vec![]),

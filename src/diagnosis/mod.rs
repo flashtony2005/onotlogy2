@@ -257,6 +257,7 @@ mod tests {
             expected_relations: vec![],
             expected_artifacts: vec![],
             time_budget_secs: 10.0,
+            skill_version: None,
         }
     }
 

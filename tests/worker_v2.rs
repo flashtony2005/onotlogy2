@@ -499,6 +499,7 @@ async fn tc_w8_orchestrator_eval_end_to_end() {
         expected_relations: vec![],
         expected_artifacts: vec![],
         time_budget_secs: 10.0,
+        skill_version: None,
     };
     let run_id = result.run_id.clone();
     let eval = openaip_os::on_run_end(
