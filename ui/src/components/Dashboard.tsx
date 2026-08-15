@@ -1,5 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  Boxes,
+  BrainCircuit,
+  Database,
+  FileCheck2,
+  GitBranch,
+  LayoutGrid,
+  ListChecks,
+  PlayCircle,
+  Plug,
+  Route,
+  Sparkles,
+} from 'lucide-react'
+import {
   getEvolution,
   getMemory,
   getPlugins,
@@ -226,11 +239,25 @@ export function Dashboard({ onNavigate }: { onNavigate: (v: ViewKind) => void })
 
   const now = new Date().toLocaleTimeString('zh-CN', { hour12: false })
 
+  const objects = [
+    { label: 'Skill', count: skills.length, icon: Boxes, color: 'var(--accent)' },
+    { label: 'Plugin', count: plugins.length, icon: Plug, color: 'var(--purple)' },
+    { label: 'Session', count: sessions.length, icon: Route, color: 'var(--teal)' },
+    { label: 'Memory', count: memories.length, icon: Database, color: 'var(--green)' },
+    { label: 'Task', count: tasks.length, icon: ListChecks, color: 'var(--amber)' },
+    { label: 'Pattern', count: patterns, icon: GitBranch, color: 'var(--accent)' },
+    { label: 'Proposal', count: proposals, icon: FileCheck2, color: 'var(--purple)' },
+    { label: 'Learned', count: learned, icon: BrainCircuit, color: 'var(--green)' },
+  ]
+
   return (
     <div className="dash">
       <div className="dash-head">
-        <h3>❯ 系统总览</h3>
-        <span className="dash-meta">OpenAIP-OS · agent runtime · {now}</span>
+        <div>
+          <h3>运营总览</h3>
+          <span className="dash-meta">OpenAIP-OS · Agent Runtime · {now}</span>
+        </div>
+        <span className="dash-pill">实时</span>
       </div>
 
       {err && <div className="err-msg">⚠️ {err}</div>}
@@ -256,12 +283,45 @@ export function Dashboard({ onNavigate }: { onNavigate: (v: ViewKind) => void })
           </div>
         </div>
         <div className="dash-hero-bars">
-          <h4>维度分布</h4>
+          <h4>能力维度分布</h4>
           {dims.map((d) => (
             <Bar key={d.label} label={d.label} value={d.value} max={dimMax} />
           ))}
         </div>
       </div>
+
+      {/* 对象类型网格 */}
+      <section className="dash-section">
+        <h4>
+          <LayoutGrid size={14} /> 对象类型
+        </h4>
+        <div className="obj-grid">
+          {objects.map((o) => (
+            <button
+              key={o.label}
+              className="obj-card"
+              onClick={() => {
+                if (o.label === 'Skill' || o.label === 'Plugin' || o.label === 'Session') {
+                  onNavigate('v2')
+                } else if (o.label === 'Memory') {
+                  onNavigate('memory')
+                } else if (o.label === 'Pattern' || o.label === 'Proposal' || o.label === 'Learned') {
+                  onNavigate('evolution')
+                } else if (o.label === 'Task') {
+                  onNavigate('tasks')
+                }
+              }}
+              title={`查看 ${o.label}`}
+            >
+              <span className="obj-ic" style={{ color: o.color, background: `color-mix(in srgb, ${o.color} 12%, white)` }}>
+                <o.icon size={18} strokeWidth={2} />
+              </span>
+              <span className="obj-count">{o.count}</span>
+              <span className="obj-label">{o.label}</span>
+            </button>
+          ))}
+        </div>
+      </section>
 
       {/* 指标卡行（数字滚动） */}
       <div className="dash-grid">
@@ -310,11 +370,21 @@ export function Dashboard({ onNavigate }: { onNavigate: (v: ViewKind) => void })
       <section className="dash-section">
         <h4>快速入口</h4>
         <div className="dash-quick">
-          <button onClick={() => onNavigate('v2')}>▣ V2 Runtime — Skill / Plugin / Session</button>
-          <button onClick={() => onNavigate('evolution')}>◉ Evolution — 自学习知识</button>
-          <button onClick={() => onNavigate('memory')}>💾 Memory — 动作沉淀</button>
-          <button onClick={() => onNavigate('tasks')}>☑ Tasks — 任务状态</button>
-          <button onClick={() => onNavigate('developer')}>◈ Developer — 全量事件流</button>
+          <button onClick={() => onNavigate('v2')}>
+            <Boxes size={15} /> V2 Runtime
+          </button>
+          <button onClick={() => onNavigate('evolution')}>
+            <Sparkles size={15} /> Evolution
+          </button>
+          <button onClick={() => onNavigate('memory')}>
+            <BrainCircuit size={15} /> Memory
+          </button>
+          <button onClick={() => onNavigate('tasks')}>
+            <ListChecks size={15} /> Tasks
+          </button>
+          <button onClick={() => onNavigate('developer')}>
+            <PlayCircle size={15} /> 全量事件流
+          </button>
         </div>
       </section>
     </div>

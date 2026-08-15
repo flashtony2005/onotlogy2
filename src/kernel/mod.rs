@@ -24,6 +24,7 @@ pub mod context;
 pub mod effect;
 pub mod fiber;
 pub mod persistence;
+pub mod projection;
 pub mod relation;
 pub mod scheduler;
 pub mod state;

@@ -12,6 +12,8 @@ const MAX_RETRIES = 8
 const MAX_BACKOFF_MS = 10000
 
 interface Options {
+  /** 登录态门：false 时不连接（避免未登录时发起 WS），登录后自动重连。 */
+  enabled?: boolean
   onEvent: (e: TraceEventDto) => void
   onStatus?: (connected: boolean) => void
 }
@@ -24,7 +26,10 @@ export function useTraceStream(id: string | null, opts: Options) {
   onStatusRef.current = opts.onStatus
 
   useEffect(() => {
-    if (!id) return
+    if (!id || opts.enabled === false) {
+      onStatusRef.current?.(false)
+      return
+    }
     lastIdRef.current = null // 新 run：从头拉全量历史
     let ws: WebSocket | null = null
     let closedByUs = false
@@ -73,5 +78,5 @@ export function useTraceStream(id: string | null, opts: Options) {
       if (timer) clearTimeout(timer)
       ws?.close()
     }
-  }, [id])
+  }, [id, opts.enabled])
 }

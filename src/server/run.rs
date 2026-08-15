@@ -2,10 +2,15 @@ use std::sync::Arc;
 
 /// `POST /api/v1/wb/agent/run`：触发 Agent 运行（异步，立即返回 runId + streamUrl）。
 use crate::auth::AuthUser;
+use crate::evaluation::hook::{append_bridged, on_run_end, trace_to_session_events};
+use crate::evaluation::{EvaluationPolicy, TaskDefinition};
 use crate::planner::{
     AutoApprover, Planner, PlannerError, PolicyApprover, RunStatus, RuntimeConfig, ServerApprover,
     generate_run_id, lock_mutex,
 };
+use crate::session::event::{EventType, SessionId};
+use crate::session::log::SessionLog;
+use crate::storage::TraceQuery;
 use axum::Json;
 use axum::extract::{Extension, State};
 use axum::response::Response;
@@ -119,6 +124,40 @@ pub(crate) async fn run_start(
             .storage()
             .update_run_status(&rid, rec.status.as_str(), Some(&now_micros()))
             .await;
+        // V2 I7：EveryRun → Evaluation（成败皆评；kernel trace 桥进 SessionLog）。
+        // 失败 run 的评测同样有诊断价值（诊断环输入）。
+        let mut eval_log = SessionLog::new(SessionId::new(&rid));
+        eval_log.append(
+            EventType::ContextAssembled,
+            serde_json::json!({
+                "run_id": rid,
+                "assets": [
+                    { "asset_id": "goal", "selection_reason": goal, "relevance": 1.0 },
+                    { "asset_id": "agent", "selection_reason": ag, "relevance": 1.0 },
+                ],
+            }),
+        );
+        if let Ok(trace) = kernel.list_events(TraceQuery::for_run(&rid)).await {
+            append_bridged(&mut eval_log, trace_to_session_events(&trace));
+        }
+        eval_log.append(
+            EventType::SessionCompleted,
+            serde_json::json!({ "run_id": rid }),
+        );
+        let task = TaskDefinition {
+            task_id: goal,
+            expected_relations: vec![],
+            expected_artifacts: vec![],
+            time_budget_secs: 0.0,
+        };
+        let _ = on_run_end(
+            &mut eval_log,
+            &rid,
+            &task,
+            &EvaluationPolicy::default(),
+            &kernel.storage(),
+        )
+        .await;
         lock_mutex(&st2.runs).insert(rid, rec);
     });
 

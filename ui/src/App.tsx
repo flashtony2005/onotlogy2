@@ -1,5 +1,21 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  Boxes,
+  BrainCircuit,
+  ChevronDown,
+  ChevronRight,
+  Code2,
+  LayoutDashboard,
+  ListChecks,
+  LogOut,
+  PlayCircle,
+  ShieldCheck,
+  Sparkles,
+  Wifi,
+  WifiOff,
+} from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
+import {
   AuthError,
   getEvolution,
   getMe,
@@ -22,41 +38,27 @@ import { useTraceStream } from './hooks/useTraceStream'
 import { buildTimeline } from './view'
 import type { AuthUserDto, EvolutionStateDto, MemoryRecord, TaskRecord, TraceEventDto, ViewKind } from './types'
 
-const STEP_ICON: Record<string, string> = {
-  Goal: '🎯',
-  Intent: '🧭',
-  OntologyQuery: '🌐',
-  Reasoning: '🧠',
-  Planning: '📋',
-  PolicyCheck: '🔐',
-  Action: '⚡',
-  MemoryUpdate: '💾',
-  MemoryRecall: '🔎',
-}
-
-const VIEW_GROUPS: { name: string; items: ViewKind[] }[] = [
-  { name: '总览', items: ['overview'] },
-  {
-    name: 'Agent 观察',
-    items: ['executive', 'operator', 'developer'],
-  },
-  { name: '认知', items: ['memory', 'evolution', 'tasks'] },
-  { name: '能力', items: ['v2'] },
+const VIEW_GROUPS: { name: string; en: string; items: ViewKind[] }[] = [
+  { name: '运营', en: 'Operations', items: ['overview', 'operator', 'tasks'] },
+  { name: '构建', en: 'Build', items: ['v2', 'developer'] },
+  { name: '治理', en: 'Governance', items: ['executive', 'memory', 'evolution'] },
 ]
 
-const VIEWS: {
+interface ViewMeta {
   key: ViewKind
   label: string
   cn: string
   q: string
-  icon: string
+  icon: LucideIcon
   desc: string
-}[] = [
+}
+
+const VIEWS: ViewMeta[] = [
   {
     key: 'overview',
     label: 'Overview',
     cn: '总览',
-    icon: '◎',
+    icon: LayoutDashboard,
     q: '现在系统怎么样？',
     desc: '整个系统当前状态、运行情况、重要指标、有没有异常',
   },
@@ -64,7 +66,7 @@ const VIEWS: {
     key: 'executive',
     label: 'Executive',
     cn: '高管',
-    icon: '◈',
+    icon: ShieldCheck,
     q: '现在有什么重要事情需要我决定？',
     desc: '风险、重大任务、需要人工决策的事情、整体经营/管理情况',
   },
@@ -72,7 +74,7 @@ const VIEWS: {
     key: 'operator',
     label: 'Operator',
     cn: '操作台',
-    icon: '▶',
+    icon: PlayCircle,
     q: '系统现在正在干什么？我能不能控制它？',
     desc: '正在运行的任务、流水线走到哪一步、暂停/继续/停止/重试',
   },
@@ -80,7 +82,7 @@ const VIEWS: {
     key: 'developer',
     label: 'Developer',
     cn: '开发者',
-    icon: '</>',
+    icon: Code2,
     q: '系统内部到底发生了什么？',
     desc: '输入、输出、API、Tool 调用、事件、错误、完整技术日志',
   },
@@ -88,7 +90,7 @@ const VIEWS: {
     key: 'memory',
     label: 'Memory',
     cn: '记忆',
-    icon: '💾',
+    icon: BrainCircuit,
     q: '系统以前记住了什么？',
     desc: 'Agent 从过去任务中留下的事实、经验、偏好、结论',
   },
@@ -96,7 +98,7 @@ const VIEWS: {
     key: 'evolution',
     label: 'Evolution',
     cn: '进化',
-    icon: '◉',
+    icon: Sparkles,
     q: '系统有没有因为做事情而变聪明？',
     desc: '哪些经验被总结成知识、规则、Skill，系统能力如何增长',
   },
@@ -104,7 +106,7 @@ const VIEWS: {
     key: 'tasks',
     label: 'Tasks',
     cn: '任务',
-    icon: '☑',
+    icon: ListChecks,
     q: '我要做什么？现在做到哪了？',
     desc: '所有任务：待办、执行中、成功、失败、暂停、已完成',
   },
@@ -112,7 +114,7 @@ const VIEWS: {
     key: 'v2',
     label: 'V2 Runtime',
     cn: '运行时',
-    icon: '▣',
+    icon: Boxes,
     q: 'AI 干活的底层机器是怎么运转的？',
     desc: 'Skill、Plugin、Session，以及 Agent 实际执行任务的运行环境',
   },
@@ -120,6 +122,7 @@ const VIEWS: {
 
 export default function App() {
   const [view, setView] = useState<ViewKind>('overview')
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [agentId, setAgentId] = useState('retention-agent')
   const [goal, setGoal] = useState('为高风险流失客户生成挽留计划')
   const [runId, setRunId] = useState<string | null>(null)
@@ -192,6 +195,21 @@ export default function App() {
     setEvents([])
   }
 
+  /** 切换侧栏分组展开/收起。 */
+  const toggleGroup = (name: string) => {
+    setCollapsed((prev) => ({ ...prev, [name]: !prev[name] }))
+  }
+
+  /** 跳转视图并自动展开所属分组（总览快捷入口也可直达折叠中的菜单）。 */
+  const goView = (k: ViewKind) => {
+    setView(k)
+    const g = VIEW_GROUPS.find((x) => x.items.includes(k))
+    if (g) setCollapsed((prev) => (prev[g.name] ? { ...prev, [g.name]: false } : prev))
+    if (k === 'memory') void reloadMemory()
+    if (k === 'evolution') void reloadEvolution()
+    if (k === 'tasks') void reloadTasks()
+  }
+
   // Memory 视图刷新：从 REST /memory 拉取沉淀（hits 随轮次累加）。
   const reloadMemory = async () => {
     setMemoryLoading(true)
@@ -241,6 +259,7 @@ export default function App() {
 
   // WS 订阅：有 run 时跟 run 流；无 run 时连 agent 流（登录即连接，run 启动后事件实时到达）
   useTraceStream(runId ?? agentId, {
+    enabled: !!user,
     onEvent: (e) => {
       setEvents((prev) => (prev.some((p) => p.id === e.id) ? prev : [...prev, e]))
       // 记忆沉淀/召回事件 → 实时刷新 Memory 视图（hits 累加可见）
@@ -323,31 +342,45 @@ export default function App() {
       {/* Codex 式左侧边栏：品牌 + 分组导航 + 状态/登出 */}
       <aside className="sidebar">
         <div className="side-brand">
-          <span className="side-logo">❯_</span>
-          <span className="side-title">OpenAIP-OS</span>
+          <span className="side-logo">
+            <Boxes size={18} strokeWidth={2.2} />
+          </span>
+          <div className="side-brand-text">
+            <span className="side-title">OpenAIP-OS</span>
+            <span className="side-subtitle">Ontology Agent Runtime</span>
+          </div>
         </div>
 
         <nav className="side-nav">
           {VIEW_GROUPS.map((g) => (
             <div key={g.name} className="side-group">
-              <div className="side-group-name">{g.name}</div>
-              {g.items.map((k) => {
+              <button
+                className="side-group-name"
+                onClick={() => toggleGroup(g.name)}
+                title={collapsed[g.name] ? `展开 ${g.name}` : `收起 ${g.name}`}
+              >
+                <span>{g.name}</span>
+                <span className="side-group-en">{g.en}</span>
+                <span className="side-group-caret">
+                  {collapsed[g.name] ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                </span>
+              </button>
+              {!collapsed[g.name] && g.items.map((k) => {
                 const v = VIEWS.find((x) => x.key === k)!
                 return (
                   <button
                     key={k}
                     className={view === k ? 'side-btn active' : 'side-btn'}
-                    onClick={() => {
-                      setView(k)
-                      if (k === 'memory') void reloadMemory()
-                      if (k === 'evolution') void reloadEvolution()
-                      if (k === 'tasks') void reloadTasks()
-                    }}
+                    onClick={() => goView(k)}
                     title={v.desc}
                   >
-                    <span className="side-ic">{v.icon}</span>
-                    <span className="side-label">{v.cn}</span>
-                    <span className="side-desc">{v.q}</span>
+                    <span className="side-ic">
+                      <v.icon size={16} strokeWidth={2} />
+                    </span>
+                    <span className="side-text">
+                      <span className="side-label">{v.cn}</span>
+                      <span className="side-desc">{v.q}</span>
+                    </span>
                   </button>
                 )
               })}
@@ -356,13 +389,24 @@ export default function App() {
         </nav>
 
         <div className="side-bottom">
+          <div className="side-user">
+            <span className="side-avatar">{user.username.slice(0, 1).toUpperCase()}</span>
+            <div className="side-user-meta">
+              <span className="side-user-name">{user.username}</span>
+              <span className={`role role-${user.role.toLowerCase()}`}>{user.role}</span>
+            </div>
+          </div>
           <div className={`side-conn ${connected ? 'on' : 'off'}`}>
             <span className="dot" />
             <span>{connected ? 'WS 已连接' : 'WS 未连接'}</span>
           </div>
           <button className="side-btn side-logout" onClick={() => void doLogout()}>
-            <span className="side-ic">⎋</span>
-            <span className="side-label">登出</span>
+            <span className="side-ic">
+              <LogOut size={16} strokeWidth={2} />
+            </span>
+            <span className="side-text">
+              <span className="side-label">登出</span>
+            </span>
           </button>
         </div>
       </aside>
@@ -371,20 +415,21 @@ export default function App() {
         {/* 顶部 mini bar：会话上下文 + 连接状态 */}
         <header className="mini-bar">
           <div className="mini-title">
-            <span className="logo">❯_</span>
+            <span className="mini-logo">
+              <Boxes size={17} strokeWidth={2.2} />
+            </span>
             <span className="mini-name">OpenAIP-OS</span>
+            <span className="mini-sep">/</span>
             {(() => {
               const v = VIEWS.find((x) => x.key === view)
               return (
-                <span className="mini-sub">
-                  {v ? `${v.label} ${v.cn} · ${v.desc}` : ''}
-                </span>
+                <span className="mini-sub">{v ? `${v.cn} · ${v.desc}` : ''}</span>
               )
             })()}
           </div>
           <div className="conn-group">
             <div className={`conn ${connected ? 'on' : 'off'}`}>
-              <span className="dot" />
+              {connected ? <Wifi size={13} /> : <WifiOff size={13} />}
               {connected ? 'WS 已连接' : 'WS 未连接'}
             </div>
             <div className="user">
@@ -425,7 +470,7 @@ export default function App() {
           <MemoryPanel memories={memories} loading={memoryLoading} onReload={reloadMemory} />
         )}
 
-        {view === 'overview' && <Dashboard onNavigate={(v) => setView(v)} />}
+        {view === 'overview' && <Dashboard onNavigate={goView} />}
 
         {view === 'v2' && <V2Panel />}
 
@@ -473,7 +518,7 @@ export default function App() {
           timeline.events.map((ev) => (
           <article key={ev.id} className={`event ${ev.eventType.toLowerCase()}`}>
             <div className="ev-head">
-              <span className="ic">{STEP_ICON[ev.eventType] ?? '•'}</span>
+              <span className="ic">•</span>
               <span className="et">{ev.eventType}</span>
               <span className="ts">{fmtTime(ev.timestamp)}</span>
               {ev.confidence != null && (
