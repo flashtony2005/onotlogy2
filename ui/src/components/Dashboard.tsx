@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   getEvolution,
   getMemory,
@@ -17,7 +17,121 @@ import type {
   ViewKind,
 } from '../types'
 
-/** 系统总览 Dashboard：指标卡 + 架构视图 + 最近会话 + 快速入口。 */
+/** 数字滚动动画（0 → target，ease-out）。 */
+function useCountUp(target: number, durationMs = 900): number {
+  const [value, setValue] = useState(0)
+  const raf = useRef<number | null>(null)
+  useEffect(() => {
+    const start = performance.now()
+    const tick = (t: number) => {
+      const p = Math.min(1, (t - start) / durationMs)
+      setValue(Math.round(target * (1 - Math.pow(1 - p, 3))))
+      if (p < 1) raf.current = requestAnimationFrame(tick)
+    }
+    raf.current = requestAnimationFrame(tick)
+    return () => {
+      if (raf.current) cancelAnimationFrame(raf.current)
+    }
+  }, [target, durationMs])
+  return value
+}
+
+/** 横向条形图（加载后动画生长）。 */
+function Bar({ label, value, max }: { label: string; value: number; max: number }) {
+  const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0
+  return (
+    <div className="dash-bar">
+      <span className="dash-bar-label">{label}</span>
+      <div className="dash-bar-track">
+        <div className="dash-bar-fill" style={{ width: `${pct}%` }} />
+      </div>
+      <span className="dash-bar-val">{value}</span>
+    </div>
+  )
+}
+
+/** 环形图（SVG stroke-dasharray 分段）。 */
+function Donut({
+  segments,
+  center,
+  centerLabel,
+}: {
+  segments: { label: string; value: number; color: string }[]
+  center: number
+  centerLabel: string
+}) {
+  const total = segments.reduce((n, s) => n + s.value, 0) || 1
+  const R = 42
+  const C = 2 * Math.PI * R
+  let acc = 0
+  return (
+    <div className="dash-donut">
+      <svg viewBox="0 0 120 120" className="dash-donut-svg">
+        <circle cx="60" cy="60" r={R} fill="none" stroke="var(--border-soft)" strokeWidth="12" />
+        {segments.map((s) => {
+          const frac = s.value / total
+          const dash = frac * C
+          const offset = -acc * C
+          acc += frac
+          return (
+            <circle
+              key={s.label}
+              cx="60"
+              cy="60"
+              r={R}
+              fill="none"
+              stroke={s.color}
+              strokeWidth="12"
+              strokeDasharray={`${dash} ${C - dash}`}
+              strokeDashoffset={offset}
+              transform="rotate(-90 60 60)"
+              className="dash-donut-seg"
+            >
+              <title>{`${s.label}: ${s.value}`}</title>
+            </circle>
+          )
+        })}
+      </svg>
+      <div className="dash-donut-center">
+        <span className="dash-donut-num">{center}</span>
+        <span className="dash-donut-label">{centerLabel}</span>
+      </div>
+    </div>
+  )
+}
+
+/** 架构流动图（5 层 + 流动光点动画）。 */
+function ArchFlow() {
+  const layers = [
+    { name: 'SKILL LAYER', desc: '如何完成目标 · Skill Registry', icon: '▣' },
+    { name: 'CAPABILITY', desc: '需要什么能力 · Capability Registry', icon: '◆' },
+    { name: 'PLUGIN LAYER', desc: '谁来提供能力 · Tool / AI / MCP', icon: '🔌' },
+    { name: 'RUNTIME', desc: 'Fiber · Policy · Compensation · Audit', icon: '⚙' },
+    { name: 'SESSION LOG', desc: '到底发生了什么 · append-only', icon: '📜' },
+  ]
+  return (
+    <div className="arch-flow">
+      {layers.map((l, i) => (
+        <div key={l.name} className="arch-flow-step">
+          <div className="arch-flow-node">
+            <span className="arch-flow-ic">{l.icon}</span>
+            <div>
+              <div className="arch-flow-name">{l.name}</div>
+              <div className="arch-flow-desc">{l.desc}</div>
+            </div>
+          </div>
+          {i < layers.length - 1 && (
+            <div className="arch-flow-line">
+              <span className="arch-flow-dot" style={{ animationDelay: `${i * 0.3}s` }} />
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** 系统总览 Dashboard：环形图 + 维度条形 + 指标卡 + 架构流动 + 快速入口。 */
 export function Dashboard({ onNavigate }: { onNavigate: (v: ViewKind) => void }) {
   const [skills, setSkills] = useState<SkillDto[]>([])
   const [plugins, setPlugins] = useState<PluginDto[]>([])
@@ -66,94 +180,132 @@ export function Dashboard({ onNavigate }: { onNavigate: (v: ViewKind) => void })
   const proposals = evolution?.proposals.length ?? 0
   const learned = evolution?.learned.length ?? 0
 
+  // 动画数字
+  const nSkills = useCountUp(skills.length)
+  const nPlugins = useCountUp(plugins.length)
+  const nSessions = useCountUp(sessions.length)
+  const nEvents = useCountUp(totalEvents)
+  const nMemory = useCountUp(memories.length)
+  const nHits = useCountUp(memHits)
+  const nPatterns = useCountUp(patterns)
+
+  // Skill 类型分布（donut 段）
+  const typeCount = (t: string) => skills.filter((s) => s.skill_type === t).length
+  const typeSegs = [
+    { label: 'Composite', value: typeCount('Composite'), color: '#f1a33c' },
+    { label: 'Workflow', value: typeCount('Workflow'), color: '#4cc38a' },
+    { label: 'Atomic', value: typeCount('Atomic'), color: '#58a6ff' },
+    {
+      label: 'Other',
+      value: Math.max(
+        0,
+        skills.length - typeCount('Composite') - typeCount('Workflow') - typeCount('Atomic'),
+      ),
+      color: '#8f8f8f',
+    },
+  ].filter((s) => s.value > 0)
+
+  // 六维条形
+  const dimMax = Math.max(
+    skills.length,
+    plugins.length,
+    sessions.length,
+    memories.length,
+    patterns,
+    tasks.length,
+    1,
+  )
+  const dims = [
+    { label: 'Skill', value: skills.length },
+    { label: 'Plugin', value: plugins.length },
+    { label: 'Session', value: sessions.length },
+    { label: 'Memory', value: memories.length },
+    { label: 'Pattern', value: patterns },
+    { label: 'Task', value: tasks.length },
+  ]
+
+  const now = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+
   return (
     <div className="dash">
       <div className="dash-head">
         <h3>❯ 系统总览</h3>
-        <span className="dash-meta">OpenAIP-OS · agent runtime · 实时聚合</span>
+        <span className="dash-meta">OpenAIP-OS · agent runtime · {now}</span>
       </div>
 
       {err && <div className="err-msg">⚠️ {err}</div>}
       {loading && <div className="empty-sm">❯ 聚合数据加载中…</div>}
 
+      {/* 核心区：环形图（Skill 分布）+ 六维条形 */}
+      <div className="dash-hero">
+        <div className="dash-hero-donut">
+          <Donut
+            segments={
+              typeSegs.length > 0 ? typeSegs : [{ label: 'Empty', value: 1, color: '#262626' }]
+            }
+            center={nSkills}
+            centerLabel="SKILLS"
+          />
+          <div className="dash-donut-legend">
+            {typeSegs.map((s) => (
+              <span key={s.label} className="dash-legend-item">
+                <i style={{ background: s.color }} />
+                {s.label} <b>{s.value}</b>
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="dash-hero-bars">
+          <h4>维度分布</h4>
+          {dims.map((d) => (
+            <Bar key={d.label} label={d.label} value={d.value} max={dimMax} />
+          ))}
+        </div>
+      </div>
+
+      {/* 指标卡行（数字滚动） */}
       <div className="dash-grid">
         <div className="dash-card">
-          <div className="dash-num">{skills.length}</div>
-          <div className="dash-label">Skill Assets</div>
-          <div className="dash-sub">{activeSkills} active</div>
-        </div>
-        <div className="dash-card">
-          <div className="dash-num">{plugins.length}</div>
+          <div className="dash-num">{nPlugins}</div>
           <div className="dash-label">Plugins</div>
           <div className="dash-sub">{activePlugins} active</div>
         </div>
         <div className="dash-card">
-          <div className="dash-num">{sessions.length}</div>
+          <div className="dash-num">{nSessions}</div>
           <div className="dash-label">Sessions</div>
-          <div className="dash-sub">{totalEvents} events</div>
+          <div className="dash-sub">{nEvents} events</div>
         </div>
         <div className="dash-card">
-          <div className="dash-num">{memories.length}</div>
+          <div className="dash-num">{nMemory}</div>
           <div className="dash-label">Memory</div>
-          <div className="dash-sub">{memHits} hits</div>
+          <div className="dash-sub">{nHits} hits</div>
         </div>
         <div className="dash-card">
-          <div className="dash-num">{patterns}</div>
+          <div className="dash-num">{nPatterns}</div>
           <div className="dash-label">Patterns</div>
-          <div className="dash-sub">{proposals} proposals · {learned} learned</div>
+          <div className="dash-sub">
+            {proposals} proposals · {learned} learned
+          </div>
         </div>
         <div className="dash-card">
           <div className="dash-num">{tasks.length}</div>
           <div className="dash-label">Tasks</div>
           <div className="dash-sub">
-            {taskPending} pending · {taskInprogress} running · {taskCompleted} done
+            {taskPending} pending · {taskInprogress} run · {taskCompleted} done
           </div>
+        </div>
+        <div className="dash-card">
+          <div className="dash-num">{activeSkills}</div>
+          <div className="dash-label">Active Skills</div>
+          <div className="dash-sub">of {skills.length} registered</div>
         </div>
       </div>
 
-      <div className="dash-cols">
-        <section className="dash-section">
-          <h4>架构分层</h4>
-          <div className="arch">
-            <div className="arch-row">
-              <span className="arch-layer">Skill Layer</span>
-              <span className="arch-desc">如何完成目标 — Skill Registry</span>
-            </div>
-            <div className="arch-row">
-              <span className="arch-layer">Capability</span>
-              <span className="arch-desc">需要什么能力 — Capability Registry</span>
-            </div>
-            <div className="arch-row">
-              <span className="arch-layer">Plugin Layer</span>
-              <span className="arch-desc">谁来提供能力 — Tool / AI / MCP</span>
-            </div>
-            <div className="arch-row">
-              <span className="arch-layer">Runtime</span>
-              <span className="arch-desc">Fiber · Policy · Compensation · Audit</span>
-            </div>
-            <div className="arch-row">
-              <span className="arch-layer">Session Log</span>
-              <span className="arch-desc">到底发生了什么 — append-only 事实源</span>
-            </div>
-          </div>
-        </section>
-
-        <section className="dash-section">
-          <h4>最近 Sessions</h4>
-          {sessions.length === 0 ? (
-            <div className="empty-sm">暂无 Session — 前往 V2 Runtime 创建</div>
-          ) : (
-            <ul className="dash-sessions">
-              {sessions.slice(0, 6).map((s) => (
-                <li key={s.session_id}>
-                  <code>{s.session_id}</code>
-                  <span>{s.events} events</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      </div>
+      {/* 架构流动图 */}
+      <section className="dash-section">
+        <h4>架构分层 · 请求流动</h4>
+        <ArchFlow />
+      </section>
 
       <section className="dash-section">
         <h4>快速入口</h4>

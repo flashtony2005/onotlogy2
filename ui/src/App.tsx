@@ -55,7 +55,7 @@ const VIEWS: { key: ViewKind; label: string; icon: string; desc: string }[] = [
 ]
 
 export default function App() {
-  const [view, setView] = useState<ViewKind>('operator')
+  const [view, setView] = useState<ViewKind>('overview')
   const [agentId, setAgentId] = useState('retention-agent')
   const [goal, setGoal] = useState('为高风险流失客户生成挽留计划')
   const [runId, setRunId] = useState<string | null>(null)
