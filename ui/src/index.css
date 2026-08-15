@@ -1698,3 +1698,145 @@ pre {
   font-size: 11.5px;
   text-align: center;
 }
+
+/* ══ 全局按钮美化 ═══════════════════════════════════════════════════════
+   设计语言：等宽小字 · 3px 圆角 · 细边框 · 橙色强调
+   主按钮（实底橙）· 次按钮（透明描边）· 导航（图标栏）· 危险（登出）
+   统一反馈：hover 微上浮 + 橙色描边/辉光 · active 按压下沉 · focus 环形描边 */
+
+button {
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.12s ease,
+    filter 0.15s ease;
+  font-family: var(--mono);
+}
+button:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+button:active {
+  transform: translateY(1px);
+}
+
+/* ── 主按钮：实底琥珀橙 + 辉光 ── */
+.run,
+.login-btn {
+  background: linear-gradient(180deg, #f8b45f 0%, var(--accent) 100%);
+  color: #0a0a0a;
+  font-weight: 700;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  box-shadow:
+    0 1px 0 rgba(0, 0, 0, 0.35),
+    0 0 0 rgba(241, 163, 60, 0);
+  letter-spacing: 0.4px;
+}
+.run:hover:not(:disabled),
+.login-btn:hover:not(:disabled) {
+  filter: brightness(1.07);
+  transform: translateY(-1px);
+  box-shadow:
+    0 1px 0 rgba(0, 0, 0, 0.35),
+    0 0 14px rgba(241, 163, 60, 0.4);
+}
+.run:active:not(:disabled),
+.login-btn:active:not(:disabled) {
+  transform: translateY(1px);
+  filter: brightness(0.96);
+  box-shadow:
+    0 0 0 rgba(0, 0, 0, 0.35),
+    0 0 6px rgba(241, 163, 60, 0.25);
+}
+
+/* ── 次按钮：透明描边 + hover 橙色 ── */
+.reload,
+.evo-toggle,
+.dash-quick button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 4px;
+  cursor: pointer;
+  letter-spacing: 0.2px;
+}
+.reload:hover:not(:disabled),
+.evo-toggle:hover:not(:disabled),
+.dash-quick button:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  background: rgba(241, 163, 60, 0.07);
+  transform: translateY(-1px);
+  box-shadow: 0 0 10px rgba(241, 163, 60, 0.15);
+}
+.reload:active:not(:disabled),
+.evo-toggle:active:not(:disabled),
+.dash-quick button:active {
+  transform: translateY(0);
+  background: rgba(241, 163, 60, 0.12);
+}
+.reload:disabled,
+.evo-toggle:disabled {
+  opacity: 0.45;
+  cursor: default;
+  transform: none;
+}
+
+/* ── 导航按钮（侧边栏）：hover 左移 + 图标点亮 ── */
+.side-btn {
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.12s ease;
+}
+.side-btn:hover {
+  transform: translateX(2px);
+}
+.side-btn:active {
+  transform: translateX(1px);
+}
+.side-btn .side-ic {
+  transition: color 0.15s ease, transform 0.15s ease;
+}
+.side-btn:hover .side-ic {
+  color: var(--accent);
+}
+
+/* ── 危险按钮：登出 hover 红色 ── */
+.logout,
+.side-logout {
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background-color 0.15s ease,
+    transform 0.12s ease;
+}
+.logout:hover,
+.side-logout:hover {
+  color: var(--red);
+  border-color: rgba(255, 107, 107, 0.55);
+  background: rgba(255, 107, 107, 0.07);
+}
+.logout:active,
+.side-logout:active {
+  transform: translateY(1px);
+}
+
+/* ── Tab 按钮：hover 微亮 ── */
+.v2-tab:hover {
+  color: var(--text);
+  background: rgba(241, 163, 60, 0.05);
+}
+.views button:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.03);
+}
+.views button:active,
+.v2-tab:active {
+  transform: none;
+}
