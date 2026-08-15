@@ -603,7 +603,9 @@ async fn cmd_worker_run(
     )));
     let _ = registry.register(Box::new(adapters::codex_worker(None)));
     let _ = registry.register(Box::new(adapters::claude_worker(None)));
-    let _ = registry.register(Box::new(adapters::deepseek_worker(None)));
+    // DSH（DeepSeek Harness）Worker：dsh --profile headless "<任务>"（已验证真实可执行）
+    let dsh_cmd = std::env::var("OPENAI_OS_DSH_CMD").unwrap_or_else(|_| "dsh".into());
+    let _ = registry.register(Box::new(adapters::dsh_worker(Some(&dsh_cmd))));
 
     // Policy：fail-closed（未配置 = DENY）；高风险能力需审批——Worker ≠ Authority
     let mut policy = WorkerPolicy::new();
