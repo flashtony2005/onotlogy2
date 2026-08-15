@@ -35,7 +35,7 @@ body {
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
     'Microsoft YaHei', sans-serif;
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.55;
 }
 
@@ -65,11 +65,11 @@ pre {
   gap: 10px;
 }
 .brand .logo {
-  font-size: 15px;
+  font-size: 17px;
   color: var(--accent);
 }
 .brand h1 {
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
   margin: 0;
   letter-spacing: 0.2px;
@@ -77,7 +77,7 @@ pre {
 .brand .sub {
   margin: 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
 }
 .conn-group {
   display: flex;
@@ -88,7 +88,7 @@ pre {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: 13px;
   color: var(--muted);
 }
 .conn .dot {
@@ -108,14 +108,14 @@ pre {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: 14px;
 }
 .user-name {
   color: var(--text);
 }
 .role {
   padding: 0 7px;
-  font-size: 10px;
+  font-size: 12px;
   border-radius: 8px;
   border: 1px solid var(--border);
   text-transform: uppercase;
@@ -135,7 +135,7 @@ pre {
 }
 .logout {
   padding: 1px 9px;
-  font-size: 11px;
+  font-size: 13px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: transparent;
@@ -161,7 +161,7 @@ pre {
 }
 .controls .prompt {
   color: var(--accent);
-  font-size: 13px;
+  font-size: 15px;
   flex: none;
   user-select: none;
 }
@@ -178,7 +178,7 @@ pre {
   border-bottom: 1px solid var(--border);
   color: var(--text);
   padding: 5px 6px;
-  font-size: 13px;
+  font-size: 15px;
   font-family: var(--mono);
   border-radius: 0;
 }
@@ -194,7 +194,7 @@ pre {
   background: var(--accent);
   color: #ffffff;
   font-weight: 700;
-  font-size: 12px;
+  font-size: 14px;
   font-family: var(--mono);
   border: none;
   border-radius: 8px;
@@ -217,7 +217,7 @@ pre {
   padding: 8px 12px;
   border-radius: 10px;
   margin-bottom: 10px;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 /* ── Status ── */
@@ -232,7 +232,7 @@ pre {
   display: flex;
   gap: 18px;
   flex-wrap: wrap;
-  font-size: 12px;
+  font-size: 14px;
   color: var(--muted);
   margin-bottom: 8px;
 }
@@ -272,7 +272,7 @@ pre {
 }
 .progress span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
   width: 34px;
   text-align: right;
 }
@@ -292,7 +292,7 @@ pre {
   border-bottom: 2px solid transparent;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 14px;
   padding: 7px 12px;
   cursor: pointer;
   letter-spacing: 0.2px;
@@ -321,7 +321,7 @@ pre {
   color: var(--muted);
   text-align: center;
   padding: 48px 0;
-  font-size: 12px;
+  font-size: 14px;
   border: 1px dashed var(--border);
   border-radius: 10px;
 }
@@ -335,7 +335,7 @@ pre {
 }
 .decision h3 {
   margin: 0 0 10px;
-  font-size: 13px;
+  font-size: 15px;
   color: var(--accent);
   font-weight: 600;
 }
@@ -347,14 +347,14 @@ pre {
 }
 .decision span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
   padding-top: 1px;
   text-transform: uppercase;
   letter-spacing: 0.4px;
 }
 .decision p {
   margin: 0;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .event {
@@ -390,24 +390,24 @@ pre {
   gap: 10px;
 }
 .ev-head .ic {
-  font-size: 13px;
+  font-size: 15px;
   width: 16px;
   text-align: center;
 }
 .ev-head .et {
   font-weight: 600;
-  font-size: 12px;
+  font-size: 14px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 .ev-head .ts {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
 }
 .ev-head .cf {
   margin-left: auto;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
 }
 .refs {
   margin-top: 6px;
@@ -420,14 +420,14 @@ pre {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0 7px;
-  font-size: 11px;
+  font-size: 13px;
   color: var(--accent);
 }
 .reasoning {
   margin: 8px 0 0;
   color: var(--text);
   white-space: pre-wrap;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.6;
   opacity: 0.92;
 }
@@ -437,7 +437,7 @@ pre {
 .io label {
   display: block;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
   margin-bottom: 3px;
   text-transform: uppercase;
   letter-spacing: 0.4px;
@@ -448,7 +448,7 @@ pre {
   border: 1px solid var(--border-soft);
   border-radius: 8px;
   padding: 8px 10px;
-  font-size: 11.5px;
+  font-size: 13.5px;
   line-height: 1.5;
   overflow-x: auto;
   white-space: pre-wrap;
@@ -468,7 +468,7 @@ pre {
 .memory-head h3,
 .evo-head h3 {
   margin: 0;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--text);
 }
@@ -485,7 +485,7 @@ pre {
   border-radius: 8px;
   padding: 3px 11px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: 13px;
   font-family: var(--mono);
 }
 .memory-head .reload:hover:not(:disabled),
@@ -517,15 +517,15 @@ pre {
   background: var(--panel-2);
   padding: 0 7px;
   border-radius: 8px;
-  font-size: 12px;
+  font-size: 14px;
 }
 .mem-hits {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--green);
 }
 .mem-time {
   margin-left: auto;
-  font-size: 11px;
+  font-size: 13px;
   color: var(--muted);
 }
 .mem-payload {
@@ -534,7 +534,7 @@ pre {
   border: 1px solid var(--border-soft);
   border-radius: 8px;
   padding: 8px 10px;
-  font-size: 11.5px;
+  font-size: 13.5px;
   line-height: 1.5;
   overflow-x: auto;
   white-space: pre-wrap;
@@ -542,7 +542,7 @@ pre {
 
 /* ── Tasks 视图 ── */
 .task-status {
-  font-size: 10px;
+  font-size: 12px;
   padding: 0 7px;
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -564,11 +564,11 @@ pre {
 }
 .task-title {
   margin: 0 0 4px;
-  font-size: 13px;
+  font-size: 15px;
 }
 .task-meta {
   margin: 0;
-  font-size: 11px;
+  font-size: 13px;
   color: var(--muted);
 }
 
@@ -589,7 +589,7 @@ pre {
   background: rgba(76, 158, 230, 0.06);
   border: 1px solid rgba(76, 158, 230, 0.35);
   border-radius: 10px;
-  font-size: 11.5px;
+  font-size: 13.5px;
   color: var(--amber);
   line-height: 1.6;
 }
@@ -603,7 +603,7 @@ pre {
 }
 .evo-section h4 {
   margin: 0 0 8px;
-  font-size: 12px;
+  font-size: 14px;
   color: var(--muted);
   display: flex;
   align-items: center;
@@ -616,7 +616,7 @@ pre {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0 7px;
-  font-size: 10px;
+  font-size: 12px;
   color: var(--text);
 }
 .evo-item {
@@ -637,10 +637,10 @@ pre {
   background: var(--panel-2);
   padding: 0 7px;
   border-radius: 8px;
-  font-size: 12px;
+  font-size: 14px;
 }
 .evo-tag {
-  font-size: 10px;
+  font-size: 12px;
   padding: 0 7px;
   border-radius: 8px;
   background: transparent;
@@ -669,7 +669,7 @@ pre {
   border-color: rgba(76, 158, 230, 0.5);
 }
 .evo-evidence {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--muted);
   line-height: 1.5;
 }
@@ -693,7 +693,7 @@ pre {
 .evo-toggle {
   margin-left: auto;
   padding: 0 8px;
-  font-size: 10px;
+  font-size: 12px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: transparent;
@@ -724,7 +724,7 @@ pre {
   border-bottom: 2px solid transparent;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 14px;
   padding: 6px 12px;
   cursor: pointer;
 }
@@ -740,7 +740,7 @@ pre {
 }
 .v2-head h3 {
   margin: 0;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
 }
 .v2-head h3::before {
@@ -764,10 +764,10 @@ pre {
 }
 .v2-item-head code {
   color: var(--accent);
-  font-size: 13px;
+  font-size: 15px;
 }
 .badge {
-  font-size: 10px;
+  font-size: 12px;
   padding: 0 7px;
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -780,7 +780,7 @@ pre {
 }
 .v2-item-desc {
   margin: 4px 0;
-  font-size: 12px;
+  font-size: 14px;
   color: var(--muted);
 }
 .v2-item-caps {
@@ -793,7 +793,7 @@ pre {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0 7px;
-  font-size: 11px;
+  font-size: 13px;
   color: var(--accent);
 }
 .v2-session {
@@ -807,23 +807,23 @@ pre {
   gap: 10px;
   border-bottom: 1px solid var(--border-soft);
   padding: 7px 2px;
-  font-size: 12px;
+  font-size: 14px;
 }
 .session-event .seq {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
   width: 34px;
   flex: none;
 }
 .session-event .ev-type {
   color: var(--accent);
-  font-size: 12px;
+  font-size: 14px;
   flex: none;
 }
 .session-event .ev-data {
   margin: 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
   overflow-x: auto;
   white-space: pre-wrap;
 }
@@ -832,7 +832,7 @@ pre {
   margin-bottom: 8px;
   border: 1px solid rgba(76, 195, 138, 0.4);
   color: var(--green);
-  font-size: 12px;
+  font-size: 14px;
   border-radius: 8px;
   background: rgba(76, 195, 138, 0.05);
 }
@@ -841,7 +841,7 @@ pre {
   margin-bottom: 8px;
   border: 1px solid rgba(255, 107, 107, 0.4);
   color: var(--red);
-  font-size: 12px;
+  font-size: 14px;
   border-radius: 8px;
   background: rgba(255, 107, 107, 0.05);
 }
@@ -893,12 +893,12 @@ pre {
   user-select: none;
 }
 .side-logo {
-  font-size: 13px;
+  font-size: 15px;
   color: var(--accent);
   font-weight: 700;
 }
 .side-title {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.3px;
 }
@@ -914,7 +914,7 @@ pre {
   gap: 2px;
 }
 .side-group-name {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.6px;
@@ -945,7 +945,7 @@ pre {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 .side-ic {
-  font-size: 13px;
+  font-size: 15px;
   width: 18px;
   text-align: center;
   flex: none;
@@ -955,12 +955,12 @@ pre {
   color: var(--accent);
 }
 .side-label {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 500;
   flex: none;
 }
 .side-desc {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--muted);
   opacity: 0.8;
   overflow: hidden;
@@ -982,7 +982,7 @@ pre {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 10.5px;
+  font-size: 12.5px;
   padding: 6px 8px;
   color: var(--muted);
 }
@@ -1028,15 +1028,15 @@ pre {
   gap: 8px;
 }
 .mini-title .logo {
-  font-size: 12px;
+  font-size: 14px;
   color: var(--accent);
 }
 .mini-name {
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
 }
 .mini-sub {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--muted);
 }
 .content {
@@ -1065,7 +1065,7 @@ pre {
 }
 .composer .prompt {
   color: var(--accent);
-  font-size: 13px;
+  font-size: 15px;
   flex: none;
   user-select: none;
 }
@@ -1081,7 +1081,7 @@ pre {
   border: none;
   color: var(--text);
   padding: 5px 6px;
-  font-size: 13px;
+  font-size: 15px;
   font-family: var(--mono);
 }
 .composer input:focus {
@@ -1128,11 +1128,11 @@ pre {
 }
 .dash-head h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
 }
 .dash-meta {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--muted);
 }
 .dash-grid {
@@ -1150,20 +1150,20 @@ pre {
   border-color: var(--border);
 }
 .dash-num {
-  font-size: 30px;
+  font-size: 34px;
   font-weight: 700;
   color: var(--accent);
   line-height: 1.1;
 }
 .dash-label {
-  font-size: 11px;
+  font-size: 13px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text);
   margin-top: 6px;
 }
 .dash-sub {
-  font-size: 10.5px;
+  font-size: 12.5px;
   color: var(--muted);
   margin-top: 2px;
 }
@@ -1179,7 +1179,7 @@ pre {
 }
 .dash-section h4 {
   margin: 0 0 8px;
-  font-size: 11px;
+  font-size: 13px;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -1195,7 +1195,7 @@ pre {
   gap: 12px;
   padding: 9px 12px;
   border-bottom: 1px solid var(--border-soft);
-  font-size: 12px;
+  font-size: 14px;
 }
 .arch-row:last-child {
   border-bottom: none;
@@ -1208,7 +1208,7 @@ pre {
 }
 .arch-desc {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
 }
 .dash-sessions {
   list-style: none;
@@ -1224,25 +1224,25 @@ pre {
   gap: 10px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border-soft);
-  font-size: 11.5px;
+  font-size: 13.5px;
 }
 .dash-sessions li:last-child {
   border-bottom: none;
 }
 .dash-sessions code {
   color: var(--accent);
-  font-size: 11.5px;
+  font-size: 13.5px;
 }
 .dash-sessions span {
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 12.5px;
 }
 .empty-sm {
   padding: 14px;
   border: 1px dashed var(--border);
   border-radius: 10px;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 13.5px;
   text-align: center;
 }
 .dash-quick {
@@ -1256,7 +1256,7 @@ pre {
   color: var(--muted);
   border-radius: 10px;
   padding: 8px 14px;
-  font-size: 12px;
+  font-size: 14px;
   font-family: var(--mono);
   cursor: pointer;
 }
@@ -1292,11 +1292,11 @@ pre {
 }
 .dash-head h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
 }
 .dash-meta {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--muted);
 }
 .dash-hero {
@@ -1350,13 +1350,13 @@ pre {
   pointer-events: none;
 }
 .dash-donut-num {
-  font-size: 26px;
+  font-size: 30px;
   font-weight: 700;
   color: var(--accent);
   line-height: 1;
 }
 .dash-donut-label {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--muted);
   letter-spacing: 0.6px;
   margin-top: 3px;
@@ -1370,7 +1370,7 @@ pre {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 11px;
+  font-size: 13px;
   color: var(--muted);
   white-space: nowrap;
 }
@@ -1392,7 +1392,7 @@ pre {
 }
 .dash-hero-bars h4 {
   margin: 0 0 10px;
-  font-size: 11px;
+  font-size: 13px;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -1405,7 +1405,7 @@ pre {
   margin-bottom: 7px;
 }
 .dash-bar-label {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--muted);
   text-align: right;
 }
@@ -1423,7 +1423,7 @@ pre {
   min-width: 2px;
 }
 .dash-bar-val {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text);
   text-align: right;
 }
@@ -1472,26 +1472,26 @@ pre {
   box-shadow: 0 0 0 1px rgba(76, 158, 230, 0.15);
 }
 .dash-num {
-  font-size: 28px;
+  font-size: 32px;
   font-weight: 700;
   color: var(--accent);
   line-height: 1.1;
 }
 .dash-label {
-  font-size: 10.5px;
+  font-size: 12.5px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text);
   margin-top: 6px;
 }
 .dash-sub {
-  font-size: 10.5px;
+  font-size: 12.5px;
   color: var(--muted);
   margin-top: 2px;
 }
 .dash-section h4 {
   margin: 0 0 8px;
-  font-size: 11px;
+  font-size: 13px;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -1550,19 +1550,19 @@ pre {
   border-color: rgba(76, 158, 230, 0.5);
 }
 .arch-flow-ic {
-  font-size: 15px;
+  font-size: 17px;
   width: 22px;
   text-align: center;
   color: var(--accent);
 }
 .arch-flow-name {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.4px;
   color: var(--text);
 }
 .arch-flow-desc {
-  font-size: 10.5px;
+  font-size: 12.5px;
   color: var(--muted);
   margin-top: 1px;
 }
@@ -1611,7 +1611,7 @@ pre {
   color: var(--muted);
   border-radius: 10px;
   padding: 8px 14px;
-  font-size: 12px;
+  font-size: 14px;
   font-family: var(--mono);
   cursor: pointer;
   transition: all 0.15s;
@@ -1627,7 +1627,7 @@ pre {
   border: 1px dashed var(--border);
   border-radius: 10px;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 13.5px;
   text-align: center;
 }
 
@@ -1797,7 +1797,7 @@ button:active {
   color: var(--text);
   border-radius: 10px;
   padding: 7px 9px;
-  font-size: 12px;
+  font-size: 14px;
   font-family: var(--mono);
 }
 .up-form input:focus,
@@ -1816,7 +1816,7 @@ button:active {
   color: var(--text);
   border-radius: 10px;
   padding: 9px 10px;
-  font-size: 12px;
+  font-size: 14px;
   font-family: var(--mono);
   line-height: 1.55;
   resize: vertical;
@@ -1829,10 +1829,10 @@ button:active {
 }
 .up-run {
   padding: 7px 16px;
-  font-size: 12px;
+  font-size: 14px;
 }
 .up-hint {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--muted);
 }
 .raw-btn {
@@ -1852,19 +1852,19 @@ button:active {
   padding: 6px 10px;
   background: rgba(76, 158, 230, 0.06);
   border-bottom: 1px solid rgba(76, 158, 230, 0.15);
-  font-size: 10.5px;
+  font-size: 12.5px;
   color: var(--muted);
 }
 .raw-meta code {
   color: var(--accent);
-  font-size: 10.5px;
+  font-size: 12.5px;
 }
 .raw-content {
   margin: 0;
   padding: 10px 12px;
   max-height: 320px;
   overflow: auto;
-  font-size: 11.5px;
+  font-size: 13.5px;
   line-height: 1.6;
   white-space: pre-wrap;
   color: var(--text);
@@ -1897,12 +1897,12 @@ button:active {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 19px;
+  font-size: 21px;
   font-weight: 700;
   color: #3d6b4f;
   letter-spacing: 0.2px;
 }
-.auth-brand-leaf { font-size: 22px; }
+.auth-brand-leaf { font-size: 24px; }
 .auth-nav-links {
   display: flex;
   align-items: center;
@@ -1910,7 +1910,7 @@ button:active {
 }
 .auth-nav-links a {
   color: #5b7a66;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 500;
   text-decoration: none;
   transition: color 0.2s;
@@ -1920,7 +1920,7 @@ button:active {
   border: none;
   border-radius: 999px;
   padding: 8px 26px;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
   letter-spacing: 1px;
   color: #fff;
@@ -1983,19 +1983,19 @@ button:active {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 30px;
+  font-size: 34px;
   background: linear-gradient(135deg, #e8f8ec, #d8f0e0);
   box-shadow: inset 0 0 0 1px rgba(90, 160, 120, 0.18);
 }
 .auth-card-head h2 {
   margin: 0 0 6px;
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 700;
   color: #2c3e35;
 }
 .auth-card-head p {
   margin: 0;
-  font-size: 13px;
+  font-size: 15px;
   color: #8aa29a;
 }
 
@@ -2007,7 +2007,7 @@ button:active {
 .auth-field-label {
   display: block;
   margin: 0 0 7px 2px;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
   color: #4a6158;
 }
@@ -2028,7 +2028,7 @@ button:active {
   width: 100%;
   box-sizing: border-box;
   padding: 12px 14px 12px 42px;
-  font-size: 14px;
+  font-size: 16px;
   color: #2c3e35;
   background: #f4f9f6;
   border: 1.5px solid #e2efe8;
@@ -2054,7 +2054,7 @@ button:active {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 13px;
+  font-size: 15px;
   color: #5b7a66;
   cursor: pointer;
   user-select: none;
@@ -2066,7 +2066,7 @@ button:active {
   cursor: pointer;
 }
 .auth-link {
-  font-size: 13px;
+  font-size: 15px;
   color: #4c9ee6;
   text-decoration: none;
   font-weight: 600;
@@ -2077,7 +2077,7 @@ button:active {
 .auth-error {
   margin: 0 0 14px;
   padding: 9px 12px;
-  font-size: 13px;
+  font-size: 15px;
   color: #c0564f;
   background: #fdf0ee;
   border: 1px solid #f5d4d0;
@@ -2088,7 +2088,7 @@ button:active {
 .auth-submit {
   width: 100%;
   padding: 13px 0;
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 700;
   letter-spacing: 4px;
   color: #fff;
@@ -2117,7 +2117,7 @@ button:active {
   padding-top: 18px;
   border-top: 1px solid #eef4f0;
   text-align: center;
-  font-size: 13px;
+  font-size: 15px;
   color: #8aa29a;
 }
 .auth-foot .auth-link { margin-left: 2px; }
@@ -2129,7 +2129,7 @@ button:active {
   align-items: center;
   justify-content: center;
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-  font-size: 14px;
+  font-size: 16px;
   color: #3d6b4f;
   background: rgba(255, 255, 255, 0.5);
 }
