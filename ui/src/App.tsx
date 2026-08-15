@@ -44,15 +44,15 @@ const VIEW_GROUPS: { name: string; items: ViewKind[] }[] = [
   { name: '能力', items: ['v2'] },
 ]
 
-const VIEWS: { key: ViewKind; label: string; icon: string; desc: string }[] = [
-  { key: 'overview', label: 'Overview', icon: '◎', desc: '系统总览 · 指标/架构/活动' },
-  { key: 'executive', label: 'Executive', icon: '◈', desc: '管理者 · 决策 / 风险' },
-  { key: 'operator', label: 'Operator', icon: '▶', desc: '操作台 · 流水线进度' },
-  { key: 'developer', label: 'Developer', icon: '</>', desc: '开发者 · 全量 IO' },
-  { key: 'memory', label: 'Memory', icon: '💾', desc: '记忆沉淀 · 动作→记忆闭环' },
-  { key: 'evolution', label: 'Evolution', icon: '◉', desc: '自学习 · 经验→知识' },
-  { key: 'tasks', label: 'Tasks', icon: '☑', desc: '任务状态 · 待办→完成' },
-  { key: 'v2', label: 'V2 Runtime', icon: '▣', desc: 'Skill · Plugin · Session' },
+const VIEWS: { key: ViewKind; label: string; cn: string; icon: string; desc: string }[] = [
+  { key: 'overview', label: 'Overview', cn: '总览', icon: '◎', desc: '系统总览 · 指标/架构/活动' },
+  { key: 'executive', label: 'Executive', cn: '高管', icon: '◈', desc: '管理者 · 决策 / 风险' },
+  { key: 'operator', label: 'Operator', cn: '操作台', icon: '▶', desc: '流水线进度 · 运行控制' },
+  { key: 'developer', label: 'Developer', cn: '开发者', icon: '</>', desc: '全量 IO · 事件详情' },
+  { key: 'memory', label: 'Memory', cn: '记忆', icon: '💾', desc: '记忆沉淀 · 动作→记忆闭环' },
+  { key: 'evolution', label: 'Evolution', cn: '进化', icon: '◉', desc: '自学习 · 经验→知识' },
+  { key: 'tasks', label: 'Tasks', cn: '任务', icon: '☑', desc: '任务状态 · 待办→完成' },
+  { key: 'v2', label: 'V2 Runtime', cn: '运行时', icon: '▣', desc: 'Skill · Plugin · Session' },
 ]
 
 export default function App() {
@@ -283,8 +283,8 @@ export default function App() {
                     title={v.desc}
                   >
                     <span className="side-ic">{v.icon}</span>
-                    <span className="side-label">{v.label}</span>
-                    <span className="side-desc">{v.desc}</span>
+                    <span className="side-label">{v.cn}</span>
+                    <span className="side-desc">{v.label} · {v.desc}</span>
                   </button>
                 )
               })}
@@ -310,7 +310,14 @@ export default function App() {
           <div className="mini-title">
             <span className="logo">❯_</span>
             <span className="mini-name">OpenAIP-OS</span>
-            <span className="mini-sub">{VIEWS.find((v) => v.key === view)?.label ?? ''}</span>
+            {(() => {
+              const v = VIEWS.find((x) => x.key === view)
+              return (
+                <span className="mini-sub">
+                  {v ? `${v.label} ${v.cn} · ${v.desc}` : ''}
+                </span>
+              )
+            })()}
           </div>
           <div className="conn-group">
             <div className={`conn ${connected ? 'on' : 'off'}`}>

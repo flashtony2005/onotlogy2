@@ -1038,6 +1038,10 @@ pre {
 .mini-sub {
   font-size: 13px;
   color: var(--muted);
+  max-width: 46vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .content {
   flex: 1;
