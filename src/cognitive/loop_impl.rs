@@ -57,6 +57,8 @@ pub struct AgentLoop<'k> {
     effect_defs: Option<Vec<crate::ontology::RuntimeDefinition>>,
     /// Phase 6：演化引擎（认知状态；None = 不采集不 Gate）。
     evolution: Option<&'k mut crate::evolution2::EvolutionEngine>,
+    /// Phase 7：规则级经验分账（rule 粒度；与 action 级并存——双尺度）。
+    rule_stats: Option<&'k mut crate::rule::RuleStatsStore>,
 }
 
 impl<'k> AgentLoop<'k> {
@@ -73,6 +75,7 @@ impl<'k> AgentLoop<'k> {
             engine,
             effect_defs: None,
             evolution: None,
+            rule_stats: None,
         }
     }
 
@@ -85,6 +88,12 @@ impl<'k> AgentLoop<'k> {
     /// 注入演化引擎（Phase 6：outcome 采集 + Gate 判定）。
     pub fn with_evolution(mut self, ev: &'k mut crate::evolution2::EvolutionEngine) -> Self {
         self.evolution = Some(ev);
+        self
+    }
+
+    /// 注入规则级经验分账（Phase 7：rule_stats，双尺度）。
+    pub fn with_rule_stats(mut self, stats: &'k mut crate::rule::RuleStatsStore) -> Self {
+        self.rule_stats = Some(stats);
         self
     }
 
@@ -167,9 +176,12 @@ impl<'k> AgentLoop<'k> {
                 self.agent
                     .memory
                     .record(cap.action.clone(), json!({ "capability": cap.name }));
-                // 埋点（D1：Success 分账）
+                // 埋点（D1：Success 分账；D4：规则级分账并存）
                 if let Some(ev) = &mut self.evolution {
                     ev.record(&cap.action, crate::evolution2::OutcomeKind::Success);
+                }
+                if let (Some(stats), Some(rid)) = (&mut self.rule_stats, &decision.rule) {
+                    stats.record(rid.clone(), crate::evolution2::OutcomeKind::Success);
                 }
                 Ok(LoopOutcome::Continue)
             }
@@ -187,6 +199,12 @@ impl<'k> AgentLoop<'k> {
                     ev.record(&cap.action, crate::evolution2::OutcomeKind::Denied);
                     if compensated {
                         ev.record(&cap.action, crate::evolution2::OutcomeKind::Compensated);
+                    }
+                }
+                if let (Some(stats), Some(rid)) = (&mut self.rule_stats, &decision.rule) {
+                    stats.record(rid.clone(), crate::evolution2::OutcomeKind::Denied);
+                    if compensated {
+                        stats.record(rid.clone(), crate::evolution2::OutcomeKind::Compensated);
                     }
                 }
                 Ok(LoopOutcome::Denied(reason))

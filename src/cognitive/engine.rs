@@ -25,6 +25,9 @@ pub struct Decision {
     pub capability: String,
     pub args: Value,
     pub confidence: f64,
+    /// Phase 7：产生该决策的行为规则 id（RuleEngine 填充；None = 非规则决策）。
+    /// 规则级经验分账（rule_stats）的归因依据。
+    pub rule: Option<String>,
 }
 
 /// 观察视图（决策输入）：世界快照 + 实体 + 子图 + 相关关系 + 召回记忆 + 可用能力。
@@ -99,6 +102,7 @@ impl CognitiveEngine for FakeEngine {
                     capability: step.capability.clone(),
                     args: step.args.clone(),
                     confidence: 0.9,
+                    rule: None,
                 }));
             }
         }

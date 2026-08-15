@@ -26,6 +26,7 @@ pub mod kernel;
 pub mod odl;
 pub mod ontology;
 pub mod planner;
+pub mod rule;
 pub mod runtime;
 pub mod runtime_exec;
 pub mod server;
