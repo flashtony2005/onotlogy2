@@ -803,3 +803,96 @@ async fn tc_w13_codex_exec_e2e() {
         }
     }
 }
+
+// ── W14：Pi Worker 适配器命令构造（假 pi shim，可进 CI）─────────────
+#[tokio::test]
+async fn tc_w14_pi_adapter_command_shape() {
+    use openaip_os::worker::adapters::pi_worker;
+    use openaip_os::worker::orchestrator::{WorkerOrchestrator, WorkerTask};
+    use openaip_os::worker::router::WorkerRouter;
+
+    let shim = std::env::temp_dir().join("pi_shim_test.sh");
+    std::fs::write(&shim, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let mut registry = WorkerRegistry::new();
+    registry
+        .register(Box::new(pi_worker(Some(shim.to_str().unwrap()))))
+        .unwrap();
+    let policy = WorkerPolicy::new().allow("code.read");
+    let router = WorkerRouter::new(RouterCriteria::default());
+    let mut orch = WorkerOrchestrator::new(&registry, &policy, router);
+    let result = orch
+        .run_plan(&[WorkerTask {
+            capability: "code.read".into(),
+            input: json!({ "args": ["--mode", "text", "--print", "--no-session", "只回答两个字：收到"] }),
+            note: "pi smoke".into(),
+        }])
+        .await;
+    assert!(result.all_ok);
+    assert_eq!(result.outcomes[0].worker_id.as_deref(), Some("pi-agent"));
+    // 命令构造正确：pi --mode text --print --no-session <任务文本>（Worker 形态：不放 --no-tools）
+    let stdout = result.outcomes[0]
+        .output
+        .as_ref()
+        .and_then(|o| o.get("stdout"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    for expected in [
+        "--mode",
+        "text",
+        "--print",
+        "--no-session",
+        "只回答两个字：收到",
+    ] {
+        assert!(stdout.contains(expected), "缺参数 {expected}: {stdout}");
+    }
+    assert!(
+        !stdout.contains("--no-tools"),
+        "Worker 形态不得禁工具（与 Thinker 形态区分）"
+    );
+    std::fs::remove_file(&shim).ok();
+}
+
+// ── W15：真实 Pi Worker 端到端（#[ignore]：需本机 pi + LLM/token）──
+// 本地复现：cargo test --test worker_v2 tc_w15_pi_worker_e2e -- --ignored --nocapture
+#[tokio::test]
+#[ignore = "依赖本机 pi CLI 与 LLM/token（~/.pi 在工作区外），CI 不跑"]
+async fn tc_w15_pi_worker_e2e() {
+    use openaip_os::worker::adapters::pi_worker;
+
+    let probe = std::process::Command::new("pi").arg("--version").output();
+    let Ok(probe) = probe else {
+        eprintln!("跳过：pi 不在 PATH");
+        return;
+    };
+    if !probe.status.success() {
+        eprintln!("跳过：pi 不可执行");
+        return;
+    }
+
+    let w = pi_worker(None);
+    let result = w
+        .execute(
+            "code.read",
+            json!({ "args": ["--mode", "text", "--print", "--no-session", "只回答两个字：收到"] }),
+        )
+        .await;
+    match result {
+        Ok(r) => {
+            eprintln!("pi stdout: {:?}", r.output);
+            assert!(r.ok, "pi 应成功返回");
+            assert!(
+                r.output["stdout"].as_str().unwrap_or("").contains("收到"),
+                "pi 应完成任务并打印结果"
+            );
+        }
+        Err(e) => {
+            eprintln!("跳过：pi 执行失败（~/.pi 不可写/LLM 配置缺失）: {e}");
+        }
+    }
+}

@@ -25,6 +25,31 @@ pub fn claude_worker(command: Option<&str>) -> ProcessWorker {
     ProcessWorker::new(m, command.unwrap_or("claude"))
 }
 
+/// Pi Agent Worker 适配器（`@earendil-works/pi-coding-agent`）。
+///
+/// 角色边界（与 Cognitive Engine 形态互补）：
+/// - **Thinker 形态**（`PiAgentEngine`，src/agent.rs）：`--no-tools` 禁工具，只做 NLU/推理
+/// - **Worker 形态**（本适配器）：`--mode text --print --no-session` 放开 read/bash/edit/write 工具，
+///   经 Process 协议被 Router 调度去执行任务
+///
+/// 已验证真实可执行（非交互单次任务模式）。能力对应 pi 的工具面（code.* / shell.execute）。
+pub fn pi_worker(command: Option<&str>) -> ProcessWorker {
+    let mut m = super::manifest::WorkerManifest::new("pi-agent", "agent")
+        .with_capabilities(&[
+            "code.read",
+            "code.write",
+            "code.test",
+            "code.search",
+            "shell.execute",
+        ])
+        .with_quality(0.88)
+        .with_risk(3)
+        .with_trust(0.85)
+        .with_availability("local");
+    m.execution = ExecutionProtocol::Process;
+    ProcessWorker::new(m, command.unwrap_or("pi"))
+}
+
 /// DSH（DeepSeek Harness）Worker 适配器（Phase 11D：Harness 是 Worker，不是内核）。
 ///
 /// 经 Process 协议接入：`dsh --profile headless "<任务>"`（answer one task, print, exit）——
@@ -106,5 +131,19 @@ mod tests {
         assert_eq!(m.execution, ExecutionProtocol::Process);
         let overridden = codex_worker(Some("/custom/codex"));
         assert_eq!(overridden.command(), "/custom/codex");
+    }
+
+    /// Pi Agent 适配器声明（Worker 形态身份；Thinker 形态在 agent.rs）——进 CI。
+    #[test]
+    fn pi_worker_manifest_declares_capability_market() {
+        let w = pi_worker(None);
+        let m = w.manifest();
+        assert_eq!(m.id, "pi-agent");
+        assert!(m.supports("code.read") && m.supports("shell.execute"));
+        assert_eq!(m.risk, 3);
+        assert_eq!(m.availability, "local");
+        assert_eq!(m.execution, ExecutionProtocol::Process);
+        let overridden = pi_worker(Some("/custom/pi"));
+        assert_eq!(overridden.command(), "/custom/pi");
     }
 }

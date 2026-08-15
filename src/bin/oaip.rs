@@ -125,6 +125,10 @@ enum WorkerCmd {
         /// 任务 ID（评测聚合键，缺省用 run_id）
         #[arg(long)]
         task: Option<String>,
+        /// 显式指定 Worker（Router explicit 判据，跳过评分）：
+        /// codex / claude-code / dsh-harness / pi-agent / echo / git
+        #[arg(long)]
+        worker: Option<String>,
         /// 是否自动评测（on_run_end → wb_evaluation；默认 true）
         #[arg(long, default_value_t = true)]
         evaluate: bool,
@@ -245,6 +249,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 capabilities,
                 input,
                 task,
+                worker,
                 evaluate,
             } => {
                 cmd_worker_run(
@@ -252,6 +257,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &capabilities,
                     input.as_deref(),
                     task.as_deref(),
+                    worker.as_deref(),
                     evaluate,
                 )
                 .await?
@@ -575,6 +581,7 @@ async fn cmd_worker_run(
     capabilities: &str,
     input_json: Option<&str>,
     task_id: Option<&str>,
+    explicit_worker: Option<&str>,
     evaluate: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use openaip_os::worker::policy::WorkerPolicy;
@@ -606,6 +613,9 @@ async fn cmd_worker_run(
     // DSH（DeepSeek Harness）Worker：dsh --profile headless "<任务>"（已验证真实可执行）
     let dsh_cmd = std::env::var("OPENAI_OS_DSH_CMD").unwrap_or_else(|_| "dsh".into());
     let _ = registry.register(Box::new(adapters::dsh_worker(Some(&dsh_cmd))));
+    // Pi Agent Worker（Worker 形态，放开工具；Thinker 形态在 oaip agent run）
+    let pi_cmd = std::env::var("OPENAI_OS_PI_CMD").unwrap_or_else(|_| "pi".into());
+    let _ = registry.register(Box::new(adapters::pi_worker(Some(&pi_cmd))));
 
     // Policy：fail-closed（未配置 = DENY）；高风险能力需审批——Worker ≠ Authority
     let mut policy = WorkerPolicy::new();
@@ -628,7 +638,7 @@ async fn cmd_worker_run(
         min_quality: 0.0,
         max_cost: u32::MAX,
         max_risk: 10,
-        explicit: None,
+        explicit: explicit_worker.map(String::from),
     });
 
     let tasks: Vec<openaip_os::worker::orchestrator::WorkerTask> = capabilities

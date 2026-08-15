@@ -357,6 +357,9 @@ fn bootstrap_v2_workers(state: &Arc<AppState>) {
     let _ = reg.register(Box::new(crate::worker::adapters::dsh_worker(Some(
         &dsh_cmd,
     ))));
+    // Pi Agent Worker（Worker 形态，放开工具；Thinker 形态在 oaip agent run 的 PiAgentEngine）
+    let pi_cmd = std::env::var("OPENAI_OS_PI_CMD").unwrap_or_else(|_| "pi".into());
+    let _ = reg.register(Box::new(crate::worker::adapters::pi_worker(Some(&pi_cmd))));
 }
 
 /// 重启恢复（V0.7 持久化）：重建 runs 内存映射；崩溃残留 Running→Interrupted、orphan Pending→Expired
