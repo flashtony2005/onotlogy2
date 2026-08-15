@@ -1,0 +1,101 @@
+# src/storage.rs · [[idempotency-stable-ids]] [[persistence-layer]]
+
+- REL_SEQ · constant · L17-L17 — Atomic counter for generating relation edge semantic IDs.
+- TRACE_SEQ_AUDIT · constant · L20-L20 — Atomic counter for auto-generated approval audit IDs (REQ-018).
+- ApprovalAudit · struct · L24-L33 — Data holder for one auto-approval audit record traceable to LearnedKnowledge and run.
+- UserRecord · struct · L36-L43 — Data holder for a local account with password hash and role.
+- SessionRecord · struct · L46-L51 — Data holder for an opaque auth session token with expiry.
+- now_ts · function · L53-L58 — Produces a microsecond-precision timestamp string for record creation times.
+- ObjectRecord · struct · L62-L67 — Data holder for one ontology object row mapping to wb_ontology_object.
+- RelationRecord · struct · L71-L77 — Data holder for one relation edge row mapping to wb_relation_edge.
+- MemoryRecord · struct · L82-L88 — Data holder for a memory row with label-dedup and hit counter for self-learning.
+- StorageError · enum · L92-L101 — Error enum distinguishing DB, not-found, JSON, and constraint-violation failures.
+- TraceQuery · struct · L106-L113 — Filter/cursor struct for querying trace events by run/agent/object/type with after_id reconnect cursor.
+- for_run · function · L117-L123 — Builds a TraceQuery filtered by run with default limit 200.
+- for_agent · function · L125-L131 — Builds a TraceQuery filtered by agent with default limit 200.
+- with_after · function · L133-L136 — Sets the reconnect cursor so only events after the given id are returned.
+- with_object · function · L138-L141 — Adds an object-ref filter to the trace query.
+- ObjectEngine · interface · L146-L157 — Async trait abstracting CRUD over ontology objects.
+- create · function · L147-L152 — Trait method to create an ontology object.
+- get · function · L153-L153 — Trait method to fetch an object by id.
+- update · function · L154-L154 — Trait method to update an object's data.
+- query · function · L155-L155 — Trait method to list objects of a given type.
+- delete · function · L156-L156 — Trait method to delete an object.
+- RelationEngine · interface · L161-L181 — Async trait abstracting relation edge linking, neighbor queries, and unlinking.
+- link · function · L163-L169 — Trait method to create a relation edge, rejecting duplicates (WB2007).
+- neighbors · function · L171-L171 — Trait method to list all out-edges from a source object.
+- query_by_edge · function · L173-L173 — Trait method to list all edges of a given type.
+- unlink · function · L175-L180 — Trait method to logically delete a relation edge.
+- LibSQLStorage · struct · L187-L189 — libSQL-backed storage implementation holding a clonable connection shared across providers.
+- SCHEMA_VERSION · constant · L192-L192 — Current schema version used to reject legacy databases on open (WB2101).
+- is_no_such_table · function · L195-L197 — Detects 'no such table' libsql errors via string match, stable across creators.
+- open · function · L201-L206 — Opens or creates the local database and initializes the schema.
+- ensure_schema · function · L217-L274 — Probes whether the object table exists, then creates fresh schema or validates version and rejects legacy DBs (WB2101).
+- from_connection · function · L277-L279 — Constructs storage from an existing connection (for tests).
+- append_trace · function · L283-L314 — Persists a TraceEvent, rejecting events with empty object_refs (WB2006).
+- list_events · function · L318-L372 — Queries trace events with whitelisted filters and after_id reconnect cursor for gap-filling.
+- get_trace · function · L375-L389 — Fetches a single trace event by id.
+- list_world_events · function · L392-L406 — Lists world-kind trace events in ascending time order.
+- list_all_objects · function · L409-L422 — Lists all non-deleted objects for world-model snapshot.
+- list_all_relations · function · L425-L438 — Lists all non-deleted relation edges for world-model snapshot.
+- render_object_list · function · L441-L449 — Renders objects as 'id name level' lines for CLI display (TC-006).
+- record_memory · function · L454-L472 — Upserts a memory by label, incrementing hits on conflict to count experience reuse.
+- recall_memory · function · L475-L487 — Fetches a single memory by label.
+- recall_all · function · L490-L504 — Lists all memories ordered by hit count descending.
+- save_pattern · function · L509-L537 — Upserts a pattern by label, merging run_ids across runs as evidence.
+- read_pattern_run_ids · function · L539-L551 — Reads stored run_ids string for a pattern label.
+- read_proposal_run_ids · function · L553-L562 — Reads stored run_ids string for a proposal.
+- read_learned_run_ids · function · L564-L573 — Reads stored run_ids string for learned knowledge.
+- list_patterns · function · L576-L590 — Lists all evolution patterns.
+- save_proposal · function · L593-L631 — Upserts an evolution proposal, merging run_ids evidence.
+- list_proposals · function · L634-L648 — Lists evolution proposals.
+- save_learned · function · L651-L684 — Upserts learned knowledge, merging run_ids evidence.
+- list_learned · function · L687-L703 — Lists learned knowledge entries.
+- delete_learned · function · L706-L711 — Deletes a learned knowledge entry by id.
+- set_learned_auto_approve · function · L715-L727 — Toggles the auto-approve flag on a learned knowledge entry.
+- record_approval_audit · function · L730-L751 — Persists an approval audit record with auto-generated id.
+- list_approval_audit · function · L754-L792 — Lists approval audit records with optional filters.
+- count_action_failed · function · L796-L810 — Counts failed outcomes for an action, used to decide auto-approve fallback.
+- row_to_pattern · function · L813-L822 — Maps a DB row to a Pattern.
+- row_to_proposal · function · L824-L850 — Maps a DB row to a Proposal.
+- row_to_learned · function · L852-L876 — Maps a DB row to LearnedKnowledge.
+- create · function · L880-L899 — Creates an ontology object row, enforcing semantic id uniqueness.
+- get · function · L901-L914 — Fetches a non-deleted object by id.
+- update · function · L916-L943 — Updates an object's data and bumps version, rejecting missing objects.
+- query · function · L945-L958 — Lists non-deleted objects of a given type.
+- delete · function · L960-L972 — Logically deletes an object by setting is_delete flag.
+- hard_delete · function · L977-L983 — Physically removes an object row, returning affected count.
+- RunRecord · struct · L989-L998 — Data holder for a run record with status and timestamps.
+- ApprovalRecord · struct · L1001-L1012 — Data holder for an approval record with state and decision metadata.
+- insert_run · function · L1016-L1029 — Inserts a new run record.
+- update_run_status · function · L1032-L1049 — Updates a run's status and completion timestamp.
+- list_runs · function · L1052-L1066 — Lists all run records.
+- get_run · function · L1069-L1082 — Fetches a single run by id.
+- insert_approval · function · L1085-L1101 — Inserts an approval record for a run.
+- update_approval_state · function · L1104-L1126 — Updates an approval's state and decision fields.
+- list_approvals_for_run · function · L1129-L1146 — Lists approvals belonging to a run.
+- list_approvals_by_state · function · L1149-L1166 — Lists approvals filtered by state.
+- recover_persisted_state · function · L1170-L1184 — Loads persisted run records to recover interrupted run state.
+- row_to_run · function · L1187-L1199 — Maps a DB row to a RunRecord.
+- row_to_approval · function · L1201-L1216 — Maps a DB row to an ApprovalRecord.
+- link · function · L1220-L1260 — Creates a relation edge, rejecting duplicate (source, relation, target) with WB2007.
+- neighbors · function · L1262-L1275 — Lists all non-deleted out-edges from a source object.
+- query_by_edge · function · L1277-L1290 — Lists all non-deleted edges of a given type.
+- unlink · function · L1292-L1306 — Logically deletes a relation edge by setting is_delete.
+- row_to_object · function · L1309-L1317 — Maps a DB row to an ObjectRecord.
+- row_to_relation · function · L1319-L1328 — Maps a DB row to a RelationRecord.
+- row_to_memory · function · L1330-L1339 — Maps a DB row to a MemoryRecord.
+- row_to_trace · function · L1341-L1364 — Maps a DB row to a TraceEvent, parsing JSON object_refs.
+- create_user · function · L1369-L1384 — Inserts a user record, enforcing unique username.
+- get_user_by_username · function · L1387-L1402 — Fetches a user by username for authentication.
+- count_users · function · L1405-L1414 — Counts total users, used for first-admin bootstrap.
+- get_user_by_id · function · L1417-L1429 — Fetches a user by id.
+- set_user_disabled · function · L1432-L1447 — Toggles a user's disabled flag.
+- save_session · function · L1450-L1463 — Upserts a session token row with expiry.
+- get_session · function · L1466-L1483 — Fetches a session by token, enforcing expiry.
+- delete_session · function · L1486-L1491 — Deletes a session by token (logout).
+- delete_sessions_for_user · function · L1494-L1502 — Deletes all sessions belonging to a user.
+- user_from_row · function · L1506-L1515 — Maps a DB row to a UserRecord.
+- tests · module · L1518-L1556 — Test module for storage schema and open behavior.
+- ensure_schema_rejects_legacy · function · L1523-L1542 — Test verifying legacy schema is rejected with WB2101.
+- open_creates_fresh_db_with_version · function · L1546-L1555 — Test verifying fresh DB creation writes schema version.

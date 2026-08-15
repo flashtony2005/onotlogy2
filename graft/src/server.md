@@ -1,0 +1,58 @@
+# src/server.rs · [[server-api]] [[server-side-view-clamping]]
+
+- RunRecord · struct · L43-L47 — In-memory per-run status and human-approval flag used to override timeline status for fast WB2004/2005 feedback.
+- AppState · struct · L50-L71 — Shared application state bundling kernel, engine, registry, approval store, auth providers, and run map for all handlers.
+- ApiResponse · struct · L75-L80 — Uniform response envelope carrying numeric code, message, and optional data payload for all API responses.
+- ok · function · L83-L89 — Builds a success envelope with code 0 and the given data payload.
+- error · function · L94-L100 — Builds an error envelope with a numeric WB error code and message, no data.
+- wb_code · function · L104-L106 — Converts WB-prefixed error code strings to their numeric part, defaulting to 5000 for unknown codes.
+- now_micros · function · L109-L115 — Returns current Unix time in microseconds as a string for run/approval persistence timestamps.
+- TraceListParams · struct · L119-L134 — Query parameter DTO for filtering and paginating trace event listings.
+- WsParams · struct · L137-L140 — Query parameter DTO carrying the optional after cursor for WebSocket reconnect backfill.
+- ViewParam · struct · L143-L146 — Query parameter DTO for the optional timeline view selector.
+- RunBody · struct · L150-L158 — Request body DTO for starting a run with agent id, goal, object refs, and context.
+- TraceListDto · struct · L162-L165 — Response DTO wrapping total count and a page of trace events.
+- RunStartDto · struct · L169-L173 — Response DTO for a started run exposing run id, status, and stream URL in camelCase.
+- MemoryRecordDto · struct · L178-L184 — Response DTO for a memory record with label, payload, hits, and timestamps.
+- MemoryListDto · struct · L188-L191 — Response DTO wrapping total count and a list of memory records.
+- PatternDto · struct · L197-L203 — Response DTO for an evolution pattern with support, confidence, and run ids.
+- ProposalDto · struct · L207-L215 — Response DTO for an evolution proposal with kind, target, confidence, and status.
+- LearnedDto · struct · L219-L229 — Response DTO for learned knowledge including auto-approve eligibility flag.
+- EvolutionDto · struct · L233-L237 — Response DTO aggregating patterns, proposals, and learned knowledge for the evolution endpoint.
+- router · function · L242-L276 — Declares all REST/WS routes and the static fallback, wiring handlers to paths.
+- serve · function · L283-L305 — Public entrypoint that binds the listener and delegates to serve_with_timeout with no approval timeout override.
+- serve_with_timeout · function · L311-L347 — Constructs AppState, wires auth middleware and router, recovers persisted runs, and serves HTTP/WS.
+- recover · function · L351-L366 — Rebuilds in-memory run map from persisted state after restart, restoring status and human-approval flags.
+- auth_layer · function · L373-L403 — Middleware that authenticates requests via bearer token, injects AuthUser, and bypasses auth for public paths or when enforce_auth is off.
+- is_public · function · L406-L408 — Determines whether a path is exempt from authentication (login endpoint or non-API static assets).
+- bearer_token · function · L411-L415 — Extracts the opaque token from the Authorization Bearer header.
+- unauthorized · function · L418-L420 — Builds a 401 response with the given message.
+- forbidden · function · L423-L425 — Builds a 403 response with the given message.
+- AuthToken · struct · L429-L429 — Newtype wrapper carrying the session token injected by middleware for logout revocation.
+- LoginBody · struct · L433-L436 — Request body DTO for login with username and password.
+- auth_login · function · L439-L456 — Authenticates local credentials via identity provider and issues an opaque session token.
+- auth_logout · function · L459-L467 — Revokes the current session token to invalidate it.
+- auth_me · function · L470-L476 — Returns the authenticated user's username and role for frontend initialization.
+- list_trace · function · L480-L504 — Queries trace events with filters and applies server-side pagination with clamped page size.
+- get_trace · function · L507-L517 — Fetches a single trace event by id, returning WB2002 when missing.
+- timeline · function · L520-L552 — Builds a run timeline, clamping the requested view to the user's role and overriding status from in-memory or DB run records.
+- list_memory · function · L555-L575 — Returns all memory records sorted by hit count for the memory view.
+- list_evolution · function · L579-L642 — Aggregates patterns, proposals, and learned knowledge into the evolution view DTO.
+- revoke_learned · function · L645-L658 — Revokes a learned knowledge entry by id.
+- AutoApproveBody · struct · L664-L667 — Request body DTO carrying the auto-approve toggle flag.
+- toggle_auto_approve · function · L669-L701 — Toggles auto-approve eligibility on a learned knowledge entry.
+- ApprovalAuditDto · struct · L706-L714 — Response DTO for an approval audit record.
+- from · function · L717-L727 — Maps an ApprovalAudit storage record into its response DTO.
+- list_approval_audit_handler · function · L731-L748 — Lists approval audit records for the evolution audit endpoint.
+- list_approvals · function · L751-L773 — Lists pending approval requests for a run.
+- ApprovalDecisionBody · struct · L776-L779 — Request body DTO carrying the approve/reject decision for an approval request.
+- resolve_approval · function · L782-L818 — Resolves a pending approval request by approving or rejecting it, resuming or terminating the suspended action.
+- approval_record_to_request · function · L821-L830 — Maps a persisted approval record into an ApprovalRequest for the planner.
+- run_start · function · L833-L928 — Starts a new agent run, creating a run record and returning run id, status, and stream URL.
+- ws_handler · function · L931-L939 — Upgrades an HTTP request to a WebSocket stream for agent events.
+- handle_ws · function · L942-L989 — Streams historical and incremental trace events over WebSocket, supporting after-cursor reconnect backfill.
+- collect_history · function · L992-L1019 — Collects historical trace events for an agent, optionally starting after a given cursor.
+- serve_static · function · L1022-L1060 — Serves static UI build artifacts from the dist directory, returning a hint when missing.
+- content_type · function · L1063-L1085 — Maps a file path extension to its MIME content type for static serving.
+- tests · module · L1088-L1104 — Unit test module for server behavior.
+- run_start_dto_is_camel_case · function · L1092-L1103 — Verifies the RunStartDto serializes with camelCase field names.

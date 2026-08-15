@@ -1,0 +1,23 @@
+# src/bin/oaip.rs · [[cli-entry-point]]
+
+- Cli · struct · L22-L27 — Top-level CLI argument struct holding the global db path and the subcommand to dispatch.
+- Cmd · enum · L30-L83 — Enumeration of all top-level CLI subcommands (compile, run, object, relation, event, agent, serve, db, user).
+- AgentCmd · enum · L86-L104 — Subcommand enum for agent operations, currently only 'run' with goal and approval flags.
+- ObjectCmd · enum · L107-L110 — Subcommand enum for object operations, currently only listing objects of a type.
+- RelationCmd · enum · L113-L127 — Subcommand enum for relation operations: link an edge and list relations by source or edge type.
+- EventCmd · enum · L130-L139 — Subcommand enum for world event operations: list the event trace and emit a domain event.
+- DbCmd · enum · L142-L145 — Subcommand enum for database maintenance, currently only resetting the local DB.
+- UserCmd · enum · L148-L156 — Subcommand enum for user management, currently only offline admin account creation.
+- main · function · L159-L229 — Parses CLI args and dispatches each subcommand to its handler function.
+- cmd_compile · function · L231-L244 — Parses an ODL file and generates Rust structs, schema.sql, and ontology.json into ./gen/.
+- cmd_run · function · L246-L261 — Demo command that hard-deletes old demo rows and re-seeds two Customer objects for repeatable TC-006 runs.
+- cmd_object_list · function · L263-L272 — Queries and renders all objects of a given type, with a hint when none exist.
+- cmd_event_list · function · L274-L288 — Lists the world event trace, rendering each event's timestamp, type, id, and refs.
+- cmd_relation_link · function · L290-L306 — Creates a relation edge between source and target via the runtime kernel and reports success or failure.
+- cmd_relation_list · function · L308-L331 — Lists relations filtered by source id or edge type, requiring at least one filter.
+- cmd_event_emit · function · L333-L346 — Emits a domain business event bound to the given object refs through the runtime kernel.
+- cmd_db_reset · function · L348-L359 — Deletes the DB file plus WAL/SHM companions and reopens to rebuild tables from canonical schema.
+- cmd_agent_run · function · L362-L429 — Runs the agent loop: checks Pi engine health, selects an approver (auto vs console), and executes the goal through the Planner.
+- cmd_serve · function · L432-L480 — Boots the observation server, enforcing that an admin account exists (env bootstrap or error) before binding the listener.
+- cmd_user_create_admin · function · L483-L493 — Offline idempotent creation of a Developer-role admin account via the identity provider.
+- load_registry · function · L496-L505 — Builds an ActionRegistry from an optional ODL file, falling back to an empty registry when none is given.

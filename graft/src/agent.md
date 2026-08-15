@@ -1,0 +1,26 @@
+# src/agent.rs · [[cognitive-engine-pi]]
+
+- AgentError · enum · L18-L25 — Error type distinguishing unavailable cognitive engine (mapped to WB2004) from unparseable engine output.
+- WorldSnapshot · struct · L29-L34 — Minimal world-model snapshot (objects and relations) passed to the engine to keep context small per prd 4.4.
+- Context · struct · L38-L51 — Per-step input context carrying goal, run/agent ids, step type, prior output, and world snapshot for engine routing.
+- Decision · struct · L55-L66 — Structured engine result (intent, reasoning, confidence, object refs, output) that the Planner maps into cognitive TraceEvents.
+- AgentEngine · interface · L70-L80 — Replaceable cognitive engine trait so Planner depends only on the interface, not on any specific LLM engine internals.
+- name · function · L72-L72 — Trait method returning the engine's name.
+- reason · function · L74-L74 — Trait method for engine inference returning a structured Decision or an AgentError.
+- health · function · L77-L79 — Trait default health check returning true, overridden by PiAgentEngine to probe the pi binary.
+- PiAgentEngine · struct · L88-L94 — MVP production engine wrapping the pi binary via non-interactive text mode with tools disabled, so Pi only performs NLU/reasoning.
+- new · function · L100-L125 — Constructs the engine, optionally reading OPENAIP_PROVIDER/MODEL/API_KEY_ENV env vars to override the LLM provider, falling back to pi defaults.
+- with_provider · function · L128-L131 — Builder to set the LLM provider.
+- with_model · function · L134-L137 — Builder to set the model.
+- with_api_key_env · function · L140-L143 — Builder to set the env var holding the API key.
+- system_prompt · function · L146-L155 — Builds the system prompt constraining Pi to act only as a cognitive engine returning structured JSON, forbidding file/db operations.
+- user_prompt · function · L158-L168 — Builds the user prompt with step type, goal, prior output, and serialized world snapshot for the engine to reason over.
+- parse_decision · function · L171-L212 — Parses pi's JSON output into a Decision, with best-effort fallback (extract text, default confidence 0.5, collect refs) when the model doesn't return strict JSON.
+- name · function · L217-L219 — PiAgentEngine reports its name as 'pi'.
+- health · function · L221-L223 — PiAgentEngine health check probes whether the pi binary exists in PATH.
+- reason · function · L225-L283 — Spawns the pi process with tools disabled, injects provider/model/api-key, enforces timeout, and maps every failure (missing binary, spawn error, timeout, non-zero exit) to AgentError::Unavailable.
+- which_pi · function · L287-L305 — Locates the pi executable via PI_BIN env var or PATH search, with Windows .exe compatibility.
+- extract_text · function · L308-L313 — Extracts readable text from pi output, unwrapping JSON if present else returning raw trimmed text.
+- strip_code_fence · function · L316-L325 — Strips ```json / ``` code fences that LLMs commonly wrap around JSON so it can be parsed.
+- extract_text_from_value · function · L328-L350 — Drills into a parsed JSON value to find reasoning text across string, reasoning/content/message/text keys, or concatenated message contents.
+- collect_refs · function · L353-L359 — Collects all object ids from the world snapshot as fallback object_refs.

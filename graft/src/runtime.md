@@ -1,0 +1,47 @@
+# src/runtime.rs · [[learn-permission-invariant]] [[runtime-kernel-observability]]
+
+- TraceKind · enum · L19-L22 — Enum distinguishing world events (object CRUD) from cognitive events (agent reasoning), serialized as strings.
+- as_str · function · L25-L30 — Maps TraceKind variant to its string tag for serialization.
+- Err · type · L34-L34 — String error type for TraceKind parsing failures.
+- from_str · function · L35-L41 — Parses a string into a TraceKind, rejecting unknown kinds with an error.
+- TraceEvent · struct · L46-L59 — Unified event struct for world and cognitive traces, carrying object_refs as the explainability anchor.
+- TRACE_SEQ · constant · L61-L61 — Atomic counter ensuring unique trace IDs across concurrent event creation.
+- now_ts · function · L63-L68 — Produces a microsecond-precision timestamp string for event ordering.
+- new_trace_id · function · L70-L76 — Generates a unique trace ID combining timestamp and atomic sequence counter.
+- world · function · L80-L82 — Convenience constructor for a single-object world event (ObjectCreated/Updated/Deleted).
+- world_with_refs · function · L86-L100 — Builds a world event binding multiple object refs (e.g. relation src/dst), enforcing non-empty refs.
+- EventBus · struct · L104-L106 — Minimal broadcast pub/sub bus for trace events, decoupling persistence from subscribers.
+- default · function · L109-L111 — Default constructor delegating to EventBus::new.
+- new · function · L115-L118 — Creates a broadcast channel with capacity 1024 for event distribution.
+- publish · function · L120-L122 — Sends an event to all subscribers, dropping it if receivers are full so persistence is never blocked.
+- subscribe · function · L124-L126 — Registers a new subscriber that only receives events published after subscription.
+- RuntimeKernel · struct · L131-L134 — Runtime kernel tying LibSQLStorage and EventBus together so every object CRUD persists and publishes a trace.
+- new · function · L137-L142 — Constructs the kernel with a storage handle and a fresh event bus.
+- event_bus · function · L144-L146 — Exposes the event bus for external subscription.
+- storage · function · L150-L152 — Clones the storage handle so serve can reuse the same libSQL connection for auth/session providers.
+- create_object · function · L154-L163 — Persists a new object then emits an ObjectCreated world trace event.
+- update_object · function · L165-L170 — Persists an object update then emits an ObjectUpdated world trace event.
+- get_object · function · L173-L175 — Reads a single object by semantic ID for planner idempotency checks.
+- delete_object · function · L177-L181 — Deletes an object then emits an ObjectDeleted world trace event.
+- emit · function · L184-L188 — Core write-then-publish path: appends trace to storage first, then broadcasts, guaranteeing write/publish consistency.
+- emit_cognitive · function · L193-L218 — Builds and emits a cognitive trace event bound to run/agent/object_refs, persisted and published like world events.
+- list_events · function · L221-L223 — Queries trace events by filter for timeline and WS reconnect catch-up.
+- get_trace · function · L226-L228 — Fetches a single trace event by ID, returning None when missing.
+- list_world_events · function · L231-L233 — Lists all persisted world events for the oaip event list command.
+- snapshot_world · function · L236-L248 — Builds a minimal world-model snapshot of all objects and relations as the cognitive engine's context.
+- query_objects · function · L251-L256 — Lists objects filtered by type for the oaip object list command.
+- link_relation · function · L261-L277 — Creates a relation edge and emits a RelationLinked world event binding both endpoint refs.
+- neighbors · function · L280-L282 — Queries all outgoing edges from a given source object.
+- query_relations · function · L285-L290 — Queries all relation edges of a given edge type.
+- emit_domain_event · function · L293-L301 — Emits a domain business event (e.g. PaymentLate) as a world trace event through the bus.
+- record_memory · function · L306-L312 — Upserts a memory record with label and payload, accumulating hits.
+- recall_memory · function · L315-L320 — Recalls a single memory by label.
+- recall_all · function · L323-L325 — Recalls all memories ordered by hits descending.
+- run_evolution · function · L334-L394 — Runs one evolution round: mines patterns from memories, proposes/validates, and persists only validated knowledge while revoking stale ones.
+- evolution_state · function · L397-L403 — Reads the current aggregated evolution state for HTTP API/UI.
+- revoke_learned · function · L406-L408 — Deletes a LearnedKnowledge entry idempotently, honoring revocable commitments.
+- save_learned · function · L413-L418 — Persists a LearnedKnowledge entry, used by tests/external drivers and internally by run_evolution.
+- set_learned_auto_approve · function · L422-L428 — Toggles a LearnedKnowledge's auto-approve eligibility; disabling reverts the action to human approval.
+- record_approval_audit · function · L431-L442 — Writes an auto-approval audit entry traceable to a LearnedKnowledge and run.
+- list_approval_audit · function · L445-L450 — Lists auto-approval audit entries, optionally filtered by LearnedKnowledge.
+- count_action_failed · function · L453-L455 — Counts historical ActionFailed events for an action, feeding the REQ-018 no-failure gate.
