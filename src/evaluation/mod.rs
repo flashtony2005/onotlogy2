@@ -252,6 +252,10 @@ impl EvaluationReducer {
 
     // ── EfficiencyReducer（客观）：worker.completed.duration_ms vs 时间预算 ──
     fn efficiency(&self, events: &[SessionEvent], task: &TaskDefinition) -> Score {
+        // 无预算 → 未知（Unknown ≠ 0：0 分是"差"，未知是"不知道"）
+        if task.time_budget_secs <= 0.0 {
+            return Score::unknown();
+        }
         let completed: Vec<&SessionEvent> = events
             .iter()
             .filter(|e| e.event_type == EventType::WorkerCompleted)

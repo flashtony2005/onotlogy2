@@ -25,6 +25,26 @@ pub fn claude_worker(command: Option<&str>) -> ProcessWorker {
     ProcessWorker::new(m, command.unwrap_or("claude"))
 }
 
+/// DeepSeek Harness Worker 适配器壳（Phase 11D：Harness 是 Worker，不是内核）。
+/// 经 Process 协议接入（MCP/HTTP 为可选接入协议）；command 可配置为
+/// deepseek-harness CLI / 包装脚本；未安装时由调用方提供替代命令。
+pub fn deepseek_worker(command: Option<&str>) -> ProcessWorker {
+    let mut m = super::manifest::WorkerManifest::new("deepseek-harness", "agent")
+        .with_capabilities(&[
+            "code.read",
+            "code.write",
+            "code.test",
+            "code.search",
+            "shell.execute",
+        ])
+        .with_quality(0.9)
+        .with_risk(3)
+        .with_trust(0.9)
+        .with_availability("local");
+    m.execution = ExecutionProtocol::Process;
+    ProcessWorker::new(m, command.unwrap_or("deepseek"))
+}
+
 /// 便捷断言（防未使用）。
 #[allow(dead_code)]
 fn _is_worker(w: &ProcessWorker) -> bool {

@@ -38,6 +38,10 @@ cargo build --release
 # 带声明式动作跑 Agent（默认 ODL=examples/crm.odl）
 ./target/release/oaip agent run "reduce churn" --auto-approve
 
+# Worker ABI（Phase 11D）：Thinker 制定计划，Worker 执行——OpenAIP-OS 不亲自干活
+# 预置 echo/git/codex/claude/deepseek Worker；shell.execute/code.write 需审批（fail-closed）
+./target/release/oaip worker run text.echo,code.test --input '{"suite":"unit"}' --task fix-bug
+
 # 启动观察服务（UI + REST + WS）
 export WB_BOOTSTRAP_ADMIN_USER=admin
 export WB_BOOTSTRAP_ADMIN_PWD='change-me'

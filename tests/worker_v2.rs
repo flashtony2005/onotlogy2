@@ -86,7 +86,7 @@ async fn tc_w3_router_selection() {
     let policy = WorkerPolicy::new().allow("code.write");
     let sel: SelectedWorker = router.route(&reg, "code.write", &policy).expect("路由成功");
     assert_eq!(sel.worker_id, "worker-b", "质量优先");
-    assert!(sel.reason.contains("quality"), "路由理由可解释");
+    assert!(sel.reason.contains("score"), "路由理由可解释");
 
     // 显式指定
     let router2 = WorkerRouter::new(RouterCriteria {
@@ -355,4 +355,253 @@ async fn tc_w5_mcp_worker_tools_call() {
             .unwrap_or("")
             .contains("mcp.tool")
     );
+}
+
+// ── W6：Orchestrator（Phase 11D：Worker ABI 进入运行热路径）───────────
+#[tokio::test]
+async fn tc_w6_orchestrator_plan() {
+    use openaip_os::worker::orchestrator::{WorkerOrchestrator, WorkerTask};
+    use openaip_os::worker::router::WorkerRouter;
+
+    let mut registry = WorkerRegistry::new();
+    registry
+        .register(Box::new(echo_worker("echo", &["text.echo", "code.test"])))
+        .unwrap();
+    let policy = WorkerPolicy::new().allow("text.echo").allow("code.test");
+    let router = WorkerRouter::new(RouterCriteria::default());
+
+    let mut orch = WorkerOrchestrator::new(&registry, &policy, router);
+    let tasks = vec![
+        WorkerTask::new("text.echo", json!({ "msg": "hi" })),
+        WorkerTask::new("code.test", json!({ "suite": "unit" })),
+    ];
+    let result = orch.run_plan(&tasks).await;
+    assert!(result.all_ok, "计划全绿");
+    assert_eq!(result.outcomes.len(), 2);
+    assert!(
+        result
+            .outcomes
+            .iter()
+            .all(|o| o.status == openaip_os::TaskStatus::Completed)
+    );
+    assert!(
+        result
+            .outcomes
+            .iter()
+            .all(|o| o.worker_id.as_deref() == Some("echo"))
+    );
+    assert_eq!(result.success_rate(), 1.0);
+
+    // 事件流（事实源）：capability.selected → policy.checked → worker.selected/started/completed
+    let events = orch.session_log().events();
+    let types: Vec<&str> = events.iter().map(|e| e.event_type.as_str()).collect();
+    assert!(types.contains(&"capability.selected"));
+    assert!(types.contains(&"policy.checked"));
+    assert!(types.contains(&"worker.selected"));
+    assert!(types.contains(&"worker.started"));
+    assert!(types.contains(&"worker.completed"));
+    // 事件可回放（事实源不可变）
+    assert_eq!(events.len(), orch.session_log().events().len());
+}
+
+// ── W7：Orchestrator 策略闸门（Worker ≠ Authority）──────────────────
+#[tokio::test]
+async fn tc_w7_orchestrator_policy_gates() {
+    use openaip_os::worker::orchestrator::{WorkerOrchestrator, WorkerTask};
+    use openaip_os::worker::router::WorkerRouter;
+
+    let mut registry = WorkerRegistry::new();
+    registry
+        .register(Box::new(echo_worker(
+            "echo",
+            &["text.echo", "code.write", "shell.execute"],
+        )))
+        .unwrap();
+    // fail-closed：text.echo allow；code.write require_approval；shell.execute 未配置 → Deny
+    // fail-closed：未配置 = Deny；策略允许但无候选 = NoWorker
+    let policy = WorkerPolicy::new()
+        .allow("text.echo")
+        .allow("allowed.but.noworker")
+        .require_approval("code.write");
+    let router = WorkerRouter::new(RouterCriteria::default());
+    let mut orch = WorkerOrchestrator::new(&registry, &policy, router);
+    let result = orch
+        .run_plan(&[
+            WorkerTask::new("text.echo", json!({})),
+            WorkerTask::new("code.write", json!({})),
+            WorkerTask::new("shell.execute", json!({})),
+            WorkerTask::new("allowed.but.noworker", json!({})),
+        ])
+        .await;
+    assert!(!result.all_ok);
+    assert_eq!(result.outcomes[0].status, openaip_os::TaskStatus::Completed);
+    assert_eq!(
+        result.outcomes[1].status,
+        openaip_os::TaskStatus::NeedsApproval
+    );
+    assert_eq!(
+        result.outcomes[2].status,
+        openaip_os::TaskStatus::Denied,
+        "fail-closed：未配置 = Deny"
+    );
+    assert_eq!(
+        result.outcomes[3].status,
+        openaip_os::TaskStatus::NoWorker,
+        "允许但无候选 = NoWorker"
+    );
+    // 被闸门拦下的步骤不产生 worker 执行事件
+    let ev_types: Vec<&str> = orch
+        .session_log()
+        .events()
+        .iter()
+        .map(|e| e.event_type.as_str())
+        .collect();
+    assert_eq!(
+        ev_types.iter().filter(|t| **t == "worker.started").count(),
+        1,
+        "只有 allow 的步骤真正执行"
+    );
+}
+
+// ── W8：Orchestrator → Evaluation 端到端（Phase 11A 闭环）────────────
+#[tokio::test]
+async fn tc_w8_orchestrator_eval_end_to_end() {
+    use openaip_os::evaluation::{EvaluationReducer, TaskDefinition};
+    use openaip_os::session::event::EventType;
+    use openaip_os::worker::orchestrator::{WorkerOrchestrator, WorkerTask};
+    use openaip_os::worker::router::WorkerRouter;
+
+    let storage = openaip_os::storage::LibSQLStorage::open(":memory:")
+        .await
+        .unwrap();
+    let mut registry = WorkerRegistry::new();
+    registry
+        .register(Box::new(echo_worker("echo", &["text.echo", "code.test"])))
+        .unwrap();
+    let policy = WorkerPolicy::new().allow("text.echo").allow("code.test");
+    let router = WorkerRouter::new(RouterCriteria::default());
+    let mut orch = WorkerOrchestrator::new(&registry, &policy, router);
+    let result = orch
+        .run_plan(&[
+            WorkerTask::new("text.echo", json!({ "msg": "a" })),
+            WorkerTask::new("code.test", json!({ "suite": "unit" })),
+        ])
+        .await;
+    assert!(result.all_ok);
+
+    // RunEnd → Evaluation：worker.* 真实事件 → 六维评测 → wb_evaluation
+    orch.session_log().append(
+        EventType::SessionCompleted,
+        json!({ "run_id": result.run_id }),
+    );
+    let task = TaskDefinition {
+        task_id: "w-e2e".into(),
+        expected_relations: vec![],
+        expected_artifacts: vec![],
+        time_budget_secs: 10.0,
+    };
+    let run_id = result.run_id.clone();
+    let eval = openaip_os::on_run_end(
+        orch.session_log(),
+        &run_id,
+        &task,
+        &openaip_os::EvaluationPolicy::default(),
+        &storage,
+    )
+    .await
+    .unwrap();
+    // 真实 worker 事件 → 客观维度全部可得（此前 V1 planner 路径全是 unknowns）
+    assert_eq!(eval.reliability.value, Some(1.0), "无失败 → 可靠");
+    assert_eq!(eval.policy_compliance.value, Some(1.0), "allow 链 → 合规");
+    assert_eq!(eval.efficiency.value, Some(1.0), "echo 毫秒级 ≪ 10s 预算");
+    assert!(
+        eval.correctness.is_unknown(),
+        "无测试证据 → 未知（Unknown ≠ Success）"
+    );
+    assert_eq!(
+        eval.unknowns().len(),
+        3,
+        "correctness/completeness/output_quality"
+    );
+
+    // 可回放：同一事件流重算一致
+    let events: Vec<_> = orch.session_log().events().to_vec();
+    let replay = EvaluationReducer::default().evaluate(&events, &run_id, &task);
+    assert_eq!(replay, eval);
+
+    // wb_evaluation 可查询
+    let loaded = storage
+        .list_evaluations(Some(&run_id), None, 10)
+        .await
+        .unwrap();
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].aggregate, eval.aggregate);
+}
+
+// ── W9：Router 风险过滤 + 信任评分（Capability-aware Registry）──────
+#[tokio::test]
+async fn tc_w9_router_risk_and_trust() {
+    use openaip_os::worker::process::ProcessWorker;
+    use openaip_os::worker::router::WorkerRouter;
+
+    let mut registry = WorkerRegistry::new();
+    // 同质量候选：low-trust（trust 0.5）vs high-trust（trust 1.0）
+    let mut low = openaip_os::worker::manifest::WorkerManifest::new("low-trust", "agent")
+        .with_capabilities(&["code.read"])
+        .with_quality(1.0)
+        .with_trust(0.5);
+    low.execution = ExecutionProtocol::Process;
+    let mut high = openaip_os::worker::manifest::WorkerManifest::new("high-trust", "agent")
+        .with_capabilities(&["code.read"])
+        .with_quality(0.9)
+        .with_trust(1.0);
+    high.execution = ExecutionProtocol::Process;
+    registry
+        .register(Box::new(ProcessWorker::new(low, "echo")))
+        .unwrap();
+    registry
+        .register(Box::new(ProcessWorker::new(high, "echo")))
+        .unwrap();
+
+    let router = WorkerRouter::new(RouterCriteria::default());
+    let sel = router
+        .route(
+            &registry,
+            "code.read",
+            &WorkerPolicy::new().allow("code.read"),
+        )
+        .unwrap();
+    assert_eq!(
+        sel.worker_id, "high-trust",
+        "评分 = quality × trust：0.9 > 0.5"
+    );
+
+    // 风险过滤：risk=9 的候选在 max_risk=5 下被排除
+    let mut risky = openaip_os::worker::manifest::WorkerManifest::new("risky", "agent")
+        .with_capabilities(&["db.delete"])
+        .with_quality(1.0)
+        .with_risk(9);
+    risky.execution = ExecutionProtocol::Process;
+    registry
+        .register(Box::new(ProcessWorker::new(risky, "echo")))
+        .unwrap();
+    let strict = WorkerRouter::new(RouterCriteria {
+        max_risk: 5,
+        ..Default::default()
+    });
+    let r = strict.route(
+        &registry,
+        "db.delete",
+        &WorkerPolicy::new().allow("db.delete"),
+    );
+    assert!(r.is_err(), "高风险 worker 被策略性过滤（还有别的候选）");
+    let loose = WorkerRouter::new(RouterCriteria::default());
+    let sel2 = loose
+        .route(
+            &registry,
+            "db.delete",
+            &WorkerPolicy::new().allow("db.delete"),
+        )
+        .unwrap();
+    assert_eq!(sel2.worker_id, "risky");
 }

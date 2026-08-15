@@ -56,6 +56,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: AgentCmd,
     },
+    /// Worker ABI（Phase 11D）：Thinker 制定计划，Worker 执行——OpenAIP-OS 不亲自干活
+    Worker {
+        #[command(subcommand)]
+        cmd: WorkerCmd,
+    },
     /// 启动 Agent 观察服务（HTTP + WebSocket + 三层观察 UI）
     Serve {
         #[arg(long, default_value_t = 8080)]
@@ -104,6 +109,25 @@ enum AgentCmd {
         /// REQ-018 Evolution 第二阶段 AutoApprove：允许基于已验证 LearnedKnowledge 自动放行 require_approval 动作。默认 false → 等同 MVP。
         #[arg(long, default_value_t = false)]
         auto_approve_evolution: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorkerCmd {
+    /// 通过 Worker ABI 执行 capability 计划（Phase 11D Orchestrator）：
+    /// oaip worker run code.test,code.build —— Thinker 制定计划，Worker 执行。
+    Run {
+        /// capability 计划（逗号分隔；每个 capability 经 Router → Policy → Worker）
+        capabilities: String,
+        /// 单步输入 JSON（应用到每一步）
+        #[arg(long)]
+        input: Option<String>,
+        /// 任务 ID（评测聚合键，缺省用 run_id）
+        #[arg(long)]
+        task: Option<String>,
+        /// 是否自动评测（on_run_end → wb_evaluation；默认 true）
+        #[arg(long, default_value_t = true)]
+        evaluate: bool,
     },
 }
 
@@ -212,6 +236,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     odl.as_deref(),
                     auto_approve,
                     auto_approve_evolution,
+                )
+                .await?
+            }
+        },
+        Cmd::Worker { cmd } => match cmd {
+            WorkerCmd::Run {
+                capabilities,
+                input,
+                task,
+                evaluate,
+            } => {
+                cmd_worker_run(
+                    &cli.db,
+                    &capabilities,
+                    input.as_deref(),
+                    task.as_deref(),
+                    evaluate,
                 )
                 .await?
             }
@@ -523,6 +564,138 @@ async fn cmd_agent_run(
         }
         Ok(_) => {}
         Err(e) => println!("⚠️ 诊断失败（不影响运行结果）：{e}"),
+    }
+    Ok(())
+}
+
+/// Worker ABI 执行（Phase 11D）：capability 计划 → Router → Policy → Worker → Event Log → Evaluation。
+/// OpenAIP-OS 是 Thinker：只选择谁来做、怎么安全地做，不亲自执行。
+async fn cmd_worker_run(
+    db: &str,
+    capabilities: &str,
+    input_json: Option<&str>,
+    task_id: Option<&str>,
+    evaluate: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use openaip_os::worker::policy::WorkerPolicy;
+    use openaip_os::worker::registry::WorkerRegistry;
+    use openaip_os::worker::router::{RouterCriteria, WorkerRouter};
+    use openaip_os::worker::{adapters, orchestrator::WorkerOrchestrator};
+
+    let storage = openaip_os::storage::LibSQLStorage::open(db).await?;
+    let input: serde_json::Value = match input_json {
+        Some(s) => serde_json::from_str(s)?,
+        None => serde_json::json!({}),
+    };
+
+    // 预置 Worker（能力市场）：echo / git 真实 + codex / claude / deepseek 适配器壳
+    let mut registry = WorkerRegistry::new();
+    let _ = registry.register(Box::new(openaip_os::worker::process::ProcessWorker::new(
+        openaip_os::worker::manifest::WorkerManifest::new("echo", "cli")
+            .with_capabilities(&["text.echo"]),
+        "echo",
+    )));
+    let _ = registry.register(Box::new(openaip_os::worker::process::ProcessWorker::new(
+        openaip_os::worker::manifest::WorkerManifest::new("git", "cli")
+            .with_capabilities(&["git.version", "git.status", "git.diff"])
+            .with_quality(0.98),
+        "git",
+    )));
+    let _ = registry.register(Box::new(adapters::codex_worker(None)));
+    let _ = registry.register(Box::new(adapters::claude_worker(None)));
+    let _ = registry.register(Box::new(adapters::deepseek_worker(None)));
+
+    // Policy：fail-closed（未配置 = DENY）；高风险能力需审批——Worker ≠ Authority
+    let mut policy = WorkerPolicy::new();
+    for c in capabilities
+        .split(',')
+        .map(|c| c.trim())
+        .filter(|c| !c.is_empty())
+    {
+        match c {
+            "shell.execute" | "code.write" => {
+                policy = policy.require_approval(c);
+            }
+            _ => {
+                policy = policy.allow(c);
+            }
+        }
+    }
+
+    let router = WorkerRouter::new(RouterCriteria {
+        min_quality: 0.0,
+        max_cost: u32::MAX,
+        max_risk: 10,
+        explicit: None,
+    });
+
+    let tasks: Vec<openaip_os::worker::orchestrator::WorkerTask> = capabilities
+        .split(',')
+        .map(|c| c.trim())
+        .filter(|c| !c.is_empty())
+        .map(|c| openaip_os::worker::orchestrator::WorkerTask::new(c, input.clone()))
+        .collect();
+    if tasks.is_empty() {
+        println!("⚠️ 空计划：未指定 capability");
+        return Ok(());
+    }
+
+    let mut orch = WorkerOrchestrator::new(&registry, &policy, router);
+    let result = orch.run_plan(&tasks).await;
+    println!(
+        "🧠 Worker 计划执行：run_id={} all_ok={}",
+        result.run_id, result.all_ok
+    );
+    for o in &result.outcomes {
+        println!(
+            "   [{}] {} → {:?} (worker={:?}, {:.2}s)",
+            o.status.status_str(),
+            o.capability,
+            o.error.as_deref().unwrap_or(""),
+            o.worker_id,
+            o.duration_ms as f64 / 1000.0
+        );
+    }
+    println!(
+        "   success_rate={:.2} total_duration={:.2}s",
+        result.success_rate(),
+        result.total_duration_ms() as f64 / 1000.0
+    );
+
+    // Phase 11A：RunEnd → Evaluation（worker.* 真实事件 → 六维评测 → wb_evaluation）
+    if evaluate {
+        orch.session_log().append(
+            openaip_os::session::event::EventType::SessionCompleted,
+            serde_json::json!({ "run_id": result.run_id }),
+        );
+        let run_id = result.run_id.clone();
+        let task = openaip_os::evaluation::TaskDefinition {
+            task_id: task_id.unwrap_or(&run_id).to_string(),
+            expected_relations: vec![],
+            expected_artifacts: vec![],
+            time_budget_secs: 0.0,
+        };
+        match openaip_os::on_run_end(
+            orch.session_log(),
+            &run_id,
+            &task,
+            &openaip_os::EvaluationPolicy::default(),
+            &storage,
+        )
+        .await
+        {
+            Ok(r) => {
+                println!(
+                    "📊 Phase 11 评测：aggregate={:.3} correctness={:?} efficiency={:?} reliability={:?} policy_compliance={:?}",
+                    r.aggregate,
+                    r.correctness.value,
+                    r.efficiency.value,
+                    r.reliability.value,
+                    r.policy_compliance.value
+                );
+            }
+            Err(e) => println!("⚠️ 评测失败（不影响运行结果）：{e}"),
+        }
     }
     Ok(())
 }

@@ -352,6 +352,12 @@ fn bootstrap_v2_workers(state: &Arc<AppState>) {
     let _ = reg.register(Box::new(codex_worker(Some(&codex_cmd))));
     let claude_cmd = std::env::var("OPENAI_OS_CLAUDE_CMD").unwrap_or_else(|_| "claude".into());
     let _ = reg.register(Box::new(claude_worker(Some(&claude_cmd))));
+    // DeepSeek Harness 适配器壳（Phase 11D：Harness 是 Worker，不是内核）
+    let deepseek_cmd =
+        std::env::var("OPENAI_OS_DEEPSEEK_CMD").unwrap_or_else(|_| "deepseek".into());
+    let _ = reg.register(Box::new(crate::worker::adapters::deepseek_worker(Some(
+        &deepseek_cmd,
+    ))));
 }
 
 /// 重启恢复（V0.7 持久化）：重建 runs 内存映射；崩溃残留 Running→Interrupted、orphan Pending→Expired

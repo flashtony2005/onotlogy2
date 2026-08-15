@@ -11,6 +11,7 @@ pub mod exec;
 pub mod http;
 pub mod manifest;
 pub mod mcp;
+pub mod orchestrator;
 pub mod policy;
 pub mod process;
 pub mod registry;

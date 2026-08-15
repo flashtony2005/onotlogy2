@@ -31,6 +31,12 @@ pub struct WorkerManifest {
     pub cost: u32,
     pub latency_ms: u32,
     pub quality: f64,
+    /// 风险等级（1-10；Capability-aware Registry，Phase 11D）。
+    pub risk: u32,
+    /// 信任度（0..1；Router 评分 = quality × trust）。
+    pub trust: f64,
+    /// 可用性：local / remote / cloud（候选过滤依据之一）。
+    pub availability: String,
 }
 
 impl WorkerManifest {
@@ -45,6 +51,9 @@ impl WorkerManifest {
             cost: 1,
             latency_ms: 100,
             quality: 0.9,
+            risk: 1,
+            trust: 1.0,
+            availability: "local".to_string(),
         }
     }
 
@@ -55,6 +64,21 @@ impl WorkerManifest {
 
     pub fn with_quality(mut self, q: f64) -> Self {
         self.quality = q;
+        self
+    }
+
+    pub fn with_risk(mut self, risk: u32) -> Self {
+        self.risk = risk;
+        self
+    }
+
+    pub fn with_trust(mut self, trust: f64) -> Self {
+        self.trust = trust;
+        self
+    }
+
+    pub fn with_availability(mut self, availability: &str) -> Self {
+        self.availability = availability.to_string();
         self
     }
 

@@ -81,3 +81,6 @@ pub use storage::{
 };
 pub use tool_backend::{ActionHook, NullBackend, ToolBackend, ToolError, ToolOutcome};
 pub use trace::{RunTimeline, TraceEventDto, View};
+pub use worker::orchestrator::{
+    TaskOutcome, TaskStatus, WorkerOrchestrator, WorkerRunResult, WorkerTask,
+};

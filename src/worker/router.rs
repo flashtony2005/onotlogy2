@@ -11,6 +11,8 @@ pub struct RouterCriteria {
     pub explicit: Option<String>,
     pub min_quality: f64,
     pub max_cost: u32,
+    /// 最大风险等级（1-10；超限候选被过滤，Phase 11D）。
+    pub max_risk: u32,
 }
 
 impl Default for RouterCriteria {
@@ -19,6 +21,7 @@ impl Default for RouterCriteria {
             explicit: None,
             min_quality: 0.0,
             max_cost: u32::MAX,
+            max_risk: 10,
         }
     }
 }
@@ -31,7 +34,8 @@ pub struct SelectedWorker {
     pub reason: String,
 }
 
-/// Worker Router：Capability + Policy + Quality/Cost/Latency → Worker。
+/// Worker Router：Capability + Policy + Quality/Cost/Latency/Risk/Trust → Worker。
+#[derive(Clone)]
 pub struct WorkerRouter {
     pub criteria: RouterCriteria,
 }
@@ -73,17 +77,18 @@ impl WorkerRouter {
                 "{capability} 无显式 worker {id}"
             )));
         }
-        // 4) 评分：quality 降序（同分 cost 升序、latency 升序）
+        // 4) 评分：quality × trust 降序（risk 超限过滤；同分 cost 升序、latency 升序）
         let best = candidates
             .iter()
             .filter(|w| {
                 w.manifest().quality >= self.criteria.min_quality
                     && w.manifest().cost <= self.criteria.max_cost
+                    && w.manifest().risk <= self.criteria.max_risk
             })
             .max_by(|a, b| {
-                a.manifest()
-                    .quality
-                    .partial_cmp(&b.manifest().quality)
+                let sa = a.manifest().quality * a.manifest().trust;
+                let sb = b.manifest().quality * b.manifest().trust;
+                sa.partial_cmp(&sb)
                     .unwrap_or(std::cmp::Ordering::Equal)
                     .then_with(|| b.manifest().cost.cmp(&a.manifest().cost))
                     .then_with(|| b.manifest().latency_ms.cmp(&a.manifest().latency_ms))
@@ -92,7 +97,11 @@ impl WorkerRouter {
         Ok(SelectedWorker {
             worker_id: best.manifest().id.clone(),
             capability: capability.to_string(),
-            reason: format!("highest quality (q={})", best.manifest().quality),
+            reason: format!(
+                "highest score (q={} × t={})",
+                best.manifest().quality,
+                best.manifest().trust
+            ),
         })
     }
 }
