@@ -163,7 +163,8 @@ export default function App() {
   const reloadMemoryDebounced = useMemo(() => debounce(() => void reloadMemory(), 300), [])
   const reloadTasksDebounced = useMemo(() => debounce(() => void reloadTasks(), 300), [])
 
-  useTraceStream(runId, {
+  // WS 订阅：有 run 时跟 run 流；无 run 时连 agent 流（登录即连接，run 启动后事件实时到达）
+  useTraceStream(runId ?? agentId, {
     onEvent: (e) => {
       setEvents((prev) => (prev.some((p) => p.id === e.id) ? prev : [...prev, e]))
       // 记忆沉淀/召回事件 → 实时刷新 Memory 视图（hits 累加可见）
