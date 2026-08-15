@@ -872,7 +872,7 @@ pre {
   height: 100%;
 }
 .sidebar {
-  width: 192px;
+  width: 230px;
   flex: none;
   display: flex;
   flex-direction: column;
