@@ -17,11 +17,23 @@ pub(crate) async fn serve_static(State(st): State<Arc<AppState>>, uri: OriginalU
     };
     let full = format!("{}/{}", st.static_dir, rel);
     match tokio::fs::read(&full).await {
-        Ok(bytes) => (
-            [(axum::http::header::CONTENT_TYPE, content_type(&full))],
-            bytes,
-        )
-            .into_response(),
+        Ok(bytes) => {
+            // 缓存策略：index.html 完全不缓存（no-store——HTML 是入口，必须每次最新）；
+            // 带 hash 的资源（assets/*）长期缓存（immutable——文件名即指纹）。
+            let cache = if rel.starts_with("assets/") {
+                "public, max-age=31536000, immutable"
+            } else {
+                "no-store, no-cache, must-revalidate"
+            };
+            (
+                [
+                    (axum::http::header::CONTENT_TYPE, content_type(&full)),
+                    (axum::http::header::CACHE_CONTROL, cache.to_string()),
+                ],
+                bytes,
+            )
+                .into_response()
+        }
         Err(_) => {
             let idx = format!("{}/index.html", st.static_dir);
             match tokio::fs::read(&idx).await {

@@ -2093,40 +2093,81 @@ button:active {
     0 0 0 1px rgba(241, 163, 60, 0.25),
     0 0 18px rgba(241, 163, 60, 0.15);
 }
-/* 登录按钮：流光扫过 + 辉光 */
+/* 登录按钮：科技感强化——呼吸辉光 + 强流光 + 文字发光 + 顶部高光 */
 .login-btn {
   position: relative;
   overflow: hidden;
   background: linear-gradient(180deg, #f8b45f 0%, var(--accent) 100%);
   border-radius: 4px;
+  font-size: 14px;
+  padding: 12px 0;
+  text-shadow:
+    0 0 10px rgba(255, 255, 255, 0.35),
+    0 1px 2px rgba(0, 0, 0, 0.3);
+  animation: btn-breathe 2.2s ease-in-out infinite;
 }
-.login-btn::after {
+@keyframes btn-breathe {
+  0%,
+  100% {
+    box-shadow:
+      0 0 10px rgba(241, 163, 60, 0.3),
+      0 2px 8px rgba(0, 0, 0, 0.45);
+  }
+  50% {
+    box-shadow:
+      0 0 28px rgba(241, 163, 60, 0.7),
+      0 2px 8px rgba(0, 0, 0, 0.45);
+  }
+}
+/* 顶部高光细线（扫描条） */
+.login-btn::before {
   content: '';
   position: absolute;
   top: 0;
-  left: -80%;
-  width: 60%;
-  height: 100%;
+  left: 10%;
+  right: 10%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.9), transparent);
+  animation: scan-sweep 2s ease-in-out infinite;
+  pointer-events: none;
+}
+/* 强流光扫过 */
+.login-btn::after {
+  content: '';
+  position: absolute;
+  top: -10%;
+  left: -110%;
+  width: 80%;
+  height: 120%;
   background: linear-gradient(
     105deg,
     transparent 0%,
-    rgba(255, 255, 255, 0.45) 50%,
+    rgba(255, 255, 255, 0.65) 50%,
     transparent 100%
   );
   transform: skewX(-20deg);
-  animation: shine-sweep 2.6s ease-in-out infinite;
+  animation: shine-sweep 1.8s ease-in-out infinite;
+  pointer-events: none;
 }
 @keyframes shine-sweep {
   0% {
-    left: -80%;
+    left: -110%;
   }
   55% {
-    left: 130%;
+    left: 140%;
   }
   100% {
-    left: 130%;
+    left: 140%;
   }
 }
-.login-btn:disabled::after {
+.login-btn:hover:not(:disabled) {
+  filter: brightness(1.12);
+  transform: translateY(-1px);
+}
+.login-btn:disabled::after,
+.login-btn:disabled::before {
   display: none;
+}
+.login-btn:disabled {
+  animation: none;
 }
