@@ -23,6 +23,8 @@ pub enum EventType {
     AssistantChunk,
     AssistantMessage,
     ContextInjected,
+    /// Phase 11（Domain Agent Evolution）：本次运行选择了哪些 Context Asset。
+    ContextAssembled,
     SkillSelected,
     SkillStarted,
     SkillCompleted,
@@ -43,6 +45,8 @@ pub enum EventType {
     AiResponse,
     ApprovalRequested,
     ApprovalResolved,
+    /// Phase 11：Human / LLM 判断信号（Fact/Judgment 分离——judge 本身成为可审计事实）。
+    JudgeSubmitted,
     ArtifactCreated,
     CodeChanged,
     TestStarted,
@@ -61,6 +65,7 @@ impl EventType {
             EventType::AssistantChunk => "assistant.chunk",
             EventType::AssistantMessage => "assistant.message",
             EventType::ContextInjected => "context.injected",
+            EventType::ContextAssembled => "context.assembled",
             EventType::SkillSelected => "skill.selected",
             EventType::SkillStarted => "skill.started",
             EventType::SkillCompleted => "skill.completed",
@@ -80,6 +85,7 @@ impl EventType {
             EventType::AiResponse => "ai.response",
             EventType::ApprovalRequested => "approval.requested",
             EventType::ApprovalResolved => "approval.resolved",
+            EventType::JudgeSubmitted => "judge.submitted",
             EventType::ArtifactCreated => "artifact.created",
             EventType::CodeChanged => "code.changed",
             EventType::TestStarted => "test.started",

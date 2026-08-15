@@ -222,11 +222,12 @@ Runtime: T1→Codex T2→Codex T3→Maven T4→Report
 ```
 Phase 9  Skill Intelligence    第三方 Skill → AI 解析 → IR → Capability → Registry
 Phase 10 Universal Worker Runtime  Skill → Capability → Worker Router → Codex/Claude/CLI/MCP/API → 执行 → Evidence → Event Log
-Phase 11 Software Engineering Ontology  Requirement → Project → Code → Test → Issue → Change → Review → Release
+Phase 11 Domain Agent Evolution Runtime  Event Log → Evaluation → Experience → Mutation → Benchmark → Promotion → Skill/Context/Router → Next Run
+Phase 12 Software Engineering Ontology  Requirement → Project → Code → Test → Issue → Change → Review → Release（第一个领域实例）
 ```
 
-Phase 11 做软件工程 Ontology 时，Codex 和 Claude Code 已经是现成的 Worker，
-可直接被 Ontology Runtime 调度。
+Phase 11（见 `domain-agent-evolution-v11.md`）做 Agent Evolution 时，Codex 和 Claude Code 已经是现成的 Worker，
+可直接被 Ontology Runtime 调度；Software Engineering Ontology 降为第一个领域实例（Phase 12）。
 
 ## 14. 实现规划
 

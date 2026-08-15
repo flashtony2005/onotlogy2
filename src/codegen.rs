@@ -195,6 +195,45 @@ CREATE TABLE IF NOT EXISTS wb_approval_audit (
   created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Phase 11 Domain Agent Evolution（WB-DOC-03-V11.0）：Evaluation = Pure Function(Event Log)。
+-- wb_evaluation 是 Event Log 的**派生结果**（可删表经 Reducer 重建），不是事实源。
+CREATE TABLE IF NOT EXISTS wb_evaluation (
+  id                 TEXT PRIMARY KEY,   -- eval.<run_id>（幂等 upsert）
+  run_id             TEXT NOT NULL,
+  task_id            TEXT NOT NULL,
+  skill_version      TEXT,               -- 执行所用 Skill 版本（可追溯）
+  correctness        REAL,
+  completeness       REAL,
+  efficiency         REAL,
+  reliability        REAL,
+  policy_compliance  REAL,
+  output_quality     REAL,
+  aggregate_score    REAL NOT NULL DEFAULT 0.0,  -- 派生视图：已出现维度均值
+  failure_modes      TEXT NOT NULL DEFAULT '[]', -- worker.failed error 去重排序
+  evaluator_version  TEXT NOT NULL,
+  created_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_eval_run ON wb_evaluation(run_id);
+CREATE INDEX IF NOT EXISTS idx_eval_task ON wb_evaluation(task_id);
+
+-- wb_mutation：Skill 结构化变更提案 + 配对 Benchmark 结果（失败保留，不删除）。
+CREATE TABLE IF NOT EXISTS wb_mutation (
+  id                 TEXT PRIMARY KEY,   -- mutation.<target>.<candidate_version>（幂等）
+  target_asset       TEXT NOT NULL,
+  source_version     TEXT NOT NULL,
+  candidate_version  TEXT NOT NULL,
+  root_cause         TEXT NOT NULL,
+  evidence           TEXT NOT NULL DEFAULT '[]',  -- run_ids JSON
+  delta              TEXT NOT NULL,               -- 结构化 Delta JSON（白名单操作）
+  validation_result  TEXT,                        -- ok / 错误信息
+  benchmark_result   TEXT,                        -- BenchmarkVerdict JSON
+  status             TEXT NOT NULL,               -- PROPOSED/VALIDATED/BENCHMARKING/EXPERIMENTAL/ACTIVE/REJECTED/ARCHIVED
+  promotion_reason   TEXT,
+  created_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_mutation_status ON wb_mutation(status);
+CREATE INDEX IF NOT EXISTS idx_mutation_target ON wb_mutation(target_asset);
+
 -- V0.7 认证与授权（P0 风险「无认证」）：本地账号 + 不透明会话令牌。
 -- 不依赖外键（libsql 默认 foreign_keys=OFF）；用户禁用时由应用层级联清理会话（delete_sessions_for_user）。
 CREATE TABLE IF NOT EXISTS wb_user (

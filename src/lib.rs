@@ -19,10 +19,12 @@ pub mod auth;
 pub mod codegen;
 pub mod cognitive;
 pub mod compose;
+pub mod evaluation;
 pub mod evolution;
 pub mod evolution2;
 pub mod ir;
 pub mod kernel;
+pub mod mutation;
 pub mod odl;
 pub mod ontology;
 pub mod planner;
@@ -45,6 +47,9 @@ pub use auth::{
     AuthError, AuthUser, IdentityProvider, LocalIdentityProvider, Role, SessionStore, clamp_view,
 };
 pub use codegen::{CodegenOutput, ObjectDef, codegen};
+pub use evaluation::{
+    EVALUATOR_VERSION, EvaluationPolicy, EvaluationReducer, EvaluationResult, TaskDefinition,
+};
 pub use evolution::{
     EvolutionState, Experience, LearnedKnowledge, PATTERN_MIN_HITS, Pattern, Proposal,
     ProposalKind, ProposalStatus, VALIDATE_THRESHOLD,
@@ -52,6 +57,10 @@ pub use evolution::{
 pub use ir::{
     ActionDef, Clause, CompareOp, CreateEffect, FieldUpdate, ObjectType, OntologyIR, ParamDef,
     PolicyDef, PropertyDef, ScalarType, ValueExpr,
+};
+pub use mutation::{
+    BenchmarkConfig, BenchmarkMetric, BenchmarkVerdict, DEFAULT_MIN_EFFECT_SIZE, DEFAULT_MIN_RUNS,
+    MutationError, MutationProposal, MutationStatus, benchmark,
 };
 pub use odl::parse_odl;
 pub use planner::{

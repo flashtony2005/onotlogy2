@@ -7,6 +7,7 @@
 //! 模块拆分（长文件模块化）：核心类型/初始化在 `mod`，对象在 `objects`，关系在 `relations`，
 //! 事件在 `events`，记忆在 `memory`，演化在 `evolution`，运行态在 `runs`，账号会话在 `users`。
 
+pub mod evaluation;
 pub mod events;
 pub mod evolution;
 pub mod memory;
@@ -202,7 +203,7 @@ pub struct LibSQLStorage {
 
 /// 当前 schema 版本。每次 schema 变更（加列 / 改列名）递增；
 /// 旧库 open 时按 `MIGRATIONS` 顺序自动迁移（事务化），不再要求 `db reset`。
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 /// 版本化迁移注册表：`(from_version, sql)`，按版本升序执行；每步成功后推进
 /// `wb_meta.schema_version`。迁移在事务内执行（失败整体回滚，版本不推进，可安全重试）。
@@ -213,6 +214,45 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (
         1,
         "ALTER TABLE wb_learned ADD COLUMN auto_approve_enabled INTEGER NOT NULL DEFAULT 1",
+    ),
+    // V2 → V3：Phase 11 Domain Agent Evolution（WB-DOC-03-V11.0）。
+    // 新增 wb_evaluation（Event Log 派生结果，可重建）与 wb_mutation（提案 + Benchmark）。
+    (
+        2,
+        "CREATE TABLE IF NOT EXISTS wb_evaluation (
+  id                 TEXT PRIMARY KEY,
+  run_id             TEXT NOT NULL,
+  task_id            TEXT NOT NULL,
+  skill_version      TEXT,
+  correctness        REAL,
+  completeness       REAL,
+  efficiency         REAL,
+  reliability        REAL,
+  policy_compliance  REAL,
+  output_quality     REAL,
+  aggregate_score    REAL NOT NULL DEFAULT 0.0,
+  failure_modes      TEXT NOT NULL DEFAULT '[]',
+  evaluator_version  TEXT NOT NULL,
+  created_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_eval_run ON wb_evaluation(run_id);
+CREATE INDEX IF NOT EXISTS idx_eval_task ON wb_evaluation(task_id);
+CREATE TABLE IF NOT EXISTS wb_mutation (
+  id                 TEXT PRIMARY KEY,
+  target_asset       TEXT NOT NULL,
+  source_version     TEXT NOT NULL,
+  candidate_version  TEXT NOT NULL,
+  root_cause         TEXT NOT NULL,
+  evidence           TEXT NOT NULL DEFAULT '[]',
+  delta              TEXT NOT NULL,
+  validation_result  TEXT,
+  benchmark_result   TEXT,
+  status             TEXT NOT NULL,
+  promotion_reason   TEXT,
+  created_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_mutation_status ON wb_mutation(status);
+CREATE INDEX IF NOT EXISTS idx_mutation_target ON wb_mutation(target_asset);",
     ),
 ];
 

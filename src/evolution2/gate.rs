@@ -37,7 +37,7 @@ fn compensable(rev: Reversibility) -> bool {
 
 /// 7 条件 AND 判定（纯函数，E5 直接可测）。
 ///
-/// ```
+/// ```text
 /// EvolutionGate = Enabled ∧ Validated ∧ Confidence≥0.8 ∧ Success≥3
 ///               ∧ Failure=0 ∧ Compensable ∧ ¬Irreversible
 /// ```

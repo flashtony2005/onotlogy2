@@ -35,10 +35,13 @@ Skill 保持 **Provider Agnostic**。
 | 8 | Runtime | 怎么可靠执行 ✅ |
 | 9 | Skill Asset Compiler & Registry | 能力从哪里来 ✅（设计定稿） |
 | **10** | **Plugin & Capability Runtime** | **能力如何连接真实世界（本阶段）** |
-| 11 | Skill Composition & Planning | 多个能力如何组合完成目标 |
-| 12 | Skill Evaluation & Learning | 什么 Skill 更好 |
-| 13 | Skill Evolution | Skill 如何自我改进 |
-| 14 | Self-Evolving Agent | Agent 如何自主获得、组合、进化能力 |
+| **11** | **Domain Agent Evolution Runtime** | **Agent 如何越做越好（本阶段，设计定稿 ✅）** |
+| 12 | Software Engineering Ontology | 第一个领域实例：Requirement → Project → Code → Test → Review → Release |
+| 13 | Skill Composition & Planning | 多个能力如何组合完成目标（原 11 顺延） |
+| 14 | Self-Evolving Agent | Agent 如何自主获得、组合、进化能力（Evolution Loop 的自主化收束） |
+
+> 注：原 Phase 12（Skill Evaluation & Learning）、Phase 13（Skill Evolution）已并入
+> **Phase 11**（六维 Evaluation + Mutation Benchmark），见 `domain-agent-evolution-v11.md`。
 
 ## 2. 为什么是 Plugin System 而不是 Tool Registry
 

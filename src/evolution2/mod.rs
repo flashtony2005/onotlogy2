@@ -4,7 +4,7 @@
 //! > **Evolution learns from execution, but learning never becomes authority.**
 //!
 //! 三个不等式（代码与测试共同保证）：
-//! ```
+//! ```text
 //! Pattern ≠ Permission
 //! Pattern ≠ Policy
 //! Pattern ≠ Capability

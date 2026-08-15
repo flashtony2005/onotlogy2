@@ -36,6 +36,8 @@
 | wb_proposal | 进化提案 | Evolution 提案（Pattern→Proposal），状态 Proposed/Validated/Rejected，携带来源 pattern_label |
 | wb_learned | 沉淀知识 | Evolution 最终知识（仅 Validated 才沉淀），携来源 proposal_id 与 `auto_approve_enabled`（可撤销资格），**不修改 Policy、不绕过审批**（Learn≠Permission）；REQ-018 自动放行资格存于此 |
 | wb_approval_audit | 放行审计 | REQ-018 自动放行审计：每次自动放行/资格切换落库（decision=`auto_approve`/`auto_approve_enabled`/`revoke_disabled`），可追溯至 LearnedKnowledge + run |
+| wb_evaluation | 评测结果 | Phase 11 六维评测（correctness/completeness/efficiency/reliability/policy_compliance/output_quality + aggregate）；**Event Log 的派生结果**（可删表经 Evaluation Reducer 重建），不是事实源 |
+| wb_mutation | 进化提案 | Phase 11 Skill 结构化变更提案 + 配对 Benchmark（状态 PROPOSED/VALIDATED/BENCHMARKING/EXPERIMENTAL/ACTIVE/REJECTED/ARCHIVED）；失败保留不删除，全程可追溯 |
 
 ### 4.2 表结构示例：wb_user_account
 - 用途：
@@ -188,6 +190,50 @@
 | reason | text | 否 | - | 决策说明（如「5 道闸门全过」/「撤销自动放行资格」） | - |
 | created_at | text | 是 | CURRENT_TIMESTAMP | 创建时间 | - |
 
+### 4.11 表结构：wb_evaluation
+- 用途：Phase 11 六维评测结果（`WB-DOC-03-V11.0`）。**派生表**：Evaluation = Pure Function(Event Log)，删表可经 Evaluation Reducer 重建；Event Log 永远是 Source of Truth。
+- 主键：id（`eval.<run_id>` 幂等 upsert）
+- 唯一约束：无
+- 索引：idx_eval_run(run_id)、idx_eval_task(task_id)
+
+| 字段 | 类型 | 非空 | 默认 | 注释 | 枚举(若有) |
+|------|------|------|------|------|------------|
+| id | text | 是 | - | eval.\<run_id\>（幂等 upsert） | - |
+| run_id | text | 是 | - | 运行 ID（可追溯） | - |
+| task_id | text | 是 | - | 任务定义 ID | - |
+| skill_version | text | 否 | - | 执行所用 Skill 版本 | - |
+| correctness | real | 否 | - | 半客观：expected_relations + judge | - |
+| completeness | real | 否 | - | 半客观：产物/事件链 + judge | - |
+| efficiency | real | 否 | - | 客观：时间/cost | - |
+| reliability | real | 否 | - | 客观：failed/retry | - |
+| policy_compliance | real | 否 | - | 客观：approval 链 | - |
+| output_quality | real | 否 | - | 主观：judge.submitted | - |
+| aggregate_score | real | 是 | 0.0 | 派生视图：已出现维度均值 | - |
+| failure_modes | text | 是 | '[]' | worker.failed error 去重排序（Benchmark 判「无新增失败模式」） | - |
+| evaluator_version | text | 是 | - | Reducer 版本（口径区分） | - |
+| created_at | text | 是 | CURRENT_TIMESTAMP | 创建时间 | - |
+
+### 4.12 表结构：wb_mutation
+- 用途：Phase 11 Skill 结构化变更提案 + 配对 Benchmark 结果。**Mutation = Candidate Asset**（Skill 永不原地修改）；REJECTED 保留不删除（失败本身就是 Experience）。
+- 主键：id（`mutation.<target>.<candidate_version>` 幂等 upsert）
+- 唯一约束：无
+- 索引：idx_mutation_status(status)、idx_mutation_target(target_asset)
+
+| 字段 | 类型 | 非空 | 默认 | 注释 | 枚举(若有) |
+|------|------|------|------|------|------------|
+| id | text | 是 | - | mutation.\<target\>.\<candidate_version\> | - |
+| target_asset | text | 是 | - | 目标 Skill 资产 | - |
+| source_version | text | 是 | - | 基线版本（v1） | - |
+| candidate_version | text | 是 | - | 候选版本（v2） | - |
+| root_cause | text | 是 | - | 失败根因（Failure→RootCause→Mutation） | - |
+| evidence | text | 是 | '[]' | 触发 run_ids JSON | - |
+| delta | text | 是 | - | 结构化 Delta JSON（白名单操作） | - |
+| validation_result | text | 否 | - | ok / 错误信息 | - |
+| benchmark_result | text | 否 | - | Benchmark 判定理由 JSON | - |
+| status | text | 是 | - | 状态机 | PROPOSED / VALIDATED / BENCHMARKING / EXPERIMENTAL / ACTIVE / REJECTED / ARCHIVED |
+| promotion_reason | text | 否 | - | 晋升/拒绝理由（可追溯） | - |
+| created_at | text | 是 | CURRENT_TIMESTAMP | 创建时间 | - |
+
 
 ## 5. 风险点 & 注意事项
 - 遗漏 is_delete 逻辑删除会导致物理删除风险。
@@ -206,4 +252,5 @@
 | V1.2 | lushaohui | 2026-08-11 | 新增 wb_ontology_object / wb_relation_edge 两张核心表（4.4/4.5）；4.3 类型对齐 SQLite + id 改 TEXT；id 统一字段规则改为「系统表 INTEGER / 领域表 TEXT」 |
 | V1.3 | lushaohui | 2026-08-12 | 新增 Agent 自治四表：wb_memory（V0.5·REQ-016 记忆沉淀）、wb_pattern / wb_proposal / wb_learned（BL-003·REQ-017 Evolution Engine，Learn≠Permission）；表清单 4.1 补 4 行，新增 4.6~4.9 结构详情 |
 | V1.4 | lushaohui | 2026-08-12 | REQ-018 Evolution 第二阶段 AutoApprove：wb_learned 加 `auto_approve_enabled`（integer 0/1，可撤销资格，默认 1）；新增 wb_approval_audit 审计表（4.10，decision=auto_approve/auto_approve_enabled/revoke_disabled，可追溯至 LearnedKnowledge+run） |
+| V1.5 | lushaohui | 2026-08-15 | Phase 11 Domain Agent Evolution（WB-DOC-03-V11.0）：表清单补 wb_evaluation（派生结果表）/ wb_mutation（提案 + Benchmark），新增 4.11 / 4.12 结构详情 |
 

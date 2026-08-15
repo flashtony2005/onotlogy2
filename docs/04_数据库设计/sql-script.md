@@ -150,6 +150,45 @@ CREATE TABLE wb_approval_audit (
   reason      TEXT,                -- 决策说明（如「5 道闸门全过」/「撤销自动放行资格」）
   created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Phase 11 Domain Agent Evolution（WB-DOC-03-V11.0）：Evaluation = Pure Function(Event Log)。
+-- wb_evaluation 是 Event Log 的**派生结果**（可删表经 Reducer 重建），不是事实源。
+CREATE TABLE wb_evaluation (
+  id                 TEXT PRIMARY KEY,   -- eval.<run_id>（幂等 upsert）
+  run_id             TEXT NOT NULL,
+  task_id            TEXT NOT NULL,
+  skill_version      TEXT,               -- 执行所用 Skill 版本（可追溯）
+  correctness        REAL,
+  completeness       REAL,
+  efficiency         REAL,
+  reliability        REAL,
+  policy_compliance  REAL,
+  output_quality     REAL,
+  aggregate_score    REAL NOT NULL DEFAULT 0.0,  -- 派生视图：已出现维度均值
+  failure_modes      TEXT NOT NULL DEFAULT '[]', -- worker.failed error 去重排序
+  evaluator_version  TEXT NOT NULL,
+  created_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_eval_run  ON wb_evaluation(run_id);
+CREATE INDEX idx_eval_task ON wb_evaluation(task_id);
+
+-- wb_mutation：Skill 结构化变更提案 + 配对 Benchmark 结果（失败保留，不删除）。
+CREATE TABLE wb_mutation (
+  id                 TEXT PRIMARY KEY,   -- mutation.<target>.<candidate_version>（幂等）
+  target_asset       TEXT NOT NULL,
+  source_version     TEXT NOT NULL,
+  candidate_version  TEXT NOT NULL,
+  root_cause         TEXT NOT NULL,
+  evidence           TEXT NOT NULL DEFAULT '[]',  -- run_ids JSON
+  delta              TEXT NOT NULL,               -- 结构化 Delta JSON（白名单操作）
+  validation_result  TEXT,                        -- ok / 错误信息
+  benchmark_result   TEXT,                        -- Benchmark 判定理由 JSON
+  status             TEXT NOT NULL,               -- PROPOSED/VALIDATED/BENCHMARKING/EXPERIMENTAL/ACTIVE/REJECTED/ARCHIVED
+  promotion_reason   TEXT,
+  created_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_mutation_status ON wb_mutation(status);
+CREATE INDEX idx_mutation_target ON wb_mutation(target_asset);
 ```
 
 ### 4.2 初始化脚本
@@ -176,4 +215,5 @@ CREATE TABLE wb_approval_audit (
 | V1.5 | lushaohui | 2026-08-12 | 新增 wb_meta 元数据表（schema_version），作为 open 旧 schema 拦截（WB2101）的唯一依据；canonical_schema 与文档 DDL 保持一致 |
 | V1.6 | lushaohui | 2026-08-12 | 新增 wb_memory（V0.5·REQ-016 记忆沉淀）+ wb_pattern / wb_proposal / wb_learned（BL-003·REQ-017 Evolution Engine）建表 DDL，与 codegen canonical_schema 完全一致 |
 | V1.7 | lushaohui | 2026-08-12 | REQ-018 Evolution 第二阶段 AutoApprove：wb_learned 加 `auto_approve_enabled INTEGER NOT NULL DEFAULT 1`；新增 wb_approval_audit 审计表（decision=auto_approve/auto_approve_enabled/revoke_disabled），与 codegen canonical_schema 完全一致 |
+| V1.8 | lushaohui | 2026-08-15 | Phase 11 Domain Agent Evolution（WB-DOC-03-V11.0）：新增 wb_evaluation（Event Log 派生结果表，可重建）+ wb_mutation（提案 + Benchmark，失败保留）建表 DDL 与索引，与 codegen canonical_schema 完全一致 |
 
