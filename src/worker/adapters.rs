@@ -73,3 +73,26 @@ pub fn deepseek_worker(command: Option<&str>) -> ProcessWorker {
 fn _is_worker(w: &ProcessWorker) -> bool {
     w.manifest().worker_type == "agent"
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// DSH 适配器声明（能力市场身份证）——纯内存，可进 CI。
+    #[test]
+    fn dsh_worker_manifest_declares_capability_market() {
+        let w = dsh_worker(None);
+        let m = w.manifest();
+        assert_eq!(m.id, "dsh-harness");
+        assert_eq!(m.worker_type, "agent");
+        assert!(m.supports("agent.task"), "通用 agent 任务入口");
+        assert!(m.supports("code.write") && m.supports("shell.execute"));
+        assert_eq!(m.risk, 3);
+        assert!((m.trust - 0.9).abs() < 1e-9);
+        assert_eq!(m.availability, "local");
+        assert_eq!(m.execution, ExecutionProtocol::Process);
+        // 命令可覆盖（不绑定二进制）
+        let overridden = dsh_worker(Some("/custom/dsh"));
+        assert_eq!(overridden.command(), "/custom/dsh");
+    }
+}

@@ -22,6 +22,11 @@ impl ProcessWorker {
         }
     }
 
+    /// 命令（测试断言用；正常路径经 execute 使用）。
+    pub fn command(&self) -> &str {
+        &self.command
+    }
+
     /// 可变 manifest（测试/注册前调参）。
     pub fn manifest_mut(&mut self) -> &mut WorkerManifest {
         &mut self.manifest

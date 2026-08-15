@@ -605,3 +605,113 @@ async fn tc_w9_router_risk_and_trust() {
         .unwrap();
     assert_eq!(sel2.worker_id, "risky");
 }
+
+// ── W10：DSH 适配器命令构造（假 dsh shim，可进 CI，不依赖真实二进制）──
+#[tokio::test]
+async fn tc_w10_dsh_adapter_command_shape() {
+    use openaip_os::worker::adapters::dsh_worker;
+    use openaip_os::worker::orchestrator::{WorkerOrchestrator, WorkerTask};
+    use openaip_os::worker::router::WorkerRouter;
+
+    // 假 dsh：把收到的全部参数逐行打印到 stdout（验证命令构造形态）
+    let shim = std::env::temp_dir().join("dsh_shim_test.sh");
+    std::fs::write(&shim, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let mut registry = WorkerRegistry::new();
+    registry
+        .register(Box::new(dsh_worker(Some(shim.to_str().unwrap()))))
+        .unwrap();
+    let policy = WorkerPolicy::new().allow("agent.task");
+    let router = WorkerRouter::new(RouterCriteria::default());
+    let mut orch = WorkerOrchestrator::new(&registry, &policy, router);
+    let result = orch
+        .run_plan(&[WorkerTask {
+            capability: "agent.task".into(),
+            input: json!({ "args": ["--profile", "headless", "只回答两个字：收到"] }),
+            note: "dsh smoke".into(),
+        }])
+        .await;
+    assert!(result.all_ok, "shim 应成功执行");
+    assert_eq!(result.outcomes[0].status, openaip_os::TaskStatus::Completed);
+    assert_eq!(result.outcomes[0].worker_id.as_deref(), Some("dsh-harness"));
+
+    // 命令构造正确：dsh --profile headless <任务文本>
+    let stdout = result.outcomes[0]
+        .output
+        .as_ref()
+        .and_then(|o| o.get("stdout"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    assert!(stdout.contains("--profile"), "参数 1: {stdout}");
+    assert!(stdout.contains("headless"), "参数 2: {stdout}");
+    assert!(
+        stdout.contains("只回答两个字：收到"),
+        "任务文本透传: {stdout}"
+    );
+
+    // 事件流完整（capability.selected → policy.checked → worker.selected/started/completed）
+    let types: Vec<&str> = orch
+        .session_log()
+        .events()
+        .iter()
+        .map(|e| e.event_type.as_str())
+        .collect();
+    for t in [
+        "capability.selected",
+        "policy.checked",
+        "worker.selected",
+        "worker.started",
+        "worker.completed",
+    ] {
+        assert!(types.contains(&t), "缺少事件 {t}");
+    }
+    std::fs::remove_file(&shim).ok();
+}
+
+// ── W11：真实 DSH headless 端到端（#[ignore]：需本机 dsh + ~/.dsh 可写）──
+// 本地复现：cargo test --test worker_v2 tc_w11_dsh_headless_e2e -- --ignored --nocapture
+#[tokio::test]
+#[ignore = "依赖本机 dsh CLI 与 ~/.dsh（外部 LLM/token），CI 不跑"]
+async fn tc_w11_dsh_headless_e2e() {
+    use openaip_os::worker::adapters::dsh_worker;
+
+    // dsh 不可用 → 跳过（不 panic）
+    let probe = std::process::Command::new("dsh").arg("--version").output();
+    let Ok(probe) = probe else {
+        eprintln!("跳过：dsh 不在 PATH");
+        return;
+    };
+    if !probe.status.success() {
+        eprintln!(
+            "跳过：dsh 不可执行: {}",
+            String::from_utf8_lossy(&probe.stderr)
+        );
+        return;
+    }
+
+    let w = dsh_worker(None);
+    let result = w
+        .execute(
+            "agent.task",
+            json!({ "args": ["--profile", "headless", "只回答两个字：收到"] }),
+        )
+        .await;
+    match result {
+        Ok(r) => {
+            eprintln!("dsh headless stdout: {:?}", r.output);
+            assert!(r.ok, "dsh 应成功返回");
+            assert!(
+                r.output["stdout"].as_str().unwrap_or("").contains("收到"),
+                "headless 应完成任务并打印结果"
+            );
+        }
+        Err(e) => {
+            eprintln!("跳过：dsh 执行失败（可能 ~/.dsh 不可写或 LLM 配置缺失）: {e}");
+        }
+    }
+}
