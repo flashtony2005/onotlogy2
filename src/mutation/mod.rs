@@ -15,6 +15,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::evaluation::EvaluationResult;
+use crate::storage::StorageError;
 
 /// 配对实验基线 runs 下限（T10）。
 pub const DEFAULT_MIN_RUNS: usize = 5;
@@ -253,6 +254,30 @@ impl MutationProposal {
     pub fn archive(&mut self) {
         self.status = MutationStatus::Archived;
     }
+
+    // ── Phase 11C 离线 Benchmark（覆盖率语义；Validated → EXPERIMENTAL / REJECTED）──
+    /// 应用离线 Benchmark 判定（仅 VALIDATED 可进入；REJECTED 是持久态，不可复活）。
+    ///
+    /// pass → EXPERIMENTAL（可路由小流量）；fail → REJECTED（失败保留，不删除）。
+    pub fn apply_offline_verdict(&mut self, verdict: &OfflineVerdict) -> Result<(), MutationError> {
+        if self.status != MutationStatus::Validated {
+            return Err(MutationError::IllegalTransition {
+                from: self.status,
+                to: if verdict.pass {
+                    MutationStatus::Experimental
+                } else {
+                    MutationStatus::Rejected
+                },
+            });
+        }
+        self.status = if verdict.pass {
+            MutationStatus::Experimental
+        } else {
+            MutationStatus::Rejected
+        };
+        self.promotion_reason = Some(verdict.reason.clone());
+        Ok(())
+    }
 }
 
 /// 配对 Benchmark 判定（纯函数，T11）。
@@ -322,6 +347,152 @@ pub fn benchmark(
             reasons.join("; ")
         },
     }
+}
+
+// ── Phase 11C：离线 Benchmark（覆盖率语义）───────────────────────────
+
+/// 离线 Benchmark 配置。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OfflineConfig {
+    /// 历史任务集最少 run 数（默认 5，对齐 T10 样本下限）。
+    pub min_task_runs: usize,
+    /// 目标模式覆盖率下限（默认 0.5）。
+    pub min_coverage: f64,
+}
+
+impl Default for OfflineConfig {
+    fn default() -> Self {
+        Self {
+            min_task_runs: DEFAULT_MIN_RUNS,
+            min_coverage: 0.5,
+        }
+    }
+}
+
+/// 离线 Benchmark 判定（确定性）。
+///
+/// 诚实语义：**Evaluation = f(EventLog)，Skill 版本不进入评测**——候选 v2 没有
+/// 真实执行时，"重放旧事件流"只会恒等于基线（Δ=0 平凡成立）。因此离线 Δ 衡量的是
+/// **覆盖率**：候选 Delta 针对的失败模式，在历史任务集中真实出现的比例。
+/// 结果性 Δ（score_new − score_old）只能在候选真实执行后测得（在线 Shadow）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OfflineVerdict {
+    /// 历史任务集 run 数。
+    pub baseline_runs: usize,
+    /// 历史任务集 aggregate 均值（基线画像）。
+    pub baseline_mean: f64,
+    /// 历史任务集失败率（1 - reliability 均值）。
+    pub baseline_failure_rate: f64,
+    /// 命中候选目标模式的 run 数。
+    pub targeted_runs: usize,
+    /// 覆盖率 = targeted / baseline。
+    pub coverage: f64,
+    pub pass: bool,
+    pub reason: String,
+}
+
+/// 离线 Benchmark 判定（纯函数）：
+/// 1. 历史任务集样本量 ≥ min_task_runs（不足 = 数据不足，不判定）
+/// 2. 覆盖率 ≥ min_coverage（候选确实针对历史失败）
+pub fn offline_benchmark(
+    base: &[EvaluationResult],
+    targeted_runs: &[String],
+    config: &OfflineConfig,
+) -> OfflineVerdict {
+    let baseline_runs = base.len();
+    let targeted = base
+        .iter()
+        .filter(|r| targeted_runs.contains(&r.run_id))
+        .count();
+    let coverage = if baseline_runs == 0 {
+        0.0
+    } else {
+        targeted as f64 / baseline_runs as f64
+    };
+    let mut reasons = Vec::new();
+    if baseline_runs < config.min_task_runs {
+        reasons.push(format!(
+            "历史任务集 runs {baseline_runs} < {}（数据不足）",
+            config.min_task_runs
+        ));
+    }
+    if coverage < config.min_coverage {
+        reasons.push(format!(
+            "覆盖率 {coverage:.3} < {}（候选未针对历史失败）",
+            config.min_coverage
+        ));
+    }
+    let pass = reasons.is_empty();
+    OfflineVerdict {
+        baseline_runs,
+        baseline_mean: mean_of(base, BenchmarkMetric::Aggregate),
+        baseline_failure_rate: failure_rate(base),
+        targeted_runs: targeted,
+        coverage,
+        pass,
+        reason: if pass {
+            format!(
+                "offline pass: coverage {coverage:.3} ≥ {} over {baseline_runs} historical runs（结果性 Δ 需候选真实执行后测得；新增失败模式离线不可观测，需 Shadow 确认）",
+                config.min_coverage
+            )
+        } else {
+            reasons.join("; ")
+        },
+    }
+}
+
+/// 离线 Benchmark 编排：读提案 → 任务集评测 → 重诊断定位目标模式 → 判定 → 落库。
+///
+/// - 提案须为 VALIDATED（人工评审通过后）或 EXPERIMENTAL（复评）
+/// - `task_ids = None` → 全部历史任务集；否则仅指定任务
+/// - 判定后状态：pass → EXPERIMENTAL；fail → REJECTED（持久，不复活）
+pub async fn run_offline_benchmark(
+    storage: &crate::storage::LibSQLStorage,
+    proposal_id: &str,
+    task_ids: Option<&[String]>,
+    config: &OfflineConfig,
+) -> Result<(MutationProposal, OfflineVerdict), StorageError> {
+    use crate::diagnosis::Diagnoser;
+
+    let mut p = storage
+        .get_mutation(proposal_id)
+        .await?
+        .ok_or_else(|| StorageError::NotFound(proposal_id.to_string()))?;
+    if !matches!(
+        p.status,
+        MutationStatus::Validated | MutationStatus::Experimental
+    ) {
+        return Err(StorageError::Constraint {
+            code: "WB3002",
+            message: format!("提案状态 {} 不可离线 Benchmark（需 VALIDATED）", p.status),
+        });
+    }
+    let mut results = storage.list_evaluations(None, None, 500).await?;
+    if let Some(ids) = task_ids {
+        results.retain(|r| ids.contains(&r.task_id));
+    }
+    // 重诊断：候选针对的失败模式是否仍在任务集出现（确定性；与提案诞生同源）
+    let diags = Diagnoser::default().diagnose(&results, &p.target_asset);
+    let mut targeted = Vec::new();
+    for d in &diags {
+        if crate::diagnosis::proposal_id_for(&p.target_asset, &p.source_version, d) == p.id {
+            targeted = d.evidence_runs.clone();
+            break;
+        }
+    }
+    let verdict = offline_benchmark(&results, &targeted, config);
+    if p.status == MutationStatus::Validated {
+        p.apply_offline_verdict(&verdict)
+            .map_err(|e| StorageError::Constraint {
+                code: "WB3003",
+                message: format!("离线 Benchmark 状态迁移失败：{e}"),
+            })?;
+    } else {
+        // EXPERIMENTAL 复评：不降级，仅刷新判定理由
+        p.promotion_reason = Some(verdict.reason.clone());
+    }
+    storage.save_mutation(&p).await?;
+    Ok((p, verdict))
 }
 
 /// 按指标取均值（空集 → 0.0；确定性）。
@@ -680,5 +851,187 @@ mod tests {
         let v = benchmark(&base, &cand, &config);
         assert!(v.pass, "{}", v.reason);
         assert!(v.effect_size > 0.05);
+    }
+
+    // ── Phase 11C：离线 Benchmark ──────────────────────────────────────
+    #[test]
+    fn offline_benchmark_rules() {
+        let config = OfflineConfig::default();
+        // 样本不足（< 5）
+        let small = vec![result("r0", 0.8, Some(1.0), &[])];
+        let v = offline_benchmark(&small, &["r0".into()], &config);
+        assert!(!v.pass);
+        assert!(v.reason.contains("数据不足"));
+
+        // 覆盖率不足（1/5 = 0.2 < 0.5）
+        let base: Vec<_> = (0..5)
+            .map(|i| result(&format!("r{i}"), 0.8, Some(1.0), &[]))
+            .collect();
+        let v2 = offline_benchmark(&base, &["r0".into()], &config);
+        assert!(!v2.pass);
+        assert!(v2.reason.contains("覆盖率"));
+
+        // 通过：全覆盖
+        let all: Vec<String> = base.iter().map(|r| r.run_id.clone()).collect();
+        let v3 = offline_benchmark(&base, &all, &config);
+        assert!(v3.pass, "{}", v3.reason);
+        assert_eq!(v3.baseline_runs, 5);
+        assert_eq!(v3.coverage, 1.0);
+        assert_eq!(v3.targeted_runs, 5);
+        // 诚实语义：reason 明确结果性 Δ 需真实执行
+        assert!(v3.reason.contains("结果性 Δ"));
+    }
+
+    #[test]
+    fn apply_offline_verdict_transitions() {
+        let pass_v = OfflineVerdict {
+            baseline_runs: 5,
+            baseline_mean: 0.8,
+            baseline_failure_rate: 0.0,
+            targeted_runs: 5,
+            coverage: 1.0,
+            pass: true,
+            reason: "offline pass".into(),
+        };
+        let fail_v = OfflineVerdict {
+            baseline_runs: 5,
+            baseline_mean: 0.8,
+            baseline_failure_rate: 0.0,
+            targeted_runs: 1,
+            coverage: 0.2,
+            pass: false,
+            reason: "coverage low".into(),
+        };
+        // Validated + pass → EXPERIMENTAL
+        let mut p = MutationProposal::propose("s", "v1", "v2", "rc", vec![], delta()).unwrap();
+        p.validate().unwrap();
+        p.apply_offline_verdict(&pass_v).unwrap();
+        assert_eq!(p.status, MutationStatus::Experimental);
+        // EXPERIMENTAL 复评 → 非法迁移（不降级）
+        assert!(p.apply_offline_verdict(&fail_v).is_err());
+        // Validated + fail → REJECTED（持久）
+        let mut p2 = MutationProposal::propose("s", "v1", "v2", "rc", vec![], delta()).unwrap();
+        p2.validate().unwrap();
+        p2.apply_offline_verdict(&fail_v).unwrap();
+        assert_eq!(p2.status, MutationStatus::Rejected);
+        assert!(
+            p2.promotion_reason
+                .as_deref()
+                .unwrap()
+                .contains("coverage low")
+        );
+        // REJECTED 不可复活
+        assert!(p2.apply_offline_verdict(&pass_v).is_err());
+        // PROPOSED（未评审）不可直接 Benchmark
+        let mut p3 = MutationProposal::propose("s", "v1", "v2", "rc", vec![], delta()).unwrap();
+        assert!(p3.apply_offline_verdict(&pass_v).is_err());
+    }
+
+    #[tokio::test]
+    async fn run_offline_benchmark_lifecycle() {
+        use crate::DiagnosisConfig;
+        use crate::diagnosis::run_diagnosis;
+        use crate::session::event::{EventType, SessionId};
+        use crate::session::log::SessionLog;
+        use serde_json::json;
+
+        let storage = crate::storage::LibSQLStorage::open(":memory:")
+            .await
+            .unwrap();
+        let reducer = EvaluationReducer::default();
+        let task = TaskDefinition {
+            task_id: "fix-java-bug".into(),
+            expected_relations: vec![],
+            expected_artifacts: vec![],
+            time_budget_secs: 10.0,
+        };
+        // 5 个历史 run：执行但无正确性证据（T1 模式）
+        for i in 0..5 {
+            let mut log = SessionLog::new(SessionId::new(&format!("run_{i}")));
+            log.append(
+                EventType::WorkerStarted,
+                json!({ "worker": "w1", "attempt": 1 }),
+            );
+            log.append(
+                EventType::WorkerCompleted,
+                json!({ "worker": "w1", "ok": true, "duration_ms": 5000.0 }),
+            );
+            let r = reducer.evaluate(log.events(), &format!("run_{i}"), &task);
+            storage.save_evaluation(&r).await.unwrap();
+        }
+        // 诊断 → 提案（PROPOSED）→ 人工评审 → VALIDATED
+        let proposals = run_diagnosis(
+            &storage,
+            "fix-java-bug",
+            "v1",
+            None,
+            &DiagnosisConfig::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(proposals.len(), 1, "T1 命中");
+        let mut p = proposals.into_iter().next().unwrap();
+        p.review_approve("developer-1").unwrap();
+        storage.save_mutation(&p).await.unwrap();
+        assert_eq!(p.status, MutationStatus::Validated);
+
+        // 离线 Benchmark：历史任务集 5 runs、覆盖率 1.0 → pass → EXPERIMENTAL
+        let (after, verdict) =
+            run_offline_benchmark(&storage, &p.id, None, &OfflineConfig::default())
+                .await
+                .unwrap();
+        assert!(verdict.pass, "{}", verdict.reason);
+        assert_eq!(verdict.baseline_runs, 5);
+        assert_eq!(verdict.coverage, 1.0);
+        assert_eq!(after.status, MutationStatus::Experimental);
+
+        // 已评审提案不被诊断环重新生成
+        let rerun = run_diagnosis(
+            &storage,
+            "fix-java-bug",
+            "v1",
+            None,
+            &DiagnosisConfig::default(),
+        )
+        .await
+        .unwrap();
+        assert!(rerun.is_empty());
+
+        // 失败路径：基准任务集为空（task_ids 过滤）→ 数据不足 → REJECTED（持久）
+        let p2 = run_offline_benchmark(&storage, &p.id, None, &OfflineConfig::default())
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(
+            p2.status,
+            MutationStatus::Experimental,
+            "EXPERIMENTAL 复评不降级"
+        );
+        let _ = p2;
+        // 新提案（同任务集但不同 task 过滤）→ 数据不足 → REJECTED
+        let mut p3 = MutationProposal::propose(
+            "fix-java-bug",
+            "v1",
+            "v2",
+            "rc",
+            vec!["run_0".into()],
+            delta(),
+        )
+        .unwrap();
+        p3.validate().unwrap();
+        storage.save_mutation(&p3).await.unwrap();
+        let (p3_after, v3) = run_offline_benchmark(
+            &storage,
+            &p3.id,
+            Some(&["other-task".to_string()]),
+            &OfflineConfig::default(),
+        )
+        .await
+        .unwrap();
+        assert!(!v3.pass);
+        assert_eq!(p3_after.status, MutationStatus::Rejected);
+        // REJECTED 不可复活
+        let res = run_offline_benchmark(&storage, &p3.id, None, &OfflineConfig::default()).await;
+        assert!(res.is_err(), "REJECTED 不可再 Benchmark");
     }
 }

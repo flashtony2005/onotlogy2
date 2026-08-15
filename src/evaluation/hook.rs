@@ -31,6 +31,8 @@ pub async fn on_run_end(
     let events: Vec<SessionEvent> = log.events().to_vec();
     let result = EvaluationReducer::new(policy.clone()).evaluate(&events, run_id, task);
     storage.save_evaluation(&result).await?;
+    // Phase 11C：任务定义持久化（历史任务集 = 按 task_id 聚合的 wb_evaluation + wb_task）。
+    storage.save_task(task).await?;
     log.append(
         EventType::EvaluationCreated,
         serde_json::json!({

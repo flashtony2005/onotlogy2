@@ -207,7 +207,7 @@ pub async fn run_diagnosis(
         .collect();
     let mut proposals = Vec::new();
     for d in diags {
-        if existing.contains(&proposal_id(skill, source_version, &d)) {
+        if existing.contains(&proposal_id_for(skill, source_version, &d)) {
             continue; // 已评审：不覆盖（REJECTED 决定持久）
         }
         let p = propose_from_diagnosis(&d, skill, source_version).map_err(diag_err)?;
@@ -217,8 +217,8 @@ pub async fn run_diagnosis(
     Ok(proposals)
 }
 
-/// 诊断 → 提案的幂等 id（与 MutationProposal::propose 的 id 规则一致）。
-fn proposal_id(skill: &str, source_version: &str, d: &Diagnosis) -> String {
+/// 诊断 → 提案的幂等 id（与 MutationProposal::propose 的 id 规则一致；供 Benchmark 定位目标模式）。
+pub fn proposal_id_for(skill: &str, source_version: &str, d: &Diagnosis) -> String {
     format!(
         "mutation.{skill}.{source_version}+{}",
         sanitize(rule_short(&d.id))

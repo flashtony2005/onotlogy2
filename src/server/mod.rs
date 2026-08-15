@@ -50,6 +50,7 @@ use views::list_evolution;
 use views::list_memory;
 use views::list_mutations;
 use views::list_tasks;
+use views::offline_benchmark_mutation;
 use views::review_mutation;
 use views::revoke_learned;
 use views::toggle_auto_approve;
@@ -200,6 +201,10 @@ fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/v1/wb/agent/mutation/:id/review",
             post(review_mutation),
+        )
+        .route(
+            "/api/v1/wb/agent/mutation/:id/offline-benchmark",
+            post(offline_benchmark_mutation),
         )
         .route(
             "/api/v1/wb/agent/evolution/learned/:id",

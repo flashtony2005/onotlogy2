@@ -64,7 +64,8 @@ pub use ir::{
 };
 pub use mutation::{
     BenchmarkConfig, BenchmarkMetric, BenchmarkVerdict, DEFAULT_MIN_EFFECT_SIZE, DEFAULT_MIN_RUNS,
-    MutationError, MutationProposal, MutationStatus, benchmark,
+    MutationError, MutationProposal, MutationStatus, OfflineConfig, OfflineVerdict, benchmark,
+    offline_benchmark, run_offline_benchmark,
 };
 pub use odl::parse_odl;
 pub use planner::{

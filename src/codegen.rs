@@ -235,6 +235,14 @@ CREATE TABLE IF NOT EXISTS wb_mutation (
 CREATE INDEX IF NOT EXISTS idx_mutation_status ON wb_mutation(status);
 CREATE INDEX IF NOT EXISTS idx_mutation_target ON wb_mutation(target_asset);
 
+-- Phase 11C：任务集（离线 Benchmark 的一等概念）。TaskDefinition 持久化——
+-- 历史任务集 = 按 task_id 聚合的 wb_evaluation；未来重放执行（replay execution）的输入来源。
+CREATE TABLE IF NOT EXISTS wb_task (
+  task_id    TEXT PRIMARY KEY,
+  definition TEXT NOT NULL,                -- TaskDefinition JSON（expected_relations/artifacts/time_budget）
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- V0.7 认证与授权（P0 风险「无认证」）：本地账号 + 不透明会话令牌。
 -- 不依赖外键（libsql 默认 foreign_keys=OFF）；用户禁用时由应用层级联清理会话（delete_sessions_for_user）。
 CREATE TABLE IF NOT EXISTS wb_user (

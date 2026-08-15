@@ -8,11 +8,59 @@ use std::collections::BTreeMap;
 use libsql::params;
 
 use super::*;
-use crate::evaluation::{EvaluationResult, Score};
+use crate::evaluation::{EvaluationResult, Score, TaskDefinition};
 use crate::mutation::{MutationProposal, MutationStatus};
 use serde_json::{Value, json};
 
 impl LibSQLStorage {
+    /// 保存任务定义（幂等 upsert：task_id 主键；离线 Benchmark 的历史任务集依据）。
+    pub async fn save_task(&self, t: &TaskDefinition) -> Result<(), StorageError> {
+        let definition = serde_json::to_string(t)?;
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO wb_task (task_id, definition) VALUES (?1,?2)",
+                params![t.task_id.clone(), definition],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// 取任务定义（缺失返 None）。
+    pub async fn get_task(&self, task_id: &str) -> Result<Option<TaskDefinition>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT definition FROM wb_task WHERE task_id = ?",
+                params![task_id],
+            )
+            .await?;
+        if let Some(row) = rows.next().await? {
+            let def: String = row.get(0)?;
+            Ok(Some(serde_json::from_str(&def)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// 全部任务定义（离线 Benchmark 的任务集枚举）。
+    pub async fn list_tasks(&self, limit: usize) -> Result<Vec<TaskDefinition>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                &format!(
+                    "SELECT definition FROM wb_task ORDER BY created_at ASC LIMIT {}",
+                    limit.clamp(1, 1000)
+                ),
+                params![],
+            )
+            .await?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let def: String = row.get(0)?;
+            out.push(serde_json::from_str(&def)?);
+        }
+        Ok(out)
+    }
     /// 保存评测结果（幂等 upsert：`eval.<run_id>`；同 run 重算覆盖）。
     pub async fn save_evaluation(&self, r: &EvaluationResult) -> Result<(), StorageError> {
         let id = format!("eval.{}", r.run_id);

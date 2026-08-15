@@ -190,6 +190,14 @@ CREATE TABLE wb_mutation (
 );
 CREATE INDEX idx_mutation_status ON wb_mutation(status);
 CREATE INDEX idx_mutation_target ON wb_mutation(target_asset);
+
+-- Phase 11C：任务集（离线 Benchmark 的一等概念）。TaskDefinition 持久化——
+-- 历史任务集 = 按 task_id 聚合的 wb_evaluation；未来重放执行（replay execution）的输入来源。
+CREATE TABLE wb_task (
+  task_id    TEXT PRIMARY KEY,
+  definition TEXT NOT NULL,                -- TaskDefinition JSON（expected_relations/artifacts/time_budget）
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 ```
 
 ### 4.2 初始化脚本
@@ -218,4 +226,5 @@ CREATE INDEX idx_mutation_target ON wb_mutation(target_asset);
 | V1.7 | lushaohui | 2026-08-12 | REQ-018 Evolution 第二阶段 AutoApprove：wb_learned 加 `auto_approve_enabled INTEGER NOT NULL DEFAULT 1`；新增 wb_approval_audit 审计表（decision=auto_approve/auto_approve_enabled/revoke_disabled），与 codegen canonical_schema 完全一致 |
 | V1.8 | lushaohui | 2026-08-15 | Phase 11 Domain Agent Evolution（WB-DOC-03-V11.0）：新增 wb_evaluation（Event Log 派生结果表，可重建）+ wb_mutation（提案 + Benchmark，失败保留）建表 DDL 与索引，与 codegen canonical_schema 完全一致 |
 | V1.9 | lushaohui | 2026-08-15 | Phase 11 · 11A 证据系统：wb_evaluation 加 `evidence` 列（每维度 Score{evidence,confidence} JSON，Unknown ≠ Success），与 codegen canonical_schema 完全一致 |
+| V2.0 | lushaohui | 2026-08-15 | Phase 11C 离线 Benchmark：新增 wb_task（TaskDefinition 持久化，历史任务集一等概念），与 codegen canonical_schema 完全一致 |
 

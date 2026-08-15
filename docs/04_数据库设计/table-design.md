@@ -37,6 +37,7 @@
 | wb_learned | 沉淀知识 | Evolution 最终知识（仅 Validated 才沉淀），携来源 proposal_id 与 `auto_approve_enabled`（可撤销资格），**不修改 Policy、不绕过审批**（Learn≠Permission）；REQ-018 自动放行资格存于此 |
 | wb_approval_audit | 放行审计 | REQ-018 自动放行审计：每次自动放行/资格切换落库（decision=`auto_approve`/`auto_approve_enabled`/`revoke_disabled`），可追溯至 LearnedKnowledge + run |
 | wb_evaluation | 评测结果 | Phase 11 六维评测（correctness/completeness/efficiency/reliability/policy_compliance/output_quality + aggregate）；**Event Log 的派生结果**（可删表经 Evaluation Reducer 重建），不是事实源 |
+| wb_task | 任务定义 | Phase 11C 离线 Benchmark：TaskDefinition 持久化（历史任务集 = 按 task_id 聚合的 wb_evaluation；未来重放执行的输入来源） |
 | wb_mutation | 进化提案 | Phase 11 Skill 结构化变更提案 + 配对 Benchmark（状态 PROPOSED/VALIDATED/BENCHMARKING/EXPERIMENTAL/ACTIVE/REJECTED/ARCHIVED）；失败保留不删除，全程可追溯 |
 
 ### 4.2 表结构示例：wb_user_account
@@ -235,6 +236,18 @@
 | promotion_reason | text | 否 | - | 晋升/拒绝理由（可追溯） | - |
 | created_at | text | 是 | CURRENT_TIMESTAMP | 创建时间 | - |
 
+### 4.13 表结构：wb_task
+- 用途：Phase 11C 离线 Benchmark 的任务集概念。TaskDefinition（expected_relations / expected_artifacts / time_budget_secs）持久化——历史任务集 = 按 task_id 聚合的 wb_evaluation；未来重放执行（replay execution）的输入来源。RunEnd 钩子（on_run_end）自动 upsert。
+- 主键：task_id
+- 唯一约束：无
+- 索引：无
+
+| 字段 | 类型 | 非空 | 默认 | 注释 | 枚举(若有) |
+|------|------|------|------|------|------------|
+| task_id | text | 是 | - | 任务 ID（稳定键，如 goal 字符串） | - |
+| definition | text | 是 | - | TaskDefinition JSON | - |
+| created_at | text | 是 | CURRENT_TIMESTAMP | 创建时间 | - |
+
 
 ## 5. 风险点 & 注意事项
 - 遗漏 is_delete 逻辑删除会导致物理删除风险。
@@ -255,4 +268,5 @@
 | V1.4 | lushaohui | 2026-08-12 | REQ-018 Evolution 第二阶段 AutoApprove：wb_learned 加 `auto_approve_enabled`（integer 0/1，可撤销资格，默认 1）；新增 wb_approval_audit 审计表（4.10，decision=auto_approve/auto_approve_enabled/revoke_disabled，可追溯至 LearnedKnowledge+run） |
 | V1.5 | lushaohui | 2026-08-15 | Phase 11 Domain Agent Evolution（WB-DOC-03-V11.0）：表清单补 wb_evaluation（派生结果表）/ wb_mutation（提案 + Benchmark），新增 4.11 / 4.12 结构详情 |
 | V1.6 | lushaohui | 2026-08-15 | Phase 11 · 11A 证据系统：4.11 wb_evaluation 加 `evidence` 列（每维度 Score{evidence,confidence}，Unknown ≠ Success）；表清单 wb_evaluation 描述同步 |
+| V1.7 | lushaohui | 2026-08-15 | Phase 11C 离线 Benchmark：新增 wb_task（4.13 表结构：task_id 主键 + definition JSON）；表清单补 1 行 |
 

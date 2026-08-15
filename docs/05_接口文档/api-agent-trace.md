@@ -372,3 +372,30 @@
 }
 ```
 - 特殊逻辑：`approve` → PROPOSED→VALIDATED（评审记录进 promotion_reason，可审计），并尝试 **Apply**：结构化 Delta 应用到基准 Skill（Fork）→ 注册 EXPERIMENTAL 候选（原资产保留）；基准不存在 / Delta 引用了不存在的步骤 → apply 失败但评审状态不受影响（提示人工细化）。`reject` → PROPOSED→REJECTED（失败保留不删除）。已评审提案不会被诊断环重新生成（否决决定持久）。Learn ≠ Permission：评审（人工）才是从提案到应用的唯一通道
+### 4.13.3 离线 Benchmark（Phase 11C）
+- [强制] 请求方式：POST
+- [强制] 接口路径：/api/v1/wb/agent/mutation/{id}/offline-benchmark
+- [强制] 权限要求：登录用户（Developer 角色可写）
+- 请求体（JSON，可选）：`{ "taskIds": ["fix-java-bug", ...] }`（缺省 = 全部历史任务集）
+- 响应成功示例：
+```json
+{
+  "code": 0, "msg": "success",
+  "data": {
+    "id": "mutation.fix-java-bug.v1+missing-test-evidence",
+    "status": "EXPERIMENTAL",
+    "promotionReason": "offline pass: coverage 1.000 ≥ 0.5 over 5 historical runs（结果性 Δ 需候选真实执行后测得；新增失败模式离线不可观测，需 Shadow 确认）",
+    "verdict": {
+      "baselineRuns": 5,
+      "baselineMean": 0.8,
+      "baselineFailureRate": 0.0,
+      "targetedRuns": 5,
+      "coverage": 1.0,
+      "pass": true,
+      "reason": "offline pass: ..."
+    }
+  }
+}
+```
+- 特殊逻辑：**诚实语义**——Evaluation = f(EventLog)，Skill 版本不进入评测，重放旧事件流 Δ=0 平凡成立；离线 Δ 衡量**覆盖率**（候选 Delta 针对的失败模式在历史任务集的占比，重诊断定位目标模式，证据 run 可追溯）。判定：VALIDATED → pass=EXPERIMENTAL / fail=REJECTED（持久不可复活）；EXPERIMENTAL 复评仅刷新理由不降级；数据不足（任务集 <5 runs）→ REJECTED。结果性 Δ 需候选真实执行后测得（在线 Shadow），晋升 ACTIVE 仍需 Human Approval / REQ-018 闸门（Learn ≠ Permission）
+| V1.7 | lushaohui | 2026-08-15 | 新增 4.13.3 POST /api/v1/wb/agent/mutation/{id}/offline-benchmark（Phase 11C 离线 Benchmark：覆盖率语义 + 状态迁移 VALIDATED→EXPERIMENTAL/REJECTED，wb_task 任务集持久化） |

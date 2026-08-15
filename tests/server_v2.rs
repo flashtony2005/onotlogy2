@@ -389,3 +389,114 @@ async fn tc_sv6_mutation_review_endpoint() {
             .contains("draft 步骤需细化")
     );
 }
+
+// ── SV7：Phase 11C 离线 Benchmark 端点 ───────────────────────────────
+#[tokio::test]
+async fn tc_sv7_offline_benchmark_endpoint() {
+    let storage = openaip_os::storage::LibSQLStorage::open(":memory:")
+        .await
+        .unwrap();
+    let kernel = std::sync::Arc::new(openaip_os::runtime::RuntimeKernel::new(storage.clone()));
+    let addr = common::spawn_server(kernel).await;
+
+    let reducer = openaip_os::evaluation::EvaluationReducer::default();
+    let task = openaip_os::evaluation::TaskDefinition {
+        task_id: "fix-java-bug".into(),
+        expected_relations: vec![],
+        expected_artifacts: vec![],
+        time_budget_secs: 10.0,
+    };
+    // 5 个历史 run：执行但无正确性证据（T1 模式）
+    for i in 0..5 {
+        let mut log = openaip_os::session::log::SessionLog::new(
+            openaip_os::session::event::SessionId::new(&format!("run_{i}")),
+        );
+        log.append(
+            openaip_os::session::event::EventType::WorkerStarted,
+            json!({ "worker": "w1", "attempt": 1 }),
+        );
+        log.append(
+            openaip_os::session::event::EventType::WorkerCompleted,
+            json!({ "worker": "w1", "ok": true, "duration_ms": 5000.0 }),
+        );
+        let r = reducer.evaluate(log.events(), &format!("run_{i}"), &task);
+        storage.save_evaluation(&r).await.unwrap();
+    }
+    // 任务定义持久化（hook 语义：run_end 落 wb_task）
+    storage.save_task(&task).await.unwrap();
+    assert!(storage.get_task("fix-java-bug").await.unwrap().is_some());
+
+    // 诊断 → 提案 → 人工评审 approve → VALIDATED
+    let proposals = openaip_os::run_diagnosis(
+        &storage,
+        "fix-java-bug",
+        "v1",
+        None,
+        &openaip_os::DiagnosisConfig::default(),
+    )
+    .await
+    .unwrap();
+    let pid = proposals[0].id.clone();
+    let (s0, _) = call(
+        addr,
+        "POST",
+        &format!("/api/v1/wb/agent/mutation/{pid}/review"),
+        Some(json!({ "decision": "approve" })),
+    )
+    .await;
+    assert_eq!(s0, 200);
+
+    // 离线 Benchmark：覆盖率 1.0 → pass → EXPERIMENTAL + verdict
+    let (s1, body1) = call(
+        addr,
+        "POST",
+        &format!("/api/v1/wb/agent/mutation/{pid}/offline-benchmark"),
+        None,
+    )
+    .await;
+    assert_eq!(s1, 200, "benchmark: {body1}");
+    assert_eq!(body1["data"]["status"], "EXPERIMENTAL");
+    assert_eq!(body1["data"]["verdict"]["pass"], json!(true));
+    assert_eq!(body1["data"]["verdict"]["baselineRuns"], 5);
+    assert_eq!(body1["data"]["verdict"]["coverage"], json!(1.0));
+    assert!(
+        body1["data"]["promotionReason"]
+            .as_str()
+            .unwrap()
+            .contains("offline pass")
+    );
+
+    // 失败路径：任务集过滤为空 → 数据不足 → REJECTED（持久）
+    let mut p2 = openaip_os::mutation::MutationProposal::propose(
+        "fix-java-bug",
+        "v1",
+        "v2",
+        "rc",
+        vec!["run_0".into()],
+        json!({ "insert_step": { "step": "run_tests" } }),
+    )
+    .unwrap();
+    p2.validate().unwrap();
+    storage.save_mutation(&p2).await.unwrap();
+    let (s2, body2) = call(
+        addr,
+        "POST",
+        &format!("/api/v1/wb/agent/mutation/{}/offline-benchmark", p2.id),
+        Some(json!({ "taskIds": ["other-task"] })),
+    )
+    .await;
+    assert_eq!(s2, 200, "benchmark: {body2}");
+    assert_eq!(body2["data"]["status"], "REJECTED");
+    assert_eq!(body2["data"]["verdict"]["pass"], json!(false));
+
+    // REJECTED 不可再 Benchmark
+    let (s3, body3) = call(
+        addr,
+        "POST",
+        &format!("/api/v1/wb/agent/mutation/{}/offline-benchmark", p2.id),
+        None,
+    )
+    .await;
+    assert_eq!(s3, 200, "WB 错误码在 body 中");
+    assert_eq!(body3["code"], 4001, "REJECTED 不可复活: {body3}");
+}

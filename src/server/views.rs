@@ -482,6 +482,76 @@ pub(crate) async fn review_mutation(
     ApiResponse::ok(resp).into_response()
 }
 
+/// `POST /api/v1/wb/agent/mutation/{id}/offline-benchmark`：离线 Benchmark（Phase 11C）。
+/// 仅 Developer。对 EXPERIMENTAL 候选在历史任务集上做覆盖率判定：
+/// pass → EXPERIMENTAL；fail → REJECTED（持久）。结果性 Δ 需候选真实执行后测得。
+#[derive(serde::Deserialize)]
+pub(crate) struct OfflineBenchmarkBody {
+    #[serde(rename = "taskIds", default)]
+    task_ids: Option<Vec<String>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OfflineVerdictDto {
+    baseline_runs: usize,
+    baseline_mean: f64,
+    baseline_failure_rate: f64,
+    targeted_runs: usize,
+    coverage: f64,
+    pass: bool,
+    reason: String,
+}
+
+impl From<&crate::mutation::OfflineVerdict> for OfflineVerdictDto {
+    fn from(v: &crate::mutation::OfflineVerdict) -> Self {
+        Self {
+            baseline_runs: v.baseline_runs,
+            baseline_mean: v.baseline_mean,
+            baseline_failure_rate: v.baseline_failure_rate,
+            targeted_runs: v.targeted_runs,
+            coverage: v.coverage,
+            pass: v.pass,
+            reason: v.reason.clone(),
+        }
+    }
+}
+
+pub(crate) async fn offline_benchmark_mutation(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(id): Path<String>,
+    body: Option<Json<OfflineBenchmarkBody>>,
+) -> Response {
+    if !user.can_write_evolution() {
+        return forbidden("当前角色无权执行离线 Benchmark（需 Developer）").into_response();
+    }
+    let task_ids = body.map(|b| b.0).and_then(|b| b.task_ids);
+    match crate::mutation::run_offline_benchmark(
+        &st.kernel.storage(),
+        &id,
+        task_ids.as_deref(),
+        &crate::mutation::OfflineConfig::default(),
+    )
+    .await
+    {
+        Ok((p, v)) => {
+            let mut resp = serde_json::to_value(MutationDto::from(&p)).unwrap_or(json!({}));
+            resp["verdict"] =
+                serde_json::to_value(OfflineVerdictDto::from(&v)).unwrap_or(json!({}));
+            ApiResponse::ok(resp).into_response()
+        }
+        Err(crate::storage::StorageError::NotFound(_)) => {
+            ApiResponse::error(404, format!("Mutation 提案不存在：{id}")).into_response()
+        }
+        Err(crate::storage::StorageError::Constraint {
+            code: "WB3002",
+            message,
+        }) => ApiResponse::error(4001, message).into_response(),
+        Err(_) => ApiResponse::error(5000, "存储错误").into_response(),
+    }
+}
+
 /// `DELETE /api/v1/wb/agent/evolution/learned/:id`：撤销一条 LearnedKnowledge（可撤销承诺）。
 pub(crate) async fn revoke_learned(
     State(st): State<Arc<AppState>>,
