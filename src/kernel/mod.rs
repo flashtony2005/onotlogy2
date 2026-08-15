@@ -87,6 +87,8 @@ pub struct Kernel {
     compensator: std::sync::Arc<dyn Compensator>,
     /// 事实层事件（emit/relate/compensate 的审计记录；Phase 1 落 events 表）。
     events: Vec<KernelEvent>,
+    /// Phase 8：幂等执行去重（context + key → 已执行 Effect）。
+    idempotency: std::collections::HashMap<(ContextId, String), EffectId>,
 }
 
 impl Default for Kernel {
@@ -103,6 +105,7 @@ impl Default for Kernel {
             clock: now_secs,
             compensator: std::sync::Arc::new(NullCompensator),
             events: Vec::new(),
+            idempotency: std::collections::HashMap::new(),
         }
     }
 }
@@ -167,6 +170,95 @@ impl Kernel {
             "evolution.gate_approved",
             json!({ "capability": capability, "action": action }),
         );
+    }
+
+    // ── Phase 8 · G1：Idempotency（执行去重）────────────────────────────
+    /// 幂等命中：该 (context, key) 已执行过 → 返回原 Effect id。
+    pub fn idempotency_hit(&self, ctx: ContextId, key: &str) -> Option<EffectId> {
+        self.idempotency.get(&(ctx, key.to_string())).copied()
+    }
+
+    /// 记录一次幂等执行（emit 成功后调用）。
+    pub(crate) fn record_idempotency(&mut self, ctx: ContextId, key: &str, effect: EffectId) {
+        self.idempotency.insert((ctx, key.to_string()), effect);
+    }
+
+    /// 幂等重放审计（同 key 第二次执行：不产生新业务效果，仅记录）。
+    pub(crate) fn record_idempotent_replay(&mut self, fiber: FiberId, key: &str) {
+        self.record_event(
+            Some(fiber),
+            "effect.idempotent_replay",
+            json!({ "key": key }),
+        );
+    }
+
+    /// Phase 8 · G2：审批挂起审计（compose 层 wait_on 时调用）。
+    pub(crate) fn record_approval_requested(&mut self, fiber: FiberId, capability: &str) {
+        self.record_event(
+            Some(fiber),
+            "approval.requested",
+            json!({ "capability": capability }),
+        );
+    }
+
+    // ── Phase 8 · G2：Approval 显式入口（Suspension Point 的完整语义）──
+    /// 审批通过：Waiting → Running（显式恢复）+ `approval.granted` 事件。
+    pub fn approve(&mut self, fiber: FiberId, by: &str) -> Result<(), KernelError> {
+        let st = self
+            .fiber(fiber)
+            .map(|f| f.state)
+            .ok_or(KernelError::FiberNotFound(fiber))?;
+        if st != FiberState::Waiting {
+            return Err(KernelError::InvalidTransition(
+                st.as_str().to_string(),
+                "Running".into(),
+            ));
+        }
+        self.resume(fiber)?;
+        // 审批通过 = 门禁放行（与 relate(Approval) 恢复路径一致：approved 置位）
+        if let Some(f) = self.fibers.get_mut(&fiber) {
+            f.approved = true;
+        }
+        self.record_event(Some(fiber), "approval.granted", json!({ "by": by }));
+        Ok(())
+    }
+
+    /// 审批拒绝：Waiting → Cancelled（终态）+ `approval.rejected` 事件。
+    /// 已提交 Effect 的补偿由上层显式执行（与 P1 一致：取消 ≠ 自动回滚）。
+    pub fn reject_approval(&mut self, fiber: FiberId, by: &str) -> Result<(), KernelError> {
+        let st = self
+            .fiber(fiber)
+            .map(|f| f.state)
+            .ok_or(KernelError::FiberNotFound(fiber))?;
+        if st != FiberState::Waiting {
+            return Err(KernelError::InvalidTransition(
+                st.as_str().to_string(),
+                "Cancelled".into(),
+            ));
+        }
+        self.advance(fiber, FiberState::Cancelled)?;
+        self.record_event(Some(fiber), "approval.rejected", json!({ "by": by }));
+        Ok(())
+    }
+
+    // ── Phase 8 · G3：Crash Recovery（Interrupted 恢复语义）─────────────
+    /// 崩溃标记：Running → Interrupted + `fiber.interrupted` 事件。
+    pub fn mark_interrupted(&mut self, fiber: FiberId) -> Result<(), KernelError> {
+        self.advance(fiber, FiberState::Interrupted)?;
+        self.record_event(Some(fiber), "fiber.interrupted", json!({}));
+        Ok(())
+    }
+
+    /// 恢复：Interrupted → Running + `fiber.recovered` 事件（resume 继续执行）。
+    pub fn recover(&mut self, fiber: FiberId) -> Result<(), KernelError> {
+        self.advance(fiber, FiberState::Running)?;
+        self.record_event(Some(fiber), "fiber.recovered", json!({}));
+        Ok(())
+    }
+
+    /// 放弃恢复：Interrupted → Failed（进入补偿路径）。
+    pub fn abandon(&mut self, fiber: FiberId) -> Result<(), KernelError> {
+        self.advance(fiber, FiberState::Failed)
     }
 
     pub(crate) fn mark_effect_compensated(&mut self, id: EffectId) {
@@ -435,6 +527,11 @@ impl Kernel {
         self.contexts.insert(ctx.id, ctx);
     }
     pub(crate) fn restore_fiber(&mut self, f: Fiber) {
+        let mut f = f;
+        // Phase 8 · G3：崩溃残留 Running → Interrupted（V1 v0_8 语义移植）
+        if f.state == FiberState::Running {
+            f.state = FiberState::Interrupted;
+        }
         self.next_fiber = self.next_fiber.max(f.id.0 + 1);
         self.fibers.insert(f.id, f);
     }

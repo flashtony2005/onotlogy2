@@ -36,6 +36,10 @@ pub enum FiberState {
     Compensating,
     Compensated,
     Escalated,
+    /// Phase 8：审批 Reject 终态（Reject → Abort，不补偿除非上层显式）。
+    Cancelled,
+    /// Phase 8：崩溃恢复中间态（restore 时 Running → Interrupted；可 recover/abandon）。
+    Interrupted,
 }
 
 impl FiberState {
@@ -52,6 +56,8 @@ impl FiberState {
             FiberState::Compensating => "Compensating",
             FiberState::Compensated => "Compensated",
             FiberState::Escalated => "Escalated",
+            FiberState::Cancelled => "Cancelled",
+            FiberState::Interrupted => "Interrupted",
         }
     }
 }
@@ -137,6 +143,12 @@ impl Fiber {
             (FiberState::Failed, FiberState::Compensating) => true,
             (FiberState::Compensating, FiberState::Compensated) => true,
             (FiberState::Compensating, FiberState::Escalated) => true,
+            // Phase 8：审批 Reject → Cancelled（终态）
+            (FiberState::Waiting, FiberState::Cancelled) => true,
+            // Phase 8：崩溃恢复（Running → Interrupted → Running/Failed）
+            (FiberState::Running, FiberState::Interrupted) => true,
+            (FiberState::Interrupted, FiberState::Running) => true,
+            (FiberState::Interrupted, FiberState::Failed) => true,
             (a, b) if a == b => true, // 幂等
             _ => false,
         };

@@ -55,6 +55,12 @@ impl<'k> CompensationEngine<'k> {
             ));
         }
         self.kernel.advance(fiber, FiberState::Compensating)?;
+        // Phase 8 · G4：补偿开始审计（可审计，而非"程序员觉得应该回滚"）
+        self.kernel.record_event(
+            Some(fiber),
+            "compensation.started",
+            serde_json::json!({ "fiber": format!("{fiber}") }),
+        );
 
         // 逆序取已提交 Effect（含不可补偿项——Irreversible 跳过仅标记）
         let ledger: Vec<EffectId> = {
@@ -82,6 +88,12 @@ impl<'k> CompensationEngine<'k> {
             {
                 Ok(()) => {
                     self.kernel.mark_effect_compensated(id);
+                    // Phase 8 · G4：单步补偿完成
+                    self.kernel.record_event(
+                        Some(fiber),
+                        "compensation.completed",
+                        serde_json::json!({ "effect": format!("{id}"), "action": comp.action }),
+                    );
                     // 事实：Effect --compensated--> true
                     let _ = self.kernel.relate(Relation::new(
                         self.kernel
@@ -96,8 +108,19 @@ impl<'k> CompensationEngine<'k> {
                 }
                 Err(reason) => {
                     self.kernel.mark_effect_compensation_failed(id);
+                    // Phase 8 · G4：补偿失败不吞异常——双事件（补偿失败 + 人工介入）
+                    self.kernel.record_event(
+                        Some(fiber),
+                        "compensation.failed",
+                        serde_json::json!({ "effect": format!("{id}"), "action": comp.action, "reason": reason }),
+                    );
                     // 升级人工：Fiber → Escalated + 事实 Relation
                     self.kernel.advance(fiber, FiberState::Escalated)?;
+                    self.kernel.record_event(
+                        Some(fiber),
+                        "manual_intervention_required",
+                        serde_json::json!({ "fiber": format!("{fiber}"), "reason": reason }),
+                    );
                     let ctx = self
                         .kernel
                         .fiber(fiber)

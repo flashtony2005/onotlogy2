@@ -5,6 +5,7 @@
 //! 设计定稿：docs/03_架构设计/cognitive-layer-v3.md
 
 pub mod engine;
+pub mod episode;
 pub mod loop_impl;
 pub mod memory;
 pub mod observe;

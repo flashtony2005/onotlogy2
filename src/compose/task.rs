@@ -139,7 +139,7 @@ impl<'k> TaskExecutor<'k> {
         capability: &Capability,
         args: Value,
     ) -> Result<StepOutcome, KernelError> {
-        self.step_inner(fiber, capability, args, false)
+        self.step_inner(fiber, capability, args, false, None)
     }
 
     /// Phase 6：带 EvolutionGate 判定的 step（gate_pass 由调用方预计算）。
@@ -152,7 +152,19 @@ impl<'k> TaskExecutor<'k> {
         args: Value,
         gate_pass: bool,
     ) -> Result<StepOutcome, KernelError> {
-        self.step_inner(fiber, capability, args, gate_pass)
+        self.step_inner(fiber, capability, args, gate_pass, None)
+    }
+
+    /// Phase 8 · G1：幂等 step——同 (context, key) 只产生一次业务效果；
+    /// 重放仅记录 `effect.idempotent_replay` 审计事件（S8）。
+    pub fn step_idempotent(
+        &mut self,
+        fiber: FiberId,
+        capability: &Capability,
+        args: Value,
+        key: &str,
+    ) -> Result<StepOutcome, KernelError> {
+        self.step_inner(fiber, capability, args, false, Some(key))
     }
 
     fn step_inner(
@@ -161,6 +173,7 @@ impl<'k> TaskExecutor<'k> {
         capability: &Capability,
         args: Value,
         gate_pass: bool,
+        idempotency_key: Option<&str>,
     ) -> Result<StepOutcome, KernelError> {
         let f = self
             .kernel
@@ -168,6 +181,19 @@ impl<'k> TaskExecutor<'k> {
             .ok_or(KernelError::FiberNotFound(fiber))?;
         if f.state != FiberState::Running {
             return Err(KernelError::FiberNotRunning("step".into()));
+        }
+
+        // Phase 8 · G1：幂等重放（同 key 已执行 → 不产生新业务效果，仅审计）
+        if let Some(key) = idempotency_key {
+            let ctx = self
+                .kernel
+                .fiber(fiber)
+                .map(|f| f.context)
+                .ok_or(KernelError::FiberNotFound(fiber))?;
+            if self.kernel.idempotency_hit(ctx, key).is_some() {
+                self.kernel.record_idempotent_replay(fiber, key);
+                return Ok(StepOutcome::Committed);
+            }
         }
 
         // 0) 必填参数校验（schema；缺参 = 业务拒绝）
@@ -216,6 +242,9 @@ impl<'k> TaskExecutor<'k> {
                             },
                         )?;
                         self.kernel.advance(fiber, FiberState::Waiting)?;
+                        // Phase 8 · G2：审批挂起审计（Suspension Point 事件）
+                        self.kernel
+                            .record_approval_requested(fiber, &capability.name);
                         return Ok(StepOutcome::Waiting);
                     }
                 }
@@ -246,18 +275,29 @@ impl<'k> TaskExecutor<'k> {
             if let Some(inv) = &mut effect.inverse {
                 inv.payload = serde_json::json!({ "relations": result.relations });
             }
-            self.kernel.emit(fiber, effect)?;
+            let eid = self.kernel.emit(fiber, effect)?;
             let ctx = self
                 .kernel
                 .fiber(fiber)
                 .map(|f| f.context)
                 .ok_or(KernelError::FiberNotFound(fiber))?;
+            if let Some(key) = idempotency_key {
+                self.kernel.record_idempotency(ctx, key, eid);
+            }
             for (source, pred, target) in result.relations {
                 self.kernel
                     .relate(Relation::new(ctx, source, pred, target, self.kernel.now()))?;
             }
         } else {
-            self.kernel.emit(fiber, effect)?;
+            let eid = self.kernel.emit(fiber, effect)?;
+            if let Some(key) = idempotency_key {
+                let ctx = self
+                    .kernel
+                    .fiber(fiber)
+                    .map(|f| f.context)
+                    .ok_or(KernelError::FiberNotFound(fiber))?;
+                self.kernel.record_idempotency(ctx, key, eid);
+            }
             if let Some((pred, target)) = &capability.projection {
                 let source = args
                     .get("target")
