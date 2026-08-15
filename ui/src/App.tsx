@@ -32,14 +32,14 @@ const STEP_ICON: Record<string, string> = {
   MemoryRecall: '🔎',
 }
 
-const VIEWS: { key: ViewKind; label: string; desc: string }[] = [
-  { key: 'executive', label: 'Executive', desc: '管理者 · Mission/Decision/Risk' },
-  { key: 'operator', label: 'Operator', desc: '管理员 · Pipeline 进度' },
-  { key: 'developer', label: 'Developer', desc: '开发者 · 全量 IO' },
-  { key: 'memory', label: 'Memory', desc: '记忆沉淀 · Action→Memory 闭环' },
-  { key: 'evolution', label: 'Evolution', desc: '自学习 · Experience→Knowledge 闭环' },
-  { key: 'tasks', label: 'Tasks', desc: '任务状态 · Pending→Completed' },
-  { key: 'v2', label: 'V2 Runtime', desc: 'Skill · Plugin · Session（Phase 9-10）' },
+const VIEWS: { key: ViewKind; label: string; icon: string; desc: string }[] = [
+  { key: 'executive', label: 'Executive', icon: '◈', desc: '管理者 · Mission/Decision/Risk' },
+  { key: 'operator', label: 'Operator', icon: '▶', desc: '管理员 · Pipeline 进度' },
+  { key: 'developer', label: 'Developer', icon: '</>', desc: '开发者 · 全量 IO' },
+  { key: 'memory', label: 'Memory', icon: '💾', desc: '记忆沉淀 · Action→Memory 闭环' },
+  { key: 'evolution', label: 'Evolution', icon: '◉', desc: '自学习 · Experience→Knowledge 闭环' },
+  { key: 'tasks', label: 'Tasks', icon: '☑', desc: '任务状态 · Pending→Completed' },
+  { key: 'v2', label: 'V2 Runtime', icon: '▣', desc: 'Skill · Plugin · Session（Phase 9-10）' },
 ]
 
 export default function App() {
@@ -207,127 +207,99 @@ export default function App() {
   // 未登录：渲染登录页（V0.7 认证强制）
   if (sessionChecking) {
     return (
-      <div className="app">
-        <header className="topbar">
-          <div className="brand">
-            <span className="logo">❯_</span>
-            <div>
-              <h1>OpenAIP-OS · Agent 认知观察</h1>
-              <p className="sub">agent runtime · v2</p>
-            </div>
-          </div>
-        </header>
-        <main className="timeline">
-          <div className="empty">正在恢复会话…</div>
-        </main>
+      <div className="app-shell">
+        <div className="login-wrap">
+          <div className="empty">❯ 正在恢复会话…</div>
+        </div>
       </div>
     )
   }
 
   if (!user) {
     return (
-      <div className="app">
-        <header className="topbar">
-          <div className="brand">
-            <span className="logo">❯_</span>
-            <div>
-              <h1>OpenAIP-OS · Agent 认知观察</h1>
-              <p className="sub">agent runtime · v2</p>
-            </div>
+      <div className="app-shell">
+        <div className="login-wrap">
+          <div className="login-brand">
+            <span className="logo">❯_</span> OpenAIP-OS
           </div>
-        </header>
-        <main className="timeline">
           <LoginForm error={loginError} onLogin={doLogin} />
-        </main>
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <div className="brand">
-          <span className="logo">❯_</span>
-          <div>
-            <h1>OpenAIP-OS · Agent 认知观察</h1>
-            <p className="sub">agent runtime · v0.9</p>
-          </div>
+    <div className="app-shell">
+      {/* Codex 式左侧 icon 边栏 */}
+      <aside className="sidebar">
+        <div className="side-logo" title="OpenAIP-OS">
+          ❯_
         </div>
-        <div className="conn-group">
-          <div className={`conn ${connected ? 'on' : 'off'}`}>
-            <span className="dot" />
-            {connected ? 'WS 已连接' : 'WS 未连接'}
-          </div>
-          <div className="user">
-            <span className="user-name">{user.username}</span>
-            <span className={`role role-${user.role.toLowerCase()}`}>{user.role}</span>
-            <button className="logout" onClick={() => void doLogout()}>
-              登出
+        <nav className="side-nav">
+          {VIEWS.map((v) => (
+            <button
+              key={v.key}
+              className={view === v.key ? 'side-btn active' : 'side-btn'}
+              onClick={() => {
+                setView(v.key)
+                if (v.key === 'memory') void reloadMemory()
+                if (v.key === 'evolution') void reloadEvolution()
+                if (v.key === 'tasks') void reloadTasks()
+              }}
+              title={`${v.label} — ${v.desc}`}
+            >
+              {v.icon}
             </button>
-          </div>
-        </div>
-      </header>
-
-      <section className="controls">
-        <span className="prompt">❯</span>
-        <input
-          className="agent"
-          value={agentId}
-          onChange={(e) => setAgentId(e.target.value)}
-          placeholder="Agent ID"
-        />
-        <input
-          className="goal"
-          value={goal}
-          onChange={(e) => setGoal(e.target.value)}
-          placeholder="自然语言目标（goal）"
-          onKeyDown={(e) => e.key === 'Enter' && startRun()}
-        />
-        <button className="run" onClick={startRun} disabled={running}>
-          {running ? '触发中…' : '▶ 触发 Agent 运行'}
-        </button>
-      </section>
-
-      {error && <div className="error">⚠ {error}</div>}
-
-      {runId && (
-        <section className="status">
-          <div className="meta">
-            <span>
-              Run: <code>{runId}</code>
-            </span>
-            <span>
-              状态: <b className={timeline.status.toLowerCase()}>{timeline.status}</b>
-            </span>
-            <span>审批: {timeline.humanApproval}</span>
-          </div>
-          <div className="progress">
-            <div className="bar" style={{ width: `${timeline.progress}%` }} />
-            <span>{timeline.progress}%</span>
-          </div>
-        </section>
-      )}
-
-      <nav className="views">
-        {VIEWS.map((v) => (
-          <button
-            key={v.key}
-            className={view === v.key ? 'active' : ''}
-            onClick={() => {
-              setView(v.key)
-              if (v.key === 'memory') void reloadMemory()
-              if (v.key === 'evolution') void reloadEvolution()
-              if (v.key === 'tasks') void reloadTasks()
-            }}
-            title={v.desc}
-          >
-            <b>{v.label}</b>
-            <small>{v.desc}</small>
+          ))}
+        </nav>
+        <div className="side-bottom">
+          <button className="side-btn" onClick={() => void doLogout()} title="登出">
+            ⎋
           </button>
-        ))}
-      </nav>
+        </div>
+      </aside>
 
-      <main className="timeline">
+      <div className="main-col">
+        {/* 顶部 mini bar：会话上下文 + 连接状态 */}
+        <header className="mini-bar">
+          <div className="mini-title">
+            <span className="logo">❯_</span>
+            <span className="mini-name">OpenAIP-OS</span>
+            <span className="mini-sub">{VIEWS.find((v) => v.key === view)?.label ?? ''}</span>
+          </div>
+          <div className="conn-group">
+            <div className={`conn ${connected ? 'on' : 'off'}`}>
+              <span className="dot" />
+              {connected ? 'WS 已连接' : 'WS 未连接'}
+            </div>
+            <div className="user">
+              <span className="user-name">{user.username}</span>
+              <span className={`role role-${user.role.toLowerCase()}`}>{user.role}</span>
+            </div>
+          </div>
+        </header>
+
+        {runId && (
+          <section className="status">
+            <div className="meta">
+              <span>
+                run <code>{runId}</code>
+              </span>
+              <span>
+                状态 <b className={timeline.status.toLowerCase()}>{timeline.status}</b>
+              </span>
+              <span>审批 {timeline.humanApproval}</span>
+            </div>
+            <div className="progress">
+              <div className="bar" style={{ width: `${timeline.progress}%` }} />
+              <span>{timeline.progress}%</span>
+            </div>
+          </section>
+        )}
+
+        {error && <div className="error">⚠ {error}</div>}
+
+        <main className="content">
         {!runId && view !== 'memory' && view !== 'evolution' && view !== 'tasks' && view !== 'v2' && (
           <div className="empty">
             输入目标并点击「触发 Agent 运行」，实时观察 Agent 认知闭环。
@@ -415,7 +387,30 @@ export default function App() {
             )}
           </article>
         ))}
-      </main>
+        </main>
+
+        {/* Codex 式底部 composer */}
+        <footer className="composer">
+          <span className="prompt">❯</span>
+          <input
+            className="agent"
+            value={agentId}
+            onChange={(e) => setAgentId(e.target.value)}
+            placeholder="agent"
+            title="Agent ID"
+          />
+          <input
+            className="goal"
+            value={goal}
+            onChange={(e) => setGoal(e.target.value)}
+            placeholder="自然语言目标（goal），Enter 触发"
+            onKeyDown={(e) => e.key === 'Enter' && startRun()}
+          />
+          <button className="run" onClick={startRun} disabled={running}>
+            {running ? '…' : '▶'}
+          </button>
+        </footer>
+      </div>
     </div>
   )
 }
