@@ -23,3 +23,29 @@ export function debounce<A extends unknown[]>(fn: (...args: A) => void, ms: numb
     t = setTimeout(() => fn(...args), ms)
   }
 }
+
+/// fabric.* 通信事件的专用文案（D：时间线/事件流语义化；未知类型回退原名）。
+export function fabricEventLabel(eventType: string): string {
+  switch (eventType) {
+    case 'fabric.agent_connected':
+      return '🔗 Agent 已连接'
+    case 'fabric.agent_disconnected':
+      return '🔌 Agent 已断开'
+    case 'fabric.message_sent':
+      return '📤 消息已发出'
+    case 'fabric.task_requested':
+      return '🎯 任务已请求'
+    case 'fabric.task_accepted':
+      return '🤝 任务已受理'
+    case 'fabric.task_completed':
+      return '✅ 任务完成'
+    case 'fabric.task_failed':
+      return '❌ 任务失败'
+    case 'fabric.capability_invoked':
+      return '⚡ 能力已调用'
+    case 'fabric.approval_requested':
+      return '🛂 审批已请求'
+    default:
+      return eventType
+  }
+}

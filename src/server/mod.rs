@@ -6,6 +6,7 @@
 
 pub mod approvals;
 pub mod auth;
+pub mod facade;
 pub mod graph;
 pub mod run;
 pub mod static_files;
@@ -37,6 +38,7 @@ use approvals::resolve_approval;
 use auth::auth_login;
 use auth::auth_logout;
 use auth::auth_me;
+use facade::{facade_audit_query, facade_fabric_submit, facade_world_query};
 use graph::list_graph;
 use run::run_start;
 use static_files::serve_static;
@@ -105,6 +107,8 @@ pub struct AppState {
     enforce_auth: bool,
     /// 登录失败计数（M3：防引导账号爆破）。按用户名：连续失败 ≥ 阈值 → 锁定窗口内拒绝 429。
     login_fails: Mutex<HashMap<String, LoginFail>>,
+    /// Phase 7：Public Semantic Facade（world/audit/fabric 三语义域；Server Transport）。
+    pub facade: Arc<crate::facade::Facade>,
 }
 
 /// 登录失败记录（连续失败次数 + 首次失败时间，用于锁定窗口判定）。
@@ -230,6 +234,10 @@ fn router() -> Router<Arc<AppState>> {
         .route("/api/v1/wb/auth/me", get(auth_me))
         // ── V0.8 GraphRAG 基础（对象-关系图） ──
         .route("/api/v1/wb/graph", get(list_graph))
+        // Phase 7：Facade HTTP Transport（单一语义源：与 CLI/Plugin 同一 OpenAipFacade）
+        .route("/api/v1/facade/world/query", post(facade_world_query))
+        .route("/api/v1/facade/audit/query", post(facade_audit_query))
+        .route("/api/v1/facade/fabric/submit", post(facade_fabric_submit))
         // ── Phase 10 V2 认知面板（Skill / Plugin / Session） ──
         .route("/api/v1/v2/skills", get(v2::list_skills))
         .route(
@@ -300,6 +308,27 @@ pub async fn serve_with_timeout(
     let idp: Arc<dyn IdentityProvider> =
         Arc::new(LocalIdentityProvider::new(storage.as_ref().clone()));
     let sessions = SessionStore::new(storage.as_ref().clone());
+    // storage 随后被 move 进 AppState——Facade 先行 clone（同一底层连接）。
+    let storage_f = storage.clone();
+    let handle = tokio::runtime::Handle::current();
+    // Facade::new 会触发 agent_connected 事件（同步 sink block_on）→ 阻塞上下文
+    // 装配（multi_thread runtime 下 block_in_place 合法；current_thread 测试环境
+    // 用空 Facade——world/audit 查询不受影响，fabric 路由 fail-closed）。
+    let facade = match handle.runtime_flavor() {
+        tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(|| build_facade(&storage_f, handle))
+        }
+        _ => std::sync::Arc::new(
+            crate::facade::Facade::new(
+                storage_f,
+                handle,
+                crate::fabric::router::FabricRouter::new(),
+                vec![],
+                &[],
+            )
+            .expect("Facade 基础装配（空 router/adapters 恒成功）"),
+        ),
+    };
     let state = Arc::new(AppState {
         v2: Arc::new(v2::V2State::default()),
         storage,
@@ -320,6 +349,7 @@ pub async fn serve_with_timeout(
         sessions,
         enforce_auth,
         login_fails: Mutex::new(HashMap::new()),
+        facade,
     });
     let app = router()
         .layer(middleware::from_fn(auth_layer))
@@ -330,12 +360,55 @@ pub async fn serve_with_timeout(
     recover(&state).await;
     // V10.1：预置 Worker（echo / git / codex / claude 壳）。
     bootstrap_v2_workers(&state);
+
     axum::serve(listener, app).await
 }
 
 /// 预置 Worker（V10.1）：echo / git / codex / claude 壳注册进 V2 Worker Registry。
 /// Codex/Claude 命令可经环境变量覆盖（OPENAI_OS_CODEX_CMD / OPENAI_OS_CLAUDE_CMD）；
 /// 未安装时注册仍成功（能力声明可见），执行阶段才失败。
+/// Phase 7：装配 Facade（Server Transport 的语义后端）。
+/// 意图映射固定；适配器动态发现（connect 成功的 Agent 把 discover 能力注册进
+/// Router——Codex/DSH 是 Capability Provider）；领域规则：fabric.task_completed
+/// → fabric.status（提交即世界，UI World 视图可见）。
+fn build_facade(
+    storage: &std::sync::Arc<crate::storage::LibSQLStorage>,
+    handle: tokio::runtime::Handle,
+) -> std::sync::Arc<crate::facade::Facade> {
+    use crate::fabric::adapter::AgentAdapter;
+    use crate::fabric::adapters::{codex_adapter, dsh_adapter};
+    use crate::fabric::router::FabricRouter;
+
+    let mut router = FabricRouter::new();
+    router.register_intent("modify_code", "code.write");
+    router.register_intent("run_shell", "shell.execute");
+    router.register_intent("run_tests", "code.test");
+    router.mark_high_risk("shell.execute");
+
+    let mut adapters: Vec<std::sync::Arc<dyn AgentAdapter>> = Vec::new();
+    for a in [codex_adapter(None), dsh_adapter(None)] {
+        if a.connect().is_ok() {
+            let id = a.id().to_string();
+            for c in a.discover() {
+                router.register_agent(c.name, id.clone(), 1);
+            }
+            adapters.push(std::sync::Arc::new(a));
+        } else {
+            eprintln!("[facade] 适配器离线（命令不可用）：{}", a.id());
+        }
+    }
+    std::sync::Arc::new(
+        crate::facade::Facade::new(
+            storage.clone(),
+            handle,
+            router,
+            adapters,
+            &[("fabric.task_completed", "fabric.status")],
+        )
+        .expect("Facade 装配失败（适配器已预过滤，不应发生）"),
+    )
+}
+
 fn bootstrap_v2_workers(state: &Arc<AppState>) {
     use crate::worker::adapters::{claude_worker, codex_worker};
     use crate::worker::process::ProcessWorker;

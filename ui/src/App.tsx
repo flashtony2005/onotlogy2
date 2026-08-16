@@ -8,6 +8,7 @@ import {
   Globe2,
   LayoutDashboard,
   LogOut,
+  Network,
   ShieldCheck,
   Sparkles,
   Users,
@@ -26,6 +27,7 @@ import { LoginForm } from './components/LoginForm'
 import { LoginScene } from './components/LoginScene'
 import { V2Panel } from './components/V2Panel'
 import { Dashboard } from './components/Dashboard'
+import { FabricPanel } from './components/FabricPanel'
 import { GovernancePanel } from './components/GovernancePanel'
 import { WorldPanel } from './components/WorldPanel'
 import { fmtJson, fmtTime } from './format'
@@ -37,7 +39,7 @@ import type { AuthUserDto, TraceEventDto, ViewKind } from './types'
 const VIEW_GROUPS: { name: string; en: string; items: ViewKind[] }[] = [
   { name: '运行', en: 'Operations', items: ['overview', 'world', 'runs'] },
   { name: '学习', en: 'Learning', items: ['workers', 'learning'] },
-  { name: '治理', en: 'Governance', items: ['governance', 'developer'] },
+  { name: '治理', en: 'Governance', items: ['governance', 'fabric', 'developer'] },
 ]
 
 interface ViewMeta {
@@ -97,6 +99,14 @@ const VIEWS: ViewMeta[] = [
     icon: ShieldCheck,
     q: '有没有越界？',
     desc: '决策摘要、策略检查、审批与审计',
+  },
+  {
+    key: 'fabric',
+    label: 'Fabric',
+    cn: '通信',
+    icon: Network,
+    q: 'Agent 之间在说什么？',
+    desc: 'Agent 拓扑、通信事件流、任务提交（OAB）',
   },
   {
     key: 'developer',
@@ -413,6 +423,7 @@ export default function App() {
         )}
 
         {view === 'world' && <WorldPanel />}
+        {view === 'fabric' && <FabricPanel />}
 
         {view === 'workers' && <V2Panel initialTab="workers" />}
 

@@ -9,10 +9,16 @@ import type {
   PluginDto,
   RawSkillDto,
   RunStartDto,
+  AuditQueryDto,
+  AuditViewDto,
+  FabricRequestDto,
+  FabricSubmissionDto,
   SessionDto,
   SessionSummaryDto,
   SkillDto,
   WorldGraphDto,
+  WorldQueryDto,
+  WorldViewDto,
   WorkerDto,
 } from './types'
 
@@ -182,3 +188,44 @@ export async function getGraph(): Promise<WorldGraphDto> {
 }
 
 /// REQ-018：列出自动放行审计（wb_approval_audit，可追溯至 LearnedKnowledge + run）。
+
+// ── Phase 7 Facade Transport（POST /api/v1/facade/*；单一语义源）──
+
+export async function postWorldQuery(req: WorldQueryDto): Promise<WorldViewDto> {
+  const r = await fetch('/api/v1/facade/world/query', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  })
+  const json: ApiResponse<WorldViewDto> = await r.json()
+  if (json.code !== 0 || !json.data) {
+    throw new Error(json.msg || `世界查询失败 (code=${json.code})`)
+  }
+  return json.data
+}
+
+export async function postAuditQuery(req: AuditQueryDto): Promise<AuditViewDto> {
+  const r = await fetch('/api/v1/facade/audit/query', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  })
+  const json: ApiResponse<AuditViewDto> = await r.json()
+  if (json.code !== 0 || !json.data) {
+    throw new Error(json.msg || `审计查询失败 (code=${json.code})`)
+  }
+  return json.data
+}
+
+export async function postFabricSubmit(req: FabricRequestDto): Promise<FabricSubmissionDto> {
+  const r = await fetch('/api/v1/facade/fabric/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  })
+  const json: ApiResponse<FabricSubmissionDto> = await r.json()
+  if (json.code !== 0 || !json.data) {
+    throw new Error(json.msg || `fabric 提交失败 (code=${json.code})`)
+  }
+  return json.data
+}

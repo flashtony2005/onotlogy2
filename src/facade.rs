@@ -61,14 +61,17 @@ impl From<ProjectionError> for FacadeError {
 
 /// world.query 请求（按实体/谓词过滤；默认全量）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorldQuery {
     pub object_ref: Option<String>,
     pub predicate: Option<String>,
+    #[serde(default)]
     pub limit: usize,
 }
 
 /// 世界关系（Kernel 当前有效投影的只读视图）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorldRelation {
     pub source: String,
     pub predicate: String,
@@ -79,6 +82,7 @@ pub struct WorldRelation {
 
 /// world.query 结果。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorldView {
     pub relations: Vec<WorldRelation>,
     pub total: usize,
@@ -88,15 +92,18 @@ pub struct WorldView {
 
 /// audit.query 请求（event_type 前缀匹配："approval." 匹配全部 approval.*）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AuditQuery {
     pub run_id: Option<String>,
     pub agent_id: Option<String>,
     pub event_type: Option<String>,
+    #[serde(default)]
     pub limit: usize,
 }
 
 /// 审计事件（Event Log 的审计语义域）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AuditEvent {
     pub id: String,
     pub event_type: String,
@@ -107,6 +114,7 @@ pub struct AuditEvent {
 
 /// audit.query 结果。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AuditView {
     pub events: Vec<AuditEvent>,
     pub total: usize,
@@ -114,6 +122,7 @@ pub struct AuditView {
 
 /// fabric.submit 请求（session 不存在自动创建，participants=[sender]）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FabricRequest {
     pub session_id: String,
     pub sender: String,
@@ -123,6 +132,7 @@ pub struct FabricRequest {
 
 /// fabric.submit 结果（task.result；事件已入 Event Log，可 audit.query 复核）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FabricSubmission {
     pub result: AgentMessage,
 }

@@ -65,3 +65,16 @@ describe('debounce', () => {
     vi.useRealTimers()
   })
 })
+
+import { fabricEventLabel } from '../format'
+
+describe('fabricEventLabel', () => {
+  it('给 fabric.* 事件语义化文案', () => {
+    expect(fabricEventLabel('fabric.task_completed')).toBe('✅ 任务完成')
+    expect(fabricEventLabel('fabric.agent_connected')).toBe('🔗 Agent 已连接')
+    expect(fabricEventLabel('fabric.task_failed')).toBe('❌ 任务失败')
+  })
+  it('未知类型回退原名', () => {
+    expect(fabricEventLabel('effect.committed')).toBe('effect.committed')
+  })
+})

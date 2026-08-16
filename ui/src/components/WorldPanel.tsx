@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Boxes, Globe2, Network, RefreshCw } from 'lucide-react'
-import { getGraph } from '../api'
+import { Activity, Boxes, Globe2, Network, RefreshCw } from 'lucide-react'
+import { getGraph, postWorldQuery } from '../api'
 import { fmtJson } from '../format'
-import type { WorldGraphDto, WorldNodeDto } from '../types'
+import type { WorldGraphDto, WorldNodeDto, WorldViewDto } from '../types'
 
 const TYPE_COLORS = [
   '#4c9ee6',
@@ -44,6 +44,31 @@ export function WorldPanel() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // Phase 5：投影世界（Event Log → Kernel 关系；world.query 语义）
+  const [mode, setMode] = useState<'projected' | 'objects'>('projected')
+  const [world, setWorld] = useState<WorldViewDto | null>(null)
+  const [objFilter, setObjFilter] = useState('')
+  const [predFilter, setPredFilter] = useState('')
+  const [wErr, setWErr] = useState<string | null>(null)
+
+  const loadProjected = async () => {
+    setWErr(null)
+    try {
+      const v = await postWorldQuery({
+        objectRef: objFilter.trim() || undefined,
+        predicate: predFilter.trim() || undefined,
+        limit: 500,
+      })
+      setWorld(v)
+    } catch (e) {
+      setWErr(String(e))
+    }
+  }
+
+  useEffect(() => {
+    void loadProjected()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const reload = async () => {
     setLoading(true)
@@ -89,16 +114,97 @@ export function WorldPanel() {
         <div>
           <h3>世界</h3>
           <span className="dash-meta">
-            World-aware Agent Operating System · 对象 {nodes.length} · 关系 {edges.length}
+            World-aware Agent Operating System · WorldState = Reduce(EventLog)
           </span>
         </div>
-        <button className="reload" onClick={() => void reload()} disabled={loading}>
-          <RefreshCw size={13} /> {loading ? '加载中…' : '刷新'}
+        <div className="world-mode-tabs">
+          <button
+            className={mode === 'projected' ? 'on' : ''}
+            onClick={() => setMode('projected')}
+          >
+            <Activity size={13} /> 投影世界
+          </button>
+          <button
+            className={mode === 'objects' ? 'on' : ''}
+            onClick={() => setMode('objects')}
+          >
+            <Network size={13} /> 对象图
+          </button>
+        </div>
+        <button
+          className="reload"
+          onClick={() => {
+            if (mode === 'projected') void loadProjected()
+            else void reload()
+          }}
+          disabled={loading}
+        >
+          <RefreshCw size={13} /> 刷新
         </button>
       </div>
 
       {err && <div className="err-msg">⚠️ {err}</div>}
+      {wErr && <div className="err-msg">⚠️ {wErr}</div>}
       {loading && <div className="empty-sm">❯ 世界图谱加载中…</div>}
+
+      {mode === 'projected' && (
+        <section className="dash-section">
+          <h4>
+            <Activity size={14} /> 投影世界（事件 → 投影 → Kernel 关系）
+          </h4>
+          <div className="world-filter">
+            <input
+              placeholder="objectRef 过滤（如 order-001）"
+              value={objFilter}
+              onChange={(e) => setObjFilter(e.target.value)}
+            />
+            <input
+              placeholder="predicate 过滤（如 fabric.status）"
+              value={predFilter}
+              onChange={(e) => setPredFilter(e.target.value)}
+            />
+            <button onClick={() => void loadProjected()}>查询</button>
+          </div>
+          {world && (
+            <>
+              <div className="dash-meta">
+                共 {world.total} 条关系 · 视图时刻 {world.at}
+                {predFilter.trim() === 'fabric.status' && ' · fabric 领域规则状态（提交即世界）'}
+              </div>
+              {world.relations.length === 0 ? (
+                <div className="empty-sm">投影世界为空——事件日志无（可投影）事件。</div>
+              ) : (
+                <table className="world-rel-table">
+                  <thead>
+                    <tr>
+                      <th>source</th>
+                      <th>predicate</th>
+                      <th>target</th>
+                      <th>valid</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {world.relations.map((r, i) => (
+                      <tr key={i}>
+                        <td>
+                          <code>{r.source}</code>
+                        </td>
+                        <td className={r.predicate.startsWith('fabric.') ? 'world-pred-fabric' : ''}>
+                          {r.predicate}
+                        </td>
+                        <td>
+                          <code>{r.target}</code>
+                        </td>
+                        <td>{r.validUntil == null ? '∞' : r.validUntil}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </>
+          )}
+        </section>
+      )}
 
       {!loading && nodes.length === 0 && (
         <div className="empty">
@@ -106,7 +212,7 @@ export function WorldPanel() {
         </div>
       )}
 
-      {nodes.length > 0 && (
+      {mode === 'objects' && nodes.length > 0 && (
         <>
           <section className="dash-section">
             <h4>

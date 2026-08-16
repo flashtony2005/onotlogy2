@@ -373,7 +373,9 @@ pub(crate) async fn list_audit(
     let list: Vec<crate::trace::TraceEventDto> = events
         .into_iter()
         .filter(|e| {
-            e.event_type.starts_with("approval.") || e.event_type == "evolution.gate_approved"
+            e.event_type.starts_with("approval.")
+                || e.event_type == "evolution.gate_approved"
+                || e.event_type.starts_with("fabric.")
         })
         .map(Into::into)
         .collect();

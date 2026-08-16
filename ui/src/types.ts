@@ -7,6 +7,7 @@ export type ViewKind =
   | 'workers'
   | 'learning'
   | 'governance'
+  | 'fabric'
   | 'developer'
   // 旧视图保留给后端 timeline 视图钳制与兼容（新菜单不再直接暴露）。
   | 'executive'
@@ -148,3 +149,69 @@ export interface WorldGraphDto {
   edges: WorldEdgeDto[]
 }
 
+
+// ── Phase 7 Facade DTO（对应 server /api/v1/facade/*；camelCase wire）──
+
+export interface WorldRelationDto {
+  source: string
+  predicate: string
+  target: string
+  validFrom: number
+  validUntil: number | null
+}
+
+export interface WorldViewDto {
+  relations: WorldRelationDto[]
+  total: number
+  at: number
+}
+
+export interface WorldQueryDto {
+  objectRef?: string
+  predicate?: string
+  limit?: number
+}
+
+export interface AuditEventDto {
+  id: string
+  eventType: string
+  refs: string[]
+  payload: unknown
+  timestamp: string
+}
+
+export interface AuditViewDto {
+  events: AuditEventDto[]
+  total: number
+}
+
+export interface AuditQueryDto {
+  runId?: string
+  agentId?: string
+  eventType?: string
+  limit?: number
+}
+
+export interface FabricRequestDto {
+  sessionId: string
+  sender: string
+  intent: string
+  payload: unknown
+}
+
+export interface FabricSubmissionDto {
+  // AgentMessage wire 为 snake_case（契约示例）；此处照实际字段声明
+  result: {
+    id: string
+    session_id: string
+    sender: string
+    receiver: string
+    kind: string
+    intent: string | null
+    payload: Record<string, unknown>
+    capability: string | null
+    correlation_id: string | null
+    causation_id: string | null
+    timestamp: number
+  }
+}
