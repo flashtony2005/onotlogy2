@@ -22,7 +22,7 @@ pub mod evaluation;
 pub mod evolution2;
 pub mod health;
 pub mod ir;
-pub mod kernel;
+pub use oaip_kernel as kernel;
 pub mod mutation;
 pub mod odl;
 pub mod plugin;

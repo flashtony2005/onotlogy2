@@ -23,6 +23,7 @@ use std::collections::HashMap;
 pub mod compensation;
 pub mod context;
 pub mod effect;
+pub mod event_ref;
 pub mod fiber;
 pub mod persistence;
 pub mod projection;
@@ -33,6 +34,7 @@ pub mod state;
 pub use compensation::{CompensationEngine, Compensator, NullCompensator, RecordingCompensator};
 pub use context::{Context, ContextId, ContextState, Scope};
 pub use effect::{Compensation, Effect, EffectId, EffectLedger, EffectState, Reversibility};
+pub use event_ref::EventRef;
 pub use fiber::{Fiber, FiberId, FiberState, WaitPattern};
 pub use relation::{Relation, RelationId};
 pub use state::StateStore;
@@ -63,7 +65,7 @@ pub enum KernelError {
 }
 
 /// 当前 unix 秒（Kernel 时钟，测试可注入）。
-pub(crate) fn now_secs() -> i64 {
+pub fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -135,7 +137,7 @@ impl Kernel {
         self
     }
 
-    pub(crate) fn compensator(&self) -> std::sync::Arc<dyn Compensator> {
+    pub fn compensator(&self) -> std::sync::Arc<dyn Compensator> {
         self.compensator.clone()
     }
 
@@ -156,7 +158,7 @@ impl Kernel {
     }
 
     /// 组合层：记录一次策略拒绝（业务拒绝，非运行失败；Effect 未提交）。
-    pub(crate) fn record_policy_denied(&mut self, fiber: FiberId, capability: &str, reason: &str) {
+    pub fn record_policy_denied(&mut self, fiber: FiberId, capability: &str, reason: &str) {
         self.record_event(
             Some(fiber),
             "policy.denied",
@@ -166,7 +168,7 @@ impl Kernel {
 
     /// Phase 6：EvolutionGate 放行审计（事实层，可观察/可撤销依据）。
     /// 记录一次「学习替代人工审批」——Learning ≠ Authority 的可审计证据。
-    pub(crate) fn record_evolution_gate(&mut self, fiber: FiberId, capability: &str, action: &str) {
+    pub fn record_evolution_gate(&mut self, fiber: FiberId, capability: &str, action: &str) {
         self.record_event(
             Some(fiber),
             "evolution.gate_approved",
@@ -181,12 +183,12 @@ impl Kernel {
     }
 
     /// 记录一次幂等执行（emit 成功后调用）。
-    pub(crate) fn record_idempotency(&mut self, ctx: ContextId, key: &str, effect: EffectId) {
+    pub fn record_idempotency(&mut self, ctx: ContextId, key: &str, effect: EffectId) {
         self.idempotency.insert((ctx, key.to_string()), effect);
     }
 
     /// 幂等重放审计（同 key 第二次执行：不产生新业务效果，仅记录）。
-    pub(crate) fn record_idempotent_replay(&mut self, fiber: FiberId, key: &str) {
+    pub fn record_idempotent_replay(&mut self, fiber: FiberId, key: &str) {
         self.record_event(
             Some(fiber),
             "effect.idempotent_replay",
@@ -195,7 +197,7 @@ impl Kernel {
     }
 
     /// Phase 8 · G2：审批挂起审计（compose 层 wait_on 时调用）。
-    pub(crate) fn record_approval_requested(&mut self, fiber: FiberId, capability: &str) {
+    pub fn record_approval_requested(&mut self, fiber: FiberId, capability: &str) {
         self.record_event(
             Some(fiber),
             "approval.requested",
@@ -281,7 +283,7 @@ impl Kernel {
         self.advance(fiber, FiberState::Failed)
     }
 
-    pub(crate) fn mark_effect_compensated(&mut self, id: EffectId) {
+    pub fn mark_effect_compensated(&mut self, id: EffectId) {
         let fiber = self.effects.get(&id).map(|e| e.fiber);
         if let Some(e) = self.effects.get_mut(&id) {
             e.status = EffectState::Compensated;
@@ -293,7 +295,7 @@ impl Kernel {
         );
     }
 
-    pub(crate) fn mark_effect_compensation_failed(&mut self, id: EffectId) {
+    pub fn mark_effect_compensation_failed(&mut self, id: EffectId) {
         let fiber = self.effects.get(&id).map(|e| e.fiber);
         if let Some(e) = self.effects.get_mut(&id) {
             e.status = EffectState::CompensationFailed;
@@ -551,11 +553,11 @@ impl Kernel {
     }
 
     // ── 恢复辅助（persistence::restore 使用；id 计数器随最大 id 推进） ──
-    pub(crate) fn restore_context(&mut self, ctx: Context) {
+    pub fn restore_context(&mut self, ctx: Context) {
         self.next_ctx = self.next_ctx.max(ctx.id.0 + 1);
         self.contexts.insert(ctx.id, ctx);
     }
-    pub(crate) fn restore_fiber(&mut self, f: Fiber) {
+    pub fn restore_fiber(&mut self, f: Fiber) {
         let mut f = f;
         // Phase 8 · G3：崩溃残留 Running → Interrupted（V1 v0_8 语义移植）
         if f.state == FiberState::Running {
@@ -564,15 +566,15 @@ impl Kernel {
         self.next_fiber = self.next_fiber.max(f.id.0 + 1);
         self.fibers.insert(f.id, f);
     }
-    pub(crate) fn restore_effect(&mut self, e: Effect) {
+    pub fn restore_effect(&mut self, e: Effect) {
         self.next_effect = self.next_effect.max(e.id.0 + 1);
         self.effects.insert(e.id, e);
     }
-    pub(crate) fn restore_relation(&mut self, r: Relation) {
+    pub fn restore_relation(&mut self, r: Relation) {
         self.next_relation = self.next_relation.max(r.id.0 + 1);
         self.relations.insert(r.id, r);
     }
-    pub(crate) fn restore_event(&mut self, ev: KernelEvent) {
+    pub fn restore_event(&mut self, ev: KernelEvent) {
         self.events.push(ev);
     }
 

@@ -27,20 +27,7 @@ pub mod hook;
 pub const EVALUATOR_VERSION: &str = "11.1.0";
 
 /// 证据引用：指向贡献该维度分数的事件（seq = 该 run 事件流中的 append 序号）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EventRef {
-    pub seq: u64,
-    pub event_type: String,
-}
-
-impl EventRef {
-    pub fn of(e: &SessionEvent) -> Self {
-        Self {
-            seq: e.seq,
-            event_type: e.event_type.as_str().to_string(),
-        }
-    }
-}
+pub use crate::kernel::EventRef;
 
 /// 单维度评分：值 + 证据 + 置信度。
 ///
@@ -227,11 +214,11 @@ impl EvaluationReducer {
         if let Some((s, ev, conf)) =
             judge_score(events, "correctness", self.policy.judge_min_confidence)
         {
-            return Score::judged(s, vec![EventRef::of(ev)], conf);
+            return Score::judged(s, vec![EventRef::new(ev.seq, ev.event_type.as_str())], conf);
         }
         // 2) 一等证据：测试通过率（TestResult 事件；代码类任务的真实 correctness）
         if let Some((rate, ev)) = test_pass_rate(events) {
-            return Score::known(rate, vec![EventRef::of(ev)]);
+            return Score::known(rate, vec![EventRef::new(ev.seq, ev.event_type.as_str())]);
         }
         // 3) 客观兜底：expected_relations 被事件提及
         if !task.expected_relations.is_empty() {
@@ -241,7 +228,13 @@ impl EvaluationReducer {
                 .collect();
             if !hit_events.is_empty() {
                 let rate = hit_events.len() as f64 / task.expected_relations.len() as f64;
-                return Score::known(rate, hit_events.iter().map(|e| EventRef::of(e)).collect());
+                return Score::known(
+                    rate,
+                    hit_events
+                        .iter()
+                        .map(|e| EventRef::new(e.seq, e.event_type.as_str()))
+                        .collect(),
+                );
             }
         }
         Score::unknown()
@@ -256,13 +249,19 @@ impl EvaluationReducer {
                 .collect();
             if !hit_events.is_empty() {
                 let rate = hit_events.len() as f64 / task.expected_artifacts.len() as f64;
-                return Score::known(rate, hit_events.iter().map(|e| EventRef::of(e)).collect());
+                return Score::known(
+                    rate,
+                    hit_events
+                        .iter()
+                        .map(|e| EventRef::new(e.seq, e.event_type.as_str()))
+                        .collect(),
+                );
             }
         }
         if let Some((s, ev, conf)) =
             judge_score(events, "completeness", self.policy.judge_min_confidence)
         {
-            return Score::judged(s, vec![EventRef::of(ev)], conf);
+            return Score::judged(s, vec![EventRef::new(ev.seq, ev.event_type.as_str())], conf);
         }
         Score::unknown()
     }
@@ -287,7 +286,10 @@ impl EvaluationReducer {
         let budget_ms = task.time_budget_secs * 1000.0;
         Score::known(
             budget_ms / total_ms,
-            completed.iter().map(|e| EventRef::of(e)).collect(),
+            completed
+                .iter()
+                .map(|e| EventRef::new(e.seq, e.event_type.as_str()))
+                .collect(),
         )
     }
 
@@ -304,12 +306,15 @@ impl EvaluationReducer {
             .iter()
             .filter(|e| e.event_type == EventType::WorkerFailed)
             .count();
-        let mut evidence: Vec<EventRef> = started.iter().map(|e| EventRef::of(e)).collect();
+        let mut evidence: Vec<EventRef> = started
+            .iter()
+            .map(|e| EventRef::new(e.seq, e.event_type.as_str()))
+            .collect();
         evidence.extend(
             events
                 .iter()
                 .filter(|e| e.event_type == EventType::WorkerFailed)
-                .map(EventRef::of),
+                .map(|e| EventRef::new(e.seq, e.event_type.as_str())),
         );
         Score::known(1.0 - fails as f64 / started.len() as f64, evidence)
     }
@@ -339,14 +344,19 @@ impl EvaluationReducer {
         });
         Score::known(
             if violated { 0.0 } else { 1.0 },
-            checks.iter().map(|e| EventRef::of(e)).collect(),
+            checks
+                .iter()
+                .map(|e| EventRef::new(e.seq, e.event_type.as_str()))
+                .collect(),
         )
     }
 
     // ── OutputQualityReducer（主观）：仅 judge ──
     fn output_quality(&self, events: &[SessionEvent]) -> Score {
         match judge_score(events, "output_quality", self.policy.judge_min_confidence) {
-            Some((s, ev, conf)) => Score::judged(s, vec![EventRef::of(ev)], conf),
+            Some((s, ev, conf)) => {
+                Score::judged(s, vec![EventRef::new(ev.seq, ev.event_type.as_str())], conf)
+            }
             None => Score::unknown(),
         }
     }

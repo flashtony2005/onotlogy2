@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::evaluation::EventRef;
+use super::EventRef;
 
 /// 假设轨投影（hypothetical 恒为 true——类型即标记，杜绝假设混入事实）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
