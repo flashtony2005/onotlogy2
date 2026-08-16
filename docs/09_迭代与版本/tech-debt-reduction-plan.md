@@ -55,8 +55,12 @@
   幂等均已由 V2 等价实现）；差集 G1–G10（认知 Trace 事件流、审批适配器、Pi 引擎迁移、
   审计落库、失败数据源、run 状态映射、health 数据源、via_workers 桥、测试迁移、UI 面板）；
   M1d 删除范围清单（planner/action/agent/runtime 门面 + wb_run/wb_memory/wb_approval 三表）。
-- **M1b 契约测试（测试先行，不动产品代码）**：按差集把 v0_3_agent/policy/evolution 与
-  v0_9_ws_clamp 的行为改写为 V2 契约测试（`tests/v2_parity/`）；先跑红，逐个补齐 V2 实现到绿。
+- **M1b 契约测试（测试先行，不动产品代码）** 🔄 进行中 → [`m1-gap-analysis.md`](./m1-gap-analysis.md)：
+  按差集把 v0_3_agent/policy/evolution 与 v0_9_ws_clamp 的行为改写为 V2 契约测试
+  （`tests/v2_parity/`）；先跑红，逐个补齐 V2 实现到绿。
+  - ✅ G1 认知 Trace 事件流：4 例契约测试 + `AgentLoop::with_trace` 实现（commit cecc44f），360 passed。
+  - ⬜ G2 审批适配器 / G3 Pi 引擎 / G4 审计 / G5 失败数据源 / G6 状态映射 / G7 health /
+    G8 via_workers / G9 v0_3 迁移 / G10 UI 面板。
 - **M1c 切换入口**：CLI `agent run` 与 server `/run` 改走 cognitive loop；
   v0_3_* 测试退役（行为已被 v2_parity 覆盖）；全量确认 UI/WS 事件流不回归。
 - **M1d 物理删除**：删 `planner/`、`action.rs`、`RuntimeKernel` 门面（server 直连 V2 Kernel）、

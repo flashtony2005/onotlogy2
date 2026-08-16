@@ -28,15 +28,19 @@
 
 ## 3. 差集（切换入口前必须补齐，M1b 契约测试对象）
 
-### G1 认知 Trace 事件流（最大缺口）
+### G1 认知 Trace 事件流（最大缺口）✅ 已落地（commit cecc44f）
 
 - V1：run_goal 全链路 emit 12 种认知事件（Goal / Intent / OntologyQuery / MemoryRecall /
   Reasoning / Planning / PolicyCheck / ToolBackend / ActionFailed / Action / MemoryUpdate /
   Reflection）→ `wb_trace_event(kind=cognitive)` → UI 时间线 + WS 流 + evaluation 桥接。
-- V2：`run_once` 零事件。切换后 UI 时间线空白、`v0_9_ws_clamp` 失效。
-- 补齐：AgentLoop 各阶段 emit 对等认知事件（最小集 = UI `buildTimeline` 实际消费的种类 +
-  evaluation 桥接所需）；事件写入经统一入口，保留 run_id/object_refs 绑定。
-- 测试：`tests/v2_parity/trace_events.rs`——断言 run_until_done 全程事件序列（种类/顺序/绑定）。
+- V2 原状：`run_once` 零事件。切换后 UI 时间线空白、`v0_9_ws_clamp` 失效。
+- 已落地：`AgentLoop::with_trace(run_id, sink)`——调用方持有 sink，事件与 V1 同源
+  （Goal/OntologyQuery/Reasoning/Intent/Planning/PolicyCheck/Action/PendingApproval/
+  ActionFailed/MemoryUpdate）；resume 续跑扫描去重（Goal 不重复）；空世界 object_refs
+  兜底 "world"；`runtime::new_trace_id/now_ts` 转 pub。sink → `wb_trace_event` 落库在
+  M1c 入口接线时做。
+- 契约测试：`tests/v2_parity/trace_events.rs` 4 例全绿（闭环全流水线 / 审批挂起恢复 /
+  拒绝零记忆 / 默认关闭）。基线 356 → 360。
 
 ### G2 审批适配器（CLI + HTTP 两条腿）
 
