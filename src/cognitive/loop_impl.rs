@@ -63,7 +63,9 @@ pub struct AgentLoop<'k> {
     /// M1b G1：认知 Trace 事件缓冲（观察层；调用方持有并负责落库——
     /// 与 V1 run_goal 的 wb_trace_event 同源，UI buildTimeline/deriveState 依赖）。
     trace: Option<&'k mut Vec<TraceEvent>>,
-    /// Trace 事件的 run_id 绑定（with_trace 时指定）。
+    /// M1b G2：挂起审批请求缓冲（交互层；调用方持有，CLI/HTTP 适配器据此裁决）。
+    approvals: Option<&'k mut Vec<super::approval::ApprovalRequest>>,
+    /// Trace/审批事件的 run_id 绑定（with_trace / with_approvals 时指定）。
     run_id: Option<String>,
     /// 已提交动作数（MemoryUpdate 的 actions 统计）。
     action_count: usize,
@@ -85,6 +87,7 @@ impl<'k> AgentLoop<'k> {
             evolution: None,
             rule_stats: None,
             trace: None,
+            approvals: None,
             run_id: None,
             action_count: 0,
         }
@@ -112,6 +115,18 @@ impl<'k> AgentLoop<'k> {
     /// resume 续跑时传入同一 sink 即可保持单次 run 的事件连续性。
     pub fn with_trace(mut self, run_id: impl Into<String>, sink: &'k mut Vec<TraceEvent>) -> Self {
         self.trace = Some(sink);
+        self.run_id = Some(run_id.into());
+        self
+    }
+
+    /// 开启挂起审批注册（G2）：Waiting 时把类型化 ApprovalRequest 推入调用方 sink，
+    /// CLI/HTTP 适配器据此裁决（resolve/expire）。run_id 与 with_trace 共用同一字段。
+    pub fn with_approvals(
+        mut self,
+        run_id: impl Into<String>,
+        sink: &'k mut Vec<super::approval::ApprovalRequest>,
+    ) -> Self {
+        self.approvals = Some(sink);
         self.run_id = Some(run_id.into());
         self
     }
@@ -323,6 +338,8 @@ impl<'k> AgentLoop<'k> {
             .as_ref()
             .map(|ev| ev.gate(&cap.action, cap.reversibility))
             .unwrap_or(false);
+        // G2：步骤参数副本（step 会 move args；审批请求注册需要）
+        let step_args = decision.args.clone();
         let outcome = self
             .task_executor()
             .step_with_gate(fiber, cap, decision.args, gate_pass)?;
@@ -373,10 +390,26 @@ impl<'k> AgentLoop<'k> {
                     "PendingApproval",
                     &refs,
                     Some("等待人工审批"),
-                    Some(json!({ "capability": cap.name })),
+                    Some(json!({ "capability": cap.name, "args": step_args })),
                     Some(json!({ "pending": true })),
                     Some(0.5),
                 );
+                // G2：类型化审批请求注册（CLI/HTTP 适配器据此裁决）
+                if let (Some(sink), Some(context)) = (
+                    self.approvals.as_deref_mut(),
+                    self.kernel.fiber(fiber).map(|f| f.context),
+                ) {
+                    sink.push(super::approval::ApprovalRequest {
+                        id: crate::runtime::new_trace_id(),
+                        run_id: self.run_id.clone().unwrap_or_default(),
+                        context,
+                        fiber,
+                        capability: cap.name.clone(),
+                        action: cap.action.clone(),
+                        args: step_args.clone(),
+                        created_at: self.kernel.now(),
+                    });
+                }
                 Ok(LoopOutcome::Waiting)
             }
             StepOutcome::Denied(reason) => {

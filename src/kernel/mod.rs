@@ -242,6 +242,24 @@ impl Kernel {
         Ok(())
     }
 
+    /// 审批超时裁决：Waiting → Cancelled + `approval.expired` 审计
+    /// （与 Rejected 区分，V1 tc023d 语义）。
+    pub fn expire_approval(&mut self, fiber: FiberId, by: &str) -> Result<(), KernelError> {
+        let st = self
+            .fiber(fiber)
+            .map(|f| f.state)
+            .ok_or(KernelError::FiberNotFound(fiber))?;
+        if st != FiberState::Waiting {
+            return Err(KernelError::InvalidTransition(
+                st.as_str().to_string(),
+                "Cancelled".into(),
+            ));
+        }
+        self.advance(fiber, FiberState::Cancelled)?;
+        self.record_event(Some(fiber), "approval.expired", json!({ "by": by }));
+        Ok(())
+    }
+
     // ── Phase 8 · G3：Crash Recovery（Interrupted 恢复语义）─────────────
     /// 崩溃标记：Running → Interrupted + `fiber.interrupted` 事件。
     pub fn mark_interrupted(&mut self, fiber: FiberId) -> Result<(), KernelError> {

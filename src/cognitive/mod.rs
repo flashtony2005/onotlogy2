@@ -4,6 +4,7 @@
 //! 只有经 `TaskExecutor::step` 提交的 Effect 改变 World。
 //! 设计定稿：docs/03_架构设计/cognitive-layer-v3.md
 
+pub mod approval;
 pub mod engine;
 pub mod episode;
 pub mod loop_impl;
@@ -11,6 +12,9 @@ pub mod memory;
 pub mod observe;
 pub mod persist;
 
+pub use approval::{
+    ApprovalDecision, ApprovalRequest, ApprovalResolution, DecisionCache, expire, resolve,
+};
 pub use engine::{
     AgentView, CognitiveEngine, CognitiveError, Decision, FakeEngine, NoOpEngine, PlanStep,
 };
