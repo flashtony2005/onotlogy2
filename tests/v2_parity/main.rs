@@ -3,5 +3,7 @@
 
 mod approval;
 mod gate_source;
+mod health_source;
+mod pi_engine;
 mod run_status;
 mod trace_events;

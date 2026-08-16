@@ -11,6 +11,7 @@ pub mod loop_impl;
 pub mod memory;
 pub mod observe;
 pub mod persist;
+pub mod pi;
 
 pub use approval::{
     ApprovalDecision, ApprovalRequest, ApprovalResolution, DecisionCache, expire, resolve,
@@ -20,3 +21,4 @@ pub use engine::{
 };
 pub use loop_impl::{Agent, AgentLoop, LoopOutcome};
 pub use memory::{Memory, MemoryItem};
+pub use pi::PiEngine;

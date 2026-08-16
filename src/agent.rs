@@ -14,6 +14,10 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
+// M1b G3：pi 探测与围栏剥离已迁至 V2 认知引擎（cognitive/pi.rs），
+// V1 PiAgentEngine 复用同一实现；M1d 删除本文件后归 pi.rs 独有。
+use crate::cognitive::pi::{strip_code_fence, which_pi};
+
 /// 认知引擎错误。
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
@@ -305,45 +309,12 @@ impl AgentEngine for PiAgentEngine {
     }
 }
 
-/// 在 PATH 中查找 `pi` 可执行文件。
-fn which_pi() -> Option<String> {
-    if let Some(p) = std::env::var("PI_BIN").ok().filter(|p| !p.is_empty()) {
-        return Some(p);
-    }
-    // 简单 PATH 探测（避免引入 which crate）。
-    let paths = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&paths) {
-        let candidate = dir.join("pi");
-        if candidate.is_file() {
-            return Some(candidate.to_string_lossy().into_owned());
-        }
-        // Windows 兼容
-        let candidate_exe = dir.join("pi.exe");
-        if candidate_exe.is_file() {
-            return Some(candidate_exe.to_string_lossy().into_owned());
-        }
-    }
-    None
-}
-
 /// 从 pi 文本输出中尽力提取可读文本（剥离 JSON 包裹）。
 fn extract_text(raw: &str) -> String {
     match serde_json::from_str::<Value>(raw) {
         Ok(v) => extract_text_from_value(&v),
         Err(_) => raw.trim().to_string(),
     }
-}
-
-/// 剥离 ```` ```json ... ``` ```` 代码围栏（真实 LLM 常包裹 JSON），便于解析。
-fn strip_code_fence(raw: &str) -> String {
-    let s = raw.trim();
-    if let Some(stripped) = s.strip_prefix("```json").or_else(|| s.strip_prefix("```")) {
-        if let Some(end) = stripped.rfind("```") {
-            return stripped[..end].trim().to_string();
-        }
-        return stripped.trim().to_string();
-    }
-    s.to_string()
 }
 
 /// 从解析后的 JSON 值下钻提取推理文本（兼容 {message}/{content}/裸字符串）。
