@@ -42,15 +42,20 @@
 - 契约测试：`tests/v2_parity/trace_events.rs` 4 例全绿（闭环全流水线 / 审批挂起恢复 /
   拒绝零记忆 / 默认关闭）。基线 356 → 360。
 
-### G2 审批适配器（CLI + HTTP 两条腿）
+### G2 审批适配器（CLI + HTTP 两条腿）✅ 原语已落地（commit eed2f43）
 
 - V1：`PolicyApprover` 三实现——`ConsoleApprover`（stdin y/N + 决策缓存）、`AutoApprover`、
   `ServerApprover`（挂起 + `GET /run/:id/approvals` + `POST /run/:id/approval/:req_id` + 超时 Expired）。
-- V2：只有 `Waiting` + `relate(Approval)` 机制，无外部适配器。
-- 补齐：① `CliApprovalAdapter`（stdin 交互，复用 V1 决策缓存语义）；② `HttpApprovalAdapter`
-  （复用现有端点协议，待审队列改由 Waiting Fiber 注册表驱动，超时→advance(Expired 语义)）。
-- 测试：`tests/v2_parity/approval_cli.rs` / `approval_http.rs`——挂起→批准恢复→完成；
-  挂起→拒绝→Denied；挂起→超时→Expired 且拒绝二次裁决。
+- V2 原状：只有 `Waiting` + `relate(Approval)` 机制，无外部适配器。
+- 已落地（库级原语，适配器薄壳在 M1c 接线）：
+  - `cognitive/approval.rs`：`ApprovalRequest`（类型化挂起请求，AgentLoop Waiting 时经
+    `with_approvals(run_id, sink)` 注册）/ `resolve`（以 Fiber 状态为真相源，非 WAITING →
+    AlreadyResolved 拒绝二次裁决）/ `expire`（`approval.expired` 与 Rejected 区分）/
+    `DecisionCache`（`action@target` 只询问一次，V1 ConsoleApprover 语义）。
+  - `kernel::expire_approval`：Waiting → Cancelled + `approval.expired` 审计（tc023d 语义）。
+  - 待 M1c：CLI stdin 交互壳（用 DecisionCache + resolve）、HTTP 端点壳（请求 sink → 现有端点协议）。
+- 契约测试：`tests/v2_parity/approval.rs` 4 例全绿（注册+批准恢复 / 拒绝防重 / 超时区分 /
+  缓存单次询问）。基线 360 → 364。
 
 ### G3 Pi 真实引擎迁移
 
