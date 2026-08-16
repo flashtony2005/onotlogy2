@@ -13,6 +13,7 @@
 //! 5 接口（connect/discover/send/stream/cancel）+ correlation_id/session_id。
 
 pub mod adapter;
+pub mod adapters;
 pub mod router;
 pub mod session;
 

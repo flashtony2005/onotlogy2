@@ -123,6 +123,21 @@ pub trait AgentAdapter: Send + Sync {
 - 现有 Worker 层不推倒：`WorkerManifest` 的能力声明 = Adapter 的 discover 数据源。
 - 每个 Agent 是 **Capability Provider**，不是 Bridge 的特殊公民。
 
+**真实适配器（v1.1 落地：`fabric/adapters.rs`）**：
+
+- `ProcessAdapter`：桥接 `ProcessWorker` 作为执行连接器（manifest/command 复用），
+  执行 = 同步 std::process（阻塞上下文约定：spawn_blocking / block_in_place，
+  与 StorageSink 同约定，不依赖 async runtime）。
+- `codex_adapter` / `dsh_adapter`：工厂函数（能力市场与 `codex_worker` /
+  `dsh_worker` 同源——Codex/DSH 是 Capability Provider，新 Agent 接入 = 一个
+  适配器工厂）。
+- `connect()` = 命令 PATH 探测（不启动进程；不可用 → fail-closed）。
+- payload 约定：`args` 数组透传为命令行参数；`task` 文本追加为末参。
+- `stream()` 真实语义：逐行 stdout → `TaskProgress` 序列 → 终局 `TaskResult`
+  （退出码非 0 → status=failed）。
+- `cancel(correlation_id)`：kill 运行中的子进程（未在跑 = 幂等 Ok；
+  被取消的进程不得报 completed——kill 语义）。
+
 ## 4. ABI-4 Router（Bridge 的真正核心）
 
 不是 `receiver = codex` 直路由，而是：
@@ -193,3 +208,4 @@ tc_f5 闭环 demo（Router→Adapter→result→事件→投影→World State）
 | 版本 | 修改人 | 修改日期 | 修改内容 |
 |------|--------|----------|----------|
 | V1.0 | lushaohui | 2026-08-16 | 契约定稿：四 ABI（AgentMessage/Session/Adapter/Router）+ Event Log 集成 + OAB v0.1 边界 |
+| V1.1 | lushaohui | 2026-08-16 | 真实适配器落地：ProcessAdapter 桥接 ProcessWorker（codex/dsh 工厂 + PATH 探测 + payload 约定）；stream 逐行进度/cancel kill 语义（tc_f6–f8 钉死） |

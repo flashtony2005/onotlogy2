@@ -288,3 +288,197 @@ async fn tc_f5_full_demo_chain_to_world_state() {
         "World State 必须反映通信层事实"
     );
 }
+
+// ── OAB v1.1：真实适配器（桥接 ProcessWorker）+ stream/cancel 真实语义 ──
+// 契约 §3/§6：Adapter 管协议、Worker 是执行连接器；payload 约定 args/task；
+// stream = 逐行 stdout → TaskProgress；cancel = 按 correlation_id kill。
+use openaip_os::fabric::adapters::{ProcessAdapter, codex_adapter, dsh_adapter};
+use openaip_os::worker::manifest::WorkerManifest;
+use openaip_os::worker::process::ProcessWorker;
+
+/// 用 /bin/sh 构造测试适配器（不依赖 codex/dsh 安装；命令可覆盖）。
+fn sh_adapter(capabilities: &[&str]) -> ProcessAdapter {
+    let mut m = WorkerManifest::new("sh-agent", "agent").with_capabilities(capabilities);
+    m.quality = 0.9;
+    m.risk = 2;
+    ProcessAdapter::new("sh-agent", ProcessWorker::new(m, "/bin/sh"))
+}
+
+// ── tc_f6：真实适配器——discover 能力市场与 WorkerManifest 同源 ─────────
+#[test]
+fn tc_f6_real_adapters_discover_from_worker_manifest() {
+    // Codex/DSH 工厂：能力市场与 codex_worker/dsh_worker 同源（不是特殊公民）
+    let codex = codex_adapter(None);
+    assert_eq!(codex.id(), "codex");
+    let caps: Vec<String> = codex.discover().into_iter().map(|c| c.name).collect();
+    for expect in ["code.read", "code.write", "code.test", "code.search"] {
+        assert!(caps.iter().any(|c| c == expect), "缺 {expect}: {caps:?}");
+    }
+    let dsh = dsh_adapter(None);
+    assert_eq!(dsh.id(), "dsh");
+    let dsh_caps: Vec<String> = dsh.discover().into_iter().map(|c| c.name).collect();
+    assert!(
+        dsh_caps.iter().any(|c| c == "agent.task") && dsh_caps.iter().any(|c| c == "shell.execute")
+    );
+    // 风险/质量来自 manifest（Policy 判定依据；codex_worker 声明 quality=0.95）
+    let first = codex.discover().into_iter().next().unwrap();
+    assert_eq!(first.agent_id, "codex");
+    assert!(
+        (first.quality - 0.95).abs() < 1e-9,
+        "quality 应来自 WorkerManifest"
+    );
+    assert!(first.risk >= 1 && first.risk <= 10);
+}
+
+// ── tc_f7：真实进程闭环（send：task.request → 进程 → task.result）────────
+#[tokio::test]
+async fn tc_f7_real_process_send_roundtrip_through_bridge() {
+    let sink = Arc::new(VecSink::default());
+    let mut r = FabricRouter::new();
+    r.register_intent("run_check", "shell.execute");
+    r.register_agent("shell.execute", "sh-agent", 1);
+    let mut b = Bridge::new(r, Some(sink.clone()));
+    // 命令不可用 → connect 失败（真实握手：PATH 探测）
+    let ghost = ProcessAdapter::new(
+        "ghost",
+        ProcessWorker::new(
+            WorkerManifest::new("ghost", "agent").with_capabilities(&["shell.execute"]),
+            "no-such-cmd-xyz-123",
+        ),
+    );
+    assert!(
+        ghost.connect().is_err(),
+        "命令不存在必须 connect 失败（fail-closed）"
+    );
+    // 真实进程：/bin/sh 可用 → connect 成功
+    let sh = sh_adapter(&["shell.execute"]);
+    assert!(sh.connect().is_ok());
+    b.connect_agent(Arc::new(sh)).unwrap();
+
+    let mut sm = SessionManager::new();
+    let s = sm.create(vec!["dsh".into(), "sh-agent".into()]);
+    let result = b
+        .submit(
+            &mut sm,
+            &s.id,
+            "dsh",
+            "run_check",
+            serde_json::json!({ "args": ["-c", "echo done-ok"] }),
+        )
+        .unwrap();
+    assert_eq!(result.kind, MessageKind::TaskResult);
+    assert_eq!(result.payload["status"], "completed");
+    assert_eq!(result.payload["exit_code"], 0);
+    assert!(
+        result.payload["stdout"]
+            .as_str()
+            .unwrap()
+            .contains("done-ok")
+    );
+    assert_eq!(result.sender, "sh-agent");
+    assert_eq!(result.receiver, "dsh");
+    // correlation 贯通（request → result）
+    assert!(result.correlation_id.is_some());
+
+    // 失败路径：非零退出 → status=failed
+    let result2 = b
+        .submit(
+            &mut sm,
+            &s.id,
+            "dsh",
+            "run_check",
+            serde_json::json!({ "args": ["-c", "echo boom; exit 3"] }),
+        )
+        .unwrap();
+    assert_eq!(result2.payload["status"], "failed");
+    assert_eq!(result2.payload["exit_code"], 3);
+    // 事件黑匣子：真实进程路径也全量入日志
+    let evs = sink.0.lock().unwrap();
+    let types: Vec<&str> = evs.iter().map(|e| e.event_type.as_str()).collect();
+    assert!(types.contains(&"fabric.task_completed"));
+    assert!(types.contains(&"fabric.task_failed"));
+}
+
+// ── tc_f8：stream 真实流式（逐行进度）+ cancel（kill 子进程）───────────
+#[test]
+fn tc_f8_stream_emits_progress_lines_and_cancel_kills() {
+    // 流式：/bin/sh -c "printf 'a\nb\nc\n'" → 3 条 TaskProgress + 终局 TaskResult
+    let sh = sh_adapter(&["shell.execute"]);
+    let req = AgentMessage {
+        id: "req_stream".into(),
+        session_id: "sess_s".into(),
+        sender: "dsh".into(),
+        receiver: "sh-agent".into(),
+        kind: MessageKind::TaskRequest,
+        intent: Some("run_check".into()),
+        payload: serde_json::json!({ "args": ["-c", "printf 'a\\nb\\nc\\n'"] }),
+        context: Value::Null,
+        capability: Some("shell.execute".into()),
+        correlation_id: Some("c_stream".into()),
+        causation_id: None,
+        timestamp: 1,
+    };
+    let msgs = sh.stream(&req).unwrap();
+    let kinds: Vec<&str> = msgs.iter().map(|m| m.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            "task.progress",
+            "task.progress",
+            "task.progress",
+            "task.result"
+        ]
+    );
+    for (i, line) in ["a", "b", "c"].iter().enumerate() {
+        assert_eq!(msgs[i].payload["progress"], *line);
+    }
+    assert_eq!(msgs[3].payload["status"], "completed");
+    assert_eq!(msgs[3].payload["progress_count"], 3);
+    // correlation 贯通
+    assert!(
+        msgs.iter()
+            .all(|m| m.correlation_id.as_deref() == Some("c_stream"))
+    );
+
+    // cancel：长任务进程按 correlation_id 被杀 → 终局 failed
+    let sh2 = Arc::new(sh_adapter(&["shell.execute"]));
+    let req2 = AgentMessage {
+        id: "req_cancel".into(),
+        session_id: "sess_c".into(),
+        sender: "dsh".into(),
+        receiver: "sh-agent".into(),
+        kind: MessageKind::TaskRequest,
+        intent: Some("run_check".into()),
+        payload: serde_json::json!({ "args": ["-c", "sleep 5; echo never"] }),
+        context: Value::Null,
+        capability: Some("shell.execute".into()),
+        correlation_id: Some("c_cancel".into()),
+        causation_id: None,
+        timestamp: 1,
+    };
+    let handle = {
+        let sh2 = sh2.clone();
+        std::thread::spawn(move || {
+            // 阻塞读（真实流式）；cancel 后管道关闭 → 提前返回
+            sh2.stream(&req2).unwrap()
+        })
+    };
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    // 取消（幂等：不存在的 correlation 也 Ok）
+    assert!(sh2.cancel("c_cancel").is_ok());
+    assert!(sh2.cancel("no-such").is_ok());
+    let msgs = handle.join().expect("stream 线程应结束");
+    assert!(
+        msgs.iter().any(|m| m.kind == MessageKind::TaskResult),
+        "cancel 后必须有终局结果"
+    );
+    let final_msg = msgs
+        .iter()
+        .rev()
+        .find(|m| m.kind == MessageKind::TaskResult)
+        .unwrap();
+    assert_ne!(
+        final_msg.payload["status"], "completed",
+        "被取消的进程不得报 completed（kill 语义）"
+    );
+}
