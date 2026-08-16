@@ -52,10 +52,10 @@ covers:
     at: 'tests/v0_1.rs:L135-L166'
   - symbol: tc007b_missing_refs_blocked
     kind: function
-    at: 'tests/v0_1.rs:L169-L189'
+    at: 'tests/v0_1.rs:L169-L190'
   - symbol: tc005b_open_rejects_legacy_schema
     kind: function
-    at: 'tests/v0_1.rs:L193-L221'
+    at: 'tests/v0_1.rs:L194-L222'
   - symbol: tc012_relation_link_and_neighbors
     kind: function
     at: 'tests/v0_2.rs:L10-L36'

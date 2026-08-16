@@ -50,67 +50,73 @@ covers:
     at: 'ui/src/App.tsx:L231-L247'
   - symbol: AuthError
     kind: class
-    at: 'ui/src/api.ts:L26-L31'
+    at: 'ui/src/api.ts:L28-L33'
   - symbol: constructor
     kind: method
-    at: 'ui/src/api.ts:L27-L30'
+    at: 'ui/src/api.ts:L29-L32'
   - symbol: fetchWithTimeout
     kind: function
-    at: 'ui/src/api.ts:L37-L50'
+    at: 'ui/src/api.ts:L39-L52'
   - symbol: unwrap
     kind: function
-    at: 'ui/src/api.ts:L52-L75'
+    at: 'ui/src/api.ts:L54-L77'
   - symbol: authFetch
     kind: function
-    at: 'ui/src/api.ts:L78-L85'
+    at: 'ui/src/api.ts:L80-L87'
   - symbol: postLogin
     kind: function
-    at: 'ui/src/api.ts:L90-L100'
+    at: 'ui/src/api.ts:L92-L102'
   - symbol: getMe
     kind: function
-    at: 'ui/src/api.ts:L103-L106'
+    at: 'ui/src/api.ts:L105-L108'
   - symbol: postLogout
     kind: function
-    at: 'ui/src/api.ts:L109-L112'
+    at: 'ui/src/api.ts:L111-L114'
   - symbol: postRun
     kind: function
-    at: 'ui/src/api.ts:L116-L123'
+    at: 'ui/src/api.ts:L118-L125'
   - symbol: getSkillRaw
     kind: function
-    at: 'ui/src/api.ts:L125-L129'
+    at: 'ui/src/api.ts:L127-L131'
   - symbol: importSkill
     kind: function
-    at: 'ui/src/api.ts:L131-L143'
+    at: 'ui/src/api.ts:L133-L145'
   - symbol: getPlugins
     kind: function
-    at: 'ui/src/api.ts:L145-L149'
+    at: 'ui/src/api.ts:L147-L151'
   - symbol: getWorkers
     kind: function
-    at: 'ui/src/api.ts:L151-L155'
+    at: 'ui/src/api.ts:L153-L157'
   - symbol: getSessions
     kind: function
-    at: 'ui/src/api.ts:L157-L161'
+    at: 'ui/src/api.ts:L159-L163'
   - symbol: getSession
     kind: function
-    at: 'ui/src/api.ts:L163-L167'
+    at: 'ui/src/api.ts:L165-L169'
   - symbol: createSession
     kind: function
-    at: 'ui/src/api.ts:L169-L175'
+    at: 'ui/src/api.ts:L171-L177'
   - symbol: getSkills
     kind: function
-    at: 'ui/src/api.ts:L179-L183'
+    at: 'ui/src/api.ts:L181-L185'
   - symbol: getGraph
     kind: function
-    at: 'ui/src/api.ts:L185-L188'
+    at: 'ui/src/api.ts:L187-L190'
   - symbol: postWorldQuery
     kind: function
-    at: 'ui/src/api.ts:L194-L205'
+    at: 'ui/src/api.ts:L196-L207'
   - symbol: postAuditQuery
     kind: function
-    at: 'ui/src/api.ts:L207-L218'
+    at: 'ui/src/api.ts:L209-L220'
+  - symbol: postProjectList
+    kind: function
+    at: 'ui/src/api.ts:L222-L231'
+  - symbol: postProjectCreate
+    kind: function
+    at: 'ui/src/api.ts:L233-L242'
   - symbol: postFabricSubmit
     kind: function
-    at: 'ui/src/api.ts:L220-L231'
+    at: 'ui/src/api.ts:L244-L255'
 ---
 <!-- context:generated:start -->
 ## Summary

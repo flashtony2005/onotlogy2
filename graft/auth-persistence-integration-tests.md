@@ -56,13 +56,13 @@ covers:
     at: 'tests/v0_7_auth.rs:L197-L231'
   - symbol: tc_auth_i_trace_list_clamped_to_role
     kind: function
-    at: 'tests/v0_7_auth.rs:L236-L293'
+    at: 'tests/v0_7_auth.rs:L236-L294'
   - symbol: tc_auth_j_login_rate_limited
     kind: function
-    at: 'tests/v0_7_auth.rs:L297-L308'
+    at: 'tests/v0_7_auth.rs:L298-L309'
   - symbol: tc_auth_k_session_token_hashed_at_rest
     kind: function
-    at: 'tests/v0_7_auth.rs:L312-L322'
+    at: 'tests/v0_7_auth.rs:L313-L323'
   - symbol: common
     kind: module
     at: 'tests/v0_8_persistence.rs:L10-L10'

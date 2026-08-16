@@ -93,3 +93,25 @@ pub(crate) async fn facade_project_list(
         Err(e) => ApiResponse::error(5000, format!("项目列表失败: {e}")).into_response(),
     }
 }
+
+/// project.seed：把 OpenAIP-OS 工程本体写成项目世界事件（模块/文件/测试）。
+/// root 取当前工作目录（server 在工程根运行时的形态；CLI 亦同）。
+pub(crate) async fn facade_project_seed(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+) -> Response {
+    if !user.can_trigger_run() {
+        return forbidden("当前角色无权 seed 项目（需 Operator 及以上）").into_response();
+    }
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| ".".to_string());
+    let n = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current()
+            .block_on(crate::project_seed::seed_openaip_os(&st.storage, &cwd))
+    });
+    match n {
+        Ok(n) => ApiResponse::ok(serde_json::json!({ "events": n })).into_response(),
+        Err(e) => ApiResponse::error(5000, format!("seed 失败: {e}")).into_response(),
+    }
+}

@@ -13,6 +13,6 @@ Integration test contract for V0.7 auth & RBAC: verifies server-enforced authent
 - tc_auth_f_logout_invalidates_token · function · L156-L165 — Verifies that after logout, reusing the same token on a protected endpoint returns 401.
 - tc_auth_g_disabled_user_token_401 · function · L169-L192 — Verifies that disabling a user cascades session invalidation so their previously-valid token returns 401.
 - tc_auth_h_graph_clamped_to_role · function · L197-L231 — async fn tc_auth_h_graph_clamped_to_role()
-- tc_auth_i_trace_list_clamped_to_role · function · L236-L293 — async fn tc_auth_i_trace_list_clamped_to_role()
-- tc_auth_j_login_rate_limited · function · L297-L308 — async fn tc_auth_j_login_rate_limited()
-- tc_auth_k_session_token_hashed_at_rest · function · L312-L322 — async fn tc_auth_k_session_token_hashed_at_rest()
+- tc_auth_i_trace_list_clamped_to_role · function · L236-L294 — async fn tc_auth_i_trace_list_clamped_to_role()
+- tc_auth_j_login_rate_limited · function · L298-L309 — async fn tc_auth_j_login_rate_limited()
+- tc_auth_k_session_token_hashed_at_rest · function · L313-L323 — async fn tc_auth_k_session_token_hashed_at_rest()

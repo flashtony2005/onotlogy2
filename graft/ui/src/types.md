@@ -22,9 +22,11 @@ Single source of truth for all frontend API DTO types, mirroring the backend tra
 - WorldGraphDto · interface · L147-L150 — interface WorldGraphDto
 - WorldRelationDto · interface · L155-L161 — interface WorldRelationDto
 - WorldViewDto · interface · L163-L167 — interface WorldViewDto
-- WorldQueryDto · interface · L169-L173 — interface WorldQueryDto
-- AuditEventDto · interface · L175-L181 — interface AuditEventDto
-- AuditViewDto · interface · L183-L186 — interface AuditViewDto
-- AuditQueryDto · interface · L188-L193 — interface AuditQueryDto
-- FabricRequestDto · interface · L195-L200 — interface FabricRequestDto
-- FabricSubmissionDto · interface · L202-L217 — interface FabricSubmissionDto
+- WorldQueryDto · interface · L169-L174 — interface WorldQueryDto
+- AuditEventDto · interface · L176-L182 — interface AuditEventDto
+- AuditViewDto · interface · L184-L187 — interface AuditViewDto
+- AuditQueryDto · interface · L189-L195 — interface AuditQueryDto
+- FabricRequestDto · interface · L197-L203 — interface FabricRequestDto
+- FabricSubmissionDto · interface · L205-L220 — interface FabricSubmissionDto
+- ProjectDto · interface · L224-L231 — interface ProjectDto
+- ProjectCreateDto · interface · L233-L238 — interface ProjectCreateDto

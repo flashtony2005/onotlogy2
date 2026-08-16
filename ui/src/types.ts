@@ -8,6 +8,7 @@ export type ViewKind =
   | 'learning'
   | 'governance'
   | 'fabric'
+  | 'projects'
   | 'developer'
   // 旧视图保留给后端 timeline 视图钳制与兼容（新菜单不再直接暴露）。
   | 'executive'

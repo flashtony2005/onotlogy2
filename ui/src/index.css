@@ -2493,3 +2493,38 @@ button {
   font-size: 11px;
   margin-top: 3px;
 }
+
+/* ── Phase 8：项目管理 ───────────────────────────────────────────────── */
+.project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.project-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(42, 58, 53, 0.6);
+  background: #0c1512;
+  color: #d8e7e2;
+  text-align: left;
+  cursor: pointer;
+}
+.project-card.on {
+  border-color: #2f6a58;
+  background: #14352e;
+}
+.project-card-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+.project-card-id {
+  font-size: 11px;
+  color: #7fe3c0;
+}
+.project-card-meta {
+  font-size: 11px;
+  color: var(--muted, #9db5ad);
+}

@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Code2,
   Globe2,
+  FolderKanban,
   LayoutDashboard,
   LogOut,
   Network,
@@ -28,6 +29,7 @@ import { LoginScene } from './components/LoginScene'
 import { V2Panel } from './components/V2Panel'
 import { Dashboard } from './components/Dashboard'
 import { FabricPanel } from './components/FabricPanel'
+import { ProjectPanel } from './components/ProjectPanel'
 import { GovernancePanel } from './components/GovernancePanel'
 import { WorldPanel } from './components/WorldPanel'
 import { fmtJson, fmtTime } from './format'
@@ -39,7 +41,7 @@ import type { AuthUserDto, TraceEventDto, ViewKind } from './types'
 const VIEW_GROUPS: { name: string; en: string; items: ViewKind[] }[] = [
   { name: '运行', en: 'Operations', items: ['overview', 'world', 'runs'] },
   { name: '学习', en: 'Learning', items: ['workers', 'learning'] },
-  { name: '治理', en: 'Governance', items: ['governance', 'fabric', 'developer'] },
+  { name: '治理', en: 'Governance', items: ['projects', 'governance', 'fabric', 'developer'] },
 ]
 
 interface ViewMeta {
@@ -107,6 +109,14 @@ const VIEWS: ViewMeta[] = [
     icon: Network,
     q: 'Agent 之间在说什么？',
     desc: 'Agent 拓扑、通信事件流、任务提交（OAB）',
+  },
+  {
+    key: 'projects',
+    label: 'Projects',
+    cn: '项目',
+    icon: FolderKanban,
+    q: '现在管理哪些项目？',
+    desc: '项目列表、创建、工程本体 seed、项目世界与审计（Phase 8）',
   },
   {
     key: 'developer',
@@ -424,6 +434,7 @@ export default function App() {
 
         {view === 'world' && <WorldPanel />}
         {view === 'fabric' && <FabricPanel />}
+        {view === 'projects' && <ProjectPanel />}
 
         {view === 'workers' && <V2Panel initialTab="workers" />}
 

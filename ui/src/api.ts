@@ -230,6 +230,17 @@ export async function postProjectList(): Promise<ProjectDto[]> {
   return json.data
 }
 
+export async function postProjectSeed(): Promise<{ events: number }> {
+  const r = await fetch('/api/v1/facade/project/seed', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  })
+  const json: ApiResponse<{ events: number }> = await r.json()
+  if (json.code !== 0 || !json.data) throw new Error(json.msg || 'seed 失败')
+  return json.data
+}
+
 export async function postProjectCreate(req: ProjectCreateDto): Promise<ProjectDto> {
   const r = await fetch('/api/v1/facade/project/create', {
     method: 'POST',

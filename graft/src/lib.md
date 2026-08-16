@@ -15,11 +15,12 @@ Crate root that declares and re-exports all OpenAIP-OS kernel modules (IR, ODL, 
 - mutation · module · L37-L41 — pub mod mutation
 - benchmark · module · L39-L39 — pub mod benchmark;
 - plugin · module · L42-L42 — pub mod plugin;
-- projection · module · L43-L43 — pub mod projection;
-- rule · module · L44-L44 — pub mod rule;
-- server · module · L45-L45 — Declares the server module hosting axum REST, WebSocket streaming, and three-layer observation UI.
-- simulation · module · L46-L46 — pub mod simulation;
-- skill · module · L47-L47 — pub mod skill;
-- worker · module · L48-L48 — pub mod worker;
-- world · module · L49-L49 — pub mod world;
-- world_exec · module · L50-L50 — pub mod world_exec;
+- project_seed · module · L43-L43 — pub mod project_seed;
+- projection · module · L44-L44 — pub mod projection;
+- rule · module · L45-L45 — pub mod rule;
+- server · module · L46-L46 — Declares the server module hosting axum REST, WebSocket streaming, and three-layer observation UI.
+- simulation · module · L47-L47 — pub mod simulation;
+- skill · module · L48-L48 — pub mod skill;
+- worker · module · L49-L49 — pub mod worker;
+- world · module · L50-L50 — pub mod world;
+- world_exec · module · L51-L51 — pub mod world_exec;

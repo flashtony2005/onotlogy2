@@ -40,7 +40,7 @@ use auth::auth_logout;
 use auth::auth_me;
 use facade::{
     facade_audit_query, facade_fabric_submit, facade_project_create, facade_project_list,
-    facade_world_query,
+    facade_project_seed, facade_world_query,
 };
 use graph::list_graph;
 use run::run_start;
@@ -243,6 +243,7 @@ fn router() -> Router<Arc<AppState>> {
         .route("/api/v1/facade/fabric/submit", post(facade_fabric_submit))
         .route("/api/v1/facade/project/create", post(facade_project_create))
         .route("/api/v1/facade/project/list", post(facade_project_list))
+        .route("/api/v1/facade/project/seed", post(facade_project_seed))
         // ── Phase 10 V2 认知面板（Skill / Plugin / Session） ──
         .route("/api/v1/v2/skills", get(v2::list_skills))
         .route(
