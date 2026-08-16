@@ -22,8 +22,13 @@ object Test:         # 测试文件/用例
   properties: name, kind
 object Task:         # 事情（项目下的任务/事项）
   properties: title, status
+object CheckRun:     # 工程检查（make check / cargo test 门禁）
+  properties: kind, status, passed, total, failed, duration_ms
+object Commit:       # 工程提交（git）
+  properties: hash, message, author, time
 # 关系：Project --contains--> Module --contains--> File
 #       Module --depends_on--> Module（跨 crate 依赖，后续由依赖图驱动）
+#       root --contains--> CheckRun / Commit（工程健康度时间线）
 "#;
 
 /// 项目 id（OpenAIP-OS 工程）。
@@ -147,9 +152,92 @@ pub async fn seed_openaip_os(storage: &LibSQLStorage, root: &str) -> Result<usiz
             });
         }
     }
-    storage
-        .apply_world_many(&cmds)
-        .await
-        .map_err(|e| e.to_string())?;
+    // 幂等写入：已存在的对象/关系跳过（重复 seed / check / commit 安全）
+    apply_idempotent(storage, &cmds).await?;
     Ok(cmds.len())
+}
+
+/// 幂等 apply：已存在对象（UNIQUE）或重复关系边（WB2007）跳过；
+/// 其余错误透出。seed/check/commit 复用——世界收敛，不重复爆错。
+async fn apply_idempotent(storage: &LibSQLStorage, cmds: &[WorldCommand]) -> Result<(), String> {
+    for cmd in cmds {
+        match storage.apply_world(cmd.clone()).await {
+            Ok(()) => {}
+            Err(e) => {
+                let text = e.to_string();
+                let idempotent =
+                    text.contains("UNIQUE constraint failed") || text.contains("WB2007");
+                if !idempotent {
+                    return Err(text);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 记录一次工程检查（make check / cargo test 门禁结果）→ 项目世界 CheckRun 对象。
+/// 每次检查一个新对象（id=时间戳）——世界保留健康度时间线。
+pub async fn record_check_run(
+    storage: &LibSQLStorage,
+    status: &str,
+    passed: usize,
+    failed: usize,
+    total: usize,
+    duration_ms: u64,
+) -> Result<(), String> {
+    let id = format!("check:{}", crate::trace::now_ts());
+    let cmds = vec![
+        WorldCommand::CreateObject {
+            object_type: "CheckRun".into(),
+            id: id.clone(),
+            data: serde_json::json!({
+                "kind": "make_check",
+                "status": status,
+                "passed": passed,
+                "failed": failed,
+                "total": total,
+                "duration_ms": duration_ms,
+            }),
+            project_id: Some(OPENAI_OS_PROJECT.into()),
+        },
+        WorldCommand::LinkRelation {
+            source: "module:root".into(),
+            edge: "contains".into(),
+            target: id,
+            project_id: Some(OPENAI_OS_PROJECT.into()),
+        },
+    ];
+    apply_idempotent(storage, &cmds).await
+}
+
+/// 记录一次工程提交（git）→ 项目世界 Commit 对象（含 message/hash）。
+pub async fn record_commit(
+    storage: &LibSQLStorage,
+    hash: &str,
+    message: &str,
+    author: &str,
+    time: &str,
+) -> Result<(), String> {
+    let id = format!("commit:{hash}");
+    let cmds = vec![
+        WorldCommand::CreateObject {
+            object_type: "Commit".into(),
+            id: id.clone(),
+            data: serde_json::json!({
+                "hash": hash,
+                "message": message,
+                "author": author,
+                "time": time,
+            }),
+            project_id: Some(OPENAI_OS_PROJECT.into()),
+        },
+        WorldCommand::LinkRelation {
+            source: "module:root".into(),
+            edge: "contains".into(),
+            target: id,
+            project_id: Some(OPENAI_OS_PROJECT.into()),
+        },
+    ];
+    apply_idempotent(storage, &cmds).await
 }

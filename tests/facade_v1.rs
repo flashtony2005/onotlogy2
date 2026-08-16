@@ -500,3 +500,136 @@ async fn tc_p3_fabric_submit_lands_in_project_world() {
         assert!(all.relations.iter().any(|r| r.source == "order-p3"));
     });
 }
+
+// ── Phase 8 遗留边界：工程健康度 → 项目世界（CheckRun / Commit）────────
+// tc_p4 record_check_run：make check 结果 → CheckRun 对象 + root contains 关系
+//     → 项目世界可查（状态时间线，幂等重跑不爆错）
+// tc_p5 record_commit：git 提交 → Commit 对象 → 项目世界可查
+use openaip_os::project_seed::{record_check_run, record_commit, seed_openaip_os};
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tc_p4_check_run_lands_in_project_world() {
+    let storage = Arc::new(LibSQLStorage::open(":memory:").await.unwrap());
+    // seed 工程结构（模块/文件）+ 记录一次 check
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current()
+            .block_on(seed_openaip_os(&storage, "."))
+            .unwrap();
+    });
+    record_check_run(&storage, "passed", 350, 0, 350, 178665)
+        .await
+        .unwrap();
+    record_check_run(&storage, "failed", 100, 2, 102, 5000)
+        .await
+        .unwrap();
+
+    tokio::task::block_in_place(|| {
+        let facade = Facade::new(
+            storage.clone(),
+            tokio::runtime::Handle::current(),
+            FabricRouter::new(),
+            vec![],
+            &[],
+        )
+        .unwrap();
+        // 项目世界：CheckRun 对象（type 关系）+ root contains 边
+        let w = facade
+            .world_query(WorldQuery {
+                project_id: Some("openaip-os".into()),
+                predicate: Some("type".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let check_runs = w
+            .relations
+            .iter()
+            .filter(|r| r.target == "CheckRun")
+            .count();
+        assert_eq!(
+            check_runs,
+            2,
+            "两次 check → 两条 CheckRun 时间线: {:?}",
+            w.relations.iter().map(|r| &r.target).collect::<Vec<_>>()
+        );
+        // 对象载荷（passed/total 字段关系）
+        let w2 = facade
+            .world_query(WorldQuery {
+                project_id: Some("openaip-os".into()),
+                predicate: Some("passed".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            w2.relations.iter().any(|r| r.target == "350"),
+            "CheckRun 的 passed=350 应在世界: {:?}",
+            w2.relations.iter().map(|r| &r.target).collect::<Vec<_>>()
+        );
+    });
+    // 幂等：重复记录不爆错（同 check id 时间戳唯一——新对象；重复 seed 已安全）
+    let _ = record_check_run(&storage, "passed", 350, 0, 350, 1).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tc_p5_commit_lands_in_project_world() {
+    let storage = Arc::new(LibSQLStorage::open(":memory:").await.unwrap());
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current()
+            .block_on(seed_openaip_os(&storage, "."))
+            .unwrap();
+    });
+    record_commit(
+        &storage,
+        "abc123",
+        "feat(x): 示例提交",
+        "mason",
+        "2026-08-17T01:00:00+08:00",
+    )
+    .await
+    .unwrap();
+    // 重复同 hash：幂等（跳过已存在）
+    record_commit(
+        &storage,
+        "abc123",
+        "feat(x): 示例提交",
+        "mason",
+        "2026-08-17T01:00:00+08:00",
+    )
+    .await
+    .unwrap();
+
+    tokio::task::block_in_place(|| {
+        let facade = Facade::new(
+            storage.clone(),
+            tokio::runtime::Handle::current(),
+            FabricRouter::new(),
+            vec![],
+            &[],
+        )
+        .unwrap();
+        let w = facade
+            .world_query(WorldQuery {
+                project_id: Some("openaip-os".into()),
+                predicate: Some("hash".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            w.relations.iter().filter(|r| r.target == "abc123").count(),
+            1,
+            "同 hash 幂等——世界只有一条 Commit"
+        );
+        let msg = facade
+            .world_query(WorldQuery {
+                project_id: Some("openaip-os".into()),
+                predicate: Some("message".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            msg.relations
+                .iter()
+                .any(|r| r.target == "feat(x): 示例提交"),
+            "Commit message 应在世界"
+        );
+    });
+}

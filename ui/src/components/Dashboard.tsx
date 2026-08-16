@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   Boxes,
+  FolderKanban,
   LayoutGrid,
   PlayCircle,
   Plug,
   Route,
 } from 'lucide-react'
-import { getPlugins, getSessions, getSkills } from '../api'
+import { getPlugins, getSessions, getSkills, postProjectList, postWorldQuery } from '../api'
 import type {
   PluginDto,
+  ProjectDto,
   SessionSummaryDto,
   SkillDto,
   TraceEventDto,
@@ -193,6 +195,8 @@ export function Dashboard({
   const [skills, setSkills] = useState<SkillDto[]>([])
   const [plugins, setPlugins] = useState<PluginDto[]>([])
   const [sessions, setSessions] = useState<SessionSummaryDto[]>([])
+  const [projects, setProjects] = useState<ProjectDto[]>([])
+  const [projectRels, setProjectRels] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
 
@@ -201,14 +205,27 @@ export function Dashboard({
       setLoading(true)
       setErr(null)
       try {
-        const [sk, pl, se] = await Promise.all([
+        const [sk, pl, se, pr] = await Promise.all([
           getSkills(),
           getPlugins(),
           getSessions(),
+          postProjectList().catch(() => [] as ProjectDto[]),
         ])
         setSkills(sk)
         setPlugins(pl)
         setSessions(se)
+        setProjects(pr)
+        // 各项目世界规模（Phase 8：运营总览按项目）
+        const rels: Record<string, number> = {}
+        for (const proj of pr) {
+          try {
+            const w = await postWorldQuery({ projectId: proj.id, limit: 1 })
+            rels[proj.id] = w.total
+          } catch {
+            rels[proj.id] = 0
+          }
+        }
+        setProjectRels(rels)
       } catch (e) {
         setErr(String(e))
       } finally {
@@ -343,6 +360,15 @@ export function Dashboard({
           <div className="dash-label">Active Skills</div>
           <div className="dash-sub">of {skills.length} registered</div>
         </div>
+        <div className="dash-card">
+          <div className="dash-num">{projects.length}</div>
+          <div className="dash-label">Projects</div>
+          <div className="dash-sub">
+            {projects.length > 0
+              ? projects.map((p) => `${p.id}:${projectRels[p.id] ?? 0} rel`).join(' · ')
+              : '点击「项目」创建/seed'}
+          </div>
+        </div>
       </div>
 
       {/* 架构流动图 */}
@@ -354,6 +380,9 @@ export function Dashboard({
       <section className="dash-section">
         <h4>快速入口</h4>
         <div className="dash-quick">
+          <button onClick={() => onNavigate('projects')}>
+            <FolderKanban size={15} /> 项目管理
+          </button>
           <button onClick={() => onNavigate('v2')}>
             <Boxes size={15} /> V2 Runtime
           </button>

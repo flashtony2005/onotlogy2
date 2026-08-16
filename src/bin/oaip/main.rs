@@ -11,6 +11,7 @@
 mod agent;
 mod commands;
 mod facade;
+mod project_cmd;
 mod serve;
 mod sim;
 mod user;
@@ -215,6 +216,10 @@ enum ProjectCmd {
     List,
     /// seed OpenAIP-OS 工程本体（模块/文件/测试 → 项目世界）
     Seed,
+    /// 运行 make check → CheckRun 状态入项目世界（工程健康度时间线）
+    Check,
+    /// 最近 git 提交 → Commit 对象入项目世界
+    Commit,
 }
 
 #[derive(Subcommand)]
@@ -356,6 +361,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 ProjectCmd::Seed => {
                     tokio::task::block_in_place(|| facade::cmd_project_seed(&cli.db))?
+                }
+                ProjectCmd::Check => {
+                    tokio::task::block_in_place(|| project_cmd::cmd_project_check(&cli.db))?
+                }
+                ProjectCmd::Commit => {
+                    tokio::task::block_in_place(|| project_cmd::cmd_project_commit(&cli.db))?
                 }
             },
         },
