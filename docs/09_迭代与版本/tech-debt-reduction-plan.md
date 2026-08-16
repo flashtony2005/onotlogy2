@@ -85,32 +85,27 @@
 - 测试先行：每个移动前跑既有契约测试作 characterization，移动后全绿。
 - 出口：src/ 内不再有同名异义文件。
 
-### M4 · workspace crates 拆分（#7，删除完成后做，不搬死代码）
-- 目标 DAG：`oaip-kernel`（零依赖）→ `oaip-storage` → `oaip-compose / oaip-cognitive / oaip-worker`
-  → `oaip-server` / `oaip-cli`；`oaip-abi`（ir/odl/codegen）。
-- 测试先行：测试文件随代码迁移，零新增测试（搬运不改行为），全部既有测试拆分后原样绿。
-- 出口：`cargo build -p oaip-kernel` 不依赖 server/planner，DAG 编译期强制。
+### M4 · workspace crates 拆分（#7）🔄 进行中
+- ✅ 第一步（27e402f）：`oaip-kernel` 独立 crate——L0 四 Primitive 零上层依赖
+  （EventRef 下沉消除 kernel→evaluation 边）；`pub use oaip_kernel as kernel` 路径兼容。
+- ✅ 第二步（5537d6b）：`oaip-abi` 独立 crate（odl/ir/codegen，语言前端）。
+- ⬜ 剩余：oaip-storage / compose / cognitive / worker / server / cli（root 暂为门面）。
 
-### M5 · 巨文件拆分（#5 剩余）
-- oaip.rs 按子命令拆 `src/cli/`；mutation 拆 proposal/benchmark/store；storage 继续按域拆。
-- 测试先行：纯重构，既有测试为护栏，每拆一步跑一次。
-- 出口：无 >400 行文件（或明确豁免清单）。
+### M5 · 巨文件拆分（#5）✅ 主体完成
+- oaip.rs 1200 行 → main 295 + 6 命令模块（f198cc7）；mutation 1041 → types/benchmark/validate
+  （5c5aab7）。最大文件 401 行。
 
-### M6 · unwrap 清零（#6）
-- CI 门槛先行：kernel 及被 kernel 依赖模块 `#![deny(clippy::unwrap_used)]`，其余 warn 逐级升级。
-- 168 处机械替换为 Result 传播 / 带不变量注释的 expect；关键 panic 路径补 should-panic 契约测试。
-- 出口：kernel 路径零 unwrap + CI 门槛落地。
+### M6 · unwrap 清零（#6）✅ 完成
+- 预算门禁：scripts/unwrap-budget.sh 入 make check + CI（只降不升，168→129）。
+- 核心路径 8 模块 `#![cfg_attr(not(test), deny(clippy::unwrap_used))]`；生产 unwrap 清理
+  （server/v2 RwLock×6、odl section 栈×3）。剩余 129 处全在测试代码（7d4a540）。
 
-### M7 · 文档重建（#4）
-- 写「当前架构总图」单页（V2 实际分层）入 03_架构设计；README 重写；
-  Cargo 版本与路线图统一（0.9.0 → 对齐 Phase 命名）。
-- 旧文档（architecture-total V2.7 等 V0.x 时代）标 [废弃] 移入 00_归档_legacy。
-- `graft build` 刷新知识图谱。
+### M7 · 文档重建（#4）✅ 完成
+- architecture-v2.md 当前架构总图 + README 重写；6 篇旧架构文档标 [废弃]（1ce7840）。
 
-### M8 · 流程文档激活（#8）
-- CODE_REVIEW.md 剩余未修项迁入 problem-summary（变活表）；
-- optimization-record 从本次执行采 2–3 条带指标的真实记录；
-- 其余空转模板删除或归档。
+### M8 · 流程文档激活（#8）✅ 完成
+- problem-summary 迁入 8 条真实问题（含修复落点）；optimization-record 5 条带指标记录
+  （e6ee4bb）。
 
 ## 4. 每个里程碑的统一节奏（测试先行铁律）
 

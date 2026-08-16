@@ -1,31 +1,31 @@
 # src/trace.rs · [[server-side-view-clamping]] [[timeline-views-dtos]]
 
-- TraceKind · enum · L15-L18 — pub enum TraceKind
-- as_str · function · L21-L26 — pub fn as_str(&self) -> &'static str
-- Err · type · L30-L30 — type Err = String;
-- from_str · function · L31-L37 — fn from_str(s: &str) -> Result<Self, Self::Err>
-- TraceEvent · struct · L42-L55 — pub struct TraceEvent
-- TRACE_SEQ · constant · L57-L57 — static TRACE_SEQ: AtomicU64 = AtomicU64::new(0);
-- now_ts · function · L60-L65 — pub fn now_ts() -> String
-- new_trace_id · function · L68-L74 — pub fn new_trace_id() -> String
-- world · function · L78-L80 — pub fn world(event_type: &str, object_ref: &str) -> Self
-- world_with_refs · function · L84-L98 — pub fn world_with_refs(event_type: &str, refs: &[String]) -> Self
-- COGNITIVE_STEPS · constant · L102-L111 — Defines the canonical ordered list of 8 cognitive step types used for progress calculation and Operator-view pipeline filtering.
-- View · enum · L115-L122 — Enumerates the three role-based timeline granularities (Executive/Operator/Developer) that determine which event details are exposed.
-- name · function · L126-L132 — Maps a View variant to its lowercase string name used in response fields and server-side clamping assertions.
-- from_param · function · L135-L141 — Parses a query parameter string into a View, defaulting to Operator for unknown or absent values.
-- TraceEventDto · struct · L147-L166 — CamelCase serialization DTO for TraceEvent used as the unified API/WebSocket payload, skipping empty optional fields.
-- from · function · L169-L183 — Converts a TraceEvent into its camelCase DTO form by copying all fields verbatim.
-- from_view · function · L192-L210 — pub fn from_view(e: &TraceEvent, view: View) -> Option<Self>
-- TimelineEvent · struct · L216-L231 — A single view-cropped timeline event carrying only the fields permitted by the active view, with reasoning/IO only in Developer view.
-- DecisionSummary · struct · L235-L239 — Executive-view decision digest holding mission, decision text, and computed risk score.
-- RunTimeline · struct · L244-L256 — Unified run timeline response structure combining status, progress, approval requirement, clamped view, events, and optional Executive decision summary.
-- derive_run_state · function · L261-L287 — Derives run status, progress percentage, and human-approval requirement from the set of events by counting cognitive steps, detecting MemoryUpdate completion, and flagging PolicyCheck Deny outputs.
-- to_timeline_event · function · L290-L301 — Builds a TimelineEvent from a TraceEvent, including reasoning/IO fields only when detail (Developer view) is requested.
-- build_timeline · function · L304-L383 — Builds the run timeline and crops events per view: Executive keeps only Goal/Action plus a decision summary, Operator shows first occurrence of each cognitive step, Developer exposes full detail.
-- DecisionText · interface · L386-L388 — Trait declaring a method to extract a human-readable decision description from a TraceEvent.
-- description_or_output · function · L387-L387 — Trait method signature for extracting a decision description from a TraceEvent.
-- description_or_output · function · L390-L397 — Extracts an Action's decision text by preferring string output, falling back to reasoning, then event type.
-- tests · module · L401-L490 — Unit test module for the trace layer.
-- timeline_dto_is_camel_case · function · L405-L434 — Verifies that RunTimeline and TimelineEvent serialize with camelCase field names and no snake_case keys.
-- ws_from_view_clamps_to_role · function · L438-L489 — fn ws_from_view_clamps_to_role()
+- TraceKind · enum · L16-L19 — pub enum TraceKind
+- as_str · function · L22-L27 — pub fn as_str(&self) -> &'static str
+- Err · type · L31-L31 — type Err = String;
+- from_str · function · L32-L38 — fn from_str(s: &str) -> Result<Self, Self::Err>
+- TraceEvent · struct · L43-L56 — pub struct TraceEvent
+- TRACE_SEQ · constant · L58-L58 — static TRACE_SEQ: AtomicU64 = AtomicU64::new(0);
+- now_ts · function · L61-L66 — pub fn now_ts() -> String
+- new_trace_id · function · L69-L75 — pub fn new_trace_id() -> String
+- world · function · L79-L81 — pub fn world(event_type: &str, object_ref: &str) -> Self
+- world_with_refs · function · L85-L99 — pub fn world_with_refs(event_type: &str, refs: &[String]) -> Self
+- COGNITIVE_STEPS · constant · L103-L112 — Defines the canonical ordered list of 8 cognitive step types used for progress calculation and Operator-view pipeline filtering.
+- View · enum · L116-L123 — Enumerates the three role-based timeline granularities (Executive/Operator/Developer) that determine which event details are exposed.
+- name · function · L127-L133 — Maps a View variant to its lowercase string name used in response fields and server-side clamping assertions.
+- from_param · function · L136-L142 — Parses a query parameter string into a View, defaulting to Operator for unknown or absent values.
+- TraceEventDto · struct · L148-L167 — CamelCase serialization DTO for TraceEvent used as the unified API/WebSocket payload, skipping empty optional fields.
+- from · function · L170-L184 — Converts a TraceEvent into its camelCase DTO form by copying all fields verbatim.
+- from_view · function · L193-L211 — pub fn from_view(e: &TraceEvent, view: View) -> Option<Self>
+- TimelineEvent · struct · L217-L232 — A single view-cropped timeline event carrying only the fields permitted by the active view, with reasoning/IO only in Developer view.
+- DecisionSummary · struct · L236-L240 — Executive-view decision digest holding mission, decision text, and computed risk score.
+- RunTimeline · struct · L245-L257 — Unified run timeline response structure combining status, progress, approval requirement, clamped view, events, and optional Executive decision summary.
+- derive_run_state · function · L262-L288 — Derives run status, progress percentage, and human-approval requirement from the set of events by counting cognitive steps, detecting MemoryUpdate completion, and flagging PolicyCheck Deny outputs.
+- to_timeline_event · function · L291-L302 — Builds a TimelineEvent from a TraceEvent, including reasoning/IO fields only when detail (Developer view) is requested.
+- build_timeline · function · L305-L384 — Builds the run timeline and crops events per view: Executive keeps only Goal/Action plus a decision summary, Operator shows first occurrence of each cognitive step, Developer exposes full detail.
+- DecisionText · interface · L387-L389 — Trait declaring a method to extract a human-readable decision description from a TraceEvent.
+- description_or_output · function · L388-L388 — Trait method signature for extracting a decision description from a TraceEvent.
+- description_or_output · function · L391-L398 — Extracts an Action's decision text by preferring string output, falling back to reasoning, then event type.
+- tests · module · L402-L491 — Unit test module for the trace layer.
+- timeline_dto_is_camel_case · function · L406-L435 — Verifies that RunTimeline and TimelineEvent serialize with camelCase field names and no snake_case keys.
+- ws_from_view_clamps_to_role · function · L439-L490 — fn ws_from_view_clamps_to_role()

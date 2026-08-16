@@ -17,37 +17,7 @@ links:
       validates against.
 generator:
   version: 1
-covers:
-  - symbol: CodegenError
-    kind: struct
-    at: 'src/codegen.rs:L12-L15'
-  - symbol: new
-    kind: function
-    at: 'src/codegen.rs:L18-L23'
-  - symbol: CodegenOutput
-    kind: struct
-    at: 'src/codegen.rs:L28-L35'
-  - symbol: ObjectDef
-    kind: struct
-    at: 'src/codegen.rs:L39-L42'
-  - symbol: codegen
-    kind: function
-    at: 'src/codegen.rs:L45-L59'
-  - symbol: gen_struct
-    kind: function
-    at: 'src/codegen.rs:L62-L81'
-  - symbol: canonical_schema
-    kind: function
-    at: 'src/codegen.rs:L84-L267'
-  - symbol: to_json
-    kind: function
-    at: 'src/codegen.rs:L270-L272'
-  - symbol: roundtrip_ok
-    kind: function
-    at: 'src/codegen.rs:L275-L280'
-  - symbol: _assert_serialize
-    kind: function
-    at: 'src/codegen.rs:L284-L284'
+covers: []
 ---
 <!-- context:generated:start -->
 ## Summary
