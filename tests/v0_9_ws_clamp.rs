@@ -223,16 +223,16 @@ async fn spawn_ws_server_raw() -> (SocketAddr, LibSQLStorage) {
         .await
         .unwrap();
     let kernel = Arc::new(RuntimeKernel::new(storage.clone()));
-    let engine: Arc<dyn AgentEngine> = Arc::new(FakeEngine);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         let _ = server::serve_with_timeout(
             kernel,
-            engine,
+            retain_services(),
+            retain_defs(),
+            std::sync::Arc::new(v2_retain_engine()),
             listener,
             "ui/dist",
-            retain_registry(),
             false,
             false,
             true, // enforce_auth

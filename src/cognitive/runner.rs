@@ -39,6 +39,8 @@ pub fn run_agent<'k>(
     agent: &'k mut Agent,
     services: &'k [Service],
     engine: &'k dyn CognitiveEngine,
+    // 世界效应声明（Phase 5：Effect 真实改变 World；None = 回退 projection 模拟）。
+    effect_defs: Option<Vec<crate::ontology::RuntimeDefinition>>,
     evolution: Option<&'k mut EvolutionEngine>,
     run_id: &str,
     goal: &str,
@@ -57,6 +59,9 @@ pub fn run_agent<'k>(
             let mut lp = AgentLoop::new(kernel, agent, services, engine)
                 .with_trace(run_id, trace)
                 .with_approvals(run_id, approvals);
+            if let Some(defs) = effect_defs.clone() {
+                lp = lp.with_effect_defs(defs);
+            }
             if let Some(ev) = evolution.as_deref_mut() {
                 lp = lp.with_evolution(ev);
             }

@@ -17,10 +17,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::action::ActionRegistry;
-use crate::agent::AgentEngine;
 use crate::auth::{AuthUser, IdentityProvider, LocalIdentityProvider, Role, SessionStore};
-use crate::planner::{ApprovalStore, RunStatus, lock_mutex};
+use crate::cognitive::approval::{ApprovalDecision, ApprovalRequest};
+use crate::compose::Service;
+use crate::planner::{RunStatus, lock_mutex};
 use crate::runtime::RuntimeKernel;
 use axum::extract::{Extension, Request};
 use axum::http::{StatusCode, header::AUTHORIZATION};
@@ -62,22 +62,34 @@ struct RunRecord {
     human_approval: bool,
 }
 
+/// M1c 挂起审批条目：请求展示信息 + 裁决通道（run 的 resolver 阻塞等待）。
+/// 裁决后从注册表移除；超时看门狗经同通道发 Expire。
+pub struct PendingApproval {
+    pub run_id: String,
+    pub request: ApprovalRequest,
+    pub tx: std::sync::mpsc::Sender<ApprovalDecision>,
+    pub created_at: std::time::Instant,
+}
+
 /// 共享应用状态。
 pub struct AppState {
     /// Phase 10 V2 认知状态（Skill/Plugin/Session）。
     pub v2: v2::SharedV2,
     pub kernel: Arc<RuntimeKernel>,
-    pub engine: Arc<dyn AgentEngine>,
-    /// 动作注册表（V0.4）：对象自有动作的声明式来源。
-    pub registry: ActionRegistry,
+    /// M1c V2 组合层：run 路径的服务集合（ODL → compose::Service）。
+    pub v2_services: Arc<Vec<Service>>,
+    /// M1c V2 世界效应声明（Phase 5：Effect 真实改变 World）。
+    pub v2_effect_defs: Arc<Vec<crate::ontology::RuntimeDefinition>>,
+    /// M1c V2 认知引擎（run 路径；PiEngine 生产，测试注入 FakeEngine）。
+    pub v2_engine: Arc<dyn crate::cognitive::CognitiveEngine>,
     /// 是否自动批准需审批动作（Human Approval）：默认 false → require_approval 动作挂起等待 HTTP 审批。
     auto_approve: bool,
     /// REQ-018 Evolution 第二阶段 AutoApprove 全局开关：默认 false → 行为等同 MVP（仍走 Human Approval）。
     auto_approve_evolution: bool,
     /// 挂起审批超时（None → 默认 APPROVAL_TIMEOUT 300s）；测试注入极短超时触发 Expired 回收路径。
     approval_timeout: Option<Duration>,
-    /// 待审批请求存储（V0.4 遗留的 server 挂起式 HTTP 审批端点）；连接 Planner 挂起点与审批 API。
-    store: Arc<ApprovalStore>,
+    /// M1c 挂起审批注册表（run 路径 Waiting 时注册；HTTP 端点据此列表/裁决）。
+    pub pending: Arc<Mutex<HashMap<String, PendingApproval>>>,
     runs: Mutex<HashMap<String, RunRecord>>,
     pub static_dir: String,
     /// 身份提供方（V0.7 认证）：本地账号实现；OIDC 后续同 trait 插拔。
@@ -178,15 +190,6 @@ fn wb_code(s: &str) -> i32 {
     s.trim_start_matches("WB").parse().unwrap_or(5000)
 }
 
-/// 当前微秒时间戳（run/approval 持久化时间戳）。
-fn now_micros() -> String {
-    let micros = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_micros();
-    format!("{micros}")
-}
-
 // ── 请求参数 ──────────────────────────────────────────────────────────────
 
 fn router() -> Router<Arc<AppState>> {
@@ -262,20 +265,22 @@ fn router() -> Router<Arc<AppState>> {
 #[allow(clippy::too_many_arguments)]
 pub async fn serve(
     kernel: Arc<RuntimeKernel>,
-    engine: Arc<dyn AgentEngine>,
+    services: Vec<Service>,
+    effect_defs: Vec<crate::ontology::RuntimeDefinition>,
+    engine: Arc<dyn crate::cognitive::CognitiveEngine>,
     listener: TcpListener,
     static_dir: impl Into<String>,
-    registry: ActionRegistry,
     auto_approve: bool,
     auto_approve_evolution: bool,
     enforce_auth: bool,
 ) -> std::io::Result<()> {
     serve_with_timeout(
         kernel,
+        services,
+        effect_defs,
         engine,
         listener,
         static_dir,
-        registry,
         auto_approve,
         auto_approve_evolution,
         enforce_auth,
@@ -290,10 +295,11 @@ pub async fn serve(
 #[allow(clippy::too_many_arguments)]
 pub async fn serve_with_timeout(
     kernel: Arc<RuntimeKernel>,
-    engine: Arc<dyn AgentEngine>,
+    services: Vec<Service>,
+    effect_defs: Vec<crate::ontology::RuntimeDefinition>,
+    engine: Arc<dyn crate::cognitive::CognitiveEngine>,
     listener: TcpListener,
     static_dir: impl Into<String>,
-    registry: ActionRegistry,
     auto_approve: bool,
     auto_approve_evolution: bool,
     enforce_auth: bool,
@@ -306,12 +312,13 @@ pub async fn serve_with_timeout(
     let state = Arc::new(AppState {
         v2: Arc::new(v2::V2State::default()),
         kernel,
-        engine,
-        registry,
+        v2_services: Arc::new(services),
+        v2_effect_defs: Arc::new(effect_defs),
+        v2_engine: engine,
         auto_approve,
         auto_approve_evolution,
         approval_timeout,
-        store: Arc::new(ApprovalStore::new()),
+        pending: Arc::new(Mutex::new(HashMap::new())),
         runs: Mutex::new(HashMap::new()),
         static_dir: static_dir.into(),
         idp,

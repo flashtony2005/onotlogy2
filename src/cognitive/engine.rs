@@ -64,6 +64,12 @@ impl AgentView {
 pub trait CognitiveEngine: Send + Sync {
     /// 基于观察视图决策；`None` = 无更多动作（配合 expected_relations 判定完成）。
     fn decide(&self, view: &AgentView) -> Result<Option<Decision>, CognitiveError>;
+
+    /// 引擎是否可用（默认 true；PiEngine 覆写为探测 pi 二进制，
+    /// 供 `POST /run` 快速判定 WB2004，避免悬挂连接）。
+    fn health(&self) -> bool {
+        true
+    }
 }
 
 /// 决策条件谓词（view 检查；用于防重/断言观察注入）。

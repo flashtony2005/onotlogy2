@@ -1,8 +1,6 @@
 //! `oaip` —— OpenAIP-OS 命令行（V0.1：compile / run / object list / event list；V0.2：relation / event emit；V0.3：agent run / serve）
 
 use clap::{Parser, Subcommand};
-use openaip_os::action::ActionRegistry;
-use openaip_os::agent::{AgentEngine, PiAgentEngine};
 use openaip_os::auth::{IdentityProvider, LocalIdentityProvider};
 use openaip_os::evaluation::hook::{append_bridged, on_run_end, trace_to_session_events};
 use openaip_os::evaluation::{EvaluationPolicy, TaskDefinition};
@@ -481,7 +479,7 @@ async fn cmd_agent_run(
     use openaip_os::cognitive::approval::{ApprovalDecision, ApprovalRequest, DecisionCache};
     use openaip_os::cognitive::persist::CognitiveStore;
     use openaip_os::cognitive::runner::run_agent;
-    use openaip_os::cognitive::{Agent, LoopOutcome, PiEngine};
+    use openaip_os::cognitive::{Agent, CognitiveEngine, LoopOutcome, PiEngine};
     use openaip_os::evolution2::{EvolutionEngine, EvolutionSnapshot};
     use openaip_os::kernel::{Kernel, Scope};
     use openaip_os::ontology::ir_to_services;
@@ -657,6 +655,7 @@ async fn cmd_agent_run(
         &mut agent,
         &services,
         &engine,
+        Some(openaip_os::ontology::ir_to_runtime(&ir)),
         evolution.as_mut().map(|(ev, _)| ev),
         &run_id,
         goal,
@@ -1126,8 +1125,13 @@ async fn cmd_serve(
         }
     }
     let kernel = Arc::new(RuntimeKernel::new(storage));
-    let engine: Arc<dyn AgentEngine> = Arc::new(PiAgentEngine::new("retention-agent"));
-    let registry = load_registry(odl)?;
+    // M1c V2 run 路径：ODL → compose::Service 集合 + PiEngine（V2 认知引擎）。
+    let odl_src = std::fs::read_to_string(odl.unwrap_or("examples/crm.odl"))?;
+    let odl_ir = parse_odl(&odl_src)?;
+    let services = openaip_os::ontology::ir_to_services(&odl_ir);
+    let effect_defs = openaip_os::ontology::ir_to_runtime(&odl_ir);
+    let engine: Arc<dyn openaip_os::cognitive::CognitiveEngine> =
+        Arc::new(openaip_os::cognitive::PiEngine::new("retention-agent"));
     let addr: SocketAddr = format!("{host}:{port}").parse()?;
     let listener = TcpListener::bind(addr).await?;
     println!(
@@ -1135,10 +1139,11 @@ async fn cmd_serve(
     );
     server::serve(
         kernel,
+        services,
+        effect_defs,
         engine,
         listener,
         static_dir,
-        registry,
         auto_approve,
         auto_approve_evolution,
         true,
@@ -1210,12 +1215,4 @@ async fn cmd_user_delete(db: &str, username: &str) -> Result<(), Box<dyn std::er
     storage.delete_user(username).await?;
     println!("✅ 用户账号已删除：{username}");
     Ok(())
-}
-
-/// 从 ODL 文件构建动作注册表（V0.4）。
-fn load_registry(odl: Option<&str>) -> Result<ActionRegistry, Box<dyn std::error::Error>> {
-    let path = odl.unwrap_or("examples/crm.odl");
-    let src = std::fs::read_to_string(path)?;
-    let ir = parse_odl(&src)?;
-    Ok(ActionRegistry::from_ir(&ir))
 }

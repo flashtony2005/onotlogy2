@@ -84,11 +84,6 @@ impl PiEngine {
         self
     }
 
-    /// pi 二进制是否可用（WB2004 前置检查同源：PI_BIN 优先，PATH 兜底）。
-    pub fn health(&self) -> bool {
-        which_pi().is_some()
-    }
-
     /// 组装系统提示：约束 Pi 仅作认知引擎、返回结构化 JSON，并标识当前 Agent。
     fn system_prompt(&self) -> String {
         format!(
@@ -248,6 +243,11 @@ impl CognitiveEngine for PiEngine {
     fn decide(&self, view: &AgentView) -> Result<Option<Decision>, CognitiveError> {
         let raw = self.run_pi(&self.system_prompt(), &self.user_prompt(view))?;
         self.parse_decision(&raw, view)
+    }
+
+    /// pi 二进制是否可用（WB2004 前置检查同源：PI_BIN 优先，PATH 兜底）。
+    fn health(&self) -> bool {
+        which_pi().is_some()
     }
 }
 

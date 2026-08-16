@@ -197,25 +197,63 @@ pub async fn http_call_auth(
 
 #[allow(dead_code)]
 pub async fn spawn_server(kernel: std::sync::Arc<RuntimeKernel>) -> SocketAddr {
-    let engine: std::sync::Arc<dyn AgentEngine> = std::sync::Arc::new(FakeEngine);
+    // M1c V2 run 路径：retain 服务 + 确定性 V2 引擎（闭环可测，无真实 LLM）。
+    let services = retain_services();
+    let defs = retain_defs();
+    let engine: std::sync::Arc<dyn openaip_os::cognitive::CognitiveEngine> =
+        std::sync::Arc::new(v2_retain_engine());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let ks = kernel.clone();
     tokio::spawn(async move {
         let _ = server::serve(
-            ks,
-            engine,
-            listener,
-            "ui/dist",
-            retain_registry(),
-            false,
-            false,
-            false,
+            ks, services, defs, engine, listener, "ui/dist", false, false, false,
         )
         .await;
     });
     tokio::time::sleep(Duration::from_millis(150)).await; // 等绑定就绪
     addr
+}
+
+// ── M1c V2 run 路径测试装配（ODL → Service + 确定性引擎）────────────────────
+#[allow(dead_code)]
+pub const ODL_RETAIN_V2: &str = r#"
+object Customer:
+  properties:
+    name: string
+    level: string
+  actions:
+    retain:
+      creates:
+        - type: RetentionTask
+          data:
+            title: "客户挽留计划"
+            customer: self
+          link: needs_retention
+"#;
+
+#[allow(dead_code)]
+pub fn retain_services() -> Vec<openaip_os::compose::Service> {
+    openaip_os::ontology::ir_to_services(&parse_odl(ODL_RETAIN_V2).expect("retain V2 ODL"))
+}
+
+#[allow(dead_code)]
+pub fn retain_defs() -> Vec<openaip_os::ontology::RuntimeDefinition> {
+    openaip_os::ontology::ir_to_runtime(&parse_odl(ODL_RETAIN_V2).expect("retain V2 ODL"))
+}
+
+/// 确定性 V2 引擎：retain 一次（世界出现 retained 后停）。
+#[allow(dead_code)]
+pub fn v2_retain_engine() -> openaip_os::cognitive::FakeEngine {
+    use openaip_os::cognitive::engine::PlanStep as V2Step;
+    openaip_os::cognitive::FakeEngine::new(vec![V2Step {
+        capability: "Customer.retain".into(),
+        args: json!({ "target": "001" }),
+        // 执行器语义：target --link--> new_entity（predicate = link 名）
+        when: Some(Box::new(|v: &openaip_os::cognitive::AgentView| {
+            !v.related.iter().any(|(_, p, _)| p == "needs_retention")
+        })),
+    }])
 }
 
 // ── V0.4 完整 Action Engine（REQ-014）───────────────────────────────────────

@@ -6,8 +6,6 @@
 mod common;
 use common::*;
 
-use async_trait::async_trait;
-use openaip_os::agent::{AgentEngine, AgentError, Context, Decision};
 use openaip_os::auth::{IdentityProvider, LocalIdentityProvider};
 use openaip_os::runtime::RuntimeKernel;
 use openaip_os::server;
@@ -17,19 +15,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
-
-/// 测试用空引擎（认证测试不触发真实 Planner；401/403 在引擎前返回）。
-struct NoopEngine;
-
-#[async_trait]
-impl AgentEngine for NoopEngine {
-    fn name(&self) -> &str {
-        "noop"
-    }
-    async fn reason(&self, _ctx: &Context) -> Result<Decision, AgentError> {
-        Err(AgentError::Unavailable("test noop".into()))
-    }
-}
 
 /// 登录并返回 (status, token)。
 async fn login(addr: SocketAddr, username: &str, password: &str) -> (u16, Option<String>) {
@@ -63,18 +48,15 @@ async fn spawn_auth_server() -> (SocketAddr, LibSQLStorage) {
         .await
         .unwrap();
     let kernel = Arc::new(RuntimeKernel::new(storage.clone()));
-    let engine: Arc<dyn AgentEngine> = Arc::new(NoopEngine);
+    let services = retain_services();
+    let defs = retain_defs();
+    let engine: Arc<dyn openaip_os::cognitive::CognitiveEngine> =
+        Arc::new(openaip_os::cognitive::NoOpEngine);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         let _ = server::serve_with_timeout(
-            kernel,
-            engine,
-            listener,
-            "ui/dist",
-            retain_registry(),
-            false,
-            false,
+            kernel, services, defs, engine, listener, "ui/dist", false, false,
             true, // enforce_auth
             None,
         )

@@ -2,7 +2,6 @@
 mod common;
 use common::*;
 
-use openaip_os::agent::AgentEngine;
 use openaip_os::runtime::RuntimeKernel;
 use openaip_os::server;
 use openaip_os::storage::LibSQLStorage;
@@ -88,17 +87,17 @@ async fn tc_server_tasks_endpoint() {
 async fn spawn_server_with_dir(static_dir: &str) -> SocketAddr {
     let s = LibSQLStorage::open(":memory:").await.unwrap();
     let kernel = Arc::new(RuntimeKernel::new(s));
-    let engine: Arc<dyn AgentEngine> = Arc::new(FakeEngine);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let dir = static_dir.to_string();
     tokio::spawn(async move {
         let _ = server::serve(
             kernel,
-            engine,
+            retain_services(),
+            retain_defs(),
+            std::sync::Arc::new(v2_retain_engine()),
             listener,
             dir,
-            retain_registry(),
             false,
             false,
             false,

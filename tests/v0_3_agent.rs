@@ -5,7 +5,6 @@ use common::*;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use openaip_os::action::{ActionEngine, ActionRegistry};
-use openaip_os::agent::AgentEngine;
 use openaip_os::ir::ValueExpr;
 use openaip_os::parse_odl;
 use openaip_os::planner::{
@@ -200,7 +199,6 @@ async fn tc009_ws_stream_and_reconnect() {
         .await
         .unwrap();
     let run_id = generate_run_id();
-    let engine: std::sync::Arc<dyn AgentEngine> = std::sync::Arc::new(FakeEngine);
 
     // 启动服务（同一 kernel，EventBus 共享）
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -209,10 +207,11 @@ async fn tc009_ws_stream_and_reconnect() {
     tokio::spawn(async move {
         let _ = server::serve(
             ks,
-            engine,
+            retain_services(),
+            retain_defs(),
+            std::sync::Arc::new(v2_retain_engine()),
             listener,
             "ui/dist",
-            retain_registry(),
             false,
             false,
             false,
@@ -323,17 +322,17 @@ async fn http_call(
 
 /// 启动匿名服务（内存库 + FakeEngine），返回地址；调用方负责喂数据。
 async fn spawn_server(kernel: std::sync::Arc<RuntimeKernel>) -> SocketAddr {
-    let engine: std::sync::Arc<dyn AgentEngine> = std::sync::Arc::new(FakeEngine);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let ks = kernel.clone();
     tokio::spawn(async move {
         let _ = server::serve(
             ks,
-            engine,
+            retain_services(),
+            retain_defs(),
+            std::sync::Arc::new(v2_retain_engine()),
             listener,
             "ui/dist",
-            retain_registry(),
             false,
             false,
             false,

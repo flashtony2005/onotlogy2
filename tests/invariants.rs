@@ -216,18 +216,19 @@ async fn i7_every_run_produces_evaluation() {
     let kernel = std::sync::Arc::new(openaip_os::runtime::RuntimeKernel::new(storage.clone()));
     let addr = {
         use tokio::net::TcpListener;
-        let engine: std::sync::Arc<dyn openaip_os::agent::AgentEngine> =
-            std::sync::Arc::new(tests_common::FakeEngine);
+        let engine: std::sync::Arc<dyn openaip_os::cognitive::CognitiveEngine> =
+            std::sync::Arc::new(openaip_os::cognitive::NoOpEngine);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let a = listener.local_addr().unwrap();
         let ks = kernel.clone();
         tokio::spawn(async move {
             let _ = openaip_os::server::serve(
                 ks,
+                vec![],
+                vec![],
                 engine,
                 listener,
                 "ui/dist",
-                tests_common::retain_registry(),
                 false,
                 false,
                 false,
@@ -411,58 +412,5 @@ fn eval_result(
         aggregate,
         failure_modes: modes.iter().map(|s| s.to_string()).collect(),
         evaluator_version: openaip_os::EVALUATOR_VERSION.into(),
-    }
-}
-
-/// I7 使用的共享测试辅助（与 tests/common 同构；独立文件避免跨 crate 依赖）。
-mod tests_common {
-    use async_trait::async_trait;
-    use openaip_os::agent::{AgentEngine, AgentError, Context, Decision};
-    use serde_json::json;
-
-    pub struct FakeEngine;
-
-    #[async_trait]
-    impl AgentEngine for FakeEngine {
-        fn name(&self) -> &str {
-            "fake"
-        }
-        async fn reason(&self, ctx: &Context) -> Result<Decision, AgentError> {
-            let refs: Vec<String> = ctx
-                .world
-                .objects
-                .iter()
-                .filter_map(|o| o.get("id").and_then(|x| x.as_str()).map(|s| s.to_string()))
-                .collect();
-            Ok(Decision {
-                intent: "Customer Retention".into(),
-                reasoning: "fake".into(),
-                confidence: 0.9,
-                object_refs: refs,
-                output: json!({ "step": ctx.step }),
-            })
-        }
-    }
-
-    pub fn retain_registry() -> openaip_os::action::ActionRegistry {
-        openaip_os::action::ActionRegistry::from_ir(
-            &openaip_os::parse_odl(
-                r#"
-object Customer:
-  properties:
-    name: string
-    level: string
-  actions:
-    retain:
-      creates:
-        - type: RetentionTask
-          data:
-            title: "客户挽留计划"
-            customer: self
-          link: needs_retention
-"#,
-            )
-            .expect("retain ODL"),
-        )
     }
 }

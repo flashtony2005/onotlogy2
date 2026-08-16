@@ -1,16 +1,33 @@
-use std::collections::HashMap;
+//! 挂起审批端点（M1c · V2）：`GET /run/:run_id/approvals` + `POST /run/:run_id/approval/:req_id`。
+//!
+//! V1 读 ApprovalStore（planner 内存 + wb_approval 持久化）；M1c 起读 `AppState.pending`
+//! 注册表（run 路径 Waiting 时注册，裁决经 mpsc 通道唤醒 run 的 resolver）。
+//! 已裁决条目从注册表移除 → 二次裁决 404（V1 tc023 语义）。
 
-/// `GET /api/v1/wb/agent/run/:run_id/approvals`：列出该运行的全部审批请求（含历史裁决）。
 use std::sync::Arc;
 
 use crate::auth::AuthUser;
-use crate::planner::{ApprovalRequest, ApprovalState};
-use crate::storage::ApprovalRecord;
+use crate::cognitive::approval::ApprovalDecision;
+use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::response::Response;
+use serde::Serialize;
 use serde_json::json;
 
 use super::*;
+
+/// 挂起审批列表项（HTTP 契约：reqId/runId/capability/action/args/state）。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PendingApprovalDto {
+    req_id: String,
+    run_id: String,
+    capability: String,
+    action: String,
+    args: serde_json::Value,
+    state: String,
+}
+
 pub(crate) async fn list_approvals(
     State(st): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
@@ -20,17 +37,19 @@ pub(crate) async fn list_approvals(
     if !user.can_read_audit() {
         return forbidden("当前角色无权读取审批（需 Operator 及以上）");
     }
-    // 合并：DB 持久记录（跨重启）+ 内存 store（live 唤醒状态），按 req_id 去重，内存优先。
-    let mut by_id: HashMap<String, ApprovalRequest> = HashMap::new();
-    if let Ok(rows) = st.kernel.storage().list_approvals_for_run(&run_id).await {
-        for r in rows {
-            by_id.insert(r.id.clone(), approval_record_to_request(&r));
-        }
-    }
-    for req in st.store.list_for_run(&run_id) {
-        by_id.insert(req.req_id.clone(), req);
-    }
-    let mut list: Vec<ApprovalRequest> = by_id.into_values().collect();
+    let g = lock_mutex(&st.pending);
+    let mut list: Vec<PendingApprovalDto> = g
+        .values()
+        .filter(|p| p.run_id == run_id)
+        .map(|p| PendingApprovalDto {
+            req_id: p.request.id.clone(),
+            run_id: p.run_id.clone(),
+            capability: p.request.capability.clone(),
+            action: p.request.action.clone(),
+            args: p.request.args.clone(),
+            state: "Pending".to_string(),
+        })
+        .collect();
     list.sort_by(|a, b| a.req_id.cmp(&b.req_id));
     ApiResponse::ok(list).into_response()
 }
@@ -52,42 +71,34 @@ pub(crate) async fn resolve_approval(
     if !user.can_resolve_approval() {
         return forbidden("当前角色无权裁决审批（需 Operator 及以上）");
     }
-    let Some(req) = st.store.get(&req_id) else {
+    let entry = lock_mutex(&st.pending).remove(&req_id);
+    let Some(p) = entry else {
         return ApiResponse::error(404, "审批请求不存在或已裁决").into_response();
     };
-    if req.run_id != run_id {
+    if p.run_id != run_id {
+        // 错 run 的请求放回注册表（请求仍待裁决）
+        lock_mutex(&st.pending).insert(req_id, p);
         return ApiResponse::error(404, "审批请求不属于该运行").into_response();
     }
     let approve = matches!(
         body.decision.to_ascii_lowercase().as_str(),
         "approve" | "yes" | "true"
     );
-    if st.store.resolve(&req_id, approve) {
-        // 持久化裁决（DB 真相源；resolved_by 取当前操作人 id）。
-        let decision = if approve { "Approved" } else { "Rejected" };
-        let _ = st
-            .kernel
-            .storage()
-            .update_approval_state(&req_id, decision, Some(&user.id), Some(&now_micros()))
-            .await;
-        ApiResponse::ok(json!({
-            "reqId": req_id,
-            "decision": if approve { "Approved" } else { "Rejected" }
-        }))
-        .into_response()
+    let decision = if approve {
+        ApprovalDecision::Approve {
+            by: user.id.clone(),
+        }
     } else {
-        ApiResponse::error(404, "审批请求不存在或已裁决").into_response()
+        ApprovalDecision::Reject {
+            by: user.id.clone(),
+        }
+    };
+    if p.tx.send(decision).is_err() {
+        return ApiResponse::error(404, "审批请求已终止").into_response();
     }
-}
-
-/// 将持久审批记录映射为 API `ApprovalRequest`（state 由字符串还原）。
-fn approval_record_to_request(r: &ApprovalRecord) -> ApprovalRequest {
-    ApprovalRequest {
-        req_id: r.id.clone(),
-        run_id: r.run_id.clone(),
-        agent_id: r.agent_id.clone(),
-        step_id: r.step_id.clone(),
-        description: r.description.clone(),
-        state: ApprovalState::from_db_str(&r.state),
-    }
+    ApiResponse::ok(json!({
+        "reqId": req_id,
+        "decision": if approve { "Approved" } else { "Rejected" }
+    }))
+    .into_response()
 }

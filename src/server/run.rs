@@ -1,15 +1,25 @@
-use std::sync::Arc;
+//! `POST /api/v1/wb/agent/run`：触发 Agent 运行（M1c · V2 认知闭环）。
+//!
+//! V1 走 Planner::run_goal；M1c 起走 V2：`spawn_blocking` 内跑 `cognitive::run_agent`
+//! （同步闭环 + 可能的 pi 子进程），挂起审批经 mpsc 通道与 HTTP 端点对接——
+//! resolver 阻塞等待裁决，HTTP 端点经 `AppState.pending` 注册表 send 决策。
+//! 终局后：trace 落库 wb_trace_event、run 状态写 wb_run、Evaluation 桥接（I7）。
 
-/// `POST /api/v1/wb/agent/run`：触发 Agent 运行（异步，立即返回 runId + streamUrl）。
+use std::sync::Arc;
+use std::time::Instant;
+
 use crate::auth::AuthUser;
+use crate::cognitive::approval::{ApprovalDecision, ApprovalRequest};
+use crate::cognitive::runner::run_agent;
+use crate::cognitive::{Agent, LoopOutcome};
 use crate::evaluation::hook::{append_bridged, on_run_end, trace_to_session_events};
 use crate::evaluation::{EvaluationPolicy, TaskDefinition};
-use crate::planner::{
-    AutoApprover, Planner, PlannerError, PolicyApprover, RunStatus, RuntimeConfig, ServerApprover,
-    generate_run_id, lock_mutex,
-};
+use crate::evolution2::EvolutionEngine;
+use crate::kernel::{Kernel, Scope};
+use crate::planner::{RunStatus, lock_mutex};
 use crate::session::event::{EventType, SessionId};
 use crate::session::log::SessionLog;
+use crate::session::run::generate_run_id;
 use crate::storage::TraceQuery;
 use axum::Json;
 use axum::extract::{Extension, State};
@@ -54,8 +64,8 @@ pub(crate) async fn run_start(
     if body.goal.trim().is_empty() {
         return ApiResponse::error(wb_code("WB1001"), "goal 必填").into_response();
     }
-    // 快速健康检查 → WB2004（避免悬挂连接，pi-doc / prd 4.5）
-    if !st.engine.health().await {
+    // 快速健康检查 → WB2004（V2：CognitiveEngine::health，PiEngine 探测二进制）
+    if !st.v2_engine.health() {
         return ApiResponse::error(wb_code("WB2004"), "认知引擎不可用（Pi 未就绪）")
             .into_response();
     }
@@ -68,99 +78,200 @@ pub(crate) async fn run_start(
             human_approval: false,
         },
     );
-    // 持久化 run（DB 真相源，跨重启可恢复状态）。
+    // 持久化 run（DB 真相源，跨重启可恢复状态；G7：wb_run = V2 run store）。
     let _ = st
         .kernel
         .storage()
         .insert_run(&run_id, &agent_id, &body.goal)
         .await;
 
-    let kernel = st.kernel.clone();
-    let engine = st.engine.clone();
+    // run 上下文（blocking 线程内使用；全部 Send + 'static）
     let st2 = st.clone();
-    let store = st.store.clone();
-    let auto_approve = st.auto_approve;
     let goal = body.goal.clone();
-    let ag = agent_id.clone();
     let rid = run_id.clone();
-    tokio::spawn(async move {
-        // Human Approval 闸门：
-        // - auto_approve → 直接放行（AutoApprover）；
-        // - 否则 `require_approval` 动作挂起，注册待审批请求并等待浏览器经 HTTP 端点裁决
-        //   （ServerApprover），批准则恢复执行，拒绝则 WB2005 终止。
-        let approver: Arc<dyn PolicyApprover> = if auto_approve {
-            Arc::new(AutoApprover { allow: true })
-        } else {
-            let mut sa = ServerApprover::new(kernel.clone(), store, rid.clone(), ag.clone());
-            if let Some(t) = st.approval_timeout {
-                sa = sa.with_timeout(t);
+    let agent = agent_id.clone();
+    let auto_approve = st.auto_approve;
+    let services = Arc::clone(&st.v2_services);
+    let engine = Arc::clone(&st.v2_engine);
+    let pending = Arc::clone(&st.pending);
+    let approval_timeout = st.approval_timeout;
+
+    // run 在 blocking 线程执行（同步闭环 + 可能的 pi 子进程）；JoinHandle 有意不等待
+    // （HTTP 端点经 pending 注册表与 run 交互），故显式 drop。
+    let run_task = tokio::task::spawn_blocking(move || {
+        let handle = tokio::runtime::Handle::current();
+        let mut kernel = Kernel::new();
+        let mut agent_state = match kernel.create_context(None, Scope::World, "world") {
+            Ok(ctx) => Agent::new(agent.clone(), ctx),
+            Err(e) => {
+                handle.block_on(async {
+                    let _ = st2
+                        .kernel
+                        .storage()
+                        .update_run_status(&rid, "Failed", Some(&crate::runtime::now_ts()))
+                        .await;
+                });
+                lock_mutex(&st2.runs).insert(
+                    rid.clone(),
+                    RunRecord {
+                        status: RunStatus::Failed,
+                        human_approval: false,
+                    },
+                );
+                eprintln!("run {rid}: 创建 Context 失败: {e}");
+                return;
             }
-            Arc::new(sa)
         };
-        let res = Planner::with_actions(&kernel, st.registry.clone())
-            .with_approver(approver)
-            .with_config(RuntimeConfig {
-                auto_approve_from_evolution: st.auto_approve_evolution,
+        let mut trace: Vec<crate::runtime::TraceEvent> = Vec::new();
+        let mut approvals: Vec<ApprovalRequest> = Vec::new();
+
+        // 审批 resolver：注册到 pending（HTTP 端点可见）→ 阻塞等待裁决。
+        // 超时看门狗：TTL 到期仍挂起 → 经通道发 Expire（audit 与 Reject 区分）。
+        let pending2 = Arc::clone(&pending);
+        let rid2 = rid.clone();
+        let timeout2 = approval_timeout;
+        let mut resolver = move |req: &ApprovalRequest| -> ApprovalDecision {
+            if auto_approve {
+                return ApprovalDecision::Approve {
+                    by: "server-auto".into(),
+                };
+            }
+            let (tx, rx) = std::sync::mpsc::channel();
+            {
+                let mut g = lock_mutex(&pending2);
+                g.insert(
+                    req.id.clone(),
+                    PendingApproval {
+                        run_id: rid2.clone(),
+                        request: req.clone(),
+                        tx: tx.clone(),
+                        created_at: Instant::now(),
+                    },
+                );
+            }
+            // 看门狗：超时未裁决 → Expire（若条目仍在注册表）
+            let h = tokio::runtime::Handle::current();
+            let req_id = req.id.clone();
+            let tx2 = tx.clone();
+            let pending3 = Arc::clone(&pending2);
+            let ttl = timeout2.unwrap_or(crate::planner::APPROVAL_TIMEOUT);
+            h.spawn(async move {
+                tokio::time::sleep(ttl).await;
+                if lock_mutex(&pending3).remove(&req_id).is_some() {
+                    let _ = tx2.send(ApprovalDecision::Expire {
+                        by: "timeout".into(),
+                    });
+                }
+            });
+            // 阻塞等待裁决（spawn_blocking 线程内，不占 tokio worker）
+            rx.recv().unwrap_or(ApprovalDecision::Expire {
+                by: "channel-closed".into(),
             })
-            .run_goal(engine.as_ref(), &goal, &ag, &rid)
-            .await;
-        let rec = match res {
-            Ok(_) => RunRecord {
-                status: RunStatus::Completed,
-                human_approval: false,
-            },
-            Err(PlannerError::PolicyDenied(_)) => RunRecord {
-                status: RunStatus::Failed,
-                human_approval: true,
-            },
-            Err(_) => RunRecord {
-                status: RunStatus::Failed,
-                human_approval: false,
-            },
         };
-        // 持久化终态（与内存映射并行）。
-        let _ = st2
-            .kernel
-            .storage()
-            .update_run_status(&rid, rec.status.as_str(), Some(&now_micros()))
-            .await;
-        // V2 I7：EveryRun → Evaluation（成败皆评；kernel trace 桥进 SessionLog）。
-        // 失败 run 的评测同样有诊断价值（诊断环输入）。
-        let mut eval_log = SessionLog::new(SessionId::new(&rid));
-        eval_log.append(
-            EventType::ContextAssembled,
-            serde_json::json!({
-                "run_id": rid,
-                "assets": [
-                    { "asset_id": "goal", "selection_reason": goal, "relevance": 1.0 },
-                    { "asset_id": "agent", "selection_reason": ag, "relevance": 1.0 },
-                ],
-            }),
-        );
-        if let Ok(trace) = kernel.list_events(TraceQuery::for_run(&rid)).await {
-            append_bridged(&mut eval_log, trace_to_session_events(&trace));
-        }
-        eval_log.append(
-            EventType::SessionCompleted,
-            serde_json::json!({ "run_id": rid }),
-        );
-        let task = TaskDefinition {
-            task_id: goal,
-            expected_relations: vec![],
-            expected_artifacts: vec![],
-            time_budget_secs: 0.0,
-            skill_version: None,
+
+        // 演化引擎：auto_approve_evolution → Gate 放行路径（M2 统一持久化）
+        let mut evolution = if st2.auto_approve_evolution {
+            Some(EvolutionEngine::new().with_gate_enabled(true))
+        } else {
+            None
         };
-        let _ = on_run_end(
-            &mut eval_log,
+
+        let report = match run_agent(
+            &mut kernel,
+            &mut agent_state,
+            services.as_slice(),
+            engine.as_ref(),
+            Some(st2.v2_effect_defs.as_ref().clone()),
+            evolution.as_mut(),
             &rid,
-            &task,
-            &EvaluationPolicy::default(),
-            &kernel.storage(),
-        )
-        .await;
+            &goal,
+            &mut trace,
+            &mut approvals,
+            &mut resolver,
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                handle.block_on(async {
+                    let _ = st2
+                        .kernel
+                        .storage()
+                        .update_run_status(&rid, "Failed", Some(&crate::runtime::now_ts()))
+                        .await;
+                });
+                lock_mutex(&st2.runs).insert(
+                    rid.clone(),
+                    RunRecord {
+                        status: RunStatus::Failed,
+                        human_approval: false,
+                    },
+                );
+                eprintln!("run {rid}: {e}");
+                return;
+            }
+        };
+
+        // 终局落库：trace → wb_trace_event；run 状态 → wb_run；Evaluation 桥接。
+        let rid3 = rid.clone();
+        let goal3 = goal.clone();
+        let agent3 = agent.clone();
+        let st3 = st2.clone();
+        handle.block_on(async move {
+            for e in &trace {
+                let _ = st3.kernel.storage().append_trace(e).await;
+            }
+            let _ = st3
+                .kernel
+                .storage()
+                .update_run_status(
+                    &rid3,
+                    report.status.as_str(),
+                    Some(&crate::runtime::now_ts()),
+                )
+                .await;
+
+            let mut log = SessionLog::new(SessionId::new(&rid3));
+            log.append(
+                EventType::ContextAssembled,
+                serde_json::json!({
+                    "run_id": rid3,
+                    "assets": [
+                        { "asset_id": "goal", "selection_reason": goal3, "relevance": 1.0 },
+                        { "asset_id": "agent", "selection_reason": agent3, "relevance": 1.0 },
+                    ],
+                }),
+            );
+            if let Ok(stored) = st3.kernel.list_events(TraceQuery::for_run(&rid3)).await {
+                append_bridged(&mut log, trace_to_session_events(&stored));
+            }
+            log.append(
+                EventType::SessionCompleted,
+                serde_json::json!({ "run_id": rid3 }),
+            );
+            let task = TaskDefinition {
+                task_id: goal3,
+                expected_relations: vec![],
+                expected_artifacts: vec![],
+                time_budget_secs: 0.0,
+                skill_version: None,
+            };
+            let _ = on_run_end(
+                &mut log,
+                &rid3,
+                &task,
+                &EvaluationPolicy::default(),
+                &st3.kernel.storage(),
+            )
+            .await;
+        });
+
+        let rec = RunRecord {
+            status: report.status,
+            human_approval: matches!(report.outcome, LoopOutcome::Denied(_))
+                || report.human_approval,
+        };
         lock_mutex(&st2.runs).insert(rid, rec);
     });
+    drop(run_task);
 
     let dto = RunStartDto {
         run_id: run_id.clone(),
