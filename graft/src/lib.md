@@ -14,15 +14,14 @@ Crate root that declares and re-exports all OpenAIP-OS kernel modules (IR, ODL, 
 - kernel · module · L25-L25 — pub mod kernel;
 - mutation · module · L26-L26 — pub mod mutation;
 - odl · module · L27-L27 — Declares the odl module that deterministically parses ODL text into IR without LLM involvement.
-- ontology · module · L28-L28 — pub mod ontology;
-- plugin · module · L29-L29 — pub mod plugin;
-- rule · module · L30-L30 — pub mod rule;
-- runtime_exec · module · L31-L31 — pub mod runtime_exec;
-- server · module · L32-L32 — Declares the server module hosting axum REST, WebSocket streaming, and three-layer observation UI.
-- session · module · L33-L33 — pub mod session;
-- simulation · module · L34-L34 — pub mod simulation;
-- skill · module · L35-L35 — pub mod skill;
-- storage · module · L36-L36 — Declares the storage module with ObjectEngine/RelationEngine abstractions and LibSQLStorage (Turso) backend.
-- trace · module · L37-L37 — Declares the trace module providing the three-layer observation timeline and TraceEventDto.
-- worker · module · L38-L38 — pub mod worker;
-- world · module · L39-L39 — pub mod world;
+- plugin · module · L28-L28 — pub mod plugin;
+- rule · module · L29-L29 — pub mod rule;
+- server · module · L30-L30 — Declares the server module hosting axum REST, WebSocket streaming, and three-layer observation UI.
+- session · module · L31-L31 — pub mod session;
+- simulation · module · L32-L32 — pub mod simulation;
+- skill · module · L33-L33 — pub mod skill;
+- storage · module · L34-L34 — Declares the storage module with ObjectEngine/RelationEngine abstractions and LibSQLStorage (Turso) backend.
+- trace · module · L35-L35 — Declares the trace module providing the three-layer observation timeline and TraceEventDto.
+- worker · module · L36-L36 — pub mod worker;
+- world · module · L37-L37 — pub mod world;
+- world_exec · module · L38-L38 — pub mod world_exec;

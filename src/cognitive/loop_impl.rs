@@ -71,7 +71,7 @@ pub struct AgentLoop<'k> {
     services: &'k [Service],
     engine: &'k dyn CognitiveEngine,
     /// Phase 5：世界效应声明（注入后 Effect 真实改变 World，D5 重投影闭环）。
-    effect_defs: Option<Vec<crate::ontology::RuntimeDefinition>>,
+    effect_defs: Option<Vec<crate::compose::defs::RuntimeDefinition>>,
     /// Phase 6：演化引擎（认知状态；None = 不采集不 Gate）。
     evolution: Option<&'k mut crate::evolution2::EvolutionEngine>,
     /// Phase 7：规则级经验分账（rule 粒度；与 action 级并存——双尺度）。
@@ -110,7 +110,7 @@ impl<'k> AgentLoop<'k> {
     }
 
     /// 注入世界效应声明（RelationEffectExecutor 生效：Effect 真实改变 World）。
-    pub fn with_effect_defs(mut self, defs: Vec<crate::ontology::RuntimeDefinition>) -> Self {
+    pub fn with_effect_defs(mut self, defs: Vec<crate::compose::defs::RuntimeDefinition>) -> Self {
         self.effect_defs = Some(defs);
         self
     }

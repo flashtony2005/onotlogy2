@@ -11,7 +11,7 @@ use super::policy::PolicyVerdict;
 use crate::kernel::fiber::{FiberId, FiberState, WaitPattern};
 use crate::kernel::relation::Relation;
 use crate::kernel::{CompensationEngine, ContextId, Effect, Kernel, KernelError};
-use crate::runtime_exec::{CompensationExecutor as _, EffectExecutor as _};
+use crate::world_exec::{CompensationExecutor as _, EffectExecutor as _};
 
 /// 期望关系（D5 目标函数）：Task 完成时世界应达成的状态。
 /// Agent 不信任自己的执行——重新观察世界确认目标达成。
@@ -88,7 +88,7 @@ pub struct TaskExecutor<'k> {
     kernel: &'k mut Kernel,
     /// 世界效应声明（Phase 5：注入后 Effect 真实改变 World；None = 旧 projection 模拟）。
     /// 执行器在方法内临时构造（借用 kernel），避免双重 &mut。
-    effect_defs: Option<Vec<crate::ontology::RuntimeDefinition>>,
+    effect_defs: Option<Vec<crate::compose::defs::RuntimeDefinition>>,
     /// D4 分离：true 时补偿走 RelationCompensationExecutor；false 回退 CompensationEngine。
     use_relation_compensation: bool,
 }
@@ -103,7 +103,7 @@ impl<'k> TaskExecutor<'k> {
     }
 
     /// 注入世界效应声明（RelationEffectExecutor 生效：Effect 真实改变 World）。
-    pub fn with_effect_defs(mut self, defs: Vec<crate::ontology::RuntimeDefinition>) -> Self {
+    pub fn with_effect_defs(mut self, defs: Vec<crate::compose::defs::RuntimeDefinition>) -> Self {
         self.effect_defs = Some(defs);
         self
     }
@@ -266,8 +266,7 @@ impl<'k> TaskExecutor<'k> {
         //    有执行器 → executor 先执行（写 World，执行成功才 emit 记录）；
         //    无执行器 → 回退 capability.projection（旧模拟，兼容既有契约）。
         if let Some(defs) = &self.effect_defs {
-            let mut ex =
-                crate::runtime_exec::RelationEffectExecutor::new(self.kernel, defs.clone());
+            let mut ex = crate::world_exec::RelationEffectExecutor::new(self.kernel, defs.clone());
             let result = ex
                 .execute(&effect)
                 .map_err(|e| KernelError::Closed(format!("Effect 执行失败: {e}")))?;
@@ -357,7 +356,7 @@ impl<'k> TaskExecutor<'k> {
                 .collect()
         };
         self.kernel.advance(fiber, FiberState::Compensating)?;
-        let mut ex = crate::runtime_exec::RelationCompensationExecutor::new(self.kernel);
+        let mut ex = crate::world_exec::RelationCompensationExecutor::new(self.kernel);
         for (action, payload) in inverses {
             let comp = crate::kernel::Compensation { action, payload };
             ex.compensate(&comp)

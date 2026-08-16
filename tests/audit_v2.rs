@@ -32,11 +32,11 @@ object Customer:
 "#;
 
 fn refund_services() -> Vec<openaip_os::compose::Service> {
-    openaip_os::ontology::ir_to_services(&openaip_os::parse_odl(ODL_REFUND).unwrap())
+    openaip_os::compose::defs::ir_to_services(&openaip_os::parse_odl(ODL_REFUND).unwrap())
 }
 
-fn refund_defs() -> Vec<openaip_os::ontology::RuntimeDefinition> {
-    openaip_os::ontology::ir_to_runtime(&openaip_os::parse_odl(ODL_REFUND).unwrap())
+fn refund_defs() -> Vec<openaip_os::compose::defs::RuntimeDefinition> {
+    openaip_os::compose::defs::ir_to_runtime(&openaip_os::parse_odl(ODL_REFUND).unwrap())
 }
 
 fn refund_engine() -> openaip_os::cognitive::FakeEngine {

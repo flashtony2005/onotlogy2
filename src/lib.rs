@@ -25,10 +25,8 @@ pub mod ir;
 pub mod kernel;
 pub mod mutation;
 pub mod odl;
-pub mod ontology;
 pub mod plugin;
 pub mod rule;
-pub mod runtime_exec;
 pub mod server;
 pub mod session;
 pub mod simulation;
@@ -37,6 +35,7 @@ pub mod storage;
 pub mod trace;
 pub mod worker;
 pub mod world;
+pub mod world_exec;
 
 pub use auth::{
     AuthError, AuthUser, IdentityProvider, LocalIdentityProvider, Role, SessionStore, clamp_view,

@@ -225,7 +225,7 @@ async fn tc_m4_ontology_policy_extraction() {
         ir.relations.iter().any(|r| r.value.predicate == "contains"),
         "Storyboard contains Scene → RelationDefinition{{predicate: contains}}"
     );
-    let rel = openaip_os::ontology::RelationDefinition {
+    let rel = openaip_os::compose::defs::RelationDefinition {
         predicate: "contains".into(),
     };
     assert_eq!(rel.predicate, "contains");
@@ -237,7 +237,7 @@ async fn tc_m4_ontology_policy_extraction() {
         .find(|p| p.value.requirement.contains("approval"))
         .expect("审批策略提取");
     assert!(p.value.condition.contains("500"), "金额条件保留");
-    let pd = openaip_os::ontology::PolicyDefinition {
+    let pd = openaip_os::compose::defs::PolicyDefinition {
         require_approval: true,
         preconditions: vec![],
     };

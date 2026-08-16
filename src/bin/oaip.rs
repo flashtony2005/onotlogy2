@@ -478,9 +478,9 @@ async fn cmd_agent_run(
     use openaip_os::cognitive::persist::CognitiveStore;
     use openaip_os::cognitive::runner::run_agent;
     use openaip_os::cognitive::{Agent, CognitiveEngine, LoopOutcome, PiEngine};
+    use openaip_os::compose::defs::ir_to_services;
     use openaip_os::evolution2::{EvolutionEngine, EvolutionSnapshot};
     use openaip_os::kernel::{Kernel, Scope};
-    use openaip_os::ontology::ir_to_services;
     use openaip_os::session::run::generate_run_id;
     use openaip_os::worker::thinker::Thinker;
 
@@ -653,7 +653,7 @@ async fn cmd_agent_run(
         &mut agent,
         &services,
         &engine,
-        Some(openaip_os::ontology::ir_to_runtime(&ir)),
+        Some(openaip_os::compose::defs::ir_to_runtime(&ir)),
         evolution.as_mut().map(|(ev, _)| ev),
         &run_id,
         goal,
@@ -1126,8 +1126,8 @@ async fn cmd_serve(
     // M1c V2 run 路径：ODL → compose::Service 集合 + PiEngine（V2 认知引擎）。
     let odl_src = std::fs::read_to_string(odl.unwrap_or("examples/crm.odl"))?;
     let odl_ir = parse_odl(&odl_src)?;
-    let services = openaip_os::ontology::ir_to_services(&odl_ir);
-    let effect_defs = openaip_os::ontology::ir_to_runtime(&odl_ir);
+    let services = openaip_os::compose::defs::ir_to_services(&odl_ir);
+    let effect_defs = openaip_os::compose::defs::ir_to_runtime(&odl_ir);
     let engine: Arc<dyn openaip_os::cognitive::CognitiveEngine> =
         Arc::new(openaip_os::cognitive::PiEngine::new("retention-agent"));
     let addr: SocketAddr = format!("{host}:{port}").parse()?;

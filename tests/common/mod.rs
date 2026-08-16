@@ -137,12 +137,12 @@ object Customer:
 
 #[allow(dead_code)]
 pub fn retain_services() -> Vec<openaip_os::compose::Service> {
-    openaip_os::ontology::ir_to_services(&parse_odl(ODL_RETAIN_V2).expect("retain V2 ODL"))
+    openaip_os::compose::defs::ir_to_services(&parse_odl(ODL_RETAIN_V2).expect("retain V2 ODL"))
 }
 
 #[allow(dead_code)]
-pub fn retain_defs() -> Vec<openaip_os::ontology::RuntimeDefinition> {
-    openaip_os::ontology::ir_to_runtime(&parse_odl(ODL_RETAIN_V2).expect("retain V2 ODL"))
+pub fn retain_defs() -> Vec<openaip_os::compose::defs::RuntimeDefinition> {
+    openaip_os::compose::defs::ir_to_runtime(&parse_odl(ODL_RETAIN_V2).expect("retain V2 ODL"))
 }
 
 /// 确定性 V2 引擎：retain 一次（世界出现 retained 后停）。

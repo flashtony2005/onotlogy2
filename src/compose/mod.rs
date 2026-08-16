@@ -7,6 +7,7 @@
 //! - Task：未来 Effect 序列的声明（执行 = spawn Fiber，TaskExecutor 驱动）
 
 pub mod capability;
+pub mod defs;
 pub mod policy;
 pub mod service;
 pub mod task;
@@ -15,3 +16,8 @@ pub use capability::{Capability, CapabilityRegistry};
 pub use policy::{Cmp, Policy, PolicyVerdict, Precondition};
 pub use service::Service;
 pub use task::{StepOutcome, Task, TaskExecutor};
+
+pub use defs::{
+    CapabilityDefinition, EffectDefinition, EffectValue, PolicyDefinition, PreconditionDefinition,
+    RelationDefinition, RuntimeDefinition, ir_to_runtime, ir_to_services,
+};

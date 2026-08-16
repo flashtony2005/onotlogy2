@@ -34,15 +34,15 @@ pub trait EffectExecutor: Send + Sync {
 pub struct RelationEffectExecutor<'k> {
     kernel: &'k mut Kernel,
     /// 对象类型 → 效应声明查找（effect.action 语义名 → CapabilityDefinition）。
-    defs: Vec<crate::ontology::RuntimeDefinition>,
+    defs: Vec<crate::compose::defs::RuntimeDefinition>,
 }
 
 impl<'k> RelationEffectExecutor<'k> {
-    pub fn new(kernel: &'k mut Kernel, defs: Vec<crate::ontology::RuntimeDefinition>) -> Self {
+    pub fn new(kernel: &'k mut Kernel, defs: Vec<crate::compose::defs::RuntimeDefinition>) -> Self {
         Self { kernel, defs }
     }
 
-    fn effects_of(&self, action: &str) -> Vec<crate::ontology::EffectDefinition> {
+    fn effects_of(&self, action: &str) -> Vec<crate::compose::defs::EffectDefinition> {
         self.defs
             .iter()
             .flat_map(|d| &d.capabilities)
@@ -73,15 +73,15 @@ impl EffectExecutor for RelationEffectExecutor<'_> {
         let mut result = EffectResult::default();
         for def in defs {
             match def {
-                crate::ontology::EffectDefinition::Update { field, value } => {
+                crate::compose::defs::EffectDefinition::Update { field, value } => {
                     // State = Relation 投影：target --field--> 求值后的 value
                     let value = match value {
-                        crate::ontology::EffectValue::Literal(v) => v.clone(),
-                        crate::ontology::EffectValue::Param(p) => {
+                        crate::compose::defs::EffectValue::Literal(v) => v.clone(),
+                        crate::compose::defs::EffectValue::Param(p) => {
                             effect.input.get(p.as_str()).cloned().unwrap_or(Value::Null)
                         }
-                        crate::ontology::EffectValue::SelfRef => Value::String(target.clone()),
-                        crate::ontology::EffectValue::SelfField(f) => {
+                        crate::compose::defs::EffectValue::SelfRef => Value::String(target.clone()),
+                        crate::compose::defs::EffectValue::SelfField(f) => {
                             Value::String(format!("self.{f}"))
                         }
                     };
@@ -95,7 +95,7 @@ impl EffectExecutor for RelationEffectExecutor<'_> {
                         .map_err(|e: KernelError| EffectError::Failed(e.to_string()))?;
                     result.relations.push((target.clone(), field, value_s));
                 }
-                crate::ontology::EffectDefinition::Create {
+                crate::compose::defs::EffectDefinition::Create {
                     object_type,
                     link_edge,
                 } => {

@@ -82,7 +82,7 @@ pub struct AppState {
     /// M1c V2 组合层：run 路径的服务集合（ODL → compose::Service）。
     pub v2_services: Arc<Vec<Service>>,
     /// M1c V2 世界效应声明（Phase 5：Effect 真实改变 World）。
-    pub v2_effect_defs: Arc<Vec<crate::ontology::RuntimeDefinition>>,
+    pub v2_effect_defs: Arc<Vec<crate::compose::defs::RuntimeDefinition>>,
     /// M1c V2 认知引擎（run 路径；PiEngine 生产，测试注入 FakeEngine）。
     pub v2_engine: Arc<dyn crate::cognitive::CognitiveEngine>,
     /// 是否自动批准需审批动作（Human Approval）：默认 false → require_approval 动作挂起等待 HTTP 审批。
@@ -257,7 +257,7 @@ fn router() -> Router<Arc<AppState>> {
 pub async fn serve(
     storage: Arc<LibSQLStorage>,
     services: Vec<Service>,
-    effect_defs: Vec<crate::ontology::RuntimeDefinition>,
+    effect_defs: Vec<crate::compose::defs::RuntimeDefinition>,
     engine: Arc<dyn crate::cognitive::CognitiveEngine>,
     listener: TcpListener,
     static_dir: impl Into<String>,
@@ -287,7 +287,7 @@ pub async fn serve(
 pub async fn serve_with_timeout(
     storage: Arc<LibSQLStorage>,
     services: Vec<Service>,
-    effect_defs: Vec<crate::ontology::RuntimeDefinition>,
+    effect_defs: Vec<crate::compose::defs::RuntimeDefinition>,
     engine: Arc<dyn crate::cognitive::CognitiveEngine>,
     listener: TcpListener,
     static_dir: impl Into<String>,

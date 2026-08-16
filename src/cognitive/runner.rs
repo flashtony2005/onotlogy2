@@ -40,7 +40,7 @@ pub fn run_agent<'k>(
     services: &'k [Service],
     engine: &'k dyn CognitiveEngine,
     // 世界效应声明（Phase 5：Effect 真实改变 World；None = 回退 projection 模拟）。
-    effect_defs: Option<Vec<crate::ontology::RuntimeDefinition>>,
+    effect_defs: Option<Vec<crate::compose::defs::RuntimeDefinition>>,
     evolution: Option<&'k mut EvolutionEngine>,
     run_id: &str,
     goal: &str,

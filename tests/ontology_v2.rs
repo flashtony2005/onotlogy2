@@ -13,15 +13,15 @@
 use openaip_os::cognitive::engine::{AgentView, FakeEngine, PlanStep};
 use openaip_os::cognitive::observe::observe;
 use openaip_os::cognitive::{Agent, AgentLoop, CognitiveEngine, LoopOutcome, Memory};
+use openaip_os::compose::defs::{ir_to_runtime, ir_to_services};
 use openaip_os::compose::{Capability, Service, Task, TaskExecutor};
 use openaip_os::kernel::effect::{Effect, Reversibility};
 use openaip_os::kernel::fiber::FiberState;
 use openaip_os::kernel::relation::Relation;
 use openaip_os::kernel::{Compensation, Kernel, Scope};
-use openaip_os::ontology::{ir_to_runtime, ir_to_services};
 use openaip_os::parse_odl;
-use openaip_os::runtime_exec::{EffectExecutor, RelationEffectExecutor};
 use openaip_os::world::{derive_entities, subgraph};
+use openaip_os::world_exec::{EffectExecutor, RelationEffectExecutor};
 use serde_json::json;
 
 // ── ODL 夹具：retain（免审批）+ refund（审批 + 前置条件）──────────────
@@ -55,7 +55,7 @@ object Customer:
             value: "BLACKLIST"
 "#;
 
-fn crm_defs() -> Vec<openaip_os::ontology::RuntimeDefinition> {
+fn crm_defs() -> Vec<openaip_os::compose::defs::RuntimeDefinition> {
     let ir = parse_odl(ODL_CRM).expect("ODL 解析");
     ir_to_runtime(&ir)
 }
@@ -96,7 +96,7 @@ async fn tc_o1_odl_to_runtime_definition_to_service() {
     assert_eq!(retain.reversibility, Reversibility::Compensatable);
     assert_eq!(
         retain.effects,
-        vec![openaip_os::ontology::EffectDefinition::Create {
+        vec![openaip_os::compose::defs::EffectDefinition::Create {
             object_type: "RetentionTask".into(),
             link_edge: Some("needs_retention".into()),
         }]

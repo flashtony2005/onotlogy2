@@ -1,4 +1,8 @@
-//! runtime_exec —— 世界执行器（Phase 5 · D4：EffectExecutor / CompensationExecutor 分离）。
+//! world_exec —— 世界执行层（Phase 5 · D4：EffectExecutor / CompensationExecutor 分离）。
+//!
+//! M3 改名：原名 runtime_exec 与 V2 Kernel（crate::kernel）概念撞车；本模块是
+//! Kernel 之上的世界执行层——Effect 执行（真实改变 World 关系投影）与错误补偿
+//! 两个语义分离的执行器。
 //!
 //! - Effect：正向世界变化（Decision → Effect → Executor → World）
 //! - Compensation：错误恢复语义（Failure → CompensationEngine → CompensationExecutor → World）
