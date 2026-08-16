@@ -7,5 +7,8 @@ mod gate_source;
 mod health_source;
 mod pi_engine;
 mod run_status;
+mod runner;
+mod timeline_views;
 mod trace_events;
+mod trace_query;
 mod via_workers;

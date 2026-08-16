@@ -6,10 +6,6 @@ use openaip_os::agent::{AgentEngine, PiAgentEngine};
 use openaip_os::auth::{IdentityProvider, LocalIdentityProvider};
 use openaip_os::evaluation::hook::{append_bridged, on_run_end, trace_to_session_events};
 use openaip_os::evaluation::{EvaluationPolicy, TaskDefinition};
-use openaip_os::planner::{
-    AutoApprover, ConsoleApprover, Planner, PlannerError, PolicyApprover, RuntimeConfig,
-    generate_run_id,
-};
 use openaip_os::runtime::RuntimeKernel;
 use openaip_os::server;
 use openaip_os::session::event::{EventType, SessionId};
@@ -469,8 +465,8 @@ async fn cmd_db_reset(db: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// 触发 Agent 运行（V0.3）：Pi 作 Cognitive Engine，OpenAIP Planner 闭环。
-/// `via_workers=true` 时走 V2 桥：Thinker 规划（plan()）→ Worker ABI 执行。
+/// 触发 Agent 运行（M1c · V2）：PiEngine 作 Cognitive Engine，AgentLoop 闭环。
+/// `via_workers=true` 时走 V2 桥：Thinker 决策 → Worker ABI 执行。
 #[allow(clippy::too_many_arguments)]
 async fn cmd_agent_run(
     db: &str,
@@ -482,12 +478,24 @@ async fn cmd_agent_run(
     via_workers: bool,
     skill: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let storage = LibSQLStorage::open(db).await?;
-    let kernel = RuntimeKernel::new(storage);
-    let engine = PiAgentEngine::new(agent_id.to_string());
-    let action_registry = load_registry(odl)?;
+    use openaip_os::cognitive::approval::{ApprovalDecision, ApprovalRequest, DecisionCache};
+    use openaip_os::cognitive::persist::CognitiveStore;
+    use openaip_os::cognitive::runner::run_agent;
+    use openaip_os::cognitive::{Agent, LoopOutcome, PiEngine};
+    use openaip_os::evolution2::{EvolutionEngine, EvolutionSnapshot};
+    use openaip_os::kernel::{Kernel, Scope};
+    use openaip_os::ontology::ir_to_services;
+    use openaip_os::session::run::generate_run_id;
+    use openaip_os::worker::thinker::Thinker;
 
-    if !engine.health().await {
+    let storage = LibSQLStorage::open(db).await?;
+    let path = odl.unwrap_or("examples/crm.odl");
+    let src = std::fs::read_to_string(path)?;
+    let ir = parse_odl(&src)?;
+    let services = ir_to_services(&ir);
+    let engine = PiEngine::new(agent_id.to_string());
+
+    if !engine.health() {
         println!(
             "❌ WB2004 认知引擎不可用：未找到 `pi` 可执行文件。请先安装 @earendil-works/pi-coding-agent 并配置 LLM Provider。"
         );
@@ -495,8 +503,8 @@ async fn cmd_agent_run(
     }
 
     let run_id = generate_run_id();
-    // Phase 11 11A：Run 级 SessionLog（事实源）。Context Assembly 事实先落
-    // （run 级上下文输入；planner 内部装配的细化发射为下一迭代项）。
+    storage.insert_run(&run_id, agent_id, goal).await?;
+    // Phase 11 11A：Run 级 SessionLog（事实源）。Context Assembly 事实先落。
     let mut log = SessionLog::new(SessionId::new(&run_id));
     log.append(
         EventType::ContextAssembled,
@@ -505,58 +513,31 @@ async fn cmd_agent_run(
             "assets": [
                 { "asset_id": "goal", "selection_reason": goal, "relevance": 1.0 },
                 { "asset_id": "agent", "selection_reason": agent_id, "relevance": 1.0 },
-                { "asset_id": "ontology", "selection_reason": odl.unwrap_or(""), "relevance": 1.0 },
+                { "asset_id": "ontology", "selection_reason": path, "relevance": 1.0 },
             ],
         }),
     );
 
-    // V2 桥：Thinker 规划 → Worker 执行（Worker ≠ Authority：Policy 由 worker 层 fail-closed 治理）
     if via_workers {
-        use openaip_os::planner::PlanStep;
-        use openaip_os::worker::orchestrator::{WorkerOrchestrator, WorkerTask};
-        use openaip_os::worker::router::{RouterCriteria, WorkerRouter};
-
-        let (wregistry, _) = default_worker_env();
-        let planner = Planner::with_actions(&kernel, action_registry);
-        let planned = planner
-            .plan(&engine, goal, agent_id, &run_id)
-            .await
-            .map_err(|e| format!("规划失败: {e}"))?;
-        let caps: Vec<String> = planned
-            .steps
+        // V2 桥：Thinker（CognitiveEngine::decide）→ Worker ABI 执行（Worker ≠ Authority）
+        let caps: Vec<String> = services
             .iter()
-            .filter_map(PlanStep::worker_capability)
+            .flat_map(|s| s.capability_names().cloned())
             .collect();
-        let wpolicy = policy_for_capabilities(&caps);
-        println!(
-            "🧠 Thinker 规划：{} 个步骤（{} 个经 Worker ABI）",
-            planned.steps.len(),
-            caps.len()
-        );
-        for s in &planned.steps {
-            match s.worker_capability() {
-                Some(cap) => println!("   - {cap} ({})", s.description),
-                None => println!(
-                    "   - ⏭️ kernel 内部操作（不经 Worker ABI）：{}",
-                    s.description
-                ),
-            }
+        let decisions = Thinker::new(&engine).plan(goal, &caps, vec![]);
+        let tasks = Thinker::to_tasks(&decisions);
+        println!("🧠 Thinker 决策：{} 步", tasks.len());
+        for t in &tasks {
+            println!("   - {} ({})", t.capability, t.note);
         }
-        let tasks: Vec<WorkerTask> = planned
-            .steps
-            .iter()
-            .filter_map(|s| {
-                s.worker_capability().map(|cap| WorkerTask {
-                    capability: cap,
-                    input: json!({ "object_refs": s.object_refs }),
-                    note: s.description.clone(),
-                })
-            })
-            .collect();
-        let mut orch = WorkerOrchestrator::new(
+        let (wregistry, _) = default_worker_env();
+        let wpolicy = policy_for_capabilities(&caps);
+        let mut orch = openaip_os::worker::orchestrator::WorkerOrchestrator::new(
             &wregistry,
             &wpolicy,
-            WorkerRouter::new(RouterCriteria::default()),
+            openaip_os::worker::router::WorkerRouter::new(
+                openaip_os::worker::router::RouterCriteria::default(),
+            ),
         );
         let result = orch.run_plan(&tasks).await;
         println!(
@@ -572,6 +553,7 @@ async fn cmd_agent_run(
                 o.worker_id
             );
         }
+        let ok = result.all_ok;
         orch.session_log()
             .append(EventType::SessionCompleted, json!({ "run_id": run_id }));
         let task = TaskDefinition {
@@ -588,16 +570,13 @@ async fn cmd_agent_run(
             &run_id,
             &task,
             &EvaluationPolicy::default(),
-            &kernel.storage(),
+            &storage,
         )
         .await
         {
             Ok(r) => {
-                let _ = openaip_os::worker::stats::record_outcomes(
-                    &kernel.storage(),
-                    &r.worker_outcomes,
-                )
-                .await;
+                let _ =
+                    openaip_os::worker::stats::record_outcomes(&storage, &r.worker_outcomes).await;
                 println!(
                     "📊 Phase 11 评测：aggregate={:.3} skill_version={:?} reliability={:?} policy_compliance={:?}",
                     r.aggregate, r.skill_version, r.reliability.value, r.policy_compliance.value
@@ -605,62 +584,128 @@ async fn cmd_agent_run(
             }
             Err(e) => println!("⚠️ 评测失败（不影响运行结果）：{e}"),
         }
+        storage
+            .update_run_status(
+                &run_id,
+                if ok { "Completed" } else { "Failed" },
+                Some(&openaip_os::runtime::now_ts()),
+            )
+            .await?;
         return Ok(());
     }
 
-    // Human Approval 闸门：默认 ConsoleApprover（stdin 交互确认）；--auto-approve 直接放行。
-    let approver: Arc<dyn PolicyApprover> = if auto_approve {
-        Arc::new(AutoApprover { allow: true })
-    } else {
-        Arc::new(ConsoleApprover::new())
+    // ── V2 认知闭环：Kernel + Agent + AgentLoop（M1c 切换，planner 不再参与）──
+    let mut kernel = Kernel::new();
+    let mut agent = Agent::new(
+        agent_id,
+        kernel.create_context(None, Scope::World, "world")?,
+    );
+    let mut trace: Vec<openaip_os::runtime::TraceEvent> = Vec::new();
+    let mut approvals: Vec<ApprovalRequest> = Vec::new();
+
+    // 审批裁决：--auto-approve 直放；否则 stdin 交互（同 action@target 缓存一次决策）。
+    let mut cache = DecisionCache::new();
+    let mut resolver = |req: &ApprovalRequest| -> ApprovalDecision {
+        if auto_approve {
+            return ApprovalDecision::Approve {
+                by: "cli-auto".into(),
+            };
+        }
+        cache.get_or_ask(&DecisionCache::key(&req.action, &req.args), || {
+            println!("⚠️ 需要人工审批：{} args={}", req.capability, req.args);
+            print!("  批准? [y/N]: ");
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+            let mut line = String::new();
+            let ok = std::io::stdin().read_line(&mut line).is_ok()
+                && matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes");
+            if ok {
+                ApprovalDecision::Approve {
+                    by: "cli-user".into(),
+                }
+            } else {
+                ApprovalDecision::Reject {
+                    by: "cli-user".into(),
+                }
+            }
+        })
     };
 
-    let outcome = Planner::with_actions(&kernel, action_registry)
-        .with_approver(approver)
-        .with_config(RuntimeConfig {
-            auto_approve_from_evolution: auto_approve_evolution,
-        })
-        .run_goal(&engine, goal, agent_id, &run_id)
-        .await;
-    match &outcome {
-        Ok(res) => {
-            println!(
-                "✅ Agent 运行完成：run_id={} status={}",
-                res.run_id,
-                res.status.as_str()
-            );
-            let events = kernel.list_events(TraceQuery::for_run(&run_id)).await?;
-            for e in &events {
-                println!(
-                    "  [{}] refs={:?} conf={:?} — {}",
-                    e.event_type,
-                    e.object_refs,
-                    e.confidence,
-                    e.reasoning.clone().unwrap_or_default()
-                );
-            }
-        }
-        Err(PlannerError::EngineUnavailable(m)) => {
-            println!("❌ WB2004 认知引擎不可用（Pi 未就绪/崩溃/鉴权失败）：{m}");
-        }
-        Err(PlannerError::PolicyDenied(m)) => {
-            println!("❌ WB2005 Policy 拒绝（需 Human Approval）：{m}");
-        }
-        Err(PlannerError::Storage(e)) => {
-            println!("❌ 存储错误：{e}");
-        }
-        Err(PlannerError::Action(e)) => {
-            println!("❌ 动作执行失败（V0.4 Action Engine）：{e}");
-        }
+    // 演化引擎：--auto-approve-evolution 开启 Gate；快照经 CognitiveStore 跨 run 持久化。
+    let mut evolution: Option<(EvolutionEngine, Option<CognitiveStore>)> = None;
+    if auto_approve_evolution {
+        let store = CognitiveStore::open(db).await.ok();
+        let restored = match &store {
+            Some(s) => s
+                .load::<EvolutionSnapshot>("evolution")
+                .await
+                .ok()
+                .flatten()
+                .map(EvolutionEngine::restore),
+            None => None,
+        };
+        evolution = Some((
+            restored
+                .unwrap_or_else(EvolutionEngine::new)
+                .with_gate_enabled(true),
+            store,
+        ));
     }
-    // Phase 11 11A：RunEnd → Evaluation（真实热路径）。
-    // 1) kernel trace 事实桥进 SessionLog（policy.checked / tool.call / approval.*）
-    // 2) on_run_end：evaluate（纯函数）→ 落 wb_evaluation → 发射 evaluation.created
-    // 3) 成败皆评（失败 run 的评测同样有诊断价值）
-    let trace = kernel.list_events(TraceQuery::for_run(&run_id)).await?;
-    append_bridged(&mut log, trace_to_session_events(&trace));
+
+    let report = run_agent(
+        &mut kernel,
+        &mut agent,
+        &services,
+        &engine,
+        evolution.as_mut().map(|(ev, _)| ev),
+        &run_id,
+        goal,
+        &mut trace,
+        &mut approvals,
+        &mut resolver,
+    )?;
+
+    // 观察层落库：V2 事件流 → wb_trace_event（UI 时间线 / WS 同源）
+    for e in &trace {
+        storage.append_trace(e).await?;
+    }
+    if let Some((ev, Some(store))) = &evolution {
+        let _ = store.save("evolution", &ev.snapshot()).await;
+    }
+    storage
+        .update_run_status(
+            &run_id,
+            report.status.as_str(),
+            Some(&openaip_os::runtime::now_ts()),
+        )
+        .await?;
+
+    match &report.outcome {
+        LoopOutcome::Completed => println!(
+            "✅ Agent 运行完成：run_id={} status={}",
+            run_id,
+            report.status.as_str()
+        ),
+        LoopOutcome::Denied(reason) => {
+            println!("❌ WB2005 Policy 拒绝（需 Human Approval）：{reason}");
+        }
+        LoopOutcome::Failed(reason) => println!("❌ 运行失败：{reason}"),
+        LoopOutcome::Waiting | LoopOutcome::Continue => unreachable!("runner 已收敛"),
+    }
+    for e in &trace {
+        println!(
+            "  [{}] refs={:?} conf={:?} — {}",
+            e.event_type,
+            e.object_refs,
+            e.confidence,
+            e.reasoning.clone().unwrap_or_default()
+        );
+    }
+
+    // Phase 11 11A：RunEnd → Evaluation（成败皆评）。
+    let stored_trace = storage.list_events(TraceQuery::for_run(&run_id)).await?;
+    append_bridged(&mut log, trace_to_session_events(&stored_trace));
     log.append(EventType::SessionCompleted, json!({ "run_id": run_id }));
-    // task_id = goal（稳定键）：同目标跨 run 聚合，供诊断环累计证据
     let task = TaskDefinition {
         task_id: goal.to_string(),
         expected_relations: vec![],
@@ -673,32 +718,25 @@ async fn cmd_agent_run(
         &run_id,
         &task,
         &EvaluationPolicy::default(),
-        &kernel.storage(),
+        &storage,
     )
     .await
     {
         Ok(r) => {
-            // Router Selection Learning：per-worker 结果沉淀统计（可回放重建的数据源）
-            let _ =
-                openaip_os::worker::stats::record_outcomes(&kernel.storage(), &r.worker_outcomes)
-                    .await;
+            let _ = openaip_os::worker::stats::record_outcomes(&storage, &r.worker_outcomes).await;
             println!(
                 "📊 Phase 11 评测（wb_evaluation）：aggregate={:.3} unknowns={:?}",
                 r.aggregate,
                 r.unknowns()
-            );
-            println!(
-                "   correctness={:?} policy_compliance={:?} reliability={:?}",
-                r.correctness.value, r.policy_compliance.value, r.reliability.value
             );
         }
         Err(e) => println!("⚠️ 评测失败（不影响运行结果）：{e}"),
     }
     // Phase 11B 诊断环：失败模式 → Mutation Proposal（等待人工评审，Proposal ≠ Mutation）
     match openaip_os::run_diagnosis(
-        &kernel.storage(),
+        &storage,
         agent_id,
-        "v1",
+        "v2",
         Some(goal),
         &openaip_os::DiagnosisConfig::default(),
     )
@@ -812,7 +850,7 @@ async fn cmd_worker_run(
     }
 
     // 注册 run 记录（Loop Health closure_rate 的分母；评测在 run 尾部落库）
-    let run_id = openaip_os::planner::generate_run_id();
+    let run_id = openaip_os::session::run::generate_run_id();
     let _ = storage
         .insert_run(&run_id, "worker-cli", capabilities)
         .await;
