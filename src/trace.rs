@@ -2,6 +2,7 @@
 //!
 //! 所有事件同源（`TraceEvent`），三层视图（Executive/Operator/Developer）仅是对同一份事件的
 //! 不同裁剪；WebSocket 实时流与离线 timeline 查询共用 `TraceEventDto`（camelCase，单一真相源）。
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 use crate::session::run::RunStatus;
 use serde::{Deserialize, Serialize};

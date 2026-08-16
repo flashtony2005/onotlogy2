@@ -77,7 +77,7 @@ pub struct ImportSkillReq {
 
 pub async fn list_skills(State(state): State<Arc<crate::server::AppState>>) -> Json<Vec<SkillDto>> {
     let v2 = &state.v2;
-    let reg = v2.skills.read().unwrap();
+    let reg = v2.skills.read().expect("V2 状态 RwLock 不中毒（读）");
     let mut out: Vec<SkillDto> = reg
         .all()
         .into_iter()
@@ -111,7 +111,7 @@ pub async fn import_skill(
         .parse(&raw)
         .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e.to_string()))?;
     let known: Vec<String> = {
-        let reg = v2.skills.read().unwrap();
+        let reg = v2.skills.read().expect("V2 状态 RwLock 不中毒（读）");
         // 已知能力：调用方提供 + 已注册 asset 的 capabilities 并集
         let mut k = req.known_capabilities.clone();
         for a in reg.all() {
@@ -127,7 +127,7 @@ pub async fn import_skill(
     let asset = AssetCompiler::default()
         .compile(&raw, &ir, &resolutions)
         .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e.to_string()))?;
-    let mut reg = v2.skills.write().unwrap();
+    let mut reg = v2.skills.write().expect("V2 状态 RwLock 不中毒（写）");
     reg.attach_raw(&raw.id, raw.clone());
     reg.register(asset.clone())
         .map_err(|e| (axum::http::StatusCode::CONFLICT, e.to_string()))?;
@@ -157,7 +157,7 @@ pub async fn get_skill_raw(
     State(state): State<Arc<crate::server::AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<RawSkillDto>, (axum::http::StatusCode, String)> {
-    let reg = state.v2.skills.read().unwrap();
+    let reg = state.v2.skills.read().expect("V2 状态 RwLock 不中毒（读）");
     let raw = reg.raw_of(&id).ok_or((
         axum::http::StatusCode::NOT_FOUND,
         format!("skill {id} 无原始快照"),
@@ -175,7 +175,7 @@ pub async fn list_plugins(
     State(state): State<Arc<crate::server::AppState>>,
 ) -> Json<Vec<PluginDto>> {
     let v2 = &state.v2;
-    let reg = v2.plugins.read().unwrap();
+    let reg = v2.plugins.read().expect("V2 状态 RwLock 不中毒（读）");
     let mut out: Vec<PluginDto> = reg
         .snapshot()
         .plugins
@@ -264,7 +264,11 @@ pub struct WorkerDto {
 pub async fn list_workers(
     State(state): State<Arc<crate::server::AppState>>,
 ) -> Json<Vec<WorkerDto>> {
-    let reg = state.v2.workers.read().unwrap();
+    let reg = state
+        .v2
+        .workers
+        .read()
+        .expect("V2 状态 RwLock 不中毒（读）");
     let mut out: Vec<WorkerDto> = reg
         .all()
         .into_iter()

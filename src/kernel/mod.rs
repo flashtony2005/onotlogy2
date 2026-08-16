@@ -15,6 +15,7 @@
 //! - P4 Cognitive Separation：LLM 推理是 poll 步骤，不入 fact 层（Phase 1+ 实现 poll）
 //!
 //! Phase 0：纯内存实现 + 状态机 + 单测，不接持久化、不接业务层。
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 use serde_json::{Value, json};
 use std::collections::HashMap;

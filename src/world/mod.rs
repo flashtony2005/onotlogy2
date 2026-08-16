@@ -7,6 +7,7 @@
 //!
 //! 数据源：kernel/persistence 的 append-only events 表 + relations/contexts 的
 //! valid_from/valid_until 时间窗（save 保留历史行——expire 只闭合窗口不删行）。
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 use serde_json::Value;
 

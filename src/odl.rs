@@ -128,8 +128,14 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
         }
 
         // 缩进回退：离开比当前行更深的块（离开时冲刷对应临时态）
-        while section.len() > 1 && indent <= section.last().unwrap().1 {
-            match section.last().unwrap().0 {
+        while section.len() > 1
+            && indent
+                <= section
+                    .last()
+                    .expect("section 栈非空：解析入口必压 Object 帧")
+                    .1
+        {
+            match section.last().expect("section 栈非空").0 {
                 Section::ActionUpdates => flush_update(&mut cur_update, &mut cur_action),
                 Section::ActionCreates => flush_create(&mut cur_create, &mut cur_action),
                 Section::ActionPrecondition => flush_clause(&mut cur_clause, &mut cur_action),
@@ -138,7 +144,9 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             }
             section.pop();
         }
-        let cur = *section.last().unwrap();
+        let cur = *section
+            .last()
+            .expect("section 栈非空：解析入口必压 Object 帧");
 
         // 列表项（actions 的 updates/creates 用 `- ` 开头）
         if let Some(content) = line.strip_prefix("- ") {

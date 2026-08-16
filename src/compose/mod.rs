@@ -5,6 +5,7 @@
 //! - Capability：能力声明（动作 + 可逆性 + 补偿 + 策略 + 关系投影）
 //! - Service：能力集合（= Context + capabilities）
 //! - Task：未来 Effect 序列的声明（执行 = spawn Fiber，TaskExecutor 驱动）
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 pub mod capability;
 pub mod defs;

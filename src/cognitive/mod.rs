@@ -3,6 +3,7 @@
 //! P4 Cognitive Separation：本层全部产物（Observation/Hypothesis/Decision）不进 fact 层；
 //! 只有经 `TaskExecutor::step` 提交的 Effect 改变 World。
 //! 设计定稿：docs/03_架构设计/cognitive-layer-v3.md
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 pub mod approval;
 pub mod engine;

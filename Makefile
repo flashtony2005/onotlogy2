@@ -24,7 +24,11 @@ audit:
 	cd ui && npm audit --audit-level=high
 
 # CI 主门禁
-check: fmt-check clippy test
+check: fmt-check clippy test unwrap-budget
+
+# M6：unwrap 预算门禁（scripts/unwrap-budget.txt，只降不升）
+unwrap-budget:
+	./scripts/unwrap-budget.sh
 
 # 全量（含前端构建与依赖审计）
 ci: check ui audit

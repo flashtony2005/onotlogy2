@@ -15,6 +15,7 @@
 //! - `FailurePattern` → RiskSignal → AgentView.evolution → Cognition → Decision
 //!
 //! 演化状态与 Memory 同为**认知状态**（P4：不进 fact 层；持久化并入 Memory 延期项）。
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 use std::collections::HashMap;
 

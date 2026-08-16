@@ -27,6 +27,9 @@ jobs:
       - name: fmt
         run: cargo fmt --check
 
+      - name: unwrap budget
+        run: ./scripts/unwrap-budget.sh
+
       - name: clippy
         run: cargo clippy --all-targets -- -D warnings
 
