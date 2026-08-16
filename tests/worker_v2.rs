@@ -1069,3 +1069,77 @@ async fn tc_w18_router_decision_is_auditable() {
         "选择理由可审计"
     );
 }
+
+// ── W19：效率维度进入 learned map（同成功率，慢者修正更低）────────
+#[tokio::test]
+async fn tc_w19_efficiency_influences_learned_map() {
+    use openaip_os::worker::stats::{learned_trust_map, record_outcomes};
+
+    let storage = openaip_os::storage::LibSQLStorage::open(":memory:")
+        .await
+        .unwrap();
+    // 同成功率（10/10 全成功），w-b 慢 4 倍
+    let mut outcomes = Vec::new();
+    for _ in 0..10 {
+        outcomes.push(openaip_os::evaluation::WorkerOutcome {
+            capability: "code.test".into(),
+            worker_id: "w-fast".into(),
+            ok: true,
+            duration_ms: 100,
+        });
+        outcomes.push(openaip_os::evaluation::WorkerOutcome {
+            capability: "code.test".into(),
+            worker_id: "w-slow".into(),
+            ok: true,
+            duration_ms: 400,
+        });
+    }
+    record_outcomes(&storage, &outcomes).await.unwrap();
+    let map = learned_trust_map(&storage).await.unwrap();
+    let fast = map
+        .get(&("code.test".into(), "w-fast".into()))
+        .copied()
+        .unwrap();
+    let slow = map
+        .get(&("code.test".into(), "w-slow".into()))
+        .copied()
+        .unwrap();
+    // 100% 成功率 → 两者都 +0.1（封顶正确；区分度需样本内成功率差异——见下）
+    assert_eq!(fast, 0.1);
+    assert_eq!(slow, 0.1);
+    // 用 30% 成功率 + 效率差异验证区分度（raw_fast=0.44 → −0.06；raw_slow=0.29 → −0.1）
+    let mut outcomes2 = Vec::new();
+    for i in 0..10 {
+        outcomes2.push(openaip_os::evaluation::WorkerOutcome {
+            capability: "code.test".into(),
+            worker_id: "m-fast".into(),
+            ok: i < 3,
+            duration_ms: 100,
+        });
+        outcomes2.push(openaip_os::evaluation::WorkerOutcome {
+            capability: "code.test".into(),
+            worker_id: "m-slow".into(),
+            ok: i < 3,
+            duration_ms: 400,
+        });
+    }
+    record_outcomes(&storage, &outcomes2).await.unwrap();
+    let map2 = learned_trust_map(&storage).await.unwrap();
+    let mf = map2
+        .get(&("code.test".into(), "m-fast".into()))
+        .copied()
+        .unwrap();
+    let ms = map2
+        .get(&("code.test".into(), "m-slow".into()))
+        .copied()
+        .unwrap();
+    assert!(mf > ms, "30% 成功率 + 效率区分：fast={mf} slow={ms}");
+    assert!(
+        (mf + 0.06).abs() < 1e-9,
+        "fast: 0.8×0.3+0.2×1.0=0.44 → −0.06，实际 {mf}"
+    );
+    assert!(
+        (ms + 0.1).abs() < 1e-9,
+        "slow: 0.8×0.3+0.2×0.25=0.29 → −0.1 封顶，实际 {ms}"
+    );
+}

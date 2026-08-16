@@ -50,22 +50,55 @@ impl WorkerStat {
         self.total_duration_ms as f64 / self.runs as f64
     }
 
-    /// learned 统计分（raw；0..1）。
+    /// learned 统计分（raw；0..1）——success 分量（历史语义，兼容保留）。
     ///
-    /// MVP 公式：`success_rate`（唯一有数据维度）。
-    /// 扩展位（数据接入后启用，遵循「不伪装」原则）：
-    /// `raw = 0.4×success_rate + 0.2×policy_compliance + 0.1×efficiency`
-    /// （quality 不入 learned——它是声明属性，入 learned 会让「初始值伪装成学习结果」；
-    ///   efficiency 从 avg_duration 与声明 latency 之比推导）
+    /// 完整公式（数据接入后逐维度启用，遵循「不伪装」原则）：
+    /// `raw = 0.4×success_rate + 0.2×policy_compliance + 0.1×efficiency`，
+    /// 权重按可得维度归一化：
+    /// - success_rate（✓ 有数据源）
+    /// - efficiency（✓ 本轮激活：同 capability 相对表现）
+    /// - policy_compliance（✗ 无数据源：deny 事件发生在 route 前，无 worker 归属，
+    ///   归因即造假——保持 None）
+    /// - quality（✗ 不入 learned：声明属性入学习会让「初始值伪装成学习结果」）
     pub fn raw_learned(&self) -> f64 {
         self.success_rate()
     }
 }
 
-/// learned 修正（确定性纯函数）：
+/// 相对效率分量（同 capability worker 间比较；纯统计，无外部基准）：
+/// 最快 worker 得 1.0，其余按 `min_avg / avg` 比例；无比较对象 → 1.0（不惩罚）。
+pub fn efficiency_component(stat: &WorkerStat, siblings: &[WorkerStat]) -> f64 {
+    let min_avg = siblings
+        .iter()
+        .filter(|s| s.capability == stat.capability && s.avg_duration_ms() > 0.0)
+        .map(|s| s.avg_duration_ms())
+        .fold(f64::INFINITY, f64::min);
+    if !min_avg.is_finite() || min_avg <= 0.0 {
+        return 1.0;
+    }
+    (min_avg / stat.avg_duration_ms().max(1.0)).clamp(0.0, 1.0)
+}
+
+/// learned 统计分（含效率维度）：`0.8×success_rate + 0.2×efficiency`（0.4/0.1 归一化；
+/// policy_compliance 无数据源暂缺）。eff ∈ [0,1]。
+pub fn raw_learned_with_efficiency(stat: &WorkerStat, efficiency: f64) -> f64 {
+    0.8 * stat.success_rate() + 0.2 * efficiency.clamp(0.0, 1.0)
+}
+
+/// learned 修正（确定性纯函数；eff=1.0 时退化为 success-only 语义）：
 /// - runs < TRUST_MIN_RUNS → None（样本不足，不学习）
-/// - 否则：(raw_learned − 0.5)，封顶 ±TRUST_MAX_CORRECTION
-///   中性点 0.5（50% 成功率 = 0 修正；100% = +0.1；0% = −0.1）
+/// - 否则：(raw − 0.5)，封顶 ±TRUST_MAX_CORRECTION（中性点 0.5：50% = 0 修正）
+pub fn learned_trust_eff(stat: &WorkerStat, efficiency: f64) -> Option<f64> {
+    if stat.runs < TRUST_MIN_RUNS {
+        return None;
+    }
+    Some(
+        (raw_learned_with_efficiency(stat, efficiency) - 0.5)
+            .clamp(-TRUST_MAX_CORRECTION, TRUST_MAX_CORRECTION),
+    )
+}
+
+/// learned 修正（success-only；中性点 50% 的冻结语义，兼容既有调用与测试）。
 pub fn learned_trust(stat: &WorkerStat) -> Option<f64> {
     if stat.runs < TRUST_MIN_RUNS {
         return None;
@@ -108,9 +141,12 @@ pub async fn learned_trust_map(
     storage: &LibSQLStorage,
 ) -> Result<std::collections::HashMap<(String, String), f64>, StorageError> {
     let mut map = std::collections::HashMap::new();
-    for stat in storage.list_worker_stats().await? {
-        if let Some(c) = learned_trust(&stat) {
-            map.insert((stat.capability, stat.worker_id), c);
+    let all = storage.list_worker_stats().await?;
+    for stat in &all {
+        // 效率维度：同 capability 相对表现（最快 = 1.0）
+        let eff = efficiency_component(stat, &all);
+        if let Some(c) = learned_trust_eff(stat, eff) {
+            map.insert((stat.capability.clone(), stat.worker_id.clone()), c);
         }
     }
     Ok(map)
@@ -168,6 +204,55 @@ mod tests {
     fn avg_duration() {
         assert_eq!(stat(4, 2).avg_duration_ms(), 1000.0);
         assert_eq!(stat(0, 0).avg_duration_ms(), 0.0);
+    }
+
+    #[test]
+    fn efficiency_component_relative_performance() {
+        let fast = stat(10, 10);
+        let mut fast = fast;
+        fast.total_duration_ms = 10 * 100; // avg 100ms
+        let mut slow = stat(10, 10);
+        slow.total_duration_ms = 10 * 400; // avg 400ms
+        let siblings = vec![fast.clone(), slow.clone()];
+        assert!(
+            (efficiency_component(&fast, &siblings) - 1.0).abs() < 1e-9,
+            "最快 = 1.0"
+        );
+        assert!(
+            (efficiency_component(&slow, &siblings) - 0.25).abs() < 1e-9,
+            "100/400 = 0.25"
+        );
+        assert_eq!(efficiency_component(&fast, &[]), 1.0, "无比较对象不惩罚");
+        // 不同 capability 不参与比较
+        let mut other = stat(10, 10);
+        other.capability = "other".into();
+        other.total_duration_ms = 1;
+        assert_eq!(efficiency_component(&fast, &[other]), 1.0);
+    }
+
+    #[test]
+    fn efficiency_affects_learned_correction() {
+        // 同成功率 100%，但 eff 0.25 vs 1.0 → raw: 0.8×1+0.2×0.25=0.85 vs 1.0
+        // adjustment: 0.35 vs 0.5 → 均封顶 0.1（上限）；用 60% 成功率区分：
+        let a = stat(10, 6); // success 0.6
+        let mut a_slow = a.clone();
+        a_slow.total_duration_ms = 10 * 400;
+        let mut a_fast = a;
+        a_fast.total_duration_ms = 10 * 100;
+        let siblings = vec![a_fast.clone(), a_slow.clone()];
+        let eff_fast = efficiency_component(&a_fast, &siblings);
+        let eff_slow = efficiency_component(&a_slow, &siblings);
+        let adj_fast = learned_trust_eff(&a_fast, eff_fast).unwrap();
+        let adj_slow = learned_trust_eff(&a_slow, eff_slow).unwrap();
+        assert!(
+            adj_fast > adj_slow,
+            "同样成功率下更快者修正更高: {adj_fast} vs {adj_slow}"
+        );
+        // success-only 语义独立（中性点 50%）
+        assert!(
+            (learned_trust(&a_fast).unwrap() - 0.1).abs() < 1e-9,
+            "60% → +0.1"
+        );
     }
 
     #[test]
