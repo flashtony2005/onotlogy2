@@ -19,15 +19,13 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::session::event::{EventType, SessionEvent};
-
-pub mod hook;
+use oaip_session::{EventType, SessionEvent};
 
 /// Evaluator 版本（随实现演进递增；wb_evaluation 记录以区分口径）。
 pub const EVALUATOR_VERSION: &str = "11.1.0";
 
 /// 证据引用：指向贡献该维度分数的事件（seq = 该 run 事件流中的 append 序号）。
-pub use crate::kernel::EventRef;
+pub use oaip_kernel::EventRef;
 
 /// 单维度评分：值 + 证据 + 置信度。
 ///
@@ -513,7 +511,7 @@ fn judge_score<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::event::SessionId;
+    use oaip_session::SessionId;
     use serde_json::json;
 
     fn ev(t: EventType, data: serde_json::Value, seq: u64) -> SessionEvent {

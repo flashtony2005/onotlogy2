@@ -17,10 +17,14 @@ pub mod auth;
 pub mod cognitive;
 pub mod compose;
 pub mod diagnosis;
-pub mod evaluation;
+pub mod evaluation {
+    pub use oaip_eval_core::*;
+    pub mod hook;
+}
 pub mod evolution2;
 pub mod health;
 pub use oaip_abi as abi;
+pub use oaip_eval_core as eval_core;
 pub use oaip_kernel as kernel;
 pub use oaip_session as session;
 pub use oaip_trace as trace;
