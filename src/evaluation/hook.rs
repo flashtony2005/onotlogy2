@@ -132,6 +132,7 @@ mod tests {
             kind: TraceKind::Cognitive,
             event_type: event_type.to_string(),
             object_refs: vec!["customer_1".into()],
+            project_id: None,
             run_id: Some("run_1".into()),
             agent_id: Some("agent_1".into()),
             reasoning: None,

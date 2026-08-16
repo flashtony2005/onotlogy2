@@ -82,6 +82,7 @@ impl crate::kernel::AuditSink for StorageAuditSink {
             kind: TraceKind::Cognitive,
             event_type: ev.ty.clone(),
             object_refs: vec!["world".to_string()],
+            project_id: None,
             run_id: Some(self.run_id.clone()),
             agent_id: Some(self.agent_id.clone()),
             reasoning: None,

@@ -63,6 +63,8 @@ impl From<ProjectionError> for FacadeError {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorldQuery {
+    /// Phase 8：项目范围（None = 全局世界；Some = 该项目世界）。
+    pub project_id: Option<String>,
     pub object_ref: Option<String>,
     pub predicate: Option<String>,
     #[serde(default)]
@@ -94,6 +96,8 @@ pub struct WorldView {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuditQuery {
+    /// Phase 8：项目范围（None = 全部；审计按项目过滤）。
+    pub project_id: Option<String>,
     pub run_id: Option<String>,
     pub agent_id: Option<String>,
     pub event_type: Option<String>,
@@ -128,6 +132,9 @@ pub struct FabricRequest {
     pub sender: String,
     pub intent: String,
     pub payload: Value,
+    /// Phase 8：项目归属（None = 全局；任务事件进项目世界）。
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 /// fabric.submit 结果（task.result；事件已入 Event Log，可 audit.query 复核）。
@@ -137,6 +144,31 @@ pub struct FabricSubmission {
     pub result: AgentMessage,
 }
 
+/// project.create 请求（项目 = 世界/事件/运营的顶层组织单元）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectCreate {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// 项目本体定义（ODL 文本；决定项目世界语义）。
+    #[serde(default)]
+    pub ontology: String,
+}
+
+/// 项目视图。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectView {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub ontology: String,
+    pub status: String,
+    pub created_at: String,
+}
+
 // ── Public Semantic API ───────────────────────────────────────────────
 
 /// OpenAIP Public Semantic Facade（唯一语义入口；Transport 不持有语义）。
@@ -144,6 +176,10 @@ pub trait OpenAipFacade {
     fn world_query(&self, request: WorldQuery) -> Result<WorldView, FacadeError>;
     fn audit_query(&self, request: AuditQuery) -> Result<AuditView, FacadeError>;
     fn fabric_submit(&self, request: FabricRequest) -> Result<FabricSubmission, FacadeError>;
+    /// Phase 8：创建项目（项目世界的注册）。
+    fn project_create(&self, request: ProjectCreate) -> Result<ProjectView, FacadeError>;
+    /// Phase 8：列出项目。
+    fn project_list(&self) -> Result<Vec<ProjectView>, FacadeError>;
 }
 
 /// Facade 聚合实现（World + Audit + Fabric 三个内部服务）。
@@ -151,6 +187,7 @@ pub struct Facade {
     world: WorldService,
     audit: AuditService,
     fabric: FabricService,
+    storage: Arc<LibSQLStorage>,
 }
 
 impl Facade {
@@ -174,8 +211,9 @@ impl Facade {
         }
         Ok(Self {
             world: WorldService::new(storage.clone(), handle.clone(), domain_rules),
-            audit: AuditService::new(storage, handle),
+            audit: AuditService::new(storage.clone(), handle),
             fabric: FabricService::new(bridge),
+            storage,
         })
     }
 }
@@ -191,6 +229,42 @@ impl OpenAipFacade for Facade {
 
     fn fabric_submit(&self, request: FabricRequest) -> Result<FabricSubmission, FacadeError> {
         self.fabric.submit(request)
+    }
+
+    fn project_create(&self, request: ProjectCreate) -> Result<ProjectView, FacadeError> {
+        let rec = self
+            .world
+            .handle
+            .block_on(self.storage.create_project(
+                &request.id,
+                &request.name,
+                &request.description,
+                &request.ontology,
+            ))
+            .map_err(|e| FacadeError::Fabric(format!("项目创建失败: {e}")))?;
+        Ok(rec.into())
+    }
+
+    fn project_list(&self) -> Result<Vec<ProjectView>, FacadeError> {
+        let recs = self
+            .world
+            .handle
+            .block_on(self.storage.list_projects())
+            .map_err(|e| FacadeError::Fabric(format!("项目列表失败: {e}")))?;
+        Ok(recs.into_iter().map(Into::into).collect())
+    }
+}
+
+impl From<crate::storage::ProjectRecord> for ProjectView {
+    fn from(rec: crate::storage::ProjectRecord) -> Self {
+        ProjectView {
+            id: rec.id,
+            name: rec.name,
+            description: rec.description,
+            ontology: rec.ontology,
+            status: rec.status,
+            created_at: rec.created_at,
+        }
     }
 }
 
@@ -223,13 +297,21 @@ impl WorldService {
 
     pub fn query(&self, req: WorldQuery) -> Result<WorldView, FacadeError> {
         let mut kernel = Kernel::new();
-        let ctx = kernel.create_context(None, Scope::World, "world")?;
+        // Phase 8：项目世界 = 独立 Context（ctx 名 = 项目 id）；None = 全局 world ctx
+        let ctx_name = req
+            .project_id
+            .clone()
+            .unwrap_or_else(|| "world".to_string());
+        let ctx = kernel.create_context(None, Scope::World, &ctx_name)?;
         let mut p = Projection::new(ctx);
         for (ty, pred) in &self.domain_rules {
             p = p.with_domain_rule(ty.clone(), pred.clone());
         }
-        self.handle
-            .block_on(p.project_from_storage(&mut kernel, &self.storage))?;
+        self.handle.block_on(p.project_from_storage_for(
+            &mut kernel,
+            &self.storage,
+            req.project_id.clone(),
+        ))?;
         let now = kernel.now();
         let limit = if req.limit == 0 {
             usize::MAX
@@ -295,6 +377,7 @@ impl AuditService {
         let events: Vec<TraceEvent> = self
             .handle
             .block_on(self.storage.list_events(TraceQuery {
+                project_id: req.project_id.clone(),
                 run_id: req.run_id.clone(),
                 agent_id: req.agent_id.clone(),
                 limit,
@@ -362,6 +445,7 @@ impl FabricService {
                 &req.sender,
                 &req.intent,
                 req.payload,
+                req.project_id.clone(),
             )
             .map_err(|e| FacadeError::Fabric(e.to_string()))?;
         Ok(FabricSubmission { result })

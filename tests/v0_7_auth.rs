@@ -242,6 +242,7 @@ async fn tc_auth_i_trace_list_clamped_to_role() {
             kind: openaip_os::trace::TraceKind::Cognitive,
             event_type: "Reasoning".into(),
             object_refs: vec!["001".into()],
+            project_id: None,
             run_id: Some("run_1".into()),
             agent_id: Some("retention-agent".into()),
             reasoning: Some("内部推理：高流失风险".into()),

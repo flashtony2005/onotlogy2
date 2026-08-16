@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use crate::auth::AuthUser;
-use crate::facade::{AuditQuery, FabricRequest, OpenAipFacade, WorldQuery};
+use crate::facade::{AuditQuery, FabricRequest, OpenAipFacade, ProjectCreate, WorldQuery};
 use axum::Json;
 use axum::extract::{Extension, State};
 use axum::response::Response;
@@ -62,5 +62,34 @@ pub(crate) async fn facade_fabric_submit(
         Err(e) => {
             ApiResponse::error(wb_code("WB2005"), format!("fabric 提交失败: {e}")).into_response()
         }
+    }
+}
+
+/// project.create：注册项目（项目世界的顶层组织单元）。
+pub(crate) async fn facade_project_create(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<ProjectCreate>,
+) -> Response {
+    if !user.can_trigger_run() {
+        return forbidden("当前角色无权创建项目（需 Operator 及以上）").into_response();
+    }
+    match tokio::task::block_in_place(|| st.facade.project_create(body)) {
+        Ok(v) => ApiResponse::ok(v).into_response(),
+        Err(e) => ApiResponse::error(5000, format!("项目创建失败: {e}")).into_response(),
+    }
+}
+
+/// project.list：列出全部项目。
+pub(crate) async fn facade_project_list(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+) -> Response {
+    if !user.can_read_audit() {
+        return forbidden("当前角色无权读取项目（需 Operator 及以上）").into_response();
+    }
+    match tokio::task::block_in_place(|| st.facade.project_list()) {
+        Ok(v) => ApiResponse::ok(v).into_response(),
+        Err(e) => ApiResponse::error(5000, format!("项目列表失败: {e}")).into_response(),
     }
 }

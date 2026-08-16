@@ -9,6 +9,7 @@
 pub mod evaluation;
 pub mod events;
 pub mod objects;
+pub mod projects;
 pub mod relations;
 pub mod runs;
 pub mod users;
@@ -21,6 +22,7 @@ use libsql::Connection;
 use libsql::params;
 use oaip_abi::codegen;
 pub(crate) use oaip_trace::TraceEvent;
+pub use projects::ProjectRecord;
 pub use runs::{ApprovalRecord, RunRecord};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -115,6 +117,8 @@ pub enum StorageError {
 /// 列名取自固定白名单（run_id/agent_id/event_type/object_refs），值全部参数化绑定，防注入。
 #[derive(Debug, Clone, Default)]
 pub struct TraceQuery {
+    /// Phase 8：项目归属过滤（None = 全部项目）。
+    pub project_id: Option<String>,
     pub run_id: Option<String>,
     pub agent_id: Option<String>,
     pub object_ref: Option<String>,
@@ -201,7 +205,7 @@ pub struct LibSQLStorage {
 
 /// 当前 schema 版本。每次 schema 变更（加列 / 改列名）递增；
 /// 旧库 open 时按 `MIGRATIONS` 顺序自动迁移（事务化），不再要求 `db reset`。
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 
 /// 版本化迁移注册表：`(from_version, sql)`，按版本升序执行；每步成功后推进
 /// `wb_meta.schema_version`。迁移在事务内执行（失败整体回滚，版本不推进，可安全重试）。
@@ -313,6 +317,24 @@ ALTER TABLE wb_worker_stats ADD COLUMN created_at TEXT NOT NULL DEFAULT CURRENT_
         "DROP TABLE IF EXISTS wb_memory; DROP TABLE IF EXISTS wb_approval; \
          DROP TABLE IF EXISTS wb_pattern; DROP TABLE IF EXISTS wb_proposal; \
          DROP TABLE IF EXISTS wb_learned; DROP TABLE IF EXISTS wb_approval_audit;",
+    ),
+    // V9 → V10（Phase 8）：Project Scope——项目维度世界模型。
+    // wb_project 项目注册表（含本体定义）；对象/关系/事件/run 全部 project 归属
+    //（NULL = 全局/历史，兼容旧库；世界按 project 过滤投影）。
+    (
+        9,
+        "CREATE TABLE IF NOT EXISTS wb_project (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  ontology    TEXT NOT NULL DEFAULT '',
+  status      TEXT NOT NULL DEFAULT 'active',
+  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+ALTER TABLE wb_ontology_object ADD COLUMN project_id TEXT;
+ALTER TABLE wb_relation_edge ADD COLUMN project_id TEXT;
+ALTER TABLE wb_trace_event ADD COLUMN project_id TEXT;
+ALTER TABLE wb_run ADD COLUMN project_id TEXT;",
     ),
 ];
 
@@ -475,25 +497,27 @@ fn row_to_relation(row: &libsql::Row) -> Result<RelationRecord, StorageError> {
 
 fn row_to_trace(row: &libsql::Row) -> Result<TraceEvent, StorageError> {
     let obj_refs: String = row.get(3)?;
-    let run_id: Option<String> = row.get(4)?;
-    let agent_id: Option<String> = row.get(5)?;
-    let reasoning: Option<String> = row.get(6)?;
-    let input: Option<String> = row.get(7)?;
-    let output: Option<String> = row.get(8)?;
-    let confidence: Option<f64> = row.get(9)?;
+    let project_id: Option<String> = row.get(4)?;
+    let run_id: Option<String> = row.get(5)?;
+    let agent_id: Option<String> = row.get(6)?;
+    let reasoning: Option<String> = row.get(7)?;
+    let input: Option<String> = row.get(8)?;
+    let output: Option<String> = row.get(9)?;
+    let confidence: Option<f64> = row.get(10)?;
     let kind_str: String = row.get(1)?;
     Ok(TraceEvent {
         id: row.get(0)?,
         kind: oaip_trace::TraceKind::from_str(&kind_str).unwrap_or(oaip_trace::TraceKind::World),
         event_type: row.get(2)?,
         object_refs: serde_json::from_str(&obj_refs)?,
+        project_id,
         run_id,
         agent_id,
         reasoning,
         input: input.map(|s| serde_json::from_str(&s)).transpose()?,
         output: output.map(|s| serde_json::from_str(&s)).transpose()?,
         confidence,
-        timestamp: row.get(10)?,
+        timestamp: row.get(11)?,
     })
 }
 
@@ -655,7 +679,21 @@ mod tests {
              CREATE TABLE wb_learned (
                id TEXT PRIMARY KEY, kind TEXT NOT NULL, action TEXT NOT NULL,
                confidence REAL NOT NULL, proposal_id TEXT NOT NULL, run_ids TEXT NOT NULL,
-               created_at TEXT NOT NULL);",
+               created_at TEXT NOT NULL);
+             CREATE TABLE wb_relation_edge (
+               id TEXT PRIMARY KEY, create_time TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               update_time TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, is_delete INTEGER NOT NULL DEFAULT 0,
+               relation TEXT NOT NULL, source TEXT NOT NULL, target TEXT NOT NULL, data TEXT);
+             CREATE TABLE wb_trace_event (
+               id TEXT PRIMARY KEY, create_time TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               update_time TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, is_delete INTEGER NOT NULL DEFAULT 0,
+               kind TEXT NOT NULL, run_id TEXT, agent_id TEXT, event_type TEXT NOT NULL,
+               object_refs TEXT, reasoning TEXT, input TEXT, output TEXT, confidence REAL, timestamp TEXT NOT NULL);
+             CREATE TABLE wb_run (
+               id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, goal TEXT NOT NULL,
+               status TEXT NOT NULL, human_approval INTEGER NOT NULL DEFAULT 0,
+               created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT);",
         )
         .await
         .unwrap();

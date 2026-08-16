@@ -40,6 +40,7 @@ pub mod mutation {
     pub use benchmark::{offline_benchmark, run_offline_benchmark};
 }
 pub mod plugin;
+pub mod project_seed;
 pub mod projection;
 pub mod rule;
 pub mod server;

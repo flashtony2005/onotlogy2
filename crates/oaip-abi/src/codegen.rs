@@ -96,7 +96,8 @@ CREATE TABLE IF NOT EXISTS wb_ontology_object (
   is_delete   INTEGER NOT NULL DEFAULT 0,  -- 逻辑删除 0未删 1已删
   type        TEXT NOT NULL,               -- 对象类型名（对应 ObjectType.name）
   data        TEXT NOT NULL,               -- 业务载荷 JSON
-  version     INTEGER NOT NULL DEFAULT 1   -- 乐观锁版本，update 自增
+  version     INTEGER NOT NULL DEFAULT 1,  -- 乐观锁版本，update 自增
+  project_id  TEXT                         -- Phase 8：项目归属（NULL=全局）
 );
 
 CREATE TABLE IF NOT EXISTS wb_relation_edge (
@@ -107,7 +108,8 @@ CREATE TABLE IF NOT EXISTS wb_relation_edge (
   relation    TEXT NOT NULL,               -- 关系类型（如 owns/belongs_to）
   source      TEXT NOT NULL,               -- 源对象ID
   target      TEXT NOT NULL,               -- 目标对象ID
-  data        TEXT                        -- 关系载荷 JSON
+  data        TEXT,                        -- 关系载荷 JSON
+  project_id  TEXT                         -- Phase 8：项目归属（NULL=全局）
 );
 
 CREATE TABLE IF NOT EXISTS wb_trace_event (
@@ -116,6 +118,7 @@ CREATE TABLE IF NOT EXISTS wb_trace_event (
   update_time TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   is_delete   INTEGER NOT NULL DEFAULT 0,
   kind        TEXT NOT NULL,               -- world | cognitive
+  project_id  TEXT,                         -- Phase 8：项目归属（NULL=全局）
   run_id      TEXT,                         -- 认知运行ID（kind=cognitive 必填）
   agent_id    TEXT,                         -- Agent ID（kind=cognitive 必填）
   event_type  TEXT NOT NULL,                -- 事件类型
@@ -133,6 +136,7 @@ CREATE INDEX IF NOT EXISTS idx_edge_source ON wb_relation_edge (source);
 CREATE INDEX IF NOT EXISTS idx_edge_target ON wb_relation_edge (target);
 CREATE INDEX IF NOT EXISTS idx_edge_rel    ON wb_relation_edge (relation);
 CREATE INDEX IF NOT EXISTS idx_trace_run    ON wb_trace_event (run_id);
+CREATE INDEX IF NOT EXISTS idx_trace_project ON wb_trace_event (project_id);
 CREATE INDEX IF NOT EXISTS idx_trace_agent  ON wb_trace_event (agent_id);
 CREATE INDEX IF NOT EXISTS idx_trace_type   ON wb_trace_event (event_type);
 CREATE INDEX IF NOT EXISTS idx_trace_time   ON wb_trace_event (timestamp);
@@ -255,11 +259,22 @@ CREATE TABLE IF NOT EXISTS wb_run (
   goal          TEXT NOT NULL,
   status        TEXT NOT NULL,           -- Running | Completed | Failed | Interrupted
   human_approval INTEGER NOT NULL DEFAULT 0,
+  project_id    TEXT,                      -- Phase 8：项目归属（NULL=全局）
   created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   finished_at   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_run_agent ON wb_run(agent_id);
+
+-- Phase 8：项目注册表（项目 = 世界/事件/运营的顶层组织单元）。
+CREATE TABLE IF NOT EXISTS wb_project (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  ontology    TEXT NOT NULL DEFAULT '',
+  status      TEXT NOT NULL DEFAULT 'active',
+  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE INDEX IF NOT EXISTS idx_run_status ON wb_run(status);
 
 "#

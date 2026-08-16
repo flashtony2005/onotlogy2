@@ -202,6 +202,19 @@ enum FacadeCmd {
         #[command(subcommand)]
         cmd: FabricCmd,
     },
+    /// project 语义域（Phase 8：项目 = 世界顶层组织单元）
+    Project {
+        #[command(subcommand)]
+        cmd: ProjectCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProjectCmd {
+    /// 列出项目
+    List,
+    /// seed OpenAIP-OS 工程本体（模块/文件/测试 → 项目世界）
+    Seed,
 }
 
 #[derive(Subcommand)]
@@ -336,6 +349,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } => tokio::task::block_in_place(|| {
                     facade::cmd_fabric_submit(&cli.db, &session, &sender, &intent, &payload)
                 })?,
+            },
+            FacadeCmd::Project { cmd } => match cmd {
+                ProjectCmd::List => {
+                    tokio::task::block_in_place(|| facade::cmd_project_list(&cli.db))?
+                }
+                ProjectCmd::Seed => {
+                    tokio::task::block_in_place(|| facade::cmd_project_seed(&cli.db))?
+                }
             },
         },
         Cmd::Agent { cmd } => match cmd {

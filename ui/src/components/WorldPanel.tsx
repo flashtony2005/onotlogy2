@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Activity, Boxes, Globe2, Network, RefreshCw } from 'lucide-react'
-import { getGraph, postWorldQuery } from '../api'
+import { getGraph, postProjectList, postWorldQuery } from '../api'
 import { fmtJson } from '../format'
-import type { WorldGraphDto, WorldNodeDto, WorldViewDto } from '../types'
+import type { ProjectDto, WorldGraphDto, WorldNodeDto, WorldViewDto } from '../types'
 
 const TYPE_COLORS = [
   '#4c9ee6',
@@ -50,11 +50,15 @@ export function WorldPanel() {
   const [objFilter, setObjFilter] = useState('')
   const [predFilter, setPredFilter] = useState('')
   const [wErr, setWErr] = useState<string | null>(null)
+  // Phase 8：项目选择（'' = 全局世界；否则项目世界）
+  const [projects, setProjects] = useState<ProjectDto[]>([])
+  const [projectId, setProjectId] = useState('')
 
   const loadProjected = async () => {
     setWErr(null)
     try {
       const v = await postWorldQuery({
+        projectId: projectId || undefined,
         objectRef: objFilter.trim() || undefined,
         predicate: predFilter.trim() || undefined,
         limit: 500,
@@ -64,6 +68,10 @@ export function WorldPanel() {
       setWErr(String(e))
     }
   }
+
+  useEffect(() => {
+    void postProjectList().then(setProjects).catch(() => setProjects([]))
+  }, [])
 
   useEffect(() => {
     void loadProjected()
@@ -153,6 +161,21 @@ export function WorldPanel() {
             <Activity size={14} /> 投影世界（事件 → 投影 → Kernel 关系）
           </h4>
           <div className="world-filter">
+            <select
+              value={projectId}
+              onChange={(e) => {
+                setProjectId(e.target.value)
+                setTimeout(() => void loadProjected(), 0)
+              }}
+              title="项目世界（Phase 8）"
+            >
+              <option value="">🌐 全局世界</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  📁 {p.name}（{p.id}）
+                </option>
+              ))}
+            </select>
             <input
               placeholder="objectRef 过滤（如 order-001）"
               value={objFilter}

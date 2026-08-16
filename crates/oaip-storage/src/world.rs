@@ -26,6 +26,7 @@ pub fn world_link_event(
         kind: TraceKind::World,
         event_type: "RelationLinked".to_string(),
         object_refs: vec![source.into(), target.into()],
+        project_id: None,
         run_id: None, // 事实不依赖 Run（审计解耦点）
         agent_id: None,
         reasoning: None,
@@ -43,58 +44,80 @@ pub enum WorldCommand {
         object_type: String,
         id: String,
         data: Value,
+        /// Phase 8：项目归属（None = 全局；世界按项目过滤）。
+        project_id: Option<String>,
     },
     UpdateObject {
         id: String,
         data: Value,
+        project_id: Option<String>,
     },
     DeleteObject {
         id: String,
+        project_id: Option<String>,
     },
     LinkRelation {
         source: String,
         edge: String,
         target: String,
+        project_id: Option<String>,
     },
     UnlinkRelation {
         source: String,
         edge: String,
         target: String,
+        project_id: Option<String>,
     },
 }
 
 impl WorldCommand {
     /// 事件载荷（契约第 2 节）。
     fn world_event(&self) -> TraceEvent {
-        let (ty, refs, input) = match self {
+        let (ty, refs, input, project_id) = match self {
             WorldCommand::CreateObject {
                 object_type,
                 id,
                 data,
+                project_id,
             } => (
                 "ObjectCreated",
                 vec![id.clone()],
                 Some(json!({ "type": object_type, "data": data })),
+                project_id.clone(),
             ),
-            WorldCommand::UpdateObject { id, data } => (
+            WorldCommand::UpdateObject {
+                id,
+                data,
+                project_id,
+            } => (
                 "ObjectUpdated",
                 vec![id.clone()],
                 Some(json!({ "data": data })),
+                project_id.clone(),
             ),
-            WorldCommand::DeleteObject { id } => ("ObjectDeleted", vec![id.clone()], None),
+            WorldCommand::DeleteObject { id, project_id } => {
+                ("ObjectDeleted", vec![id.clone()], None, project_id.clone())
+            }
             WorldCommand::LinkRelation {
                 source,
                 edge,
                 target,
-            } => return world_link_event(source, edge, target),
+                project_id,
+            } => {
+                let mut ev = world_link_event(source, edge, target);
+                ev.project_id = project_id.clone();
+                return ev;
+            }
             WorldCommand::UnlinkRelation {
                 source,
                 edge,
                 target,
+                project_id,
             } => (
                 "RelationUnlinked",
                 vec![source.clone(), target.clone()],
                 Some(json!({ "edge": edge })),
+                project_id.clone(),
             ),
         };
         TraceEvent {
@@ -102,6 +125,7 @@ impl WorldCommand {
             kind: TraceKind::World,
             event_type: ty.to_string(),
             object_refs: refs,
+            project_id,
             run_id: None, // 事实不依赖 Run（审计解耦点）
             agent_id: None,
             reasoning: None,
@@ -125,6 +149,7 @@ impl LibSQLStorage {
                 object_type,
                 id,
                 data,
+                ..
             } => {
                 let data_str = serde_json::to_string(&data)?;
                 tx.execute(
@@ -133,7 +158,7 @@ impl LibSQLStorage {
                 )
                 .await?;
             }
-            WorldCommand::UpdateObject { id, data } => {
+            WorldCommand::UpdateObject { id, data, .. } => {
                 let data_str = serde_json::to_string(&data)?;
                 tx.execute(
                     "UPDATE wb_ontology_object SET data=?1, version=version+1, \
@@ -142,7 +167,7 @@ impl LibSQLStorage {
                 )
                 .await?;
             }
-            WorldCommand::DeleteObject { id } => {
+            WorldCommand::DeleteObject { id, .. } => {
                 tx.execute(
                     "UPDATE wb_ontology_object SET is_delete=1, update_time=CURRENT_TIMESTAMP \
                      WHERE id=?1 AND is_delete=0",
@@ -154,6 +179,7 @@ impl LibSQLStorage {
                 source,
                 edge,
                 target,
+                ..
             } => {
                 // 事务内「检测 + 插入」：杜绝 TOCTOU 双插（与 relations::link 同语义）
                 let mut dup = tx
@@ -184,6 +210,7 @@ impl LibSQLStorage {
                 source,
                 edge,
                 target,
+                ..
             } => {
                 tx.execute(
                     "UPDATE wb_relation_edge SET is_delete=1, update_time=CURRENT_TIMESTAMP \
@@ -213,13 +240,14 @@ async fn insert_trace_tx(tx: &Transaction, ev: &TraceEvent) -> Result<(), Storag
     let output = ev.output.as_ref().map(serde_json::to_string).transpose()?;
     tx.execute(
         "INSERT INTO wb_trace_event \
-         (id, kind, event_type, object_refs, run_id, agent_id, reasoning, input, output, confidence, timestamp) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+         (id, kind, event_type, object_refs, project_id, run_id, agent_id, reasoning, input, output, confidence, timestamp) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         params![
             ev.id.clone(),
             ev.kind.as_str(),
             ev.event_type.clone(),
             obj_refs,
+            ev.project_id.clone(),
             ev.run_id.clone(),
             ev.agent_id.clone(),
             ev.reasoning.clone(),

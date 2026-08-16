@@ -46,6 +46,8 @@ pub struct TraceEvent {
     pub event_type: String,
     /// 绑定的 Ontology 对象ID数组——可解释性根基，禁止为空（TC-007-b）。
     pub object_refs: Vec<String>,
+    /// Phase 8：项目归属（None = 全局/未归属；世界按项目过滤投影）。
+    pub project_id: Option<String>,
     pub run_id: Option<String>,
     pub agent_id: Option<String>,
     pub reasoning: Option<String>,
@@ -88,6 +90,7 @@ impl TraceEvent {
             kind: TraceKind::World,
             event_type: event_type.to_string(),
             object_refs: refs.to_vec(),
+            project_id: None,
             run_id: None,
             agent_id: None,
             reasoning: None,
@@ -152,6 +155,8 @@ pub struct TraceEventDto {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub object_refs: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
@@ -173,6 +178,7 @@ impl From<TraceEvent> for TraceEventDto {
             kind: e.kind.as_str().to_string(),
             event_type: e.event_type,
             object_refs: e.object_refs,
+            project_id: e.project_id,
             run_id: e.run_id,
             agent_id: e.agent_id,
             reasoning: e.reasoning,
@@ -200,6 +206,7 @@ impl TraceEventDto {
             kind: e.kind.as_str().to_string(),
             event_type: e.event_type.clone(),
             object_refs: e.object_refs.clone(),
+            project_id: e.project_id.clone(),
             run_id: e.run_id.clone(),
             agent_id: e.agent_id.clone(),
             reasoning: if detail { e.reasoning.clone() } else { None },
@@ -445,6 +452,7 @@ mod tests {
             kind: TraceKind::Cognitive,
             event_type: "Reasoning".into(),
             object_refs: vec!["001".into()],
+            project_id: None,
             run_id: Some("run_1".into()),
             agent_id: Some("retention-agent".into()),
             reasoning: Some("内部推理".into()),
@@ -459,6 +467,7 @@ mod tests {
             kind: TraceKind::Cognitive,
             event_type: "Goal".into(),
             object_refs: vec!["001".into()],
+            project_id: None,
             run_id: Some("run_1".into()),
             agent_id: Some("retention-agent".into()),
             reasoning: Some("目标推理".into()),

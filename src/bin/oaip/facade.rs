@@ -51,6 +51,7 @@ pub fn cmd_world_query(
     let handle = tokio::runtime::Handle::current();
     let facade = cli_facade(db, handle)?;
     let view = facade.world_query(WorldQuery {
+        project_id: None,
         object_ref: object_ref.map(String::from),
         predicate: predicate.map(String::from),
         limit,
@@ -78,6 +79,7 @@ pub fn cmd_audit_query(
     let handle = tokio::runtime::Handle::current();
     let facade = cli_facade(db, handle)?;
     let view = facade.audit_query(AuditQuery {
+        project_id: None,
         run_id: run_id.map(String::from),
         agent_id: None,
         event_type: event_type.map(String::from),
@@ -108,6 +110,7 @@ pub fn cmd_fabric_submit(
         sender: sender.to_string(),
         intent: intent.to_string(),
         payload,
+        project_id: None,
     })?;
     println!("🚀 Fabric 提交完成：");
     println!(
@@ -118,5 +121,41 @@ pub fn cmd_fabric_submit(
         "   status={} payload={}",
         sub.result.payload["status"], sub.result.payload
     );
+    Ok(())
+}
+
+pub fn cmd_project_list(db: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let handle = tokio::runtime::Handle::current();
+    let facade = cli_facade(db, handle)?;
+    let projects = facade.project_list()?;
+    println!("📁 项目（{}）：", projects.len());
+    for p in &projects {
+        println!(
+            "   {} | {} | {} | ontology={} 字符",
+            p.id,
+            p.name,
+            p.status,
+            p.ontology.len()
+        );
+    }
+    Ok(())
+}
+
+/// seed OpenAIP-OS 工程本体：工程事实（模块/文件/测试）→ 项目世界事件。
+pub fn cmd_project_seed(db: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let handle = tokio::runtime::Handle::current();
+    let storage = Arc::new(handle.block_on(LibSQLStorage::open(db))?);
+    let n = handle.block_on(openaip_os::project_seed::seed_openaip_os(&storage, "."))?;
+    println!(
+        "🌱 OpenAIP-OS 工程本体 seed 完成：{} 条世界事件 → project=openaip-os",
+        n
+    );
+    let facade = cli_facade(db, handle)?;
+    let view = facade.world_query(openaip_os::facade::WorldQuery {
+        project_id: Some("openaip-os".into()),
+        limit: 1000,
+        ..Default::default()
+    })?;
+    println!("   项目世界：{} 条关系（模块/文件/测试结构）", view.total);
     Ok(())
 }

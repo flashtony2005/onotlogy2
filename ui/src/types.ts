@@ -167,6 +167,7 @@ export interface WorldViewDto {
 }
 
 export interface WorldQueryDto {
+  projectId?: string
   objectRef?: string
   predicate?: string
   limit?: number
@@ -186,6 +187,7 @@ export interface AuditViewDto {
 }
 
 export interface AuditQueryDto {
+  projectId?: string
   runId?: string
   agentId?: string
   eventType?: string
@@ -197,6 +199,7 @@ export interface FabricRequestDto {
   sender: string
   intent: string
   payload: unknown
+  projectId?: string
 }
 
 export interface FabricSubmissionDto {
@@ -214,4 +217,22 @@ export interface FabricSubmissionDto {
     causation_id: string | null
     timestamp: number
   }
+}
+
+// ── Phase 8 Project（项目 = 世界/事件/运营的顶层组织单元）──
+
+export interface ProjectDto {
+  id: string
+  name: string
+  description: string
+  ontology: string
+  status: string
+  createdAt: string
+}
+
+export interface ProjectCreateDto {
+  id: string
+  name: string
+  description?: string
+  ontology?: string
 }

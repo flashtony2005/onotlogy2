@@ -156,8 +156,20 @@ impl Projection {
         kernel: &mut Kernel,
         storage: &LibSQLStorage,
     ) -> Result<usize, ProjectionError> {
+        self.project_from_storage_for(kernel, storage, None).await
+    }
+
+    /// 按项目过滤投影（Phase 8：世界是项目范围的——只投影该项目的事件；
+    /// None = 全量/全局世界，兼容 P5.4 per-run 策略）。
+    pub async fn project_from_storage_for(
+        &mut self,
+        kernel: &mut Kernel,
+        storage: &LibSQLStorage,
+        project_id: Option<String>,
+    ) -> Result<usize, ProjectionError> {
         let events = storage
             .list_events(TraceQuery {
+                project_id,
                 limit: 1000,
                 ..Default::default()
             })

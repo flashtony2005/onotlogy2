@@ -30,82 +30,91 @@ generator:
 covers:
   - symbol: ViewMeta
     kind: interface
-    at: 'ui/src/App.tsx:L43-L50'
+    at: 'ui/src/App.tsx:L45-L52'
   - symbol: App
     kind: function
-    at: 'ui/src/App.tsx:L111-L510'
+    at: 'ui/src/App.tsx:L121-L521'
   - symbol: handleAuthError
     kind: function
-    at: 'ui/src/App.tsx:L150-L159'
+    at: 'ui/src/App.tsx:L160-L169'
   - symbol: doLogin
     kind: function
-    at: 'ui/src/App.tsx:L161-L170'
+    at: 'ui/src/App.tsx:L171-L180'
   - symbol: doLogout
     kind: function
-    at: 'ui/src/App.tsx:L172-L182'
+    at: 'ui/src/App.tsx:L182-L192'
   - symbol: toggleGroup
     kind: function
-    at: 'ui/src/App.tsx:L185-L187'
+    at: 'ui/src/App.tsx:L195-L197'
   - symbol: goView
     kind: function
-    at: 'ui/src/App.tsx:L190-L196'
+    at: 'ui/src/App.tsx:L200-L206'
   - symbol: startRun
     kind: function
-    at: 'ui/src/App.tsx:L221-L237'
+    at: 'ui/src/App.tsx:L231-L247'
   - symbol: AuthError
     kind: class
-    at: 'ui/src/api.ts:L20-L25'
+    at: 'ui/src/api.ts:L26-L31'
   - symbol: constructor
     kind: method
-    at: 'ui/src/api.ts:L21-L24'
+    at: 'ui/src/api.ts:L27-L30'
   - symbol: fetchWithTimeout
     kind: function
-    at: 'ui/src/api.ts:L31-L44'
+    at: 'ui/src/api.ts:L37-L50'
   - symbol: unwrap
     kind: function
-    at: 'ui/src/api.ts:L46-L69'
+    at: 'ui/src/api.ts:L52-L75'
   - symbol: authFetch
     kind: function
-    at: 'ui/src/api.ts:L72-L79'
+    at: 'ui/src/api.ts:L78-L85'
   - symbol: postLogin
     kind: function
-    at: 'ui/src/api.ts:L84-L94'
+    at: 'ui/src/api.ts:L90-L100'
   - symbol: getMe
     kind: function
-    at: 'ui/src/api.ts:L97-L100'
+    at: 'ui/src/api.ts:L103-L106'
   - symbol: postLogout
     kind: function
-    at: 'ui/src/api.ts:L103-L106'
+    at: 'ui/src/api.ts:L109-L112'
   - symbol: postRun
     kind: function
-    at: 'ui/src/api.ts:L110-L117'
+    at: 'ui/src/api.ts:L116-L123'
   - symbol: getSkillRaw
     kind: function
-    at: 'ui/src/api.ts:L119-L123'
+    at: 'ui/src/api.ts:L125-L129'
   - symbol: importSkill
     kind: function
-    at: 'ui/src/api.ts:L125-L137'
+    at: 'ui/src/api.ts:L131-L143'
   - symbol: getPlugins
     kind: function
-    at: 'ui/src/api.ts:L139-L143'
+    at: 'ui/src/api.ts:L145-L149'
   - symbol: getWorkers
     kind: function
-    at: 'ui/src/api.ts:L145-L149'
+    at: 'ui/src/api.ts:L151-L155'
   - symbol: getSessions
     kind: function
-    at: 'ui/src/api.ts:L151-L155'
+    at: 'ui/src/api.ts:L157-L161'
   - symbol: getSession
     kind: function
-    at: 'ui/src/api.ts:L157-L161'
+    at: 'ui/src/api.ts:L163-L167'
   - symbol: createSession
     kind: function
-    at: 'ui/src/api.ts:L163-L169'
+    at: 'ui/src/api.ts:L169-L175'
   - symbol: getSkills
     kind: function
-    at: 'ui/src/api.ts:L173-L177'
+    at: 'ui/src/api.ts:L179-L183'
   - symbol: getGraph
     kind: function
-    at: 'ui/src/api.ts:L179-L182'
+    at: 'ui/src/api.ts:L185-L188'
+  - symbol: postWorldQuery
+    kind: function
+    at: 'ui/src/api.ts:L194-L205'
+  - symbol: postAuditQuery
+    kind: function
+    at: 'ui/src/api.ts:L207-L218'
+  - symbol: postFabricSubmit
+    kind: function
+    at: 'ui/src/api.ts:L220-L231'
   - symbol: Options
     kind: interface
     at: 'ui/src/hooks/useTraceStream.ts:L14-L19'
@@ -126,58 +135,82 @@ covers:
     at: 'ui/src/main.tsx:L17-L39'
   - symbol: ViewKind
     kind: type
-    at: 'ui/src/types.ts:L3-L14'
+    at: 'ui/src/types.ts:L3-L15'
   - symbol: AuthUserDto
     kind: interface
-    at: 'ui/src/types.ts:L17-L20'
+    at: 'ui/src/types.ts:L18-L21'
   - symbol: TraceEventDto
     kind: interface
-    at: 'ui/src/types.ts:L22-L34'
+    at: 'ui/src/types.ts:L23-L35'
   - symbol: TimelineEvent
     kind: interface
-    at: 'ui/src/types.ts:L36-L45'
+    at: 'ui/src/types.ts:L37-L46'
   - symbol: DecisionSummary
     kind: interface
-    at: 'ui/src/types.ts:L47-L51'
+    at: 'ui/src/types.ts:L48-L52'
   - symbol: RunTimeline
     kind: interface
-    at: 'ui/src/types.ts:L53-L61'
+    at: 'ui/src/types.ts:L54-L62'
   - symbol: RunStartDto
     kind: interface
-    at: 'ui/src/types.ts:L63-L67'
+    at: 'ui/src/types.ts:L64-L68'
   - symbol: ApiResponse
     kind: interface
-    at: 'ui/src/types.ts:L69-L73'
+    at: 'ui/src/types.ts:L70-L74'
   - symbol: SkillDto
     kind: interface
-    at: 'ui/src/types.ts:L77-L85'
+    at: 'ui/src/types.ts:L78-L86'
   - symbol: PluginDto
     kind: interface
-    at: 'ui/src/types.ts:L87-L94'
+    at: 'ui/src/types.ts:L88-L95'
   - symbol: SessionEventDto
     kind: interface
-    at: 'ui/src/types.ts:L96-L101'
+    at: 'ui/src/types.ts:L97-L102'
   - symbol: WorkerDto
     kind: interface
-    at: 'ui/src/types.ts:L103-L111'
+    at: 'ui/src/types.ts:L104-L112'
   - symbol: RawSkillDto
     kind: interface
-    at: 'ui/src/types.ts:L113-L119'
+    at: 'ui/src/types.ts:L114-L120'
   - symbol: SessionSummaryDto
     kind: interface
-    at: 'ui/src/types.ts:L121-L124'
+    at: 'ui/src/types.ts:L122-L125'
   - symbol: SessionDto
     kind: interface
-    at: 'ui/src/types.ts:L126-L129'
+    at: 'ui/src/types.ts:L127-L130'
   - symbol: WorldNodeDto
     kind: interface
-    at: 'ui/src/types.ts:L132-L136'
+    at: 'ui/src/types.ts:L133-L137'
   - symbol: WorldEdgeDto
     kind: interface
-    at: 'ui/src/types.ts:L138-L144'
+    at: 'ui/src/types.ts:L139-L145'
   - symbol: WorldGraphDto
     kind: interface
-    at: 'ui/src/types.ts:L146-L149'
+    at: 'ui/src/types.ts:L147-L150'
+  - symbol: WorldRelationDto
+    kind: interface
+    at: 'ui/src/types.ts:L155-L161'
+  - symbol: WorldViewDto
+    kind: interface
+    at: 'ui/src/types.ts:L163-L167'
+  - symbol: WorldQueryDto
+    kind: interface
+    at: 'ui/src/types.ts:L169-L173'
+  - symbol: AuditEventDto
+    kind: interface
+    at: 'ui/src/types.ts:L175-L181'
+  - symbol: AuditViewDto
+    kind: interface
+    at: 'ui/src/types.ts:L183-L186'
+  - symbol: AuditQueryDto
+    kind: interface
+    at: 'ui/src/types.ts:L188-L193'
+  - symbol: FabricRequestDto
+    kind: interface
+    at: 'ui/src/types.ts:L195-L200'
+  - symbol: FabricSubmissionDto
+    kind: interface
+    at: 'ui/src/types.ts:L202-L217'
   - symbol: toTimelineEvent
     kind: function
     at: 'ui/src/view.ts:L25-L36'

@@ -56,6 +56,7 @@ pub(crate) async fn list_trace(
     Query(q): Query<TraceListParams>,
 ) -> Json<ApiResponse<TraceListDto>> {
     let tq = TraceQuery {
+        project_id: None,
         run_id: q.run_id,
         agent_id: q.agent_id,
         object_ref: q.object_ref,

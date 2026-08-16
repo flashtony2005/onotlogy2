@@ -181,6 +181,7 @@ impl<'k> AgentLoop<'k> {
             } else {
                 refs.to_vec()
             },
+            project_id: None,
             run_id: self.run_id.clone(),
             agent_id: Some(self.agent.id.clone()),
             reasoning: reasoning.map(|s| s.to_string()),

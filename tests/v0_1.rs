@@ -173,6 +173,7 @@ async fn tc007b_missing_refs_blocked() {
         kind: TraceKind::World,
         event_type: "ObjectCreated".into(),
         object_refs: vec![], // 缺 object_refs
+        project_id: None,
         run_id: None,
         agent_id: None,
         reasoning: None,

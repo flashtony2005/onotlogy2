@@ -24,6 +24,8 @@ export function FabricPanel() {
   // submit 表单
   const [sessionId, setSessionId] = useState('sess_ui')
   const [sender, setSender] = useState('dsh')
+  // Phase 8：项目归属（空 = 全局）
+  const [projectId, setProjectId] = useState('openaip-os')
   const [intent, setIntent] = useState('modify_code')
   const [payload, setPayload] = useState('{ "args": ["exec", "--skip-git-repo-check", "echo hello"], "object": "order-ui-1" }')
   const [submitting, setSubmitting] = useState(false)
@@ -62,6 +64,7 @@ export function FabricPanel() {
         sender,
         intent,
         payload: parsed,
+        projectId: projectId || undefined,
       })
       setLastSubmit(sub)
       await load() // 提交即世界：刷新事件流（含 task_completed/failed）
@@ -138,6 +141,11 @@ export function FabricPanel() {
             </h4>
             <div className="fabric-form">
               <div className="world-filter">
+                <input
+                  placeholder="project_id（Phase 8）"
+                  value={projectId}
+                  onChange={(e) => setProjectId(e.target.value)}
+                />
                 <input
                   placeholder="session_id"
                   value={sessionId}

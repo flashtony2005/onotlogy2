@@ -22,6 +22,7 @@ fn world_ev(id: &str, ty: &str, refs: Vec<&str>, input: Option<Value>, ts: i64) 
         kind: TraceKind::World,
         event_type: ty.to_string(),
         object_refs: refs.iter().map(|s| s.to_string()).collect(),
+        project_id: None,
         run_id: None,
         agent_id: None,
         reasoning: None,
@@ -327,6 +328,7 @@ async fn tc_p5a_create_writes_object_and_event_transactionally() {
             object_type: "User".into(),
             id: "u1".into(),
             data: json!({ "name": "Apple", "level": "VIP" }),
+            project_id: None,
         })
         .await
         .unwrap();
@@ -359,6 +361,7 @@ async fn tc_p5b_link_writes_relation_and_event() {
             object_type: "User".into(),
             id: "u1".into(),
             data: json!({}),
+            project_id: None,
         })
         .await
         .unwrap();
@@ -367,6 +370,7 @@ async fn tc_p5b_link_writes_relation_and_event() {
             object_type: "Order".into(),
             id: "o1".into(),
             data: json!({}),
+            project_id: None,
         })
         .await
         .unwrap();
@@ -375,6 +379,7 @@ async fn tc_p5b_link_writes_relation_and_event() {
             source: "u1".into(),
             edge: "placed".into(),
             target: "o1".into(),
+            project_id: None,
         })
         .await
         .unwrap();
@@ -407,11 +412,15 @@ async fn tc_p5c_delete_writes_event() {
             object_type: "Product".into(),
             id: "p1".into(),
             data: json!({}),
+            project_id: None,
         })
         .await
         .unwrap();
     storage
-        .apply_world(WorldCommand::DeleteObject { id: "p1".into() })
+        .apply_world(WorldCommand::DeleteObject {
+            id: "p1".into(),
+            project_id: None,
+        })
         .await
         .unwrap();
 
@@ -440,6 +449,7 @@ async fn tc_p5d_commanded_world_projects_to_kernel() {
             object_type: "User".into(),
             id: "u1".into(),
             data: json!({ "name": "Apple" }),
+            project_id: None,
         })
         .await
         .unwrap();
@@ -448,6 +458,7 @@ async fn tc_p5d_commanded_world_projects_to_kernel() {
             object_type: "Order".into(),
             id: "o1".into(),
             data: json!({}),
+            project_id: None,
         })
         .await
         .unwrap();
@@ -456,6 +467,7 @@ async fn tc_p5d_commanded_world_projects_to_kernel() {
             source: "u1".into(),
             edge: "placed".into(),
             target: "o1".into(),
+            project_id: None,
         })
         .await
         .unwrap();
@@ -492,6 +504,7 @@ async fn tc_pj8_agent_observe_sees_projected_storage_world() {
             object_type: "User".into(),
             id: "u1".into(),
             data: json!({ "name": "Apple", "level": "VIP" }),
+            project_id: None,
         })
         .await
         .unwrap();
@@ -670,6 +683,7 @@ async fn tc_p6c_world_events_persisted_at_commit_and_reproject() {
             object_type: "Customer".into(),
             id: "cust-01".into(),
             data: json!({ "name": "Apple", "level": "VIP" }),
+            project_id: None,
         })
         .await
         .unwrap();

@@ -146,7 +146,7 @@ impl Bridge {
         adapter
             .connect()
             .map_err(|e| FabricError::Adapter(e.to_string()))?;
-        self.event("fabric.agent_connected", vec![id.clone()], json!({}));
+        self.event("fabric.agent_connected", vec![id.clone()], json!({}), None);
         self.adapters.insert(id.clone(), adapter);
         Ok(())
     }
@@ -158,6 +158,7 @@ impl Bridge {
                 "fabric.agent_disconnected",
                 vec![agent_id.to_string()],
                 json!({}),
+                None,
             );
         }
     }
@@ -175,6 +176,7 @@ impl Bridge {
         from: &str,
         intent: &str,
         payload: Value,
+        project_id: Option<String>,
     ) -> Result<AgentMessage, FabricError> {
         // 1) 路由：意图 → 能力 → 策略 → 选择（fail-closed）
         let plan = self.router.route(intent)?;
@@ -184,6 +186,7 @@ impl Bridge {
                     "fabric.approval_requested",
                     vec![plan.agent_id.clone()],
                     json!({ "capability": plan.capability, "intent": intent }),
+                    project_id.clone(),
                 );
                 return Err(FabricError::RequiresApproval(plan.capability.clone()));
             }
@@ -224,16 +227,19 @@ impl Bridge {
             "fabric.capability_invoked",
             vec![plan.agent_id.clone()],
             json!({ "capability": plan.capability, "intent": intent }),
+            project_id.clone(),
         );
         self.event(
             "fabric.task_requested",
             vec![from.to_string()],
             json!({ "capability": plan.capability, "intent": intent, "correlation_id": correlation }),
+            project_id.clone(),
         );
         self.event(
             "fabric.message_sent",
             vec![from.to_string(), plan.agent_id.clone()],
             json!({ "kind": "task.request", "correlation_id": correlation }),
+            project_id.clone(),
         );
 
         // 4) Session 记录请求（会话是消息真相源）
@@ -267,6 +273,7 @@ impl Bridge {
             ty,
             vec![obj.to_string()],
             json!({ "to": status, "correlation_id": correlation, "agent": plan.agent_id }),
+            project_id,
         );
 
         // 7) Session 记录结果
@@ -279,13 +286,14 @@ impl Bridge {
     }
 
     /// 事件入日志（同步；sink 失败不阻断——旁路扇出，与 P5.6 审计同语义）。
-    fn event(&self, ty: &str, refs: Vec<String>, input: Value) {
+    fn event(&self, ty: &str, refs: Vec<String>, input: Value, project_id: Option<String>) {
         if let Some(sink) = &self.sink {
             let ev = TraceEvent {
                 id: crate::trace::new_trace_id(),
                 kind: crate::trace::TraceKind::Cognitive,
                 event_type: ty.to_string(),
                 object_refs: refs,
+                project_id,
                 run_id: None, // 事实不依赖 Run（P5 约定）
                 agent_id: None,
                 reasoning: None,

@@ -42,6 +42,7 @@ async fn tc_sf1_world_query_http_transport() {
             object_type: "User".into(),
             id: "u1".into(),
             data: json!({ "name": "Apple", "level": "VIP" }),
+            project_id: None,
         })
         .await
         .unwrap();
@@ -50,6 +51,7 @@ async fn tc_sf1_world_query_http_transport() {
             source: "u1".into(),
             edge: "placed".into(),
             target: "o1".into(),
+            project_id: None,
         })
         .await
         .unwrap();
@@ -109,6 +111,7 @@ async fn tc_sf2_audit_query_http_transport_includes_fabric_domain() {
             kind: openaip_os::trace::TraceKind::Cognitive,
             event_type: "fabric.task_completed".into(),
             object_refs: vec!["order-1".into()],
+            project_id: None,
             run_id: None,
             agent_id: None,
             reasoning: None,
@@ -125,6 +128,7 @@ async fn tc_sf2_audit_query_http_transport_includes_fabric_domain() {
             kind: openaip_os::trace::TraceKind::Cognitive,
             event_type: "effect.committed".into(),
             object_refs: vec!["world".into()],
+            project_id: None,
             run_id: None,
             agent_id: None,
             reasoning: None,

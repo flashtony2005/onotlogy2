@@ -16,13 +16,14 @@ impl LibSQLStorage {
         self.conn
             .execute(
                 "INSERT INTO wb_trace_event \
-                 (id, kind, event_type, object_refs, run_id, agent_id, reasoning, input, output, confidence, timestamp) \
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                 (id, kind, event_type, object_refs, project_id, run_id, agent_id, reasoning, input, output, confidence, timestamp) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
                 params![
                     ev.id.clone(),
                     ev.kind.as_str(),
                     ev.event_type.clone(),
                     obj_refs,
+                    ev.project_id.clone(),
                     ev.run_id.clone(),
                     ev.agent_id.clone(),
                     ev.reasoning.clone(),
@@ -40,11 +41,15 @@ impl LibSQLStorage {
     /// [强制] after_id 游标用于 WebSocket 断线重连补齐：返回该事件之后的全部匹配事件（按 timestamp,id 升序）。
     pub async fn list_events(&self, q: TraceQuery) -> Result<Vec<TraceEvent>, StorageError> {
         let mut sql = String::from(
-            "SELECT id, kind, event_type, object_refs, run_id, agent_id, reasoning, input, output, confidence, timestamp \
+            "SELECT id, kind, event_type, object_refs, project_id, run_id, agent_id, reasoning, input, output, confidence, timestamp \
              FROM wb_trace_event WHERE 1=1",
         );
         let mut params: Vec<libsql::Value> = Vec::new();
 
+        if let Some(v) = &q.project_id {
+            sql.push_str(" AND project_id = ?");
+            params.push(libsql::Value::Text(v.clone()));
+        }
         if let Some(v) = &q.run_id {
             sql.push_str(" AND run_id = ?");
             params.push(libsql::Value::Text(v.clone()));
@@ -100,7 +105,7 @@ impl LibSQLStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, kind, event_type, object_refs, run_id, agent_id, reasoning, input, output, confidence, timestamp \
+                "SELECT id, kind, event_type, object_refs, project_id, run_id, agent_id, reasoning, input, output, confidence, timestamp \
                  FROM wb_trace_event WHERE id = ?",
                 params![id],
             )
@@ -117,7 +122,7 @@ impl LibSQLStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, kind, event_type, object_refs, run_id, agent_id, reasoning, input, output, confidence, timestamp \
+                "SELECT id, kind, event_type, object_refs, project_id, run_id, agent_id, reasoning, input, output, confidence, timestamp \
                  FROM wb_trace_event WHERE kind='world' ORDER BY timestamp ASC LIMIT 1000",
                 params![],
             )

@@ -305,6 +305,7 @@ mod tests {
             kind,
             event_type: event_type.into(),
             object_refs: vec!["o1".into()],
+            project_id: None,
             run_id: Some("run_1".into()),
             agent_id: None,
             reasoning: None,

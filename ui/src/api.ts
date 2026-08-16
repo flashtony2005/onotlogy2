@@ -13,6 +13,8 @@ import type {
   AuditViewDto,
   FabricRequestDto,
   FabricSubmissionDto,
+  ProjectCreateDto,
+  ProjectDto,
   SessionDto,
   SessionSummaryDto,
   SkillDto,
@@ -214,6 +216,28 @@ export async function postAuditQuery(req: AuditQueryDto): Promise<AuditViewDto> 
   if (json.code !== 0 || !json.data) {
     throw new Error(json.msg || `审计查询失败 (code=${json.code})`)
   }
+  return json.data
+}
+
+export async function postProjectList(): Promise<ProjectDto[]> {
+  const r = await fetch('/api/v1/facade/project/list', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  })
+  const json: ApiResponse<ProjectDto[]> = await r.json()
+  if (json.code !== 0 || !json.data) throw new Error(json.msg || '项目列表失败')
+  return json.data
+}
+
+export async function postProjectCreate(req: ProjectCreateDto): Promise<ProjectDto> {
+  const r = await fetch('/api/v1/facade/project/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  })
+  const json: ApiResponse<ProjectDto> = await r.json()
+  if (json.code !== 0 || !json.data) throw new Error(json.msg || '项目创建失败')
   return json.data
 }
 

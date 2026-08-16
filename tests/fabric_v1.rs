@@ -224,6 +224,7 @@ async fn tc_f4_all_communication_events_land_in_event_log() {
             "dsh",
             "modify_code",
             serde_json::json!({ "repository": "demo", "task": "修复订单计算错误" }),
+            None,
         )
         .unwrap();
     assert_eq!(result.kind, MessageKind::TaskResult);
@@ -269,6 +270,7 @@ async fn tc_f5_full_demo_chain_to_world_state() {
             "dsh",
             "modify_code",
             serde_json::json!({ "object": "order-001", "task": "修复金额计算" }),
+            None,
         )
         .unwrap();
     assert_eq!(result.payload["status"], "completed");
@@ -364,6 +366,7 @@ async fn tc_f7_real_process_send_roundtrip_through_bridge() {
             "dsh",
             "run_check",
             serde_json::json!({ "args": ["-c", "echo done-ok"] }),
+            None,
         )
         .unwrap();
     assert_eq!(result.kind, MessageKind::TaskResult);
@@ -388,6 +391,7 @@ async fn tc_f7_real_process_send_roundtrip_through_bridge() {
             "dsh",
             "run_check",
             serde_json::json!({ "args": ["-c", "echo boom; exit 3"] }),
+            None,
         )
         .unwrap();
     assert_eq!(result2.payload["status"], "failed");

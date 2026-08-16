@@ -31,11 +31,13 @@ pub async fn cmd_run(db: &str) -> Result<(), Box<dyn std::error::Error>> {
                 object_type: "Customer".into(),
                 id: "001".into(),
                 data: json!({ "name": "Apple", "level": "VIP" }),
+                project_id: None,
             },
             WorldCommand::CreateObject {
                 object_type: "Customer".into(),
                 id: "002".into(),
                 data: json!({ "name": "Tesla", "level": "GOLD" }),
+                project_id: None,
             },
         ])
         .await?;
@@ -86,6 +88,7 @@ pub async fn cmd_relation_link(
             source: source.to_string(),
             edge: edge.to_string(),
             target: target.to_string(),
+            project_id: None,
         })
         .await
     {

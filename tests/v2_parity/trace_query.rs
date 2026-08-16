@@ -13,6 +13,7 @@ fn ev(id: &str, run: &str, ty: &str, out: serde_json::Value) -> TraceEvent {
         kind: TraceKind::Cognitive,
         event_type: ty.to_string(),
         object_refs: vec!["u1".to_string()],
+        project_id: None,
         run_id: Some(run.to_string()),
         agent_id: Some("agent".to_string()),
         reasoning: None,
