@@ -1,6 +1,6 @@
 //! Delta 校验（M5 拆分）：白名单操作 + 结构约束（propose 前门）。
 
-use super::types::MutationError;
+use crate::MutationError;
 
 /// Delta 白名单操作（结构化变更；AI 自由文本改 Skill 一律拒绝）。
 const DELTA_OPS: &[&str] = &["insert_step", "modify", "delete_step", "replace"];

@@ -26,10 +26,15 @@ pub mod health;
 pub use oaip_abi as abi;
 pub use oaip_eval_core as eval_core;
 pub use oaip_kernel as kernel;
+pub use oaip_mutation_core as mutation_core;
 pub use oaip_session as session;
 pub use oaip_trace as trace;
 pub use oaip_worker_core as worker_core;
-pub mod mutation;
+pub mod mutation {
+    pub use oaip_mutation_core::*;
+    pub mod benchmark;
+    pub use benchmark::{offline_benchmark, run_offline_benchmark};
+}
 pub mod plugin;
 pub mod rule;
 pub mod server;
@@ -53,7 +58,7 @@ pub use health::{LoopHealth, collect};
 pub use mutation::{
     BenchmarkConfig, BenchmarkMetric, BenchmarkVerdict, DEFAULT_MIN_EFFECT_SIZE, DEFAULT_MIN_RUNS,
     MutationError, MutationProposal, MutationStatus, OfflineConfig, OfflineVerdict, benchmark,
-    offline_benchmark, run_offline_benchmark,
+    offline_benchmark, run_offline_benchmark, validate_delta,
 };
 pub use simulation::replay::{
     ReplayDecision, ReplayReport, replay_all, replay_decision, run_decision_replay,

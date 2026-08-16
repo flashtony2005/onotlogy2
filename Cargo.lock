@@ -1535,6 +1535,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "oaip-mutation-core"
+version = "0.9.0"
+dependencies = [
+ "oaip-eval-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "oaip-session"
 version = "0.9.0"
 dependencies = [
@@ -1588,6 +1598,7 @@ dependencies = [
  "oaip-abi",
  "oaip-eval-core",
  "oaip-kernel",
+ "oaip-mutation-core",
  "oaip-session",
  "oaip-trace",
  "oaip-worker-core",

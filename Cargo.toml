@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/oaip-abi", "crates/oaip-eval-core", "crates/oaip-kernel", "crates/oaip-session", "crates/oaip-trace", "crates/oaip-worker-core"]
+members = ["crates/oaip-abi", "crates/oaip-eval-core", "crates/oaip-kernel", "crates/oaip-mutation-core", "crates/oaip-session", "crates/oaip-trace", "crates/oaip-worker-core"]
 resolver = "2"
 
 [package]
@@ -17,6 +17,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 oaip-abi = { path = "crates/oaip-abi" }
 oaip-eval-core = { path = "crates/oaip-eval-core" }
+oaip-mutation-core = { path = "crates/oaip-mutation-core" }
 oaip-kernel = { path = "crates/oaip-kernel" }
 oaip-session = { path = "crates/oaip-session" }
 oaip-trace = { path = "crates/oaip-trace" }
