@@ -98,6 +98,12 @@ impl<'a> WorkerRuntime<'a> {
                 "worker": sel.worker_id,
                 "capability": sel.capability,
                 "reason": sel.reason,
+                "policy_verdict": sel.policy_verdict,
+                "effective_trust": sel.effective_trust,
+                "candidates": sel.candidates.iter().map(|(id, score)| json!({
+                    "worker": id,
+                    "trust_score": score,
+                })).collect::<Vec<_>>(),
             }),
         );
         // 3) Execute（失败重试 max_retries 次）

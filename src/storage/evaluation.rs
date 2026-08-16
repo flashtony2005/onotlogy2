@@ -66,12 +66,13 @@ impl LibSQLStorage {
         let id = format!("eval.{}", r.run_id);
         let modes = serde_json::to_string(&r.failure_modes)?;
         let evidence = serde_json::to_string(&evidence_map(r))?;
+        let worker_outcomes = serde_json::to_string(&r.worker_outcomes)?;
         self.conn
             .execute(
                 "INSERT OR REPLACE INTO wb_evaluation \
                  (id, run_id, task_id, skill_version, correctness, completeness, efficiency, \
-                  reliability, policy_compliance, output_quality, aggregate_score, failure_modes, evidence, evaluator_version) \
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                  reliability, policy_compliance, output_quality, aggregate_score, failure_modes, evidence, worker_outcomes, evaluator_version) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
                 params![
                     id,
                     r.run_id.clone(),
@@ -86,6 +87,7 @@ impl LibSQLStorage {
                     r.aggregate,
                     modes,
                     evidence,
+                    worker_outcomes,
                     r.evaluator_version.clone()
                 ],
             )
@@ -102,7 +104,7 @@ impl LibSQLStorage {
     ) -> Result<Vec<EvaluationResult>, StorageError> {
         let mut sql = String::from(
             "SELECT run_id, task_id, skill_version, correctness, completeness, efficiency, \
-             reliability, policy_compliance, output_quality, aggregate_score, failure_modes, evidence, evaluator_version \
+             reliability, policy_compliance, output_quality, aggregate_score, failure_modes, evidence, worker_outcomes, evaluator_version \
              FROM wb_evaluation WHERE 1=1",
         );
         let mut params: Vec<libsql::Value> = Vec::new();
@@ -265,7 +267,11 @@ fn row_to_evaluation(row: &libsql::Row) -> Result<EvaluationResult, StorageError
         output_quality: score_from(row.get(8)?, map.get("output_quality")),
         aggregate: row.get(9)?,
         failure_modes: serde_json::from_str(&modes)?,
-        evaluator_version: row.get(12)?,
+        worker_outcomes: {
+            let wo: String = row.get(12)?;
+            serde_json::from_str(&wo)?
+        },
+        evaluator_version: row.get(13)?,
     })
 }
 

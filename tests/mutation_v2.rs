@@ -52,6 +52,7 @@ fn result(
         run_id: run_id.into(),
         task_id: "t1".into(),
         skill_version: None,
+        worker_outcomes: vec![],
         correctness: openaip_os::evaluation::Score::known(aggregate, vec![]),
         completeness: openaip_os::evaluation::Score::known(aggregate, vec![]),
         efficiency: openaip_os::evaluation::Score::known(aggregate, vec![]),

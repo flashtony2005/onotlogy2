@@ -624,6 +624,7 @@ mod tests {
             run_id: run_id.into(),
             task_id: "t1".into(),
             skill_version: None,
+            worker_outcomes: vec![],
             correctness: crate::evaluation::Score::known(aggregate, vec![]),
             completeness: crate::evaluation::Score::known(aggregate, vec![]),
             efficiency: crate::evaluation::Score::known(aggregate, vec![]),

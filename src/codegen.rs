@@ -211,6 +211,7 @@ CREATE TABLE IF NOT EXISTS wb_evaluation (
   aggregate_score    REAL NOT NULL DEFAULT 0.0,  -- 派生视图：已出现维度均值
   failure_modes      TEXT NOT NULL DEFAULT '[]', -- worker.failed error 去重排序
   evidence           TEXT NOT NULL DEFAULT '{}', -- 每维度证据+置信度 JSON（11A 证据系统）
+  worker_outcomes    TEXT NOT NULL DEFAULT '[]', -- per-worker 执行结果（WorkerStats 可回放重建的数据源）
   evaluator_version  TEXT NOT NULL,
   created_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

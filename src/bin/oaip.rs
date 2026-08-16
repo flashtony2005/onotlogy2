@@ -535,8 +535,6 @@ async fn cmd_agent_run(
             WorkerRouter::new(RouterCriteria::default()),
         );
         let result = orch.run_plan(&tasks).await;
-        let _ =
-            openaip_os::worker::stats::record_outcomes(&kernel.storage(), &result.outcomes).await;
         println!(
             "🧠 Worker 计划执行：run_id={} all_ok={}",
             result.run_id, result.all_ok
@@ -571,6 +569,11 @@ async fn cmd_agent_run(
         .await
         {
             Ok(r) => {
+                let _ = openaip_os::worker::stats::record_outcomes(
+                    &kernel.storage(),
+                    &r.worker_outcomes,
+                )
+                .await;
                 println!(
                     "📊 Phase 11 评测：aggregate={:.3} skill_version={:?} reliability={:?} policy_compliance={:?}",
                     r.aggregate, r.skill_version, r.reliability.value, r.policy_compliance.value
@@ -651,6 +654,10 @@ async fn cmd_agent_run(
     .await
     {
         Ok(r) => {
+            // Router Selection Learning：per-worker 结果沉淀统计（可回放重建的数据源）
+            let _ =
+                openaip_os::worker::stats::record_outcomes(&kernel.storage(), &r.worker_outcomes)
+                    .await;
             println!(
                 "📊 Phase 11 评测（wb_evaluation）：aggregate={:.3} unknowns={:?}",
                 r.aggregate,
@@ -782,7 +789,7 @@ async fn cmd_worker_run(
     let mut orch = WorkerOrchestrator::new(&registry, &policy, router);
     let result = orch.run_plan(&tasks).await;
     // Router Selection Learning：本次执行结果沉淀为 (capability, worker) 统计
-    let _ = openaip_os::worker::stats::record_outcomes(&storage, &result.outcomes).await;
+    // （数据源：run 结束后评测结果中的 per-worker outcomes——可回放）
     println!(
         "🧠 Worker 计划执行：run_id={} all_ok={}",
         result.run_id, result.all_ok

@@ -117,6 +117,15 @@ impl Default for EvaluationPolicy {
     }
 }
 
+/// 单次 worker 执行结果（统计重建的数据源；WorkerStats = F(evaluations) 可回放）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkerOutcome {
+    pub worker_id: String,
+    pub capability: String,
+    pub ok: bool,
+    pub duration_ms: u64,
+}
+
 /// 六维评测结果（**底层六维保留**；aggregate 只是派生视图）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvaluationResult {
@@ -124,6 +133,8 @@ pub struct EvaluationResult {
     pub task_id: String,
     /// 执行所用 Skill 版本（I7 观测：EveryRun→Evaluation 携带 skill 身份）。
     pub skill_version: Option<String>,
+    /// 本 run 的 per-worker 执行结果（从事件推导；WorkerStats 可回放重建的数据源）。
+    pub worker_outcomes: Vec<WorkerOutcome>,
     pub correctness: Score,
     pub completeness: Score,
     pub efficiency: Score,
@@ -197,6 +208,7 @@ impl EvaluationReducer {
             run_id: run_id.to_string(),
             task_id: task.task_id.clone(),
             skill_version: task.skill_version.clone(),
+            worker_outcomes: collect_worker_outcomes(events),
             correctness,
             completeness,
             efficiency,
@@ -363,6 +375,49 @@ fn aggregate_score(
     } else {
         present.iter().sum::<f64>() / present.len() as f64
     }
+}
+
+/// 从事件推导 per-worker 执行结果（确定性；worker.completed/failed 各记一条，
+/// 重试 attempt 计入——与 reliability 口径一致）。WorkerStats 重建的数据源。
+fn collect_worker_outcomes(events: &[SessionEvent]) -> Vec<WorkerOutcome> {
+    events
+        .iter()
+        .filter_map(|e| match e.event_type {
+            EventType::WorkerCompleted => {
+                let worker_id = e.data.get("worker").and_then(|v| v.as_str())?;
+                let capability = e
+                    .data
+                    .get("capability")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                Some(WorkerOutcome {
+                    worker_id: worker_id.to_string(),
+                    capability: capability.to_string(),
+                    ok: e.data.get("ok").and_then(|v| v.as_bool()).unwrap_or(true),
+                    duration_ms: e
+                        .data
+                        .get("duration_ms")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0),
+                })
+            }
+            EventType::WorkerFailed => {
+                let worker_id = e.data.get("worker").and_then(|v| v.as_str())?;
+                let capability = e
+                    .data
+                    .get("capability")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                Some(WorkerOutcome {
+                    worker_id: worker_id.to_string(),
+                    capability: capability.to_string(),
+                    ok: false,
+                    duration_ms: 0,
+                })
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// 该 run 的失败模式（worker.failed.error 去重 + 排序——确定性）。

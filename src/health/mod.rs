@@ -286,6 +286,7 @@ mod tests {
             run_id: run_id.into(),
             task_id: "t1".into(),
             skill_version: skill.map(String::from),
+            worker_outcomes: vec![],
             correctness: Score::known(aggregate, vec![]),
             completeness: Score::known(aggregate, vec![]),
             efficiency: Score::known(aggregate, vec![]),

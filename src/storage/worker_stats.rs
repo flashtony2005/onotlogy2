@@ -35,6 +35,14 @@ impl LibSQLStorage {
         Ok(())
     }
 
+    /// 清空统计（rebuild_from_evals 全量重建的第一步）。
+    pub async fn clear_worker_stats(&self) -> Result<(), StorageError> {
+        self.conn
+            .execute("DELETE FROM wb_worker_stats", params![])
+            .await?;
+        Ok(())
+    }
+
     /// 全部统计（学习 map 的数据源）。
     pub async fn list_worker_stats(&self) -> Result<Vec<WorkerStat>, StorageError> {
         let mut rows = self
@@ -53,6 +61,8 @@ impl LibSQLStorage {
                 runs: row.get(2)?,
                 success: row.get(3)?,
                 total_duration_ms: row.get(4)?,
+                policy_compliance: None,
+                avg_cost: None,
             });
         }
         Ok(out)

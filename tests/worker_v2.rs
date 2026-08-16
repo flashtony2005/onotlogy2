@@ -928,6 +928,8 @@ async fn tc_w16_router_selection_learning() {
             runs: 10,
             success: 10,
             total_duration_ms: 0,
+            policy_compliance: None,
+            avg_cost: None,
         })
         .unwrap(),
     );
@@ -939,6 +941,8 @@ async fn tc_w16_router_selection_learning() {
             runs: 10,
             success: 0,
             total_duration_ms: 0,
+            policy_compliance: None,
+            avg_cost: None,
         })
         .unwrap(),
     );
@@ -972,22 +976,16 @@ async fn tc_w16_router_selection_learning() {
 // ── W17：统计持久化 + 学习 map 重建（可回放派生）───────────────────
 #[tokio::test]
 async fn tc_w17_stats_persist_and_rebuild() {
-    use openaip_os::worker::orchestrator::{TaskOutcome, TaskStatus};
+    use openaip_os::evaluation::WorkerOutcome;
     use openaip_os::worker::stats::{learned_trust_map, record_outcomes};
 
     let storage = openaip_os::storage::LibSQLStorage::open(":memory:")
         .await
         .unwrap();
-    let outcome = |worker: &str, ok: bool| TaskOutcome {
+    let outcome = |worker: &str, ok: bool| WorkerOutcome {
         capability: "code.read".into(),
-        worker_id: Some(worker.into()),
-        status: if ok {
-            TaskStatus::Completed
-        } else {
-            TaskStatus::Failed
-        },
-        output: None,
-        error: None,
+        worker_id: worker.into(),
+        ok,
         duration_ms: 100,
     };
     // w-a 5 次全成功；w-b 5 次全失败（=门限生效）
@@ -1020,5 +1018,50 @@ async fn tc_w17_stats_persist_and_rebuild() {
     assert!(
         !map2.contains_key(&("code.read".into(), "w-c".into())),
         "2 runs 不学习（门限 5）"
+    );
+}
+
+// ── W18：Router Decision 可审计（WorkerSelected 事件全量）────────────
+#[tokio::test]
+async fn tc_w18_router_decision_is_auditable() {
+    use openaip_os::worker::orchestrator::{WorkerOrchestrator, WorkerTask};
+    use openaip_os::worker::router::WorkerRouter;
+
+    let mut registry = WorkerRegistry::new();
+    registry
+        .register(Box::new(echo_worker("echo", &["text.echo"])))
+        .unwrap();
+    let policy = WorkerPolicy::new().allow("text.echo");
+    let mut orch = WorkerOrchestrator::new(
+        &registry,
+        &policy,
+        WorkerRouter::new(RouterCriteria::default()),
+    );
+    orch.run_plan(&[WorkerTask::new("text.echo", json!({ "msg": "x" }))])
+        .await;
+    // Explainable Routing：worker.selected 事件携带候选/信任分/策略判定/理由
+    let selected = orch
+        .session_log()
+        .events()
+        .iter()
+        .find(|e| e.event_type.as_str() == "worker.selected")
+        .expect("有 worker.selected 事件");
+    assert_eq!(
+        selected.data["policy_verdict"],
+        json!("allow"),
+        "策略判定可审计"
+    );
+    assert_eq!(selected.data["worker"], json!("echo"));
+    assert!(selected.data["effective_trust"].as_f64().unwrap() > 0.0);
+    let candidates = selected.data["candidates"].as_array().unwrap();
+    assert!(
+        candidates
+            .iter()
+            .any(|c| c["worker"] == json!("echo") && c["trust_score"].is_number()),
+        "候选 + 信任分可审计: {candidates:?}"
+    );
+    assert!(
+        selected.data["reason"].as_str().unwrap().contains("score"),
+        "选择理由可审计"
     );
 }

@@ -10,7 +10,6 @@
 
 use crate::storage::LibSQLStorage;
 use crate::storage::StorageError;
-use crate::worker::orchestrator::TaskOutcome;
 
 /// 学习生效的最小样本量（对齐仓库阈值模式：hits≥2 / min_runs=5）。
 pub const TRUST_MIN_RUNS: u64 = 5;
@@ -25,6 +24,10 @@ pub struct WorkerStat {
     pub runs: u64,
     pub success: u64,
     pub total_duration_ms: u64,
+    /// Policy 合规率（per-worker 评测数据接入后的扩展位；当前无数据源 → None）。
+    pub policy_compliance: Option<f64>,
+    /// 平均成本（per-worker cost 数据接入后的扩展位；当前无数据源 → None）。
+    pub avg_cost: Option<f64>,
 }
 
 impl WorkerStat {
@@ -42,35 +45,56 @@ impl WorkerStat {
         }
         self.total_duration_ms as f64 / self.runs as f64
     }
+
+    /// learned 统计分（raw；0..1）。
+    ///
+    /// MVP 公式：`success_rate`（唯一有数据维度）。
+    /// 扩展位（数据接入后启用，遵循「不伪装」原则）：
+    /// `raw = 0.4×success_rate + 0.2×policy_compliance + 0.1×efficiency`
+    /// （quality 不入 learned——它是声明属性，入 learned 会让「初始值伪装成学习结果」；
+    ///   efficiency 从 avg_duration 与声明 latency 之比推导）
+    pub fn raw_learned(&self) -> f64 {
+        self.success_rate()
+    }
 }
 
-/// learned trust 修正（确定性纯函数）：
+/// learned 修正（确定性纯函数）：
 /// - runs < TRUST_MIN_RUNS → None（样本不足，不学习）
-/// - 否则：(success_rate − 0.5)，封顶 ±TRUST_MAX_CORRECTION
+/// - 否则：(raw_learned − 0.5)，封顶 ±TRUST_MAX_CORRECTION
 ///   中性点 0.5（50% 成功率 = 0 修正；100% = +0.1；0% = −0.1）
 pub fn learned_trust(stat: &WorkerStat) -> Option<f64> {
     if stat.runs < TRUST_MIN_RUNS {
         return None;
     }
-    Some((stat.success_rate() - 0.5).clamp(-TRUST_MAX_CORRECTION, TRUST_MAX_CORRECTION))
+    Some((stat.raw_learned() - 0.5).clamp(-TRUST_MAX_CORRECTION, TRUST_MAX_CORRECTION))
+}
+
+/// effective trust = declared + learned 修正（三值模型：declared / learned / effective）。
+pub fn effective_trust(declared: f64, adjustment: Option<f64>) -> f64 {
+    (declared + adjustment.unwrap_or(0.0)).clamp(0.0, 1.0)
 }
 
 /// 记录一批执行结果（run 结束后调用；幂等累积）。
 pub async fn record_outcomes(
     storage: &LibSQLStorage,
-    outcomes: &[TaskOutcome],
+    outcomes: &[crate::evaluation::WorkerOutcome],
 ) -> Result<(), StorageError> {
     for o in outcomes {
-        if let Some(worker_id) = &o.worker_id {
-            storage
-                .record_worker_outcome(
-                    &o.capability,
-                    worker_id,
-                    o.status == crate::worker::orchestrator::TaskStatus::Completed,
-                    o.duration_ms,
-                )
-                .await?;
-        }
+        storage
+            .record_worker_outcome(&o.capability, &o.worker_id, o.ok, o.duration_ms)
+            .await?;
+    }
+    Ok(())
+}
+
+/// **权威重建**（可回放）：从 wb_evaluation.worker_outcomes 全量重建统计。
+/// 与 record_outcomes（运行期增量）的关系：增量提供即时反馈，重建保证一致性——
+/// 删表/跨重启后经 `WorkerStats = F(evaluations)` 可完全恢复（Trust 也是 Replayable 的）。
+pub async fn rebuild_from_evals(storage: &LibSQLStorage) -> Result<(), StorageError> {
+    storage.clear_worker_stats().await?;
+    let evals = storage.list_evaluations(None, None, 1000).await?;
+    for e in evals {
+        record_outcomes(storage, &e.worker_outcomes).await?;
     }
     Ok(())
 }
@@ -99,6 +123,8 @@ mod tests {
             runs,
             success,
             total_duration_ms: runs * 1000,
+            policy_compliance: None,
+            avg_cost: None,
         }
     }
 
@@ -136,5 +162,18 @@ mod tests {
     fn avg_duration() {
         assert_eq!(stat(4, 2).avg_duration_ms(), 1000.0);
         assert_eq!(stat(0, 0).avg_duration_ms(), 0.0);
+    }
+
+    #[test]
+    fn three_value_trust_model() {
+        // declared 0.80、raw 1.0（10/10 成功）→ adjustment +0.1 → effective 0.90
+        let s = stat(10, 10);
+        assert!((s.raw_learned() - 1.0).abs() < 1e-9);
+        assert!((learned_trust(&s).unwrap() - 0.1).abs() < 1e-9);
+        assert!((effective_trust(0.80, learned_trust(&s)) - 0.90).abs() < 1e-9);
+        // 无样本 → adjustment None → effective = declared
+        assert_eq!(effective_trust(0.80, None), 0.80);
+        // clamp：declared 0.95 + 0.1 → 1.0
+        assert_eq!(effective_trust(0.95, Some(0.1)), 1.0);
     }
 }

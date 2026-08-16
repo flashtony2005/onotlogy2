@@ -204,7 +204,7 @@ pub struct LibSQLStorage {
 
 /// 当前 schema 版本。每次 schema 变更（加列 / 改列名）递增；
 /// 旧库 open 时按 `MIGRATIONS` 顺序自动迁移（事务化），不再要求 `db reset`。
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 /// 版本化迁移注册表：`(from_version, sql)`，按版本升序执行；每步成功后推进
 /// `wb_meta.schema_version`。迁移在事务内执行（失败整体回滚，版本不推进，可安全重试）。
@@ -270,6 +270,12 @@ CREATE INDEX IF NOT EXISTS idx_mutation_target ON wb_mutation(target_asset);",
   definition TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 )",
+    ),
+    // V6 → V7：V2 Router Selection Learning 可回放化。
+    // wb_evaluation 加 worker_outcomes（per-worker 结果；WorkerStats 重建的数据源）。
+    (
+        6,
+        "ALTER TABLE wb_evaluation ADD COLUMN worker_outcomes TEXT NOT NULL DEFAULT '[]'",
     ),
     // V5 → V6：V2 Router Selection Learning（Trust 轴）。
     // wb_worker_stats：(capability, worker) 执行统计（派生层，可回放重建）。

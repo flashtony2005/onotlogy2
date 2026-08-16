@@ -31,12 +31,18 @@ impl Default for RouterCriteria {
     }
 }
 
-/// 选中结果（可解释）。
+/// 选中结果（可解释 + 可审计：候选/分数/策略判定全带）。
 #[derive(Debug, Clone)]
 pub struct SelectedWorker {
     pub worker_id: String,
     pub capability: String,
     pub reason: String,
+    /// 候选列表及其有效信任分（Explainable Routing；WorkerSelected 事件数据源）。
+    pub candidates: Vec<(String, f64)>,
+    /// 策略判定（allow / require_approval / deny）。
+    pub policy_verdict: String,
+    /// 选中 worker 的有效信任（declared + learned 修正）。
+    pub effective_trust: f64,
 }
 
 /// Worker Router：Capability + Policy + Quality/Cost/Latency/Risk/Trust → Worker。
@@ -57,13 +63,13 @@ impl WorkerRouter {
         policy: &WorkerPolicy,
     ) -> Result<SelectedWorker, WorkerError> {
         // 1) Policy Filter（fail-closed）
-        match policy.check(capability, &serde_json::json!({})) {
+        let policy_verdict = match policy.check(capability, &serde_json::json!({})) {
             WorkerVerdict::Deny(reason) => return Err(WorkerError::Denied(reason)),
             WorkerVerdict::RequireApproval => {
                 return Err(WorkerError::RequireApproval(capability.to_string()));
             }
-            WorkerVerdict::Allow => {}
-        }
+            WorkerVerdict::Allow => "allow".to_string(),
+        };
         // 2) 候选
         let candidates = registry.candidates(capability);
         if candidates.is_empty() {
@@ -72,10 +78,22 @@ impl WorkerRouter {
         // 3) 显式指定
         if let Some(id) = &self.criteria.explicit {
             if let Some(w) = candidates.iter().find(|w| &w.manifest().id == id) {
+                let effective = self.effective_trust(w.manifest(), capability);
                 return Ok(SelectedWorker {
                     worker_id: w.manifest().id.clone(),
                     capability: capability.to_string(),
                     reason: "explicit".into(),
+                    candidates: candidates
+                        .iter()
+                        .map(|c| {
+                            (
+                                c.manifest().id.clone(),
+                                self.effective_trust(c.manifest(), capability),
+                            )
+                        })
+                        .collect(),
+                    policy_verdict,
+                    effective_trust: effective,
                 });
             }
             return Err(WorkerError::NoWorker(format!(
@@ -84,16 +102,19 @@ impl WorkerRouter {
         }
         // 4) 评分：quality × effective_trust 降序（risk 超限过滤；同分 cost 升序、latency 升序）
         //    effective_trust = declared trust + learned 修正（Trust 轴学习；Policy Filter 之后生效）
-        let best = candidates
+        let eligible: Vec<_> = candidates
             .iter()
             .filter(|w| {
                 w.manifest().quality >= self.criteria.min_quality
                     && w.manifest().cost <= self.criteria.max_cost
                     && w.manifest().risk <= self.criteria.max_risk
             })
+            .collect();
+        let best = eligible
+            .iter()
             .max_by(|a, b| {
-                let sa = a.manifest().quality * self.effective_trust(**a, capability);
-                let sb = b.manifest().quality * self.effective_trust(**b, capability);
+                let sa = a.manifest().quality * self.effective_trust(a.manifest(), capability);
+                let sb = b.manifest().quality * self.effective_trust(b.manifest(), capability);
                 sa.partial_cmp(&sb)
                     .unwrap_or(std::cmp::Ordering::Equal)
                     .then_with(|| b.manifest().cost.cmp(&a.manifest().cost))
@@ -119,17 +140,32 @@ impl WorkerRouter {
                     String::new()
                 }
             ),
+            candidates: candidates
+                .iter()
+                .map(|c| {
+                    (
+                        c.manifest().id.clone(),
+                        self.effective_trust(c.manifest(), capability),
+                    )
+                })
+                .collect(),
+            policy_verdict,
+            effective_trust: self.effective_trust(best.manifest(), capability),
         })
     }
 
     /// effective trust = declared + learned 修正（clamp 0..1；修正已在 stats 层封顶 ±0.1）。
-    fn effective_trust(&self, w: &dyn crate::worker::sdk::Worker, capability: &str) -> f64 {
+    fn effective_trust(
+        &self,
+        m: &crate::worker::manifest::WorkerManifest,
+        capability: &str,
+    ) -> f64 {
         let learned = self
             .criteria
             .learned_trust
-            .get(&(capability.to_string(), w.manifest().id.clone()))
+            .get(&(capability.to_string(), m.id.clone()))
             .copied()
             .unwrap_or(0.0);
-        (w.manifest().trust + learned).clamp(0.0, 1.0)
+        (m.trust + learned).clamp(0.0, 1.0)
     }
 }
