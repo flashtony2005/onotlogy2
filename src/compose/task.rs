@@ -11,7 +11,16 @@ use super::policy::PolicyVerdict;
 use crate::kernel::fiber::{FiberId, FiberState, WaitPattern};
 use crate::kernel::relation::Relation;
 use crate::kernel::{CompensationEngine, ContextId, Effect, Kernel, KernelError};
+use crate::trace::TraceEvent;
 use crate::world_exec::{CompensationExecutor as _, EffectExecutor as _};
+
+/// P6：世界事件同步回写 sink——Effect 提交点把 Kernel 世界变化转为 world 事件
+/// **同步**落库（契约 projection-v1.md P6：`Commit(WorldChange + WorldEvent)`
+/// 步骤级一致，禁止先改 Kernel 再异步补 Event）。实现必须同步（block_on 语义）；
+/// 调用方保证当前线程可阻塞（server=spawn_blocking，CLI=block_in_place）。
+pub trait WorldEventSink: Send + Sync {
+    fn append(&self, ev: &TraceEvent) -> Result<(), String>;
+}
 
 /// 期望关系（D5 目标函数）：Task 完成时世界应达成的状态。
 /// Agent 不信任自己的执行——重新观察世界确认目标达成。
@@ -91,6 +100,8 @@ pub struct TaskExecutor<'k> {
     effect_defs: Option<Vec<crate::compose::defs::RuntimeDefinition>>,
     /// D4 分离：true 时补偿走 RelationCompensationExecutor；false 回退 CompensationEngine。
     use_relation_compensation: bool,
+    /// P6：世界事件回写 sink（提交点同步落库；None = 不回写，兼容无存储调用方）。
+    world_sink: Option<std::sync::Arc<dyn WorldEventSink>>,
 }
 
 impl<'k> TaskExecutor<'k> {
@@ -99,12 +110,20 @@ impl<'k> TaskExecutor<'k> {
             kernel,
             effect_defs: None,
             use_relation_compensation: false,
+            world_sink: None,
         }
     }
 
     /// 注入世界效应声明（RelationEffectExecutor 生效：Effect 真实改变 World）。
     pub fn with_effect_defs(mut self, defs: Vec<crate::compose::defs::RuntimeDefinition>) -> Self {
         self.effect_defs = Some(defs);
+        self
+    }
+
+    /// P6：注入世界事件回写 sink——Effect 提交造成的 Kernel 关系变化在提交点
+    /// 先转 world 事件落库（成功后才更新 Kernel 投影），步骤级一致。
+    pub fn with_world_sink(mut self, sink: std::sync::Arc<dyn WorldEventSink>) -> Self {
+        self.world_sink = Some(sink);
         self
     }
 
@@ -283,6 +302,15 @@ impl<'k> TaskExecutor<'k> {
             if let Some(key) = idempotency_key {
                 self.kernel.record_idempotency(ctx, key, eid);
             }
+            // P6：先事件后投影（契约拍板：Commit(WorldChange + WorldEvent) 步骤级
+            // 一致）。落库失败 → step 失败，Kernel 未变（事务一致，无半提交）。
+            if let Some(sink) = &self.world_sink {
+                for (source, pred, target) in &result.relations {
+                    let ev = crate::storage::world::world_link_event(source, pred, target);
+                    sink.append(&ev)
+                        .map_err(|e| KernelError::Closed(format!("P6 世界事件落库失败: {e}")))?;
+                }
+            }
             for (source, pred, target) in result.relations {
                 self.kernel
                     .relate(Relation::new(ctx, source, pred, target, self.kernel.now()))?;
@@ -308,6 +336,12 @@ impl<'k> TaskExecutor<'k> {
                     .fiber(fiber)
                     .map(|f| f.context)
                     .ok_or(KernelError::FiberNotFound(fiber))?;
+                // P6：先事件后投影（legacy projection 模拟路径同契约）。
+                if let Some(sink) = &self.world_sink {
+                    let ev = crate::storage::world::world_link_event(&source, pred, target);
+                    sink.append(&ev)
+                        .map_err(|e| KernelError::Closed(format!("P6 世界事件落库失败: {e}")))?;
+                }
                 self.kernel
                     .relate(Relation::new(ctx, source, pred, target, self.kernel.now()))?;
             }

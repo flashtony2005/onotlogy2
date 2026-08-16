@@ -257,6 +257,7 @@ async fn seed_and_run(kernel: &Arc<LibSQLStorage>) {
         &mut trace,
         &mut approvals,
         &mut |_| panic!("无审批预期"),
+        None,
     );
     for e in &trace {
         let _ = kernel.append_trace(e).await;

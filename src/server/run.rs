@@ -198,6 +198,14 @@ pub(crate) async fn run_start(
             None
         };
 
+        // P5.5/P6：Effect 提交点世界事件同步落库（spawn_blocking 内 block_on 合法）。
+        let world_sink: Option<std::sync::Arc<dyn crate::compose::task::WorldEventSink>> = Some(
+            std::sync::Arc::new(crate::cognitive::runner::StorageWorldSink::new(
+                st2.storage.clone(),
+                handle.clone(),
+            )),
+        );
+
         let report = match run_agent(
             &mut kernel,
             &mut agent_state,
@@ -210,6 +218,7 @@ pub(crate) async fn run_start(
             &mut trace,
             &mut approvals,
             &mut resolver,
+            world_sink,
         ) {
             Ok(r) => r,
             Err(e) => {

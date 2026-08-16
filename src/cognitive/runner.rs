@@ -12,11 +12,39 @@ use serde_json::json;
 use super::approval::{ApprovalDecision, ApprovalRequest, ApprovalResolution, resolve};
 use super::engine::CognitiveEngine;
 use super::loop_impl::{Agent, AgentLoop, LoopOutcome};
+use crate::compose::task::WorldEventSink;
 use crate::compose::{Service, Task};
 use crate::evolution2::EvolutionEngine;
 use crate::kernel::{Kernel, KernelError};
 use crate::session::run::RunStatus;
 use crate::trace::TraceEvent;
+
+/// P6：同步落库的世界事件 sink（`Handle::block_on` 驱动 storage append）。
+///
+/// 用法约束：`append` 在**阻塞上下文**调用（server=spawn_blocking、
+/// CLI=`tokio::task::block_in_place`）——async 上下文内 block_on 会 panic。
+/// 提交点同步落库 → run_agent 返回前事件已在 Event Log（P6 步骤级一致）。
+pub struct StorageWorldSink {
+    storage: std::sync::Arc<crate::storage::LibSQLStorage>,
+    handle: tokio::runtime::Handle,
+}
+
+impl StorageWorldSink {
+    pub fn new(
+        storage: std::sync::Arc<crate::storage::LibSQLStorage>,
+        handle: tokio::runtime::Handle,
+    ) -> Self {
+        Self { storage, handle }
+    }
+}
+
+impl WorldEventSink for StorageWorldSink {
+    fn append(&self, ev: &TraceEvent) -> Result<(), String> {
+        self.handle
+            .block_on(self.storage.append_trace(ev))
+            .map_err(|e| e.to_string())
+    }
+}
 
 /// 一次 run 的编排结果。
 #[derive(Debug, Clone)]
@@ -30,6 +58,8 @@ pub struct RunReport {
 ///
 /// - `evolution`：可选演化引擎（Gate 放行路径；None = 不采集不 Gate）。
 /// - `resolver`：挂起裁决回调（每请求恰好调用一次；Gate 放行时零调用）。
+/// - `world_sink`：P6 世界事件回写（Effect 提交点同步落库；None = 不回写，
+///   仅无存储/测试场景——生产路径（CLI/server）必须注入）。
 ///
 /// 参数较多是编排入口的固有形状（与 cmd_agent_run 同例）；
 /// M5 拆文件时若参数继续增长再收敛为配置结构体。
@@ -47,6 +77,7 @@ pub fn run_agent<'k>(
     trace: &'k mut Vec<TraceEvent>,
     approvals: &'k mut Vec<ApprovalRequest>,
     resolver: &mut dyn FnMut(&ApprovalRequest) -> ApprovalDecision,
+    world_sink: Option<std::sync::Arc<dyn WorldEventSink>>,
 ) -> Result<RunReport, KernelError> {
     let ctx = agent.context;
     // task id 用 run_id：单次 run 唯一（重复 run 不串扰 fiber 查找）。
@@ -64,6 +95,9 @@ pub fn run_agent<'k>(
             }
             if let Some(ev) = evolution.as_deref_mut() {
                 lp = lp.with_evolution(ev);
+            }
+            if let Some(sink) = &world_sink {
+                lp = lp.with_world_sink(sink.clone());
             }
             match fiber {
                 None => lp.run_until_done(ctx, &task, json!({})),

@@ -535,3 +535,208 @@ async fn tc_pj8_agent_observe_sees_projected_storage_world() {
             .any(|r| r.predicate == "status" && r.target == "active")
     );
 }
+
+// ── P5.5/P6：Effect 提交点世界事件同步回写（Commit(WorldChange + WorldEvent)）──
+// 契约：禁止先改 Kernel 再异步补 Event——事件在 step 提交点先落库，Kernel 投影随后；
+// P7 判定：Effect 提交后事件日志与 Kernel 关系一一对应（投影重放得同状态）。
+use openaip_os::abi::odl::parse_odl;
+use openaip_os::cognitive::approval::{ApprovalDecision, ApprovalRequest};
+use openaip_os::cognitive::runner::{RunReport, StorageWorldSink, run_agent};
+use openaip_os::compose::defs::{ir_to_runtime, ir_to_services};
+use openaip_os::compose::task::WorldEventSink;
+use std::sync::{Arc, Mutex};
+
+/// 内存 sink（同步断言用；StorageWorldSink 的 block_on 语义由其自身测试覆盖）。
+#[derive(Default)]
+struct VecSink(Mutex<Vec<TraceEvent>>);
+
+impl WorldEventSink for VecSink {
+    fn append(&self, ev: &TraceEvent) -> Result<(), String> {
+        self.0.lock().unwrap().push(ev.clone());
+        Ok(())
+    }
+}
+
+const ODL_P6: &str = r#"
+object Customer:
+  properties:
+    name: string
+    level: string
+  actions:
+    retain:
+      creates:
+        - type: RetentionTask
+          data:
+            title: "客户挽留计划"
+            customer: self
+          link: needs_retention
+"#;
+
+#[tokio::test]
+async fn tc_p6a_effect_commit_writes_world_event_before_kernel_projection() {
+    let defs = ir_to_runtime(&parse_odl(ODL_P6).unwrap());
+    let services = ir_to_services(&parse_odl(ODL_P6).unwrap());
+    let sink = Arc::new(VecSink::default());
+
+    let mut k = Kernel::new();
+    let ctx = k.create_context(None, Scope::World, "world").unwrap();
+    let mut agent = Agent::new("retention-agent", ctx);
+    let engine = FakeEngine::new(vec![PlanStep {
+        capability: "Customer.retain".into(),
+        args: json!({ "target": "cust-01" }),
+        when: Some(Box::new(|v: &AgentView| {
+            !v.has_relation("needs_retention", "cust-01_retaincustomer")
+        })),
+    }]);
+    let task =
+        Task::new("retain", "挽留客户").expecting(&[("needs_retention", "cust-01_retaincustomer")]);
+
+    let mut lp = AgentLoop::new(&mut k, &mut agent, &services, &engine)
+        .with_effect_defs(defs)
+        .with_world_sink(sink.clone());
+    let out = lp.run_until_done(ctx, &task, json!({})).unwrap();
+    assert_eq!(out, LoopOutcome::Completed);
+
+    // P6：提交点已同步回写世界事件（run_until_done 返回前事件已产生）
+    let evs = sink.0.lock().unwrap();
+    let linked: Vec<_> = evs
+        .iter()
+        .filter(|e| e.event_type == "RelationLinked")
+        .collect();
+    assert_eq!(linked.len(), 1, "Effect 关系须一一对应事件");
+    let ev = &linked[0];
+    assert_eq!(ev.object_refs, vec!["cust-01", "cust-01_retaincustomer"]);
+    assert_eq!(ev.input.as_ref().unwrap()["edge"], "needs_retention");
+    assert_eq!(ev.run_id, None, "事实不依赖 Run（审计解耦点）");
+    // P7：事件载荷与 Kernel 关系一一对应（投影后状态一致）
+    assert!(
+        k.relations()
+            .any(|r| r.source == "cust-01" && r.predicate == "needs_retention")
+    );
+    // P6 顺序：事件先于 Kernel 投影（Kernel 是投影视图，事件是事实源）
+    let mut k2 = Kernel::new();
+    let ctx2 = k2.create_context(None, Scope::World, "world").unwrap();
+    let mut p2 = Projection::new(ctx2);
+    p2.project_events(&mut k2, &evs).unwrap();
+    assert!(
+        k2.relations()
+            .any(|r| r.source == "cust-01" && r.predicate == "needs_retention"),
+        "事件重放必须重建 Effect 造成的世界状态（P1 含 Runtime 变化）"
+    );
+}
+
+#[tokio::test]
+async fn tc_p6b_legacy_projection_path_writes_world_event() {
+    // 无 effect_defs → capability.projection 模拟路径（compose 旧契约）同样回写
+    let services = [Service::new("crm-service").with_capability(
+        Capability::new("customer.activate", "ActivateCustomer")
+            .with_reversibility(Reversibility::Reversible)
+            .with_projection("status", "active")
+            .requiring(&["target"]),
+    )];
+    let sink = Arc::new(VecSink::default());
+    let mut k = Kernel::new();
+    let ctx = k.create_context(None, Scope::World, "world").unwrap();
+    let mut agent = Agent::new("retention-agent", ctx);
+    let engine = FakeEngine::new(vec![PlanStep {
+        capability: "customer.activate".into(),
+        args: json!({ "target": "u1" }),
+        when: Some(Box::new(|v: &AgentView| {
+            !v.has_relation("status", "active")
+        })),
+    }]);
+    let task = Task::new("activate", "激活").expecting(&[("status", "active")]);
+    let mut lp =
+        AgentLoop::new(&mut k, &mut agent, &services, &engine).with_world_sink(sink.clone());
+    let out = lp.run_until_done(ctx, &task, json!({})).unwrap();
+    assert_eq!(out, LoopOutcome::Completed);
+    let evs = sink.0.lock().unwrap();
+    let linked: Vec<_> = evs
+        .iter()
+        .filter(|e| e.event_type == "RelationLinked")
+        .collect();
+    assert_eq!(linked.len(), 1);
+    assert_eq!(linked[0].object_refs, vec!["u1", "active"]);
+    assert_eq!(linked[0].input.as_ref().unwrap()["edge"], "status");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tc_p6c_world_events_persisted_at_commit_and_reproject() {
+    // 全链路（CLI/server 同构）：storage 世界 → 投影 → run_agent(StorageWorldSink)
+    // → Effect 提交点同步落库 → run 返回后事件已在 Event Log → 重投影得同状态。
+    let storage = Arc::new(LibSQLStorage::open(":memory:").await.unwrap());
+    storage
+        .apply_world(WorldCommand::CreateObject {
+            object_type: "Customer".into(),
+            id: "cust-01".into(),
+            data: json!({ "name": "Apple", "level": "VIP" }),
+        })
+        .await
+        .unwrap();
+
+    let defs = ir_to_runtime(&parse_odl(ODL_P6).unwrap());
+    let services = ir_to_services(&parse_odl(ODL_P6).unwrap());
+
+    let report: RunReport = tokio::task::block_in_place(|| {
+        let handle = tokio::runtime::Handle::current();
+        let sink = Arc::new(StorageWorldSink::new(storage.clone(), handle));
+        let mut k = Kernel::new();
+        let ctx = k.create_context(None, Scope::World, "world").unwrap();
+        let mut p = Projection::new(ctx);
+        tokio::runtime::Handle::current()
+            .block_on(p.project_from_storage(&mut k, &storage))
+            .unwrap();
+        let mut agent = Agent::new("retention-agent", ctx);
+        let engine = FakeEngine::new(vec![PlanStep {
+            capability: "Customer.retain".into(),
+            args: json!({ "target": "cust-01" }),
+            when: Some(Box::new(|v: &AgentView| {
+                !v.has_relation("needs_retention", "cust-01_retaincustomer")
+            })),
+        }]);
+        let mut trace: Vec<TraceEvent> = Vec::new();
+        let mut approvals: Vec<ApprovalRequest> = Vec::new();
+        run_agent(
+            &mut k,
+            &mut agent,
+            &services,
+            &engine,
+            Some(defs.clone()),
+            None,
+            "run_p6",
+            "挽留客户",
+            &mut trace,
+            &mut approvals,
+            &mut |_req: &ApprovalRequest| ApprovalDecision::Approve { by: "test".into() },
+            Some(sink),
+        )
+        .unwrap()
+    });
+    assert_eq!(report.status.as_str(), "Completed");
+
+    // P6 验收：run 返回前事件已落库（同步落库 → 无需 run 终局桥接）
+    let evs = storage
+        .list_events(openaip_os::storage::TraceQuery {
+            event_type: Some("RelationLinked".into()),
+            limit: 100,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(evs.len(), 1, "Effect 提交点必须同步落库（无 run 终局补写）");
+    assert_eq!(
+        evs[0].object_refs,
+        vec!["cust-01", "cust-01_retaincustomer"]
+    );
+
+    // P7：事件日志 → 新 Kernel 重放 → Effect 造成的关系在场（P1 含 Runtime 变化）
+    let mut k2 = Kernel::new();
+    let ctx2 = k2.create_context(None, Scope::World, "world").unwrap();
+    let mut p2 = Projection::new(ctx2);
+    p2.project_from_storage(&mut k2, &storage).await.unwrap();
+    assert!(
+        k2.relations()
+            .any(|r| r.source == "cust-01" && r.predicate == "needs_retention"),
+        "重放须包含 Effect 提交的世界变化（P6 闭环）"
+    );
+}

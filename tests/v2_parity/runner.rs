@@ -90,6 +90,7 @@ fn r1_plain_loop_completes_without_resolver() {
             resolver_calls += 1;
             ApprovalDecision::Approve { by: "x".into() }
         },
+        None,
     )
     .unwrap();
 
@@ -137,6 +138,7 @@ fn r2_approval_via_resolver_completes() {
             seen.push((req.capability.clone(), req.action.clone()));
             ApprovalDecision::Approve { by: "ops".into() }
         },
+        None,
     )
     .unwrap();
 
@@ -186,6 +188,7 @@ fn r3_reject_fails_with_human_flag() {
         &mut trace,
         &mut approvals,
         &mut reject_all(),
+        None,
     )
     .unwrap();
 
@@ -226,6 +229,7 @@ fn r4_unknown_capability_fails() {
         &mut trace,
         &mut approvals,
         &mut approve_all(),
+        None,
     )
     .unwrap();
 
@@ -275,6 +279,7 @@ fn r5_evolution_gate_bypasses_resolver() {
             resolver_calls += 1;
             ApprovalDecision::Approve { by: "x".into() }
         },
+        None,
     )
     .unwrap();
 
@@ -312,6 +317,7 @@ fn r6_expire_decision_fails_with_expired_audit() {
         &mut |_req| ApprovalDecision::Expire {
             by: "timeout".into(),
         },
+        None,
     )
     .unwrap();
 

@@ -136,3 +136,5 @@ P5.6 目标：审计事件**产生时即落库**（Kernel record_event 同步 ap
 | 版本 | 修改人 | 修改日期 | 修改内容 |
 |------|--------|----------|----------|
 | V1.0 | lushaohui | 2026-08-16 | 契约定稿：载荷约定 / 六条规则 / I1-I4 验收 |
+| V1.1 | lushaohui | 2026-08-16 | P5.4 落地：per-run 全量投影接入 CLI/server（tc_pj8 钉观察可见）；修正时间轴单位（事件微秒 → Kernel 秒，normalize_ts 纯除法，P4 确定性） |
+| V1.2 | lushaohui | 2026-08-16 | P5.5/P6 落地：Effect 提交点世界事件同步回写（TaskExecutor.world_sink → StorageWorldSink 同步落库；tc_p6a/b/c 钉「先 Event 后 Kernel 投影」+ P7 一一对应 + run 返回前已落库） |

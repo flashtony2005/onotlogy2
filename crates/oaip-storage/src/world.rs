@@ -6,12 +6,35 @@
 //! （裸写对象在投影世界里不存在，P7 测试已钉）。
 //! 事件载荷按契约第 2 节：ObjectCreated `refs=[id], input={type,data}`；
 //! RelationLinked `refs=[source,target], input={edge}`；run_id=None（事实不依赖 Run）。
+//! P6：`world_link_event` 是 Effect 提交点回写事件的同源构造器（契约载荷唯一实现）。
 
 use libsql::{Transaction, params};
 use serde_json::json;
 
 use super::*;
 use oaip_trace::{TraceEvent, TraceKind};
+
+/// P6：RelationLinked 世界事件（契约第 2 节载荷；Effect 提交点与 LinkRelation
+/// 命令共用——事件与 Kernel 关系一一对应，投影重放后状态一致）。
+pub fn world_link_event(
+    source: impl Into<String>,
+    edge: impl Into<String>,
+    target: impl Into<String>,
+) -> TraceEvent {
+    TraceEvent {
+        id: oaip_trace::new_trace_id(),
+        kind: TraceKind::World,
+        event_type: "RelationLinked".to_string(),
+        object_refs: vec![source.into(), target.into()],
+        run_id: None, // 事实不依赖 Run（审计解耦点）
+        agent_id: None,
+        reasoning: None,
+        input: Some(json!({ "edge": edge.into() })),
+        output: None,
+        confidence: None,
+        timestamp: oaip_trace::now_ts(),
+    }
+}
 
 /// 世界变更命令（P5 的唯一世界写入口）。
 #[derive(Debug, Clone)]
@@ -63,11 +86,7 @@ impl WorldCommand {
                 source,
                 edge,
                 target,
-            } => (
-                "RelationLinked",
-                vec![source.clone(), target.clone()],
-                Some(json!({ "edge": edge })),
-            ),
+            } => return world_link_event(source, edge, target),
             WorldCommand::UnlinkRelation {
                 source,
                 edge,

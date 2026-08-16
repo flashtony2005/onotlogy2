@@ -83,6 +83,8 @@ pub struct AgentLoop<'k> {
     approvals: Option<&'k mut Vec<super::approval::ApprovalRequest>>,
     /// Trace/审批事件的 run_id 绑定（with_trace / with_approvals 时指定）。
     run_id: Option<String>,
+    /// P6：世界事件回写 sink（TaskExecutor 提交点同步落库；None = 不回写）。
+    world_sink: Option<std::sync::Arc<dyn crate::compose::task::WorldEventSink>>,
     /// 已提交动作数（MemoryUpdate 的 actions 统计）。
     action_count: usize,
 }
@@ -105,8 +107,18 @@ impl<'k> AgentLoop<'k> {
             trace: None,
             approvals: None,
             run_id: None,
+            world_sink: None,
             action_count: 0,
         }
+    }
+
+    /// P6：注入世界事件回写 sink（Effect 提交点同步落库；None = 不回写）。
+    pub fn with_world_sink(
+        mut self,
+        sink: std::sync::Arc<dyn crate::compose::task::WorldEventSink>,
+    ) -> Self {
+        self.world_sink = Some(sink);
+        self
     }
 
     /// 注入世界效应声明（RelationEffectExecutor 生效：Effect 真实改变 World）。
@@ -212,10 +224,14 @@ impl<'k> AgentLoop<'k> {
 
     fn task_executor(&mut self) -> TaskExecutor<'_> {
         let tx = TaskExecutor::new(self.kernel);
-        match &self.effect_defs {
+        let tx = match &self.effect_defs {
             Some(defs) => tx
                 .with_effect_defs(defs.clone())
                 .with_relation_compensation(),
+            None => tx,
+        };
+        match &self.world_sink {
+            Some(sink) => tx.with_world_sink(sink.clone()),
             None => tx,
         }
     }

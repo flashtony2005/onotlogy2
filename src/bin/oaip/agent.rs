@@ -200,19 +200,32 @@ pub async fn cmd_agent_run(
         ));
     }
 
-    let report = run_agent(
-        &mut kernel,
-        &mut agent,
-        &services,
-        &engine,
-        Some(openaip_os::compose::defs::ir_to_runtime(&ir)),
-        evolution.as_mut().map(|(ev, _)| ev),
-        &run_id,
-        goal,
-        &mut trace,
-        &mut approvals,
-        &mut resolver,
-    )?;
+    // ── P5.5/P6：Effect 提交点世界事件同步落库（步骤级一致）──
+    // block_in_place：同步闭环内 sink 用 Handle::block_on 驱动 storage append
+    //（multi_thread runtime 下合法；pi 子进程/stdin 已在此同步路径内）。
+    let world_sink: Option<std::sync::Arc<dyn openaip_os::compose::task::WorldEventSink>> = Some(
+        std::sync::Arc::new(openaip_os::cognitive::runner::StorageWorldSink::new(
+            std::sync::Arc::new(storage.clone()),
+            tokio::runtime::Handle::current(),
+        )),
+    );
+
+    let report = tokio::task::block_in_place(|| {
+        run_agent(
+            &mut kernel,
+            &mut agent,
+            &services,
+            &engine,
+            Some(openaip_os::compose::defs::ir_to_runtime(&ir)),
+            evolution.as_mut().map(|(ev, _)| ev),
+            &run_id,
+            goal,
+            &mut trace,
+            &mut approvals,
+            &mut resolver,
+            world_sink,
+        )
+    })?;
 
     // 观察层落库：V2 事件流 → wb_trace_event（UI 时间线 / WS 同源）
     for e in &trace {

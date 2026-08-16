@@ -24,4 +24,4 @@ pub use engine::{
 pub use loop_impl::{Agent, AgentLoop, LoopOutcome};
 pub use memory::{Memory, MemoryItem};
 pub use pi::PiEngine;
-pub use runner::{RunReport, run_agent};
+pub use runner::{RunReport, StorageWorldSink, run_agent};
