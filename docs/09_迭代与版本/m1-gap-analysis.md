@@ -57,14 +57,17 @@
 - 契约测试：`tests/v2_parity/approval.rs` 4 例全绿（注册+批准恢复 / 拒绝防重 / 超时区分 /
   缓存单次询问）。基线 360 → 364。
 
-### G3 Pi 真实引擎迁移
+### G3 Pi 真实引擎迁移 ✅ 已落地（commit d56057f）
 
 - V1：`AgentEngine` trait + `PiAgentEngine`（agent.rs 子进程管理 + 超时 kill+wait）。
-- V2：`CognitiveEngine` trait 只有 `FakeEngine` / `NoOpEngine`，Pi 适配口未实现。
-- 补齐：`PiAgentEngine` 子进程封装迁移为 `cognitive/pi.rs::PiEngine: CognitiveEngine`
-  （decide = 复用 V1 intent 分类 + 能力选择 + 决策生成的 prompt 编排）；
-  `AgentEngine` trait 与 `WorldSnapshot` 随 planner 删除。
-- 测试：`tests/v2_parity/pi_engine.rs`——进程健康检查、超时回收、decide 形状（复用 v0_3 的 Fake 断言模式，真实 Pi 用例保持 ignore）。
+- 已落地：`cognitive/pi.rs::PiEngine: CognitiveEngine`——`decide` 是同步 trait，
+  故用 `std::process` 阻塞调用 + `try_wait` 轮询超时 kill+wait 回收（零 trait 改动，
+  server 侧可整体包 spawn_blocking）；capability=null → None（D5 路径）、
+  视图外能力 → UnknownCapability（fail-safe）、缺失/崩溃/超时 → Engine（WB2004 同源）。
+  `which_pi`/`strip_code_fence` 迁至 pi.rs（V1 agent.rs 复用同一实现，M1d 删 agent.rs）；
+  `which_pi` 补存在性检查（PI_BIN 悬空路径不得误报 healthy）。
+- 契约测试：`tests/v2_parity/pi_engine.rs` 6 例全绿（结构化决策 / none / 未知能力拒绝 /
+  不可用 / 超时杀进程 / health 探测）+ 4 个假 pi fixtures。基线 370 → 379。
 
 ### G4 审批审计落库（REQ-018 可审计承诺，已部分覆盖）
 
@@ -97,12 +100,15 @@
   与 planner 解耦——M1c 入口接线直接用；v0_8 重启恢复测试继续有效。
 - 契约测试：`tests/v2_parity/run_status.rs` 3 例全绿（映射表 / outcome 映射 / id+字符串往返）。
 
-### G7 health 数据源
+### G7 health 数据源 ✅ 计划修订并落地（commit d56057f）
 
 - 现状：`LoopHealth` 的 `total_runs` 来自 `wb_run` 表（runs.len()）。
-- 影响：M1d 删 `wb_run` 后 closure_rate 分母缺失。
-- 补齐：total_runs 改从 Session Log / Evaluation 表派生（I1 State=Reduce(EventLog) 原则）。
-- 测试：`tests/v2_parity/health_source.rs`——删表后 LoopHealth 六指标仍可计算且与基线一致。
+- **计划修订**（基于代码证据的最简方案）：`storage/runs.rs` 已是 String 状态、与 planner
+  零耦合——wb_run **不删除**，重定位为 V2 run store；M1c 起由 V2 入口写入
+  （insert_run / update_run_status 用 `session::run::RunStatus` 字符串）。
+  原「改从 SessionLog/Evaluation 派生」方案废除（增加派生复杂度且 CLI 路径无评估覆盖）。
+- 契约测试：`tests/v2_parity/health_source.rs` 2 例全绿——六指标从 V2 写入数据派生
+  （total_runs=3、closure=1/3、action_success=1、world_change=1/3）+ 空库零分母保护。
 
 ### G8 `--via-workers` 桥的 Thinker
 
@@ -147,7 +153,7 @@
 
 | 表 | 用途 | 处置 |
 |----|------|------|
-| `wb_run` | run 状态（G6 换新落库） | 删除，G6 新表替代 |
+| `wb_run` | run 状态（**计划修订 G7**：重定位为 V2 run store） | **保留**，M1c 起由 V2 入口写入（storage/runs.rs 已与 planner 解耦） |
 | `wb_memory` | V1 记忆（C4 → CognitiveStore） | 删除 |
 | `wb_approval` | V1 审批挂起（G2 → Waiting 注册表） | 删除 |
 | `wb_pattern` / `wb_proposal` / `wb_learned` | V1 Evolution（M2 归一后删） | **M2 处理，M1 不动** |
