@@ -15,7 +15,7 @@ clippy:
 	$(CARGO) clippy --all-targets -- -D warnings
 
 test:
-	$(CARGO) test --all-targets
+	$(CARGO) test --workspace --all-targets
 
 ui:
 	cd ui && npm ci && npm run build

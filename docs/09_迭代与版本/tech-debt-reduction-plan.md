@@ -85,11 +85,15 @@
 - 测试先行：每个移动前跑既有契约测试作 characterization，移动后全绿。
 - 出口：src/ 内不再有同名异义文件。
 
-### M4 · workspace crates 拆分（#7）🔄 进行中
-- ✅ 第一步（27e402f）：`oaip-kernel` 独立 crate——L0 四 Primitive 零上层依赖
-  （EventRef 下沉消除 kernel→evaluation 边）；`pub use oaip_kernel as kernel` 路径兼容。
-- ✅ 第二步（5537d6b）：`oaip-abi` 独立 crate（odl/ir/codegen，语言前端）。
-- ⬜ 剩余：oaip-storage / compose / cognitive / worker / server / cli（root 暂为门面）。
+### M4 · workspace crates 拆分（#7）✅ 完成
+- 8 crates：oaip-abi（语言前端）→ oaip-kernel（L0 四 Primitive，零上层依赖）→
+  oaip-session → oaip-trace → {oaip-eval-core / oaip-mutation-core / oaip-worker-core}
+  （三个类型环全部解开）→ oaip-storage（持久化层）。
+- 根 crate 为门面（compose/cognitive/worker/server/auth/cli 应用层），
+  `pub use oaip_xxx as xxx` 路径全兼容、测试零改动。
+- **分层从口头约定变为编译期强制**：`cargo build -p oaip-kernel` 不依赖任何上层。
+- Makefile/CI 改 `cargo test --workspace --all-targets`（8 crate 单元测试全部入闸）。
+- 315 passed / 0 failed / 3 ignored。
 
 ### M5 · 巨文件拆分（#5）✅ 主体完成
 - oaip.rs 1200 行 → main 295 + 6 命令模块（f198cc7）；mutation 1041 → types/benchmark/validate

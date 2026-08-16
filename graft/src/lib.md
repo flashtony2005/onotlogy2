@@ -6,16 +6,17 @@ Crate root that declares and re-exports all OpenAIP-OS kernel modules (IR, ODL, 
 - cognitive · module · L17-L17 — pub mod cognitive;
 - compose · module · L18-L18 — pub mod compose;
 - diagnosis · module · L19-L19 — pub mod diagnosis;
-- evaluation · module · L20-L20 — pub mod evaluation;
-- evolution2 · module · L21-L21 — pub mod evolution2;
-- health · module · L22-L22 — pub mod health;
-- mutation · module · L27-L27 — pub mod mutation;
-- plugin · module · L28-L28 — pub mod plugin;
-- rule · module · L29-L29 — pub mod rule;
-- server · module · L30-L30 — Declares the server module hosting axum REST, WebSocket streaming, and three-layer observation UI.
-- simulation · module · L31-L31 — pub mod simulation;
-- skill · module · L32-L32 — pub mod skill;
-- storage · module · L33-L33 — Declares the storage module with ObjectEngine/RelationEngine abstractions and LibSQLStorage (Turso) backend.
-- worker · module · L34-L34 — pub mod worker;
-- world · module · L35-L35 — pub mod world;
-- world_exec · module · L36-L36 — pub mod world_exec;
+- evaluation · module · L20-L23 — pub mod evaluation
+- hook · module · L22-L22 — pub mod hook;
+- evolution2 · module · L24-L24 — pub mod evolution2;
+- health · module · L25-L25 — pub mod health;
+- mutation · module · L34-L38 — pub mod mutation
+- benchmark · module · L36-L36 — pub mod benchmark;
+- plugin · module · L39-L39 — pub mod plugin;
+- rule · module · L40-L40 — pub mod rule;
+- server · module · L41-L41 — Declares the server module hosting axum REST, WebSocket streaming, and three-layer observation UI.
+- simulation · module · L42-L42 — pub mod simulation;
+- skill · module · L43-L43 — pub mod skill;
+- worker · module · L44-L44 — pub mod worker;
+- world · module · L45-L45 — pub mod world;
+- world_exec · module · L46-L46 — pub mod world_exec;

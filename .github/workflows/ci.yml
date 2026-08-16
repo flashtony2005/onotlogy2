@@ -34,7 +34,7 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: test
-        run: cargo test --all-targets
+        run: cargo test --workspace --all-targets
 
       - name: coverage (baseline >= 75%)
         run: |
