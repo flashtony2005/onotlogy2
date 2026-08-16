@@ -57,13 +57,15 @@
   `AgentEngine` trait 与 `WorldSnapshot` 随 planner 删除。
 - 测试：`tests/v2_parity/pi_engine.rs`——进程健康检查、超时回收、decide 形状（复用 v0_3 的 Fake 断言模式，真实 Pi 用例保持 ignore）。
 
-### G4 审批审计落库（REQ-018 可审计承诺）
+### G4 审批审计落库（REQ-018 可审计承诺，已部分覆盖）
 
 - V1：`wb_approval_audit` 表 + `GET /evolution/audit` + AutoApprove 可撤销 API。
-- V2：`step_with_gate` 放行不写任何审计。
-- 补齐：gate 放行与 relate 审批两个路径都落审计事件（表结构归 M2 统一：建议并入
-  Session Log 事实轨而非独立表——待 M2 定案，此处先保证「有审计」）。
-- 测试：`tests/v2_parity/approval_audit.rs`——每次 gate 放行/人工审批均有可回放审计记录。
+- V2 已覆盖（经 tc_e6/tc_e7 验证）：gate 放行 emit `evolution.gate_approved` 审计事件
+  （进 Kernel 事实轨）；撤销 = `EvolutionPermissionState::Revoked` 吸收态（revoke 后不复活）。
+- 剩余缺口：① 人工审批路径（relate Approval → 放行）的审计事件种类确认/补齐；
+  ② 审计查询入口（现有 `GET /evolution/audit` 读 V1 表，需改读事实轨）。
+- 测试：`tests/v2_parity/approval_audit.rs`——gate 放行与人工审批均有可回放审计事实；
+  撤销吸收态在审计里可查。
 
 ### G5 「无失败」数据源切换
 
