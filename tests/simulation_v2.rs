@@ -201,3 +201,44 @@ async fn projection_uses_event_sourced_state() {
     assert_eq!(snap2.relations.len(), 2, "I2：假设投影永不写入事件源");
     let _ = std::fs::remove_file(&path);
 }
+
+// ── S4：Simulation 状态来源（真实世界关系集）────────────────────────
+#[tokio::test]
+async fn simulate_state_comes_from_real_relations() {
+    use openaip_os::storage::RelationEngine;
+
+    let storage = LibSQLStorage::open(":memory:").await.unwrap();
+    storage
+        .link("order_1", "owns", "customer_1", None)
+        .await
+        .unwrap();
+    let rels = storage.list_relations().await.unwrap();
+    assert_eq!(rels.len(), 1);
+    assert_eq!(
+        (
+            rels[0].source.as_str(),
+            rels[0].relation.as_str(),
+            rels[0].target.as_str()
+        ),
+        ("order_1", "owns", "customer_1")
+    );
+
+    // 状态 → S2 投影（Decision Support 基于当前世界）
+    let state: Vec<(String, String, String)> = rels
+        .iter()
+        .map(|r| (r.source.clone(), r.relation.clone(), r.target.clone()))
+        .collect();
+    let mut deploy = openaip_os::simulation::projection::HypotheticalAction::new(
+        "DeployProduction",
+        Some("version"),
+        Some("V2"),
+        openaip_os::kernel::effect::Reversibility::Irreversible,
+    );
+    deploy.capability = Some("deploy.production".into());
+    let proj = openaip_os::simulation::projection::project(&state, &deploy);
+    assert_eq!(
+        proj.predicted_state["relations"].as_array().unwrap().len(),
+        2,
+        "1 真实 + 1 假设"
+    );
+}

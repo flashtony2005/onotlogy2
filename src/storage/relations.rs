@@ -95,3 +95,28 @@ impl RelationEngine for LibSQLStorage {
         Ok(())
     }
 }
+
+// V2 Simulation（S2/S3）：当前世界状态（Relation 集）作为假设投影的输入。
+impl LibSQLStorage {
+    /// 全部有效关系（is_delete=0；Simulation 的状态输入）。
+    pub async fn list_relations(&self) -> Result<Vec<RelationRecord>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, source, relation, target FROM wb_relation_edge WHERE is_delete=0 ORDER BY id ASC",
+                params![],
+            )
+            .await?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            out.push(RelationRecord {
+                id: row.get(0)?,
+                source: row.get(1)?,
+                relation: row.get(2)?,
+                target: row.get(3)?,
+                data: None,
+            });
+        }
+        Ok(out)
+    }
+}
