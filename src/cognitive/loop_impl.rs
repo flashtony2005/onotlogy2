@@ -13,6 +13,7 @@ use crate::compose::Service;
 use crate::compose::task::{StepOutcome, Task, TaskExecutor};
 use crate::kernel::fiber::{FiberId, FiberState};
 use crate::kernel::{ContextId, Kernel, KernelError};
+use crate::runtime::{TraceEvent, TraceKind};
 
 /// 一轮循环的产出。
 #[derive(Debug, Clone, PartialEq)]
@@ -59,6 +60,13 @@ pub struct AgentLoop<'k> {
     evolution: Option<&'k mut crate::evolution2::EvolutionEngine>,
     /// Phase 7：规则级经验分账（rule 粒度；与 action 级并存——双尺度）。
     rule_stats: Option<&'k mut crate::rule::RuleStatsStore>,
+    /// M1b G1：认知 Trace 事件缓冲（观察层；调用方持有并负责落库——
+    /// 与 V1 run_goal 的 wb_trace_event 同源，UI buildTimeline/deriveState 依赖）。
+    trace: Option<&'k mut Vec<TraceEvent>>,
+    /// Trace 事件的 run_id 绑定（with_trace 时指定）。
+    run_id: Option<String>,
+    /// 已提交动作数（MemoryUpdate 的 actions 统计）。
+    action_count: usize,
 }
 
 impl<'k> AgentLoop<'k> {
@@ -76,6 +84,9 @@ impl<'k> AgentLoop<'k> {
             effect_defs: None,
             evolution: None,
             rule_stats: None,
+            trace: None,
+            run_id: None,
+            action_count: 0,
         }
     }
 
@@ -95,6 +106,77 @@ impl<'k> AgentLoop<'k> {
     pub fn with_rule_stats(mut self, stats: &'k mut crate::rule::RuleStatsStore) -> Self {
         self.rule_stats = Some(stats);
         self
+    }
+
+    /// 开启认知 Trace 事件流（G1）：事件写入调用方持有的 sink，
+    /// resume 续跑时传入同一 sink 即可保持单次 run 的事件连续性。
+    pub fn with_trace(mut self, run_id: impl Into<String>, sink: &'k mut Vec<TraceEvent>) -> Self {
+        self.trace = Some(sink);
+        self.run_id = Some(run_id.into());
+        self
+    }
+
+    /// 推一条认知事件（观察层；空世界 object_refs 兜底 "world"，与 V1 同源）。
+    fn emit_trace(
+        &mut self,
+        event_type: &str,
+        refs: &[String],
+        reasoning: Option<&str>,
+        input: Option<Value>,
+        output: Option<Value>,
+        confidence: Option<f64>,
+    ) {
+        let Some(sink) = self.trace.as_deref_mut() else {
+            return;
+        };
+        sink.push(TraceEvent {
+            id: crate::runtime::new_trace_id(),
+            kind: TraceKind::Cognitive,
+            event_type: event_type.to_string(),
+            object_refs: if refs.is_empty() {
+                vec!["world".to_string()]
+            } else {
+                refs.to_vec()
+            },
+            run_id: self.run_id.clone(),
+            agent_id: Some(self.agent.id.clone()),
+            reasoning: reasoning.map(|s| s.to_string()),
+            input,
+            output,
+            confidence,
+            timestamp: crate::runtime::now_ts(),
+        });
+    }
+
+    /// 单次事件（扫描 sink 去重：resume 续跑不重复 Goal/OntologyQuery/MemoryUpdate）。
+    fn emit_trace_once(
+        &mut self,
+        event_type: &str,
+        refs: &[String],
+        reasoning: Option<&str>,
+        input: Option<Value>,
+        output: Option<Value>,
+        confidence: Option<f64>,
+    ) {
+        let already = self
+            .trace
+            .as_deref()
+            .is_some_and(|sink| sink.iter().any(|e| e.event_type == event_type));
+        if !already {
+            self.emit_trace(event_type, refs, reasoning, input, output, confidence);
+        }
+    }
+
+    /// 视图绑定对象（观察到的关系端点去重；可解释性根基）。
+    fn refs_of(view: &AgentView) -> Vec<String> {
+        let mut refs: Vec<String> = view
+            .related
+            .iter()
+            .flat_map(|(s, _p, t)| [s.clone(), t.clone()])
+            .collect();
+        refs.sort();
+        refs.dedup();
+        refs
     }
 
     fn task_executor(&mut self) -> TaskExecutor<'_> {
@@ -127,6 +209,25 @@ impl<'k> AgentLoop<'k> {
             &caps,
             self.evolution.as_deref(),
         );
+        let refs = Self::refs_of(&view);
+
+        // G1：首轮认知事件（Goal / OntologyQuery；resume 不重复）
+        self.emit_trace_once(
+            "Goal",
+            &refs,
+            Some(&format!("目标解析: {}", task.goal)),
+            Some(json!({ "goal": task.goal })),
+            None,
+            None,
+        );
+        self.emit_trace_once(
+            "OntologyQuery",
+            &refs,
+            Some("查询世界模型中的相关对象"),
+            Some(json!({ "goal": task.goal })),
+            Some(json!({ "objects": refs })),
+            Some(0.9),
+        );
 
         // 2) 决策（认知引擎）
         let decision = match self.engine.decide(&view) {
@@ -135,6 +236,19 @@ impl<'k> AgentLoop<'k> {
                 // 无更多动作 → D5 完成判定
                 let done = self.task_executor().check_complete(fiber, task)?;
                 return Ok(if done {
+                    self.emit_trace_once(
+                        "MemoryUpdate",
+                        &refs,
+                        Some(&format!(
+                            "记录本轮经验模式（执行 {} 个动作）",
+                            self.action_count
+                        )),
+                        Some(
+                            json!({ "pattern": "action-execution", "actions": self.action_count }),
+                        ),
+                        Some(json!({ "experience": "ExecutedActions" })),
+                        Some(0.8),
+                    );
                     LoopOutcome::Completed
                 } else {
                     // 目标未达成且无决策 → 失败（无 Effect，不补偿）
@@ -145,13 +259,55 @@ impl<'k> AgentLoop<'k> {
             Err(e) => {
                 // 认知引擎错误 → 失败
                 self.kernel.advance(fiber, FiberState::Failed)?;
+                self.emit_trace(
+                    "ActionFailed",
+                    &refs,
+                    Some("认知引擎决策失败"),
+                    None,
+                    Some(json!({ "error": e.to_string() })),
+                    Some(0.0),
+                );
                 return Ok(LoopOutcome::Failed(e.to_string()));
             }
         };
 
+        // G1：决策事件（Reasoning / Intent / Planning）
+        self.emit_trace(
+            "Reasoning",
+            &refs,
+            Some(&format!("基于观察决策执行能力 {}", decision.capability)),
+            Some(json!({ "goal": task.goal, "candidates": refs })),
+            Some(json!({ "capability": decision.capability })),
+            Some(decision.confidence),
+        );
+        self.emit_trace(
+            "Intent",
+            &refs,
+            None,
+            None,
+            Some(json!({ "intent": decision.capability })),
+            Some(decision.confidence),
+        );
+        self.emit_trace(
+            "Planning",
+            &refs,
+            Some(&format!("计划执行能力 {}", decision.capability)),
+            None,
+            Some(json!({ "capability": decision.capability, "args": decision.args })),
+            Some(decision.confidence),
+        );
+
         // 3) 执行（能力查找 → TaskExecutor step：Policy→审批→Effect→投影）
         let Some(cap) = self.find_capability(&decision.capability) else {
             self.kernel.advance(fiber, FiberState::Failed)?;
+            self.emit_trace(
+                "ActionFailed",
+                &refs,
+                Some("未知能力"),
+                Some(json!({ "capability": decision.capability })),
+                Some(json!({ "error": format!("未知能力: {}", decision.capability) })),
+                Some(0.0),
+            );
             // 埋点（D1：outcome 分账；按能力名归因）
             if let Some(ev) = &mut self.evolution {
                 ev.record(&decision.capability, crate::evolution2::OutcomeKind::Failed);
@@ -172,6 +328,24 @@ impl<'k> AgentLoop<'k> {
             .step_with_gate(fiber, cap, decision.args, gate_pass)?;
         match outcome {
             StepOutcome::Committed => {
+                self.action_count += 1;
+                // G1：策略判定 + 执行事件
+                self.emit_trace(
+                    "PolicyCheck",
+                    &refs,
+                    Some("ALLOW"),
+                    Some(json!({ "capability": cap.name })),
+                    Some(json!("Allow")),
+                    Some(0.95),
+                );
+                self.emit_trace(
+                    "Action",
+                    &refs,
+                    Some(&cap.name),
+                    Some(json!({ "capability": cap.name })),
+                    Some(json!("Success")),
+                    Some(0.9),
+                );
                 // 沉淀记忆（D3：Effect 成功后认知状态更新）
                 self.agent
                     .memory
@@ -185,8 +359,36 @@ impl<'k> AgentLoop<'k> {
                 }
                 Ok(LoopOutcome::Continue)
             }
-            StepOutcome::Waiting => Ok(LoopOutcome::Waiting),
+            StepOutcome::Waiting => {
+                // G1：审批挂起事件（UI humanApproval=Required 判定源）
+                self.emit_trace(
+                    "PolicyCheck",
+                    &refs,
+                    Some("REQUIRE_APPROVAL"),
+                    Some(json!({ "capability": cap.name })),
+                    Some(json!("RequireApproval")),
+                    Some(0.5),
+                );
+                self.emit_trace(
+                    "PendingApproval",
+                    &refs,
+                    Some("等待人工审批"),
+                    Some(json!({ "capability": cap.name })),
+                    Some(json!({ "pending": true })),
+                    Some(0.5),
+                );
+                Ok(LoopOutcome::Waiting)
+            }
             StepOutcome::Denied(reason) => {
+                // G1：拒绝事件（deriveState → Failed 判定源；与 V1 同源零置信）
+                self.emit_trace(
+                    "PolicyCheck",
+                    &refs,
+                    Some(&format!("DENY: {reason}")),
+                    Some(json!({ "capability": cap.name })),
+                    Some(json!("Deny")),
+                    Some(0.0),
+                );
                 // 已 FAILED（空补偿链）→ 明确走补偿收尾
                 let compensated = self.task_executor().compensate(fiber).is_ok()
                     && self

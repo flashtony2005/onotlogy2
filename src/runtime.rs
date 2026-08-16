@@ -60,14 +60,16 @@ pub struct TraceEvent {
 
 static TRACE_SEQ: AtomicU64 = AtomicU64::new(0);
 
-fn now_ts() -> String {
+/// 当前微秒时间戳（Trace 事件时间轴；G1：认知层复用同一时间源）。
+pub fn now_ts() -> String {
     let d = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
     format!("{}", d.as_micros())
 }
 
-fn new_trace_id() -> String {
+/// 新 Trace 事件 ID（全局单调；G1：认知层复用同一 ID 源）。
+pub fn new_trace_id() -> String {
     format!(
         "tr_{}_{}",
         now_ts(),
