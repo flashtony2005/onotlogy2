@@ -138,10 +138,16 @@ pub async fn cmd_agent_run(
 
     // ── V2 认知闭环：Kernel + Agent + AgentLoop（M1c 切换，planner 不再参与）──
     let mut kernel = Kernel::new();
-    let mut agent = Agent::new(
-        agent_id,
-        kernel.create_context(None, Scope::World, "world")?,
-    );
+    let ctx = kernel.create_context(None, Scope::World, "world")?;
+    let mut agent = Agent::new(agent_id, ctx);
+
+    // ── P5.4：per-run 世界投影——Storage 事件日志 → Kernel（Agent 首次观察即见 Storage 世界）──
+    // 投影与 Agent 共享同一世界 Context；契约 P5：事件是世界唯一入口（无裸写）。
+    let mut projection = openaip_os::Projection::new(ctx);
+    let projected = projection
+        .project_from_storage(&mut kernel, &storage)
+        .await?;
+    println!("🌍 P5.4 世界投影：{} 事件 → Kernel（观察就绪）", projected);
     let mut trace: Vec<openaip_os::trace::TraceEvent> = Vec::new();
     let mut approvals: Vec<ApprovalRequest> = Vec::new();
 

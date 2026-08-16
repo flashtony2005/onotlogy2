@@ -80,7 +80,8 @@ oaip-abi（语言前端：odl/ir/codegen）
 
 ## 7. 已知边界（诚实声明）
 
-- storage 世界对象尚未投影进 Kernel 关系（Phase 5 语义投影范畴）：CLI/server 的
-  V2 闭环以 Kernel 内关系为世界；演示数据（wb_ontology_object）与 Kernel 世界
-  之间的桥是下一个里程碑。
+- ~~storage 世界对象尚未投影进 Kernel 关系~~（P5.4 已落地）：CLI/server 的 V2 闭环
+  在 run 起点经 `Projection::project_from_storage` 全量重建 Kernel 世界——Agent 首次
+  观察即见 Storage 世界；per-run 全量策略，跨 run 常驻 Kernel + 增量水位属后续里程碑
+  （P3，契约 docs/03_架构设计/projection-v1.md）。
 - 审计查询（/audit）基于 wb_trace_event 的 run 级桥接，非全局 Kernel 事件持久化。

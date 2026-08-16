@@ -121,6 +121,32 @@ pub(crate) async fn run_start(
         let mut trace: Vec<crate::trace::TraceEvent> = Vec::new();
         let mut approvals: Vec<ApprovalRequest> = Vec::new();
 
+        // P5.4：per-run 世界投影——Storage 事件日志 → Kernel（Agent 首次观察即见 Storage 世界）。
+        // 投影失败 = run 失败（观察缺失 Storage 世界时不允许继续决策）。
+        let ctx = agent_state.context;
+        let mut projection = crate::Projection::new(ctx);
+        let projected = handle.block_on(projection.project_from_storage(&mut kernel, &st2.storage));
+        match projected {
+            Ok(n) => eprintln!("run {rid}: P5.4 世界投影完成（{n} 事件）"),
+            Err(e) => {
+                handle.block_on(async {
+                    let _ = st2
+                        .storage
+                        .update_run_status(&rid, "Failed", Some(&crate::trace::now_ts()))
+                        .await;
+                });
+                lock_mutex(&st2.runs).insert(
+                    rid.clone(),
+                    RunRecord {
+                        status: RunStatus::Failed,
+                        human_approval: false,
+                    },
+                );
+                eprintln!("run {rid}: 世界投影失败: {e}");
+                return;
+            }
+        }
+
         // 审批 resolver：注册到 pending（HTTP 端点可见）→ 阻塞等待裁决。
         // 超时看门狗：TTL 到期仍挂起 → 经通道发 Expire（audit 与 Reject 区分）。
         let pending2 = Arc::clone(&pending);

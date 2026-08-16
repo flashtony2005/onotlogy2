@@ -5,7 +5,8 @@
 //! 核心命题：
 //! - **Projection 是 Event Log 的纯函数**（P1）：同一事件流 → 同一 Kernel 关系元组集。
 //! - **幂等**（P2）：同 id 事件只应用一次（applied 水位）；重放/重复调用状态不变。
-//! - **确定性**（P4）：expire 时刻 = 事件时间戳，不用墙钟。
+//! - **确定性**（P4）：expire 时刻 = 事件时间戳，不用墙钟；事件微秒轴经
+//!   `normalize_ts` 纯除法归一化到 Kernel 秒轴（同一事件永远映射同一秒）。
 //! - **Kernel 不接受不可追溯的 World Mutation**（P7）：投影世界只由事件重建；
 //!   裸写（storage.create 不带事件）的对象在投影世界里不存在。
 //!
@@ -94,7 +95,7 @@ impl Projection {
         if self.applied.contains(&ev.id) {
             return Ok(());
         }
-        let ts = ev.timestamp.parse::<i64>().unwrap_or(0);
+        let ts = normalize_ts(ev);
         match ev.event_type.as_str() {
             "ObjectCreated" => self.apply_created(kernel, ev, ts)?,
             "ObjectUpdated" => self.apply_updated(kernel, ev, ts)?,
@@ -296,4 +297,15 @@ fn stringify(v: &serde_json::Value) -> String {
         serde_json::Value::Null => "null".to_string(),
         other => other.to_string(),
     }
+}
+
+/// 事件时刻 → Kernel 时钟轴（P4 确定性）。
+///
+/// Trace 时间轴是微秒（oaip-trace::now_ts，G1），Kernel 时钟是秒（now_secs）。
+/// 投影把事件时刻 floor 归一化到 Kernel 秒轴：纯除法、无墙钟参与——同一事件
+/// 永远映射同一秒（重放确定性）；`valid_from` 永不落入未来（observe 的
+/// `is_current(now)` 恒成立）。已知限制：同秒内事件序坍缩（项目粒度可接受，
+/// 语义重建由事件序保证——watermark/常驻 Kernel 里程碑再收紧）。
+fn normalize_ts(ev: &TraceEvent) -> i64 {
+    ev.timestamp.parse::<i64>().unwrap_or(0) / 1_000_000
 }

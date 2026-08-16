@@ -474,3 +474,64 @@ async fn tc_p5d_commanded_world_projects_to_kernel() {
             .any(|r| r.source == "u1" && r.predicate == "placed" && r.target == "o1")
     );
 }
+
+// ── P5.4：per-run 投影接入——Agent 第一次观察即见 Storage 世界 ─────────────
+// 契约：新建 Kernel → project_from_storage → AgentLoop；Observe 的 related
+// 来自 kernel fact 层（observe.rs），故投影关系必须进入 AgentView（when 可断言）。
+use openaip_os::cognitive::engine::{AgentView, FakeEngine, PlanStep};
+use openaip_os::cognitive::{Agent, AgentLoop, LoopOutcome};
+use openaip_os::compose::{Capability, Service, Task};
+use openaip_os::kernel::effect::Reversibility;
+
+#[tokio::test]
+async fn tc_pj8_agent_observe_sees_projected_storage_world() {
+    // Storage 世界：u1 是 VIP（写入路径 = WorldCommand → 事件，无裸写）
+    let storage = LibSQLStorage::open(":memory:").await.unwrap();
+    storage
+        .apply_world(WorldCommand::CreateObject {
+            object_type: "User".into(),
+            id: "u1".into(),
+            data: json!({ "name": "Apple", "level": "VIP" }),
+        })
+        .await
+        .unwrap();
+
+    // per-run 顺序与 CLI/server 一致：Kernel → 投影 → Agent（共享世界 Context）
+    let mut k = Kernel::new();
+    let ctx = k.create_context(None, Scope::World, "world").unwrap();
+    let mut p = Projection::new(ctx);
+    let n = p.project_from_storage(&mut k, &storage).await.unwrap();
+    assert!(n >= 1, "P5.4：投影必须应用 storage 事件");
+    let mut agent = Agent::new("retention-agent", ctx);
+
+    // 决策依赖投影关系：仅当观察见 (u1, level, VIP) 才执行激活；否则永不行动
+    let services = [Service::new("crm-service").with_capability(
+        Capability::new("customer.activate", "ActivateCustomer")
+            .with_reversibility(Reversibility::Reversible)
+            .with_projection("status", "active")
+            .requiring(&["target"]),
+    )];
+    let engine = FakeEngine::new(vec![PlanStep {
+        capability: "customer.activate".into(),
+        args: json!({ "target": "u1" }),
+        when: Some(Box::new(|v: &AgentView| {
+            v.has_relation("level", "VIP") && !v.has_relation("status", "active")
+        })),
+    }]);
+
+    let task = Task::new("activate-vip", "激活 VIP 用户").expecting(&[("status", "active")]);
+    let out = {
+        let mut loop_ = AgentLoop::new(&mut k, &mut agent, &services, &engine);
+        loop_.run_until_done(ctx, &task, json!({})).unwrap()
+    };
+    assert_eq!(
+        out,
+        LoopOutcome::Completed,
+        "观察必须见投影关系并执行（投影失败时 when 恒假 → 永远不行动）"
+    );
+    // Verify：世界确实达成目标（Effect 投影写入 Kernel，不是 Agent 自称）
+    assert!(
+        k.relations()
+            .any(|r| r.predicate == "status" && r.target == "active")
+    );
+}
