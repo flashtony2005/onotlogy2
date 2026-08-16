@@ -14,6 +14,7 @@ pub mod runs;
 pub mod users;
 pub mod worker_registry;
 pub mod worker_stats;
+pub mod world;
 
 use async_trait::async_trait;
 use libsql::Connection;
@@ -25,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
+pub use world::WorldCommand;
 
 static REL_SEQ: AtomicU64 = AtomicU64::new(0);
 

@@ -12,7 +12,7 @@
 
 use openaip_os::kernel::{Kernel, Scope};
 use openaip_os::projection::Projection;
-use openaip_os::storage::{LibSQLStorage, ObjectEngine};
+use openaip_os::storage::{LibSQLStorage, ObjectEngine, RelationEngine};
 use openaip_os::trace::{TraceEvent, TraceKind};
 use serde_json::{Value, json};
 
@@ -314,4 +314,163 @@ async fn tc_pj7b_event_complete_world_complete() {
             "P7：事件完备 → 实体 {id} 必须在投影世界"
         );
     }
+}
+
+// ── P5：WorldCommand 事务化（EveryWorldChange → Event，对象写+事件写同事务）──
+use openaip_os::storage::WorldCommand;
+
+#[tokio::test]
+async fn tc_p5a_create_writes_object_and_event_transactionally() {
+    let storage = LibSQLStorage::open(":memory:").await.unwrap();
+    storage
+        .apply_world(WorldCommand::CreateObject {
+            object_type: "User".into(),
+            id: "u1".into(),
+            data: json!({ "name": "Apple", "level": "VIP" }),
+        })
+        .await
+        .unwrap();
+
+    // 对象落库
+    let rec = storage.get("u1").await.unwrap().expect("对象应存在");
+    assert_eq!(rec.r#type, "User");
+    // 事件落库（契约载荷：refs=[id]，input={type,data}）
+    let events = storage
+        .list_events(openaip_os::storage::TraceQuery {
+            event_type: Some("ObjectCreated".into()),
+            limit: 200,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1, "P5：create 必须伴随 ObjectCreated 事件");
+    let ev = &events[0];
+    assert_eq!(ev.object_refs, vec!["u1"]);
+    assert_eq!(ev.input.as_ref().unwrap()["type"], "User");
+    assert_eq!(ev.input.as_ref().unwrap()["data"]["name"], "Apple");
+    assert_eq!(ev.run_id, None, "事实不依赖 Run（审计解耦点）");
+}
+
+#[tokio::test]
+async fn tc_p5b_link_writes_relation_and_event() {
+    let storage = LibSQLStorage::open(":memory:").await.unwrap();
+    storage
+        .apply_world(WorldCommand::CreateObject {
+            object_type: "User".into(),
+            id: "u1".into(),
+            data: json!({}),
+        })
+        .await
+        .unwrap();
+    storage
+        .apply_world(WorldCommand::CreateObject {
+            object_type: "Order".into(),
+            id: "o1".into(),
+            data: json!({}),
+        })
+        .await
+        .unwrap();
+    storage
+        .apply_world(WorldCommand::LinkRelation {
+            source: "u1".into(),
+            edge: "placed".into(),
+            target: "o1".into(),
+        })
+        .await
+        .unwrap();
+
+    // 边落库
+    let nbrs = storage.neighbors("u1").await.unwrap();
+    assert!(
+        nbrs.iter()
+            .any(|r| r.relation == "placed" && r.target == "o1")
+    );
+    // 事件落库（契约载荷：refs=[source,target]，input={edge}）
+    let events = storage
+        .list_events(openaip_os::storage::TraceQuery {
+            event_type: Some("RelationLinked".into()),
+            limit: 200,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1, "P5：link 必须伴随 RelationLinked 事件");
+    assert_eq!(events[0].object_refs, vec!["u1", "o1"]);
+    assert_eq!(events[0].input.as_ref().unwrap()["edge"], "placed");
+}
+
+#[tokio::test]
+async fn tc_p5c_delete_writes_event() {
+    let storage = LibSQLStorage::open(":memory:").await.unwrap();
+    storage
+        .apply_world(WorldCommand::CreateObject {
+            object_type: "Product".into(),
+            id: "p1".into(),
+            data: json!({}),
+        })
+        .await
+        .unwrap();
+    storage
+        .apply_world(WorldCommand::DeleteObject { id: "p1".into() })
+        .await
+        .unwrap();
+
+    assert!(
+        storage.get("p1").await.unwrap().is_none(),
+        "逻辑删除后不可见"
+    );
+    let events = storage
+        .list_events(openaip_os::storage::TraceQuery {
+            event_type: Some("ObjectDeleted".into()),
+            limit: 200,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1, "P5：delete 必须伴随 ObjectDeleted 事件");
+    assert_eq!(events[0].object_refs, vec!["p1"]);
+}
+
+// ── P5 闭环：Command → Event → Projection → Kernel（P5.4 的前置）────────
+#[tokio::test]
+async fn tc_p5d_commanded_world_projects_to_kernel() {
+    let storage = LibSQLStorage::open(":memory:").await.unwrap();
+    storage
+        .apply_world(WorldCommand::CreateObject {
+            object_type: "User".into(),
+            id: "u1".into(),
+            data: json!({ "name": "Apple" }),
+        })
+        .await
+        .unwrap();
+    storage
+        .apply_world(WorldCommand::CreateObject {
+            object_type: "Order".into(),
+            id: "o1".into(),
+            data: json!({}),
+        })
+        .await
+        .unwrap();
+    storage
+        .apply_world(WorldCommand::LinkRelation {
+            source: "u1".into(),
+            edge: "placed".into(),
+            target: "o1".into(),
+        })
+        .await
+        .unwrap();
+
+    let mut k = Kernel::new();
+    let ctx = k.create_context(None, Scope::World, "world").unwrap();
+    let mut p = Projection::new(ctx);
+    p.project_from_storage(&mut k, &storage).await.unwrap();
+
+    assert!(
+        k.relations()
+            .any(|r| r.source == "u1" && r.predicate == "type" && r.target == "User")
+    );
+    assert!(
+        k.relations()
+            .any(|r| r.source == "u1" && r.predicate == "placed" && r.target == "o1")
+    );
 }

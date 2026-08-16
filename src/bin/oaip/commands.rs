@@ -21,15 +21,23 @@ pub async fn cmd_compile(file: &str) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 pub async fn cmd_run(db: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use openaip_os::storage::WorldCommand;
     let storage = LibSQLStorage::open(db).await?;
-    // 演示数据（对应 TC-006）：硬删除旧演示行后重灌，保证可重复运行
-    storage.hard_delete("001").await?;
-    storage.hard_delete("002").await?;
+    // 演示数据（P5.3）：WorldCommand 事务化——对象写 + ObjectCreated 事件同事务落库，
+    // 消灭「无事件的世界变更」（P5/P7 契约）。
     storage
-        .create("Customer", "001", json!({"name": "Apple", "level": "VIP"}))
-        .await?;
-    storage
-        .create("Customer", "002", json!({"name": "Tesla", "level": "GOLD"}))
+        .apply_world_many(&[
+            WorldCommand::CreateObject {
+                object_type: "Customer".into(),
+                id: "001".into(),
+                data: json!({ "name": "Apple", "level": "VIP" }),
+            },
+            WorldCommand::CreateObject {
+                object_type: "Customer".into(),
+                id: "002".into(),
+                data: json!({ "name": "Tesla", "level": "GOLD" }),
+            },
+        ])
         .await?;
     let recs = storage.query("Customer").await?;
     println!("{}", LibSQLStorage::render_object_list(&recs));
@@ -73,11 +81,17 @@ pub async fn cmd_relation_link(
     target: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage = LibSQLStorage::open(db).await?;
-    match storage.link(source, edge, target, None).await {
-        Ok(rec) => println!(
-            "✅ 已建立关系 {}: {} -{}-> {}",
-            rec.id, source, edge, target
-        ),
+    match storage
+        .apply_world(openaip_os::storage::WorldCommand::LinkRelation {
+            source: source.to_string(),
+            edge: edge.to_string(),
+            target: target.to_string(),
+        })
+        .await
+    {
+        Ok(()) => {
+            println!("✅ 已建立关系: {source} -{edge}-> {target}（RelationLinked 事件已落库）")
+        }
         Err(e) => println!("❌ 建立关系失败：{e}"),
     }
     Ok(())
