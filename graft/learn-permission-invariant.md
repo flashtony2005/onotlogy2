@@ -26,28 +26,28 @@ generator:
 covers:
   - symbol: ViewMeta
     kind: interface
-    at: 'ui/src/App.tsx:L45-L52'
+    at: 'ui/src/App.tsx:L47-L54'
   - symbol: App
     kind: function
-    at: 'ui/src/App.tsx:L121-L521'
+    at: 'ui/src/App.tsx:L131-L532'
   - symbol: handleAuthError
     kind: function
-    at: 'ui/src/App.tsx:L160-L169'
+    at: 'ui/src/App.tsx:L170-L179'
   - symbol: doLogin
     kind: function
-    at: 'ui/src/App.tsx:L171-L180'
+    at: 'ui/src/App.tsx:L181-L190'
   - symbol: doLogout
     kind: function
-    at: 'ui/src/App.tsx:L182-L192'
+    at: 'ui/src/App.tsx:L192-L202'
   - symbol: toggleGroup
     kind: function
-    at: 'ui/src/App.tsx:L195-L197'
+    at: 'ui/src/App.tsx:L205-L207'
   - symbol: goView
     kind: function
-    at: 'ui/src/App.tsx:L200-L206'
+    at: 'ui/src/App.tsx:L210-L216'
   - symbol: startRun
     kind: function
-    at: 'ui/src/App.tsx:L231-L247'
+    at: 'ui/src/App.tsx:L241-L257'
   - symbol: AuthError
     kind: class
     at: 'ui/src/api.ts:L28-L33'
@@ -111,12 +111,15 @@ covers:
   - symbol: postProjectList
     kind: function
     at: 'ui/src/api.ts:L222-L231'
-  - symbol: postProjectCreate
+  - symbol: postProjectSeed
     kind: function
     at: 'ui/src/api.ts:L233-L242'
+  - symbol: postProjectCreate
+    kind: function
+    at: 'ui/src/api.ts:L244-L253'
   - symbol: postFabricSubmit
     kind: function
-    at: 'ui/src/api.ts:L244-L255'
+    at: 'ui/src/api.ts:L255-L266'
 ---
 <!-- context:generated:start -->
 ## Summary

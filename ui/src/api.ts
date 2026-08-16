@@ -194,7 +194,7 @@ export async function getGraph(): Promise<WorldGraphDto> {
 // ── Phase 7 Facade Transport（POST /api/v1/facade/*；单一语义源）──
 
 export async function postWorldQuery(req: WorldQueryDto): Promise<WorldViewDto> {
-  const r = await fetch('/api/v1/facade/world/query', {
+  const r = await authFetch('/api/v1/facade/world/query', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
@@ -207,7 +207,7 @@ export async function postWorldQuery(req: WorldQueryDto): Promise<WorldViewDto> 
 }
 
 export async function postAuditQuery(req: AuditQueryDto): Promise<AuditViewDto> {
-  const r = await fetch('/api/v1/facade/audit/query', {
+  const r = await authFetch('/api/v1/facade/audit/query', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
@@ -220,7 +220,7 @@ export async function postAuditQuery(req: AuditQueryDto): Promise<AuditViewDto> 
 }
 
 export async function postProjectList(): Promise<ProjectDto[]> {
-  const r = await fetch('/api/v1/facade/project/list', {
+  const r = await authFetch('/api/v1/facade/project/list', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: '{}',
@@ -231,7 +231,7 @@ export async function postProjectList(): Promise<ProjectDto[]> {
 }
 
 export async function postProjectSeed(): Promise<{ events: number }> {
-  const r = await fetch('/api/v1/facade/project/seed', {
+  const r = await authFetch('/api/v1/facade/project/seed', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: '{}',
@@ -242,7 +242,7 @@ export async function postProjectSeed(): Promise<{ events: number }> {
 }
 
 export async function postProjectCreate(req: ProjectCreateDto): Promise<ProjectDto> {
-  const r = await fetch('/api/v1/facade/project/create', {
+  const r = await authFetch('/api/v1/facade/project/create', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
@@ -253,7 +253,7 @@ export async function postProjectCreate(req: ProjectCreateDto): Promise<ProjectD
 }
 
 export async function postFabricSubmit(req: FabricRequestDto): Promise<FabricSubmissionDto> {
-  const r = await fetch('/api/v1/facade/fabric/submit', {
+  const r = await authFetch('/api/v1/facade/fabric/submit', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),

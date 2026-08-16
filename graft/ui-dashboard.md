@@ -30,28 +30,28 @@ generator:
 covers:
   - symbol: ViewMeta
     kind: interface
-    at: 'ui/src/App.tsx:L45-L52'
+    at: 'ui/src/App.tsx:L47-L54'
   - symbol: App
     kind: function
-    at: 'ui/src/App.tsx:L121-L521'
+    at: 'ui/src/App.tsx:L131-L532'
   - symbol: handleAuthError
     kind: function
-    at: 'ui/src/App.tsx:L160-L169'
+    at: 'ui/src/App.tsx:L170-L179'
   - symbol: doLogin
     kind: function
-    at: 'ui/src/App.tsx:L171-L180'
+    at: 'ui/src/App.tsx:L181-L190'
   - symbol: doLogout
     kind: function
-    at: 'ui/src/App.tsx:L182-L192'
+    at: 'ui/src/App.tsx:L192-L202'
   - symbol: toggleGroup
     kind: function
-    at: 'ui/src/App.tsx:L195-L197'
+    at: 'ui/src/App.tsx:L205-L207'
   - symbol: goView
     kind: function
-    at: 'ui/src/App.tsx:L200-L206'
+    at: 'ui/src/App.tsx:L210-L216'
   - symbol: startRun
     kind: function
-    at: 'ui/src/App.tsx:L231-L247'
+    at: 'ui/src/App.tsx:L241-L257'
   - symbol: AuthError
     kind: class
     at: 'ui/src/api.ts:L28-L33'
@@ -115,12 +115,15 @@ covers:
   - symbol: postProjectList
     kind: function
     at: 'ui/src/api.ts:L222-L231'
-  - symbol: postProjectCreate
+  - symbol: postProjectSeed
     kind: function
     at: 'ui/src/api.ts:L233-L242'
+  - symbol: postProjectCreate
+    kind: function
+    at: 'ui/src/api.ts:L244-L253'
   - symbol: postFabricSubmit
     kind: function
-    at: 'ui/src/api.ts:L244-L255'
+    at: 'ui/src/api.ts:L255-L266'
   - symbol: Options
     kind: interface
     at: 'ui/src/hooks/useTraceStream.ts:L14-L19'
@@ -141,88 +144,88 @@ covers:
     at: 'ui/src/main.tsx:L17-L39'
   - symbol: ViewKind
     kind: type
-    at: 'ui/src/types.ts:L3-L15'
+    at: 'ui/src/types.ts:L3-L16'
   - symbol: AuthUserDto
     kind: interface
-    at: 'ui/src/types.ts:L18-L21'
+    at: 'ui/src/types.ts:L19-L22'
   - symbol: TraceEventDto
     kind: interface
-    at: 'ui/src/types.ts:L23-L35'
+    at: 'ui/src/types.ts:L24-L36'
   - symbol: TimelineEvent
     kind: interface
-    at: 'ui/src/types.ts:L37-L46'
+    at: 'ui/src/types.ts:L38-L47'
   - symbol: DecisionSummary
     kind: interface
-    at: 'ui/src/types.ts:L48-L52'
+    at: 'ui/src/types.ts:L49-L53'
   - symbol: RunTimeline
     kind: interface
-    at: 'ui/src/types.ts:L54-L62'
+    at: 'ui/src/types.ts:L55-L63'
   - symbol: RunStartDto
     kind: interface
-    at: 'ui/src/types.ts:L64-L68'
+    at: 'ui/src/types.ts:L65-L69'
   - symbol: ApiResponse
     kind: interface
-    at: 'ui/src/types.ts:L70-L74'
+    at: 'ui/src/types.ts:L71-L75'
   - symbol: SkillDto
     kind: interface
-    at: 'ui/src/types.ts:L78-L86'
+    at: 'ui/src/types.ts:L79-L87'
   - symbol: PluginDto
     kind: interface
-    at: 'ui/src/types.ts:L88-L95'
+    at: 'ui/src/types.ts:L89-L96'
   - symbol: SessionEventDto
     kind: interface
-    at: 'ui/src/types.ts:L97-L102'
+    at: 'ui/src/types.ts:L98-L103'
   - symbol: WorkerDto
     kind: interface
-    at: 'ui/src/types.ts:L104-L112'
+    at: 'ui/src/types.ts:L105-L113'
   - symbol: RawSkillDto
     kind: interface
-    at: 'ui/src/types.ts:L114-L120'
+    at: 'ui/src/types.ts:L115-L121'
   - symbol: SessionSummaryDto
     kind: interface
-    at: 'ui/src/types.ts:L122-L125'
+    at: 'ui/src/types.ts:L123-L126'
   - symbol: SessionDto
     kind: interface
-    at: 'ui/src/types.ts:L127-L130'
+    at: 'ui/src/types.ts:L128-L131'
   - symbol: WorldNodeDto
     kind: interface
-    at: 'ui/src/types.ts:L133-L137'
+    at: 'ui/src/types.ts:L134-L138'
   - symbol: WorldEdgeDto
     kind: interface
-    at: 'ui/src/types.ts:L139-L145'
+    at: 'ui/src/types.ts:L140-L146'
   - symbol: WorldGraphDto
     kind: interface
-    at: 'ui/src/types.ts:L147-L150'
+    at: 'ui/src/types.ts:L148-L151'
   - symbol: WorldRelationDto
     kind: interface
-    at: 'ui/src/types.ts:L155-L161'
+    at: 'ui/src/types.ts:L156-L162'
   - symbol: WorldViewDto
     kind: interface
-    at: 'ui/src/types.ts:L163-L167'
+    at: 'ui/src/types.ts:L164-L168'
   - symbol: WorldQueryDto
     kind: interface
-    at: 'ui/src/types.ts:L169-L174'
+    at: 'ui/src/types.ts:L170-L175'
   - symbol: AuditEventDto
     kind: interface
-    at: 'ui/src/types.ts:L176-L182'
+    at: 'ui/src/types.ts:L177-L183'
   - symbol: AuditViewDto
     kind: interface
-    at: 'ui/src/types.ts:L184-L187'
+    at: 'ui/src/types.ts:L185-L188'
   - symbol: AuditQueryDto
     kind: interface
-    at: 'ui/src/types.ts:L189-L195'
+    at: 'ui/src/types.ts:L190-L196'
   - symbol: FabricRequestDto
     kind: interface
-    at: 'ui/src/types.ts:L197-L203'
+    at: 'ui/src/types.ts:L198-L204'
   - symbol: FabricSubmissionDto
     kind: interface
-    at: 'ui/src/types.ts:L205-L220'
+    at: 'ui/src/types.ts:L206-L221'
   - symbol: ProjectDto
     kind: interface
-    at: 'ui/src/types.ts:L224-L231'
+    at: 'ui/src/types.ts:L225-L232'
   - symbol: ProjectCreateDto
     kind: interface
-    at: 'ui/src/types.ts:L233-L238'
+    at: 'ui/src/types.ts:L234-L239'
   - symbol: toTimelineEvent
     kind: function
     at: 'ui/src/view.ts:L25-L36'

@@ -23,5 +23,6 @@ REST client module for the agent backend, wrapping all API calls in the {code,ms
 - postWorldQuery · function · L196-L207 — async function postWorldQuery(req: WorldQueryDto): Promise<WorldViewDto>
 - postAuditQuery · function · L209-L220 — async function postAuditQuery(req: AuditQueryDto): Promise<AuditViewDto>
 - postProjectList · function · L222-L231 — async function postProjectList(): Promise<ProjectDto[]>
-- postProjectCreate · function · L233-L242 — async function postProjectCreate(req: ProjectCreateDto): Promise<ProjectDto>
-- postFabricSubmit · function · L244-L255 — async function postFabricSubmit(req: FabricRequestDto): Promise<FabricSubmissionDto>
+- postProjectSeed · function · L233-L242 — async function postProjectSeed(): Promise<{ events: number }>
+- postProjectCreate · function · L244-L253 — async function postProjectCreate(req: ProjectCreateDto): Promise<ProjectDto>
+- postFabricSubmit · function · L255-L266 — async function postFabricSubmit(req: FabricRequestDto): Promise<FabricSubmissionDto>
