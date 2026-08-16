@@ -1,3 +1,5 @@
+> [废弃] M7（2026-08-16）：本文件描述 V0.x/V2 中间态设计；当前架构以 `architecture-v2.md` 为准。
+
 # Runtime Kernel V2.0 — Spatiotemporal Ontology Runtime
 
 | 项 | 内容 |

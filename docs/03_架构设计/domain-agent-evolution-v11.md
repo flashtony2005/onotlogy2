@@ -1,3 +1,5 @@
+> [废弃] M7（2026-08-16）：本文件描述 V0.x/V2 中间态设计；当前架构以 `architecture-v2.md` 为准。
+
 # Domain Agent Evolution Runtime（Phase 11 · V11.0 Final，设计定稿 + Implementation Spec）
 
 | 项 | 内容 |

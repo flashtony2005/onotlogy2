@@ -1,86 +1,60 @@
 # OpenAIP-OS
 
-Ontology-Centric · Local First · Agent Native 的可执行本体平台内核。
+Ontology-Centric · Local First · Agent Native 的可执行本体平台内核（**V2 架构**）。
 
-用 `.odl` 描述世界对象与动作，经确定性编译进入 Runtime Kernel；Agent（Pi 作 Cognitive Engine）在可观察的世界模型中决策，人可理解、可介入、系统可学习。
+用 `.odl` 描述世界对象与动作，经确定性编译进入 Runtime Kernel（四 Primitive：
+Context / Fiber / Effect / Relation）；Agent 在**一条认知闭环**（Observe → Decide → Act →
+Verify）中决策，人可理解、可介入、系统可学习（Learn ≠ Permission）。架构总图见
+`docs/03_架构设计/architecture-v2.md`。
 
 ## 快速开始
 
-### 依赖
-
-- Rust **nightly**（见 `rust-toolchain.toml`，edition 2024）
-- Node.js 18+（仅前端）
-- 可选：`pi` 认知引擎（`@earendil-works/pi-coding-agent`），用于真实 LLM NLU；测试使用 FakeEngine
-
 ```bash
-# 工具链
-rustup show   # 应解析到 nightly-2026-07-17
+rustup show                      # nightly-2026-07-17
+make check                       # fmt + clippy + test + unwrap 预算
 
-# 质量门禁
-make check    # fmt + clippy + test
-make ci       # check + ui build + npm audit
-```
-
-### 编译本体
-
-```bash
 cargo build --release
-./target/release/oaip compile ontology.odl
-# → ./gen/ontology.rs, schema.sql, ontology.json
-```
+./target/release/oaip compile ontology.odl        # → ./gen/
+./target/release/oaip run                          # 演示数据（Customer 001/002）
 
-### 演示数据与 Agent
-
-```bash
-# 写入示例 Customer
-./target/release/oaip run
-
-# 带声明式动作跑 Agent（默认 ODL=examples/crm.odl）
+# Agent（PiEngine 认知引擎；pi 未装时给出 WB2004 提示）
 ./target/release/oaip agent run "reduce churn" --auto-approve
 
-# Worker ABI（Phase 11D）：Thinker 制定计划，Worker 执行——OpenAIP-OS 不亲自干活
-# 预置 echo/git/codex/claude/deepseek Worker；shell.execute/code.write 需审批（fail-closed）
-./target/release/oaip worker run text.echo,code.test --input '{"suite":"unit"}' --task fix-bug
+# Worker ABI：Thinker 决策 → Worker 执行（echo/git/codex/claude 是 Worker，不是依赖）
+./target/release/oaip agent run "fix bug" --via-workers --auto-approve
 
-# 启动观察服务（UI + REST + WS）
-export WB_BOOTSTRAP_ADMIN_USER=admin
-export WB_BOOTSTRAP_ADMIN_PWD='change-me'
+# 观察服务（UI + REST + WS；V0.7 认证）
+export WB_BOOTSTRAP_ADMIN_USER=admin WB_BOOTSTRAP_ADMIN_PWD='change-me'
 ./target/release/oaip serve --odl examples/crm.odl --auto-approve
 # UI → http://127.0.0.1:8080/
 ```
 
-首次部署也可用：
-
-```bash
-./target/release/oaip user create-admin admin --password 'change-me'
-```
-
-## 架构（分层）
+## 架构（五层）
 
 | 层 | 模块 | 说明 |
 |----|------|------|
-| 语言 | `odl` / `ir` / `codegen` | `.odl` → IR → Rust / SQL / JSON |
-| 世界 | `storage` / `runtime` | Object / Relation / Event + Trace |
-| 决策 | `planner` / `action` / `agent` | Goal→Plan→Policy→Action |
-| 学习 | `evolution` | Experience→Pattern→LearnedKnowledge（Learn≠Permission） |
-| 观察 | `trace` / `server` / `ui` | 三层视图 + WebSocket 流 |
-| 安全 | `auth` | 本地账号 + 会话令牌 + 角色视图钳制 |
+| L0 | `kernel/` | 四 Primitive + 状态机 + 补偿 + 事件轨（唯一状态源） |
+| L1 | `ir/ odl/ codegen/ compose/defs.rs` | `.odl` → IR → RuntimeDefinition（ABI） |
+| L2 | `compose/ world_exec/` | Service/Capability/Policy/Task + 世界效应执行 |
+| L3 | `cognitive/ evolution2/ rule/ skill/` | 认知闭环 + 一层演化口径 |
+| L4 | `worker/ plugin/` | Capability → Router → Worker（Provider Agnostic） |
+| L5 | `trace/ server/ ui/ storage/` | 观察层 + 持久化 + 认证 |
 
-演进路线见 `docs/09_迭代与版本/sprint-plan.md`（V0.1→V0.6 已落地）。
+设计总纲：`docs/03_架构设计/architecture-v2.md`；技术债清零计划与差集：
+`docs/09_迭代与版本/tech-debt-reduction-plan.md`。
 
-## 开发约定
+## 关键概念
 
-- 原则见根目录 `AGENTS.md`：不保留向后兼容、选最简单实现、分层构建、模块化。
-- 文档体系在 `docs/`，约束见 `docs/01_项目总览/project-constraint.md`。
-- 代码导航优先用 `graft/`（`graft ask` / `graft build`）。
+- **审批**：Waiting fiber 是唯一待审队列（CLI stdin / server HTTP + 超时看门狗）。
+- **审计**：approval.* / evolution.gate_approved 桥进 wb_trace_event → `GET /audit`。
+- **模拟**：S1–S3 全是假设轨（I2），永不写 EventLog。
+- **不变量**：I1 State=Reduce(EventLog) · I5 Learn≠Permission · I7 EveryRun→Evaluation。
 
 ## 测试
 
 ```bash
-cargo test --all-targets
+cargo test --all-targets    # 326+：V2 契约（tests/v2_parity + *_v2）为核心资产
 ```
-
-集成契约覆盖 ODL/IR、存储、关系、Agent 闭环、Action/Policy、Memory/Evolution、认证、持久化恢复、WS 视图钳制。
 
 ## 许可证
 
