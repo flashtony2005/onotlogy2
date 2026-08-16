@@ -192,8 +192,14 @@
 - ✅ **server 已切换**（commit f58772f）：POST /run 走 spawn_blocking + run_agent
   （resolver 经 mpsc 通道对接 HTTP 端点 + 超时看门狗 Expire）；approvals 端点改 pending
   注册表；serve 签名换 V2 三件套；v0_3_approval 5 例重写为 V2 HTTP 契约全绿。
-- ⬜ **M1d 物理删除**（下一轮）：按矩阵删 planner/action/agent/runtime 门面 + wb_memory/
-  wb_approval 两表 + 三端点 + v0_3 系测试。
+- ✅ **M1d 物理删除**（commit b75e7b0）：planner/action/agent/tool_backend/runtime 五门面
+  删除；evolution.rs + V1 演化存储 + 6 张 V1 表删除（M2 删除半场提前完成，consumers 归零），
+  schema 8→9 + DROP 迁移；/memory /tasks /evolution 端点 + 审计/撤销端点 + 三面板删除
+  （Governance 面板改事实轨说明）；v0_3_agent/policy/evolution + bridge_v2 删除，
+  v0_1/v0_2 事件断言改显式落库；TraceEvent 归 trace.rs、AppState kernel→storage +
+  event_tx 替 EventBus。Rust 324/0/3 + UI tsc+vite+21 vitest 全绿。
+- ⏭️ **M2 剩余**：审批审计 V2 查询入口（事实轨 → 端点），其余（三套 Learn 归一）已由
+  M1d 的 evolution.rs 删除完成。
 - ⚠️ **已知限制（Phase 5 语义投影范畴，非 M1 范围）**：storage 世界对象
   （wb_ontology_object）尚未投影进 V2 Kernel 关系——CLI 的 V2 loop 观察不到 V1 演示数据
   （实测表现为前置条件对空世界判 Deny）。runtime-kernel-v2 Phase 5 落地语义投影时解决；
