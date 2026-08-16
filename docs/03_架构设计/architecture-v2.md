@@ -84,4 +84,7 @@ oaip-abi（语言前端：odl/ir/codegen）
   在 run 起点经 `Projection::project_from_storage` 全量重建 Kernel 世界——Agent 首次
   观察即见 Storage 世界；per-run 全量策略，跨 run 常驻 Kernel + 增量水位属后续里程碑
   （P3，契约 docs/03_架构设计/projection-v1.md）。
-- 审计查询（/audit）基于 wb_trace_event 的 run 级桥接，非全局 Kernel 事件持久化。
+- ~~审计查询基于 run 级桥接~~（P5.6 已落地）：审计事件（approval.* /
+  evolution.gate_approved）产生时即落库 wb_trace_event（Kernel audit sink 同步
+  append），与 Run 生命周期解耦——进程崩溃时已产生的审计不丢失；
+  /audit 直读事件表。

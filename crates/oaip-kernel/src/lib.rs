@@ -91,6 +91,8 @@ pub struct Kernel {
     compensator: std::sync::Arc<dyn Compensator>,
     /// 事实层事件（emit/relate/compensate 的审计记录；Phase 1 落 events 表）。
     events: Vec<KernelEvent>,
+    /// P5.6：审计事件同步回写 sink（record_event 产生时调用；None = 无落库）。
+    audit_sink: Option<std::sync::Arc<dyn AuditSink>>,
     /// Phase 8：幂等执行去重（context + key → 已执行 Effect）。
     idempotency: std::collections::HashMap<(ContextId, String), EffectId>,
 }
@@ -110,8 +112,18 @@ impl Default for Kernel {
             compensator: std::sync::Arc::new(NullCompensator),
             events: Vec::new(),
             idempotency: std::collections::HashMap::new(),
+            audit_sink: None,
         }
     }
+}
+
+/// P5.6：审计事件同步回写 sink——Kernel 审计事件（approval.* /
+/// evolution.gate_approved 等）**产生时**即同步落库，不依赖 run 终局桥接
+/// （契约 projection-v1.md §6.5：Event Log 成为 Audit / Projection /
+/// Evaluation / Replay 的单一扇出源）。实现须同步（block_on 语义）。
+/// 落库失败不阻断执行：审计是旁路扇出，主路径仍是 Kernel 事件内存流。
+pub trait AuditSink: Send + Sync {
+    fn append(&self, ev: &KernelEvent) -> Result<(), String>;
 }
 
 impl Kernel {
@@ -137,6 +149,12 @@ impl Kernel {
         self
     }
 
+    /// P5.6：注入审计 sink——record_event 产生时同步落库（None = 纯内存）。
+    pub fn with_audit_sink(mut self, sink: std::sync::Arc<dyn AuditSink>) -> Self {
+        self.audit_sink = Some(sink);
+        self
+    }
+
     pub fn compensator(&self) -> std::sync::Arc<dyn Compensator> {
         self.compensator.clone()
     }
@@ -148,13 +166,18 @@ impl Kernel {
 
     fn record_event(&mut self, fiber: Option<FiberId>, ty: &str, payload: Value) {
         let ctx = fiber.and_then(|f| self.fibers.get(&f).map(|x| x.context));
-        self.events.push(KernelEvent {
+        let ev = KernelEvent {
             context: ctx,
             fiber,
             ty: ty.to_string(),
             payload,
             timestamp: self.now(),
-        });
+        };
+        // P5.6：产生时即落库（sink 失败不阻断——审计旁路；事件流不受影响）
+        if let Some(sink) = &self.audit_sink {
+            let _ = sink.append(&ev);
+        }
+        self.events.push(ev);
     }
 
     /// 组合层：记录一次策略拒绝（业务拒绝，非运行失败；Effect 未提交）。

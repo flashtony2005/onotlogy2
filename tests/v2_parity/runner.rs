@@ -157,8 +157,12 @@ fn r2_approval_via_resolver_completes() {
     assert!(types.contains(&"PendingApproval"));
     assert!(types.contains(&"Action"));
     assert!(types.contains(&"MemoryUpdate"));
-    // M2：审计桥把 approval.granted 追加为尾部事实（I1 可回放）
-    assert_eq!(types.last(), Some(&"approval.granted"));
+    // P5.6：审计不再桥进 trace 尾部（产生时已落库事件表；trace 是观察层，
+    // 审计是事件表直读——审计查询/回放与 Run 生命周期解耦）
+    assert!(
+        !types.contains(&"approval.granted"),
+        "P5.6：审计事件不进 trace 流（StorageAuditSink 产生时落库）"
+    );
 }
 
 // ── R3：resolver Reject → Failed + human_approval，世界无变化 ─────────

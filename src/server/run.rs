@@ -97,7 +97,15 @@ pub(crate) async fn run_start(
     // （HTTP 端点经 pending 注册表与 run 交互），故显式 drop。
     let run_task = tokio::task::spawn_blocking(move || {
         let handle = tokio::runtime::Handle::current();
-        let mut kernel = Kernel::new();
+        // P5.6：审计事件产生时即落库（kernel audit sink；不依赖 run 终局桥接）。
+        let mut kernel = Kernel::new().with_audit_sink(std::sync::Arc::new(
+            crate::cognitive::runner::StorageAuditSink::new(
+                st2.storage.clone(),
+                handle.clone(),
+                rid.clone(),
+                agent.clone(),
+            ),
+        ));
         let mut agent_state = match kernel.create_context(None, Scope::World, "world") {
             Ok(ctx) => Agent::new(agent.clone(), ctx),
             Err(e) => {

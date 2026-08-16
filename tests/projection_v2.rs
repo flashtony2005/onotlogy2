@@ -541,7 +541,7 @@ async fn tc_pj8_agent_observe_sees_projected_storage_world() {
 // P7 判定：Effect 提交后事件日志与 Kernel 关系一一对应（投影重放得同状态）。
 use openaip_os::abi::odl::parse_odl;
 use openaip_os::cognitive::approval::{ApprovalDecision, ApprovalRequest};
-use openaip_os::cognitive::runner::{RunReport, StorageWorldSink, run_agent};
+use openaip_os::cognitive::runner::{RunReport, StorageAuditSink, StorageWorldSink, run_agent};
 use openaip_os::compose::defs::{ir_to_runtime, ir_to_services};
 use openaip_os::compose::task::WorldEventSink;
 use std::sync::{Arc, Mutex};
@@ -738,5 +738,73 @@ async fn tc_p6c_world_events_persisted_at_commit_and_reproject() {
         k2.relations()
             .any(|r| r.source == "cust-01" && r.predicate == "needs_retention"),
         "重放须包含 Effect 提交的世界变化（P6 闭环）"
+    );
+}
+
+// ── P5.6：审计即时落库——审计事件产生时即入 Event Log（不依赖 run 终局）──
+// 契约 §6.5：Kernel record_event（approval.* / evolution.gate_approved）产生时
+// 同步 append 到事件日志；进程崩溃时已产生的审计事件依然在场。
+use openaip_os::compose::policy::Policy;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tc_p6d_audit_events_persisted_at_production_time() {
+    // 需审批能力：step 挂起（Waiting）时 record_approval_requested 产生审计
+    let storage = Arc::new(LibSQLStorage::open(":memory:").await.unwrap());
+    let services = [Service::new("crm-service").with_capability(
+        Capability::new("customer.refund", "RefundCustomer")
+            .with_reversibility(Reversibility::Compensatable)
+            .with_inverse("UndoRefund")
+            .with_policy(Policy {
+                require_approval: true,
+                preconditions: vec![],
+            })
+            .requiring(&["target", "amount"]),
+    )];
+
+    let audit_sink = Arc::new(StorageAuditSink::new(
+        storage.clone(),
+        tokio::runtime::Handle::current(),
+        "run_p6d",
+        "retention-agent",
+    ));
+
+    // run 中途（未终局）：AgentLoop 返回 Waiting，run_agent 终局桥接从未发生
+    let out = tokio::task::block_in_place(|| {
+        let mut k = Kernel::new().with_audit_sink(audit_sink);
+        let ctx = k.create_context(None, Scope::World, "world").unwrap();
+        let mut agent = Agent::new("retention-agent", ctx);
+        let engine = FakeEngine::new(vec![PlanStep {
+            capability: "customer.refund".into(),
+            args: json!({ "target": "u1", "amount": 500 }),
+            when: Some(Box::new(|v: &AgentView| {
+                !v.has_relation("refunded", "true")
+            })),
+        }]);
+        let task = Task::new("refund", "退款").expecting(&[("refunded", "true")]);
+        let mut lp = AgentLoop::new(&mut k, &mut agent, &services, &engine);
+        lp.run_until_done(ctx, &task, json!({})).unwrap()
+    });
+    assert_eq!(out, LoopOutcome::Waiting, "审批应挂起");
+
+    // 关键验收：run 未终局（挂起中），approval.requested 已落库——
+    // 此时若进程崩溃，审计不丢失（P5.6 解耦 Run 生命周期）
+    let evs = storage
+        .list_events(openaip_os::storage::TraceQuery {
+            event_type: Some("approval.requested".into()),
+            limit: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        evs.len(),
+        1,
+        "P5.6：审计事件产生时即落库（不依赖 run 终局桥接）"
+    );
+    assert_eq!(evs[0].run_id.as_deref(), Some("run_p6d"));
+    assert_eq!(evs[0].agent_id.as_deref(), Some("retention-agent"));
+    assert_eq!(
+        evs[0].input.as_ref().unwrap()["capability"],
+        "customer.refund"
     );
 }

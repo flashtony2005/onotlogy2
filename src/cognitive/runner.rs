@@ -17,7 +17,7 @@ use crate::compose::{Service, Task};
 use crate::evolution2::EvolutionEngine;
 use crate::kernel::{Kernel, KernelError};
 use crate::session::run::RunStatus;
-use crate::trace::TraceEvent;
+use crate::trace::{TraceEvent, TraceKind};
 
 /// P6：同步落库的世界事件 sink（`Handle::block_on` 驱动 storage append）。
 ///
@@ -42,6 +42,56 @@ impl WorldEventSink for StorageWorldSink {
     fn append(&self, ev: &TraceEvent) -> Result<(), String> {
         self.handle
             .block_on(self.storage.append_trace(ev))
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// P5.6：审计事件产生时同步落库（Kernel `record_event` → wb_trace_event）。
+///
+/// 载荷与旧 run 终局桥接（bridge_audit）一致：event_type=审计类型、
+/// kind=Cognitive、refs=["world"]、run_id/agent_id 绑定——/audit 端点
+/// 直读事件表，语义不变；区别是**不依赖 run 生命周期**（进程崩溃时
+/// 已产生的审计事件依然在场）。用法约束同 StorageWorldSink：阻塞上下文。
+pub struct StorageAuditSink {
+    storage: std::sync::Arc<crate::storage::LibSQLStorage>,
+    handle: tokio::runtime::Handle,
+    run_id: String,
+    agent_id: String,
+}
+
+impl StorageAuditSink {
+    pub fn new(
+        storage: std::sync::Arc<crate::storage::LibSQLStorage>,
+        handle: tokio::runtime::Handle,
+        run_id: impl Into<String>,
+        agent_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            storage,
+            handle,
+            run_id: run_id.into(),
+            agent_id: agent_id.into(),
+        }
+    }
+}
+
+impl crate::kernel::AuditSink for StorageAuditSink {
+    fn append(&self, ev: &crate::kernel::KernelEvent) -> Result<(), String> {
+        let tev = TraceEvent {
+            id: crate::trace::new_trace_id(),
+            kind: TraceKind::Cognitive,
+            event_type: ev.ty.clone(),
+            object_refs: vec!["world".to_string()],
+            run_id: Some(self.run_id.clone()),
+            agent_id: Some(self.agent_id.clone()),
+            reasoning: None,
+            input: Some(ev.payload.clone()),
+            output: None,
+            confidence: None,
+            timestamp: ev.timestamp.to_string(),
+        };
+        self.handle
+            .block_on(self.storage.append_trace(&tev))
             .map_err(|e| e.to_string())
     }
 }
@@ -122,8 +172,8 @@ pub fn run_agent<'k>(
                 match resolution {
                     ApprovalResolution::Approved => continue,
                     _ => {
-                        // Rejected / Expired / AlreadyResolved → 终局（人工裁决失败）
-                        bridge_audit(kernel, agent, run_id, trace);
+                        // Rejected / Expired / AlreadyResolved → 终局（人工裁决失败）。
+                        // P5.6：审计已产生时落库（kernel audit sink），此处不再桥接。
                         return Ok(RunReport {
                             outcome: LoopOutcome::Denied("审批裁决未放行".to_string()),
                             status: RunStatus::Failed,
@@ -133,7 +183,8 @@ pub fn run_agent<'k>(
                 }
             }
             out => {
-                bridge_audit(kernel, agent, run_id, trace);
+                // P5.6：审计已产生时落库（kernel audit sink），终局不再桥接——
+                // 审计事件与 Run 生命周期解耦（崩溃窗口消除）。
                 let (status, human_approval) = out.to_run_status();
                 return Ok(RunReport {
                     outcome: out,
@@ -141,28 +192,6 @@ pub fn run_agent<'k>(
                     human_approval,
                 });
             }
-        }
-    }
-}
-
-/// M2：Kernel 审计事件桥进 trace（I1：State = Reduce(EventLog)，可回放；
-/// 审批/演化闸门事实持久化到 wb_trace_event，供 /audit 查询）。
-fn bridge_audit(kernel: &Kernel, agent: &Agent, run_id: &str, trace: &mut Vec<TraceEvent>) {
-    for ev in kernel.events() {
-        if ev.ty.starts_with("approval.") || ev.ty == "evolution.gate_approved" {
-            trace.push(TraceEvent {
-                id: crate::trace::new_trace_id(),
-                kind: crate::trace::TraceKind::Cognitive,
-                event_type: ev.ty.clone(),
-                object_refs: vec!["world".to_string()],
-                run_id: Some(run_id.to_string()),
-                agent_id: Some(agent.id.clone()),
-                reasoning: None,
-                input: Some(ev.payload.clone()),
-                output: None,
-                confidence: None,
-                timestamp: ev.timestamp.to_string(),
-            });
         }
     }
 }

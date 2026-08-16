@@ -137,7 +137,15 @@ pub async fn cmd_agent_run(
     }
 
     // ── V2 认知闭环：Kernel + Agent + AgentLoop（M1c 切换，planner 不再参与）──
-    let mut kernel = Kernel::new();
+    // P5.6：审计事件产生时即落库（kernel audit sink；不依赖 run 终局桥接）。
+    let mut kernel = Kernel::new().with_audit_sink(std::sync::Arc::new(
+        openaip_os::cognitive::runner::StorageAuditSink::new(
+            std::sync::Arc::new(storage.clone()),
+            tokio::runtime::Handle::current(),
+            &run_id,
+            agent_id,
+        ),
+    ));
     let ctx = kernel.create_context(None, Scope::World, "world")?;
     let mut agent = Agent::new(agent_id, ctx);
 
