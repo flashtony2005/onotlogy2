@@ -154,7 +154,9 @@ fn r2_approval_via_resolver_completes() {
     let types: Vec<&str> = trace.iter().map(|e| e.event_type.as_str()).collect();
     assert!(types.contains(&"PendingApproval"));
     assert!(types.contains(&"Action"));
-    assert_eq!(types.last(), Some(&"MemoryUpdate"));
+    assert!(types.contains(&"MemoryUpdate"));
+    // M2：审计桥把 approval.granted 追加为尾部事实（I1 可回放）
+    assert_eq!(types.last(), Some(&"approval.granted"));
 }
 
 // ── R3：resolver Reject → Failed + human_approval，世界无变化 ─────────

@@ -1,7 +1,8 @@
 //! 业务视图端点（Phase 11 存活面）：Evaluation / Mutation / Loop Health。
 //!
-//! M1d：V1 的 Memory/Task/Evolution 视图与审计/撤销端点随 V1 门面删除
-//! （审计事实在 Kernel 事件轨，V2 查询入口归 M2）。
+//! M1d：V1 的 Memory/Task/Evolution 视图与审计/撤销端点随 V1 门面删除。
+//! M2：审批审计查询入口重建——审计事实由 run 终局桥进 wb_trace_event（I1），
+//! `GET /api/v1/wb/agent/audit` 按审计种类过滤返回。
 
 use std::sync::Arc;
 
@@ -347,4 +348,34 @@ pub(crate) struct EvalQuery {
 struct EventRefDto {
     seq: u64,
     event_type: String,
+}
+
+// ── M2：审批审计查询（事实轨 → 端点）────────────────────────────────────
+/// `GET /api/v1/wb/agent/audit`：审批/演化闸门审计（approval.* / evolution.gate_approved）。
+pub(crate) async fn list_audit(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+) -> Response {
+    if !user.can_read_audit() {
+        return forbidden("当前角色无权读取审计（需 Operator 及以上）").into_response();
+    }
+    let events = match st
+        .storage
+        .list_events(crate::storage::TraceQuery {
+            limit: 1000,
+            ..Default::default()
+        })
+        .await
+    {
+        Ok(e) => e,
+        Err(_) => return ApiResponse::error(5000, "存储错误").into_response(),
+    };
+    let list: Vec<crate::trace::TraceEventDto> = events
+        .into_iter()
+        .filter(|e| {
+            e.event_type.starts_with("approval.") || e.event_type == "evolution.gate_approved"
+        })
+        .map(Into::into)
+        .collect();
+    ApiResponse::ok(list).into_response()
 }

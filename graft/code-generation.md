@@ -38,16 +38,16 @@ covers:
     at: 'src/codegen.rs:L62-L81'
   - symbol: canonical_schema
     kind: function
-    at: 'src/codegen.rs:L84-L250'
+    at: 'src/codegen.rs:L84-L267'
   - symbol: to_json
     kind: function
-    at: 'src/codegen.rs:L253-L255'
+    at: 'src/codegen.rs:L270-L272'
   - symbol: roundtrip_ok
     kind: function
-    at: 'src/codegen.rs:L258-L263'
+    at: 'src/codegen.rs:L275-L280'
   - symbol: _assert_serialize
     kind: function
-    at: 'src/codegen.rs:L267-L267'
+    at: 'src/codegen.rs:L284-L284'
 ---
 <!-- context:generated:start -->
 ## Summary

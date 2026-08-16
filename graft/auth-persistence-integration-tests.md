@@ -21,78 +21,66 @@ links:
 generator:
   version: 1
 covers:
-  - symbol: NoopEngine
-    kind: struct
-    at: 'tests/v0_7_auth.rs:L21-L21'
-  - symbol: name
-    kind: function
-    at: 'tests/v0_7_auth.rs:L25-L27'
-  - symbol: reason
-    kind: function
-    at: 'tests/v0_7_auth.rs:L28-L30'
-  - symbol: http_call
-    kind: function
-    at: 'tests/v0_7_auth.rs:L34-L75'
+  - symbol: common
+    kind: module
+    at: 'tests/v0_7_auth.rs:L6-L6'
   - symbol: login
     kind: function
-    at: 'tests/v0_7_auth.rs:L78-L87'
+    at: 'tests/v0_7_auth.rs:L19-L28'
   - symbol: spawn_auth_server
     kind: function
-    at: 'tests/v0_7_auth.rs:L91-L128'
+    at: 'tests/v0_7_auth.rs:L32-L66'
   - symbol: tc_auth_a_no_token_401
     kind: function
-    at: 'tests/v0_7_auth.rs:L132-L143'
+    at: 'tests/v0_7_auth.rs:L71-L82'
   - symbol: tc_auth_b_wrong_token_401
     kind: function
-    at: 'tests/v0_7_auth.rs:L147-L158'
+    at: 'tests/v0_7_auth.rs:L86-L97'
   - symbol: tc_auth_c_executive_run_forbidden
     kind: function
-    at: 'tests/v0_7_auth.rs:L162-L175'
+    at: 'tests/v0_7_auth.rs:L101-L114'
   - symbol: tc_auth_d_view_clamped_to_role
     kind: function
-    at: 'tests/v0_7_auth.rs:L179-L200'
+    at: 'tests/v0_7_auth.rs:L118-L139'
   - symbol: tc_auth_e_login_ok_and_token_works
     kind: function
-    at: 'tests/v0_7_auth.rs:L204-L213'
+    at: 'tests/v0_7_auth.rs:L143-L152'
   - symbol: tc_auth_f_logout_invalidates_token
     kind: function
-    at: 'tests/v0_7_auth.rs:L217-L225'
+    at: 'tests/v0_7_auth.rs:L156-L165'
   - symbol: tc_auth_g_disabled_user_token_401
     kind: function
-    at: 'tests/v0_7_auth.rs:L229-L252'
-  - symbol: FakeEngine
-    kind: struct
-    at: 'tests/v0_8_persistence.rs:L26-L26'
-  - symbol: name
+    at: 'tests/v0_7_auth.rs:L169-L192'
+  - symbol: tc_auth_h_graph_clamped_to_role
     kind: function
-    at: 'tests/v0_8_persistence.rs:L30-L32'
-  - symbol: reason
+    at: 'tests/v0_7_auth.rs:L197-L231'
+  - symbol: tc_auth_i_trace_list_clamped_to_role
     kind: function
-    at: 'tests/v0_8_persistence.rs:L33-L55'
-  - symbol: spawn_server
+    at: 'tests/v0_7_auth.rs:L236-L293'
+  - symbol: tc_auth_j_login_rate_limited
     kind: function
-    at: 'tests/v0_8_persistence.rs:L59-L79'
-  - symbol: http_call
+    at: 'tests/v0_7_auth.rs:L297-L308'
+  - symbol: tc_auth_k_session_token_hashed_at_rest
     kind: function
-    at: 'tests/v0_8_persistence.rs:L82-L117'
+    at: 'tests/v0_7_auth.rs:L312-L322'
+  - symbol: common
+    kind: module
+    at: 'tests/v0_8_persistence.rs:L10-L10'
   - symbol: wait_run_done
     kind: function
-    at: 'tests/v0_8_persistence.rs:L120-L130'
+    at: 'tests/v0_8_persistence.rs:L24-L34'
   - symbol: temp_db
     kind: function
-    at: 'tests/v0_8_persistence.rs:L133-L141'
+    at: 'tests/v0_8_persistence.rs:L37-L45'
   - symbol: tc_persist_a_run_lifecycle_persisted
     kind: function
-    at: 'tests/v0_8_persistence.rs:L145-L179'
+    at: 'tests/v0_8_persistence.rs:L50-L82'
   - symbol: tc_persist_b_restart_rebuilds_run_map
     kind: function
-    at: 'tests/v0_8_persistence.rs:L183-L239'
+    at: 'tests/v0_8_persistence.rs:L86-L132'
   - symbol: tc_persist_c_crash_running_to_interrupted
     kind: function
-    at: 'tests/v0_8_persistence.rs:L243-L278'
-  - symbol: tc_persist_d_orphan_pending_to_expired
-    kind: function
-    at: 'tests/v0_8_persistence.rs:L282-L320'
+    at: 'tests/v0_8_persistence.rs:L136-L157'
 ---
 <!-- context:generated:start -->
 ## Summary

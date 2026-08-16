@@ -89,6 +89,7 @@ pub fn run_agent<'k>(
                     ApprovalResolution::Approved => continue,
                     _ => {
                         // Rejected / Expired / AlreadyResolved → 终局（人工裁决失败）
+                        bridge_audit(kernel, agent, run_id, trace);
                         return Ok(RunReport {
                             outcome: LoopOutcome::Denied("审批裁决未放行".to_string()),
                             status: RunStatus::Failed,
@@ -98,6 +99,7 @@ pub fn run_agent<'k>(
                 }
             }
             out => {
+                bridge_audit(kernel, agent, run_id, trace);
                 let (status, human_approval) = out.to_run_status();
                 return Ok(RunReport {
                     outcome: out,
@@ -105,6 +107,28 @@ pub fn run_agent<'k>(
                     human_approval,
                 });
             }
+        }
+    }
+}
+
+/// M2：Kernel 审计事件桥进 trace（I1：State = Reduce(EventLog)，可回放；
+/// 审批/演化闸门事实持久化到 wb_trace_event，供 /audit 查询）。
+fn bridge_audit(kernel: &Kernel, agent: &Agent, run_id: &str, trace: &mut Vec<TraceEvent>) {
+    for ev in kernel.events() {
+        if ev.ty.starts_with("approval.") || ev.ty == "evolution.gate_approved" {
+            trace.push(TraceEvent {
+                id: crate::trace::new_trace_id(),
+                kind: crate::trace::TraceKind::Cognitive,
+                event_type: ev.ty.clone(),
+                object_refs: vec!["world".to_string()],
+                run_id: Some(run_id.to_string()),
+                agent_id: Some(agent.id.clone()),
+                reasoning: None,
+                input: Some(ev.payload.clone()),
+                output: None,
+                confidence: None,
+                timestamp: ev.timestamp.to_string(),
+            });
         }
     }
 }

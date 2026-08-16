@@ -16,57 +16,93 @@ links:
 generator:
   version: 1
 covers:
+  - symbol: TraceKind
+    kind: enum
+    at: 'src/trace.rs:L15-L18'
+  - symbol: as_str
+    kind: function
+    at: 'src/trace.rs:L21-L26'
+  - symbol: Err
+    kind: type
+    at: 'src/trace.rs:L30-L30'
+  - symbol: from_str
+    kind: function
+    at: 'src/trace.rs:L31-L37'
+  - symbol: TraceEvent
+    kind: struct
+    at: 'src/trace.rs:L42-L55'
+  - symbol: TRACE_SEQ
+    kind: constant
+    at: 'src/trace.rs:L57-L57'
+  - symbol: now_ts
+    kind: function
+    at: 'src/trace.rs:L60-L65'
+  - symbol: new_trace_id
+    kind: function
+    at: 'src/trace.rs:L68-L74'
+  - symbol: world
+    kind: function
+    at: 'src/trace.rs:L78-L80'
+  - symbol: world_with_refs
+    kind: function
+    at: 'src/trace.rs:L84-L98'
   - symbol: COGNITIVE_STEPS
     kind: constant
-    at: 'src/trace.rs:L12-L21'
+    at: 'src/trace.rs:L102-L111'
   - symbol: View
     kind: enum
-    at: 'src/trace.rs:L25-L32'
+    at: 'src/trace.rs:L115-L122'
   - symbol: name
     kind: function
-    at: 'src/trace.rs:L36-L42'
+    at: 'src/trace.rs:L126-L132'
   - symbol: from_param
     kind: function
-    at: 'src/trace.rs:L45-L51'
+    at: 'src/trace.rs:L135-L141'
   - symbol: TraceEventDto
     kind: struct
-    at: 'src/trace.rs:L57-L76'
+    at: 'src/trace.rs:L147-L166'
   - symbol: from
     kind: function
-    at: 'src/trace.rs:L79-L93'
+    at: 'src/trace.rs:L169-L183'
+  - symbol: from_view
+    kind: function
+    at: 'src/trace.rs:L192-L210'
   - symbol: TimelineEvent
     kind: struct
-    at: 'src/trace.rs:L99-L114'
+    at: 'src/trace.rs:L216-L231'
   - symbol: DecisionSummary
     kind: struct
-    at: 'src/trace.rs:L118-L122'
+    at: 'src/trace.rs:L235-L239'
   - symbol: RunTimeline
     kind: struct
-    at: 'src/trace.rs:L127-L139'
+    at: 'src/trace.rs:L244-L256'
   - symbol: derive_run_state
     kind: function
-    at: 'src/trace.rs:L142-L159'
+    at: 'src/trace.rs:L261-L287'
   - symbol: to_timeline_event
     kind: function
-    at: 'src/trace.rs:L162-L173'
+    at: 'src/trace.rs:L290-L301'
   - symbol: build_timeline
     kind: function
-    at: 'src/trace.rs:L176-L248'
+    at: 'src/trace.rs:L304-L383'
   - symbol: DecisionText
     kind: interface
-    at: 'src/trace.rs:L251-L253'
+    at: 'src/trace.rs:L386-L388'
   - symbol: description_or_output
     kind: function
-    at: 'src/trace.rs:L252-L252'
+    at: 'src/trace.rs:L387-L387'
   - symbol: description_or_output
     kind: function
-    at: 'src/trace.rs:L255-L262'
+    at: 'src/trace.rs:L390-L397'
   - symbol: tests
     kind: module
-    at: 'src/trace.rs:L266-L300'
+    at: 'src/trace.rs:L401-L490'
   - symbol: timeline_dto_is_camel_case
     kind: function
-    at: 'src/trace.rs:L270-L299'
+    at: 'src/trace.rs:L405-L434'
+  - symbol: ws_from_view_clamps_to_role
+    kind: function
+    at: 'src/trace.rs:L438-L489'
 ---
 <!-- context:generated:start -->
 ## Summary

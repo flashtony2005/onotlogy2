@@ -52,72 +52,81 @@ covers:
   - symbol: can_read_audit
     kind: function
     at: 'src/auth.rs:L108-L110'
+  - symbol: can_read_evaluation
+    kind: function
+    at: 'src/auth.rs:L112-L114'
   - symbol: AuthError
     kind: enum
-    at: 'src/auth.rs:L115-L122'
+    at: 'src/auth.rs:L119-L126'
   - symbol: IdentityProvider
     kind: interface
-    at: 'src/auth.rs:L126-L135'
+    at: 'src/auth.rs:L130-L139'
   - symbol: authenticate
     kind: function
-    at: 'src/auth.rs:L128-L132'
+    at: 'src/auth.rs:L132-L136'
   - symbol: bootstrap_admin
     kind: function
-    at: 'src/auth.rs:L134-L134'
+    at: 'src/auth.rs:L138-L138'
+  - symbol: argon2
+    kind: function
+    at: 'src/auth.rs:L144-L150'
   - symbol: LocalIdentityProvider
     kind: struct
-    at: 'src/auth.rs:L138-L140'
+    at: 'src/auth.rs:L153-L155'
   - symbol: new
     kind: function
-    at: 'src/auth.rs:L143-L145'
+    at: 'src/auth.rs:L158-L160'
   - symbol: hash_password
     kind: function
-    at: 'src/auth.rs:L148-L154'
+    at: 'src/auth.rs:L163-L169'
   - symbol: authenticate
     kind: function
-    at: 'src/auth.rs:L159-L187'
+    at: 'src/auth.rs:L174-L199'
   - symbol: bootstrap_admin
     kind: function
-    at: 'src/auth.rs:L189-L213'
+    at: 'src/auth.rs:L201-L225'
   - symbol: SessionStore
     kind: struct
-    at: 'src/auth.rs:L217-L219'
+    at: 'src/auth.rs:L232-L234'
+  - symbol: hash_token
+    kind: function
+    at: 'src/auth.rs:L237-L242'
   - symbol: new
     kind: function
-    at: 'src/auth.rs:L222-L224'
+    at: 'src/auth.rs:L245-L247'
   - symbol: TTL_SECS
     kind: constant
-    at: 'src/auth.rs:L227-L227'
+    at: 'src/auth.rs:L250-L250'
   - symbol: issue
     kind: function
-    at: 'src/auth.rs:L230-L240'
+    at: 'src/auth.rs:L253-L263'
   - symbol: validate
     kind: function
-    at: 'src/auth.rs:L243-L274'
+    at: 'src/auth.rs:L266-L298'
   - symbol: revoke
     kind: function
-    at: 'src/auth.rs:L277-L282'
+    at: 'src/auth.rs:L301-L306'
   - symbol: now_secs
     kind: function
-    at: 'src/auth.rs:L286-L291'
+    at: 'src/auth.rs:L310-L315'
   - symbol: tests
     kind: module
-    at: 'src/auth.rs:L294-L369'
+    at: 'src/auth.rs:L318-L393'
   - symbol: mk_storage
     kind: function
-    at: 'src/auth.rs:L298-L300'
+    at: 'src/auth.rs:L322-L324'
   - symbol: role_rank_orders_executive_operator_developer
     kind: function
-    at: 'src/auth.rs:L303-L309'
+    at: 'src/auth.rs:L327-L333'
   - symbol: view_clamp_uses_role_rank_not_string
     kind: function
-    at: 'src/auth.rs:L312-L328'
+    at: 'src/auth.rs:L336-L352'
   - symbol: local_identity_bootstrap_authenticate_and_disable
     kind: function
-    at: 'src/auth.rs:L331-L347'
+    at: 'src/auth.rs:L355-L371'
   - symbol: session_issue_validate_revoke_roundtrip
     kind: function
-    at: 'src/auth.rs:L350-L368'
+    at: 'src/auth.rs:L374-L392'
 ---
 <!-- context:generated:start -->
 ## Summary

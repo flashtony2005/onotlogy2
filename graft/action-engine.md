@@ -20,46 +20,7 @@ links:
     description: Executes world-model operations through RuntimeKernel.
 generator:
   version: 1
-covers:
-  - symbol: ActionRegistry
-    kind: struct
-    at: 'src/action.rs:L20-L22'
-  - symbol: empty
-    kind: function
-    at: 'src/action.rs:L26-L28'
-  - symbol: from_ir
-    kind: function
-    at: 'src/action.rs:L31-L41'
-  - symbol: get
-    kind: function
-    at: 'src/action.rs:L44-L46'
-  - symbol: actions_of
-    kind: function
-    at: 'src/action.rs:L49-L54'
-  - symbol: has_actions
-    kind: function
-    at: 'src/action.rs:L57-L59'
-  - symbol: is_empty
-    kind: function
-    at: 'src/action.rs:L62-L64'
-  - symbol: ActionError
-    kind: enum
-    at: 'src/action.rs:L69-L78'
-  - symbol: ActionEffect
-    kind: struct
-    at: 'src/action.rs:L82-L89'
-  - symbol: ActionEngine
-    kind: struct
-    at: 'src/action.rs:L92-L94'
-  - symbol: new
-    kind: function
-    at: 'src/action.rs:L97-L99'
-  - symbol: invoke
-    kind: function
-    at: 'src/action.rs:L103-L182'
-  - symbol: resolve
-    kind: function
-    at: 'src/action.rs:L186-L193'
+covers: []
 ---
 <!-- context:generated:start -->
 ## Summary

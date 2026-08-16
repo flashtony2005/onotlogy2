@@ -18,67 +18,97 @@ generator:
 covers:
   - symbol: Cli
     kind: struct
-    at: 'src/bin/oaip.rs:L22-L27'
+    at: 'src/bin/oaip.rs:L19-L24'
   - symbol: Cmd
     kind: enum
-    at: 'src/bin/oaip.rs:L30-L83'
+    at: 'src/bin/oaip.rs:L27-L104'
   - symbol: AgentCmd
     kind: enum
-    at: 'src/bin/oaip.rs:L86-L104'
+    at: 'src/bin/oaip.rs:L107-L131'
+  - symbol: WorkerCmd
+    kind: enum
+    at: 'src/bin/oaip.rs:L134-L154'
   - symbol: ObjectCmd
     kind: enum
-    at: 'src/bin/oaip.rs:L107-L110'
+    at: 'src/bin/oaip.rs:L157-L160'
   - symbol: RelationCmd
     kind: enum
-    at: 'src/bin/oaip.rs:L113-L127'
+    at: 'src/bin/oaip.rs:L163-L177'
   - symbol: EventCmd
     kind: enum
-    at: 'src/bin/oaip.rs:L130-L139'
+    at: 'src/bin/oaip.rs:L180-L189'
   - symbol: DbCmd
     kind: enum
-    at: 'src/bin/oaip.rs:L142-L145'
+    at: 'src/bin/oaip.rs:L192-L195'
   - symbol: UserCmd
     kind: enum
-    at: 'src/bin/oaip.rs:L148-L156'
+    at: 'src/bin/oaip.rs:L198-L221'
   - symbol: main
     kind: function
-    at: 'src/bin/oaip.rs:L159-L229'
+    at: 'src/bin/oaip.rs:L224-L333'
   - symbol: cmd_compile
     kind: function
-    at: 'src/bin/oaip.rs:L231-L244'
+    at: 'src/bin/oaip.rs:L335-L348'
   - symbol: cmd_run
     kind: function
-    at: 'src/bin/oaip.rs:L246-L261'
+    at: 'src/bin/oaip.rs:L350-L364'
   - symbol: cmd_object_list
     kind: function
-    at: 'src/bin/oaip.rs:L263-L272'
+    at: 'src/bin/oaip.rs:L366-L375'
   - symbol: cmd_event_list
     kind: function
-    at: 'src/bin/oaip.rs:L274-L288'
+    at: 'src/bin/oaip.rs:L377-L391'
   - symbol: cmd_relation_link
     kind: function
-    at: 'src/bin/oaip.rs:L290-L306'
+    at: 'src/bin/oaip.rs:L393-L408'
   - symbol: cmd_relation_list
     kind: function
-    at: 'src/bin/oaip.rs:L308-L331'
+    at: 'src/bin/oaip.rs:L410-L432'
   - symbol: cmd_event_emit
     kind: function
-    at: 'src/bin/oaip.rs:L333-L346'
+    at: 'src/bin/oaip.rs:L434-L449'
   - symbol: cmd_db_reset
     kind: function
-    at: 'src/bin/oaip.rs:L348-L359'
+    at: 'src/bin/oaip.rs:L451-L462'
   - symbol: cmd_agent_run
     kind: function
-    at: 'src/bin/oaip.rs:L362-L429'
+    at: 'src/bin/oaip.rs:L467-L755'
+  - symbol: default_worker_env
+    kind: function
+    at: 'src/bin/oaip.rs:L759-L785'
+  - symbol: policy_for_capabilities
+    kind: function
+    at: 'src/bin/oaip.rs:L788-L798'
+  - symbol: cmd_worker_run
+    kind: function
+    at: 'src/bin/oaip.rs:L802-L916'
+  - symbol: cmd_replay
+    kind: function
+    at: 'src/bin/oaip.rs:L919-L940'
+  - symbol: cmd_simulate
+    kind: function
+    at: 'src/bin/oaip.rs:L944-L964'
+  - symbol: simulate_inner
+    kind: function
+    at: 'src/bin/oaip.rs:L966-L1064'
+  - symbol: cmd_health
+    kind: function
+    at: 'src/bin/oaip.rs:L1067-L1094'
   - symbol: cmd_serve
     kind: function
-    at: 'src/bin/oaip.rs:L432-L480'
+    at: 'src/bin/oaip.rs:L1097-L1151'
   - symbol: cmd_user_create_admin
     kind: function
-    at: 'src/bin/oaip.rs:L483-L493'
-  - symbol: load_registry
+    at: 'src/bin/oaip.rs:L1154-L1164'
+  - symbol: cmd_user_create
     kind: function
-    at: 'src/bin/oaip.rs:L496-L505'
+    at: 'src/bin/oaip.rs:L1167-L1191'
+  - symbol: cmd_user_list
+    kind: function
+    at: 'src/bin/oaip.rs:L1194-L1208'
+  - symbol: cmd_user_delete
+    kind: function
+    at: 'src/bin/oaip.rs:L1211-L1216'
 ---
 <!-- context:generated:start -->
 ## Summary

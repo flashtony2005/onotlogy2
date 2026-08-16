@@ -81,45 +81,51 @@ covers:
   - symbol: E_OBJECT_NAME
     kind: constant
     at: 'src/odl.rs:L56-L56'
-  - symbol: E_NO_PROP_BLOCK
+  - symbol: E_DUP_OBJECT
     kind: constant
     at: 'src/odl.rs:L57-L57'
-  - symbol: E_EMPTY_PROP_NAME
+  - symbol: E_NO_PROP_BLOCK
     kind: constant
     at: 'src/odl.rs:L58-L58'
-  - symbol: E_UNKNOWN_TYPE
+  - symbol: E_EMPTY_PROP_NAME
     kind: constant
     at: 'src/odl.rs:L59-L59'
-  - symbol: E_MISSING_PROPERTY
+  - symbol: E_UNKNOWN_TYPE
     kind: constant
     at: 'src/odl.rs:L60-L60'
+  - symbol: E_MISSING_PROPERTY
+    kind: constant
+    at: 'src/odl.rs:L61-L61'
   - symbol: Section
     kind: enum
-    at: 'src/odl.rs:L64-L76'
+    at: 'src/odl.rs:L65-L77'
   - symbol: parse_odl
     kind: function
-    at: 'src/odl.rs:L79-L357'
+    at: 'src/odl.rs:L80-L361'
   - symbol: parse_header
     kind: function
-    at: 'src/odl.rs:L360-L370'
+    at: 'src/odl.rs:L364-L374'
+  - symbol: list_item_value
+    kind: function
+    at: 'src/odl.rs:L378-L383'
   - symbol: parse_value_expr
     kind: function
-    at: 'src/odl.rs:L373-L399'
+    at: 'src/odl.rs:L386-L416'
   - symbol: flush_update
     kind: function
-    at: 'src/odl.rs:L402-L406'
+    at: 'src/odl.rs:L419-L423'
   - symbol: flush_create
     kind: function
-    at: 'src/odl.rs:L409-L413'
+    at: 'src/odl.rs:L426-L430'
   - symbol: flush_action
     kind: function
-    at: 'src/odl.rs:L416-L420'
+    at: 'src/odl.rs:L433-L437'
   - symbol: flush_clause
     kind: function
-    at: 'src/odl.rs:L423-L427'
+    at: 'src/odl.rs:L440-L444'
   - symbol: parse_compare_op
     kind: function
-    at: 'src/odl.rs:L430-L439'
+    at: 'src/odl.rs:L447-L456'
 ---
 <!-- context:generated:start -->
 ## Summary

@@ -28,117 +28,168 @@ links:
 generator:
   version: 1
 covers:
-  - symbol: fmtTime
-    kind: function
-    at: 'ui/src/App.tsx:L33-L37'
-  - symbol: fmtJson
-    kind: function
-    at: 'ui/src/App.tsx:L39-L47'
+  - symbol: ViewMeta
+    kind: interface
+    at: 'ui/src/App.tsx:L43-L50'
   - symbol: App
     kind: function
-    at: 'ui/src/App.tsx:L49-L273'
-  - symbol: reloadMemory
+    at: 'ui/src/App.tsx:L111-L510'
+  - symbol: handleAuthError
     kind: function
-    at: 'ui/src/App.tsx:L62-L72'
-  - symbol: reloadEvolution
+    at: 'ui/src/App.tsx:L150-L159'
+  - symbol: doLogin
     kind: function
-    at: 'ui/src/App.tsx:L78-L88'
+    at: 'ui/src/App.tsx:L161-L170'
+  - symbol: doLogout
+    kind: function
+    at: 'ui/src/App.tsx:L172-L182'
+  - symbol: toggleGroup
+    kind: function
+    at: 'ui/src/App.tsx:L185-L187'
+  - symbol: goView
+    kind: function
+    at: 'ui/src/App.tsx:L190-L196'
   - symbol: startRun
     kind: function
-    at: 'ui/src/App.tsx:L106-L123'
-  - symbol: MemoryPanel
+    at: 'ui/src/App.tsx:L221-L237'
+  - symbol: AuthError
+    kind: class
+    at: 'ui/src/api.ts:L20-L25'
+  - symbol: constructor
+    kind: method
+    at: 'ui/src/api.ts:L21-L24'
+  - symbol: fetchWithTimeout
     kind: function
-    at: 'ui/src/App.tsx:L276-L316'
-  - symbol: EvolutionPanel
-    kind: function
-    at: 'ui/src/App.tsx:L319-L466'
-  - symbol: toggleAutoApprove
-    kind: function
-    at: 'ui/src/App.tsx:L337-L347'
-  - symbol: showAudit
-    kind: function
-    at: 'ui/src/App.tsx:L349-L352'
+    at: 'ui/src/api.ts:L31-L44'
   - symbol: unwrap
     kind: function
-    at: 'ui/src/api.ts:L13-L19'
+    at: 'ui/src/api.ts:L46-L69'
+  - symbol: authFetch
+    kind: function
+    at: 'ui/src/api.ts:L72-L79'
+  - symbol: postLogin
+    kind: function
+    at: 'ui/src/api.ts:L84-L94'
+  - symbol: getMe
+    kind: function
+    at: 'ui/src/api.ts:L97-L100'
+  - symbol: postLogout
+    kind: function
+    at: 'ui/src/api.ts:L103-L106'
   - symbol: postRun
     kind: function
-    at: 'ui/src/api.ts:L21-L28'
-  - symbol: getTimeline
+    at: 'ui/src/api.ts:L110-L117'
+  - symbol: getSkillRaw
     kind: function
-    at: 'ui/src/api.ts:L30-L35'
-  - symbol: getMemory
+    at: 'ui/src/api.ts:L119-L123'
+  - symbol: importSkill
     kind: function
-    at: 'ui/src/api.ts:L38-L41'
-  - symbol: getEvolution
+    at: 'ui/src/api.ts:L125-L137'
+  - symbol: getPlugins
     kind: function
-    at: 'ui/src/api.ts:L45-L48'
-  - symbol: postAutoApproveToggle
+    at: 'ui/src/api.ts:L139-L143'
+  - symbol: getWorkers
     kind: function
-    at: 'ui/src/api.ts:L52-L62'
-  - symbol: getApprovalAudit
+    at: 'ui/src/api.ts:L145-L149'
+  - symbol: getSessions
     kind: function
-    at: 'ui/src/api.ts:L65-L68'
+    at: 'ui/src/api.ts:L151-L155'
+  - symbol: getSession
+    kind: function
+    at: 'ui/src/api.ts:L157-L161'
+  - symbol: createSession
+    kind: function
+    at: 'ui/src/api.ts:L163-L169'
+  - symbol: getSkills
+    kind: function
+    at: 'ui/src/api.ts:L173-L177'
+  - symbol: getGraph
+    kind: function
+    at: 'ui/src/api.ts:L179-L182'
   - symbol: Options
     kind: interface
-    at: 'ui/src/hooks/useTraceStream.ts:L8-L11'
+    at: 'ui/src/hooks/useTraceStream.ts:L14-L19'
   - symbol: useTraceStream
     kind: function
-    at: 'ui/src/hooks/useTraceStream.ts:L13-L63'
+    at: 'ui/src/hooks/useTraceStream.ts:L21-L82'
   - symbol: connect
     kind: function
-    at: 'ui/src/hooks/useTraceStream.ts:L28-L54'
+    at: 'ui/src/hooks/useTraceStream.ts:L39-L73'
+  - symbol: ErrorBoundary
+    kind: class
+    at: 'ui/src/main.tsx:L7-L40'
+  - symbol: getDerivedStateFromError
+    kind: method
+    at: 'ui/src/main.tsx:L13-L15'
+  - symbol: render
+    kind: method
+    at: 'ui/src/main.tsx:L17-L39'
   - symbol: ViewKind
     kind: type
-    at: 'ui/src/types.ts:L3-L3'
+    at: 'ui/src/types.ts:L3-L14'
+  - symbol: AuthUserDto
+    kind: interface
+    at: 'ui/src/types.ts:L17-L20'
   - symbol: TraceEventDto
     kind: interface
-    at: 'ui/src/types.ts:L5-L17'
+    at: 'ui/src/types.ts:L22-L34'
   - symbol: TimelineEvent
     kind: interface
-    at: 'ui/src/types.ts:L19-L28'
+    at: 'ui/src/types.ts:L36-L45'
   - symbol: DecisionSummary
     kind: interface
-    at: 'ui/src/types.ts:L30-L34'
+    at: 'ui/src/types.ts:L47-L51'
   - symbol: RunTimeline
     kind: interface
-    at: 'ui/src/types.ts:L36-L44'
+    at: 'ui/src/types.ts:L53-L61'
   - symbol: RunStartDto
     kind: interface
-    at: 'ui/src/types.ts:L46-L50'
+    at: 'ui/src/types.ts:L63-L67'
   - symbol: ApiResponse
     kind: interface
-    at: 'ui/src/types.ts:L52-L56'
-  - symbol: MemoryRecord
+    at: 'ui/src/types.ts:L69-L73'
+  - symbol: SkillDto
     kind: interface
-    at: 'ui/src/types.ts:L59-L65'
-  - symbol: MemoryListDto
+    at: 'ui/src/types.ts:L77-L85'
+  - symbol: PluginDto
     kind: interface
-    at: 'ui/src/types.ts:L67-L70'
-  - symbol: PatternDto
+    at: 'ui/src/types.ts:L87-L94'
+  - symbol: SessionEventDto
     kind: interface
-    at: 'ui/src/types.ts:L74-L80'
-  - symbol: ProposalDto
+    at: 'ui/src/types.ts:L96-L101'
+  - symbol: WorkerDto
     kind: interface
-    at: 'ui/src/types.ts:L82-L90'
-  - symbol: LearnedDto
+    at: 'ui/src/types.ts:L103-L111'
+  - symbol: RawSkillDto
     kind: interface
-    at: 'ui/src/types.ts:L92-L102'
-  - symbol: ApprovalAuditDto
+    at: 'ui/src/types.ts:L113-L119'
+  - symbol: SessionSummaryDto
     kind: interface
-    at: 'ui/src/types.ts:L105-L113'
-  - symbol: EvolutionStateDto
+    at: 'ui/src/types.ts:L121-L124'
+  - symbol: SessionDto
     kind: interface
-    at: 'ui/src/types.ts:L115-L119'
+    at: 'ui/src/types.ts:L126-L129'
+  - symbol: WorldNodeDto
+    kind: interface
+    at: 'ui/src/types.ts:L132-L136'
+  - symbol: WorldEdgeDto
+    kind: interface
+    at: 'ui/src/types.ts:L138-L144'
+  - symbol: WorldGraphDto
+    kind: interface
+    at: 'ui/src/types.ts:L146-L149'
   - symbol: toTimelineEvent
     kind: function
-    at: 'ui/src/view.ts:L24-L35'
+    at: 'ui/src/view.ts:L25-L36'
   - symbol: asString
     kind: function
-    at: 'ui/src/view.ts:L37-L40'
+    at: 'ui/src/view.ts:L38-L41'
+  - symbol: deriveState
+    kind: function
+    at: 'ui/src/view.ts:L45-L55'
   - symbol: buildTimeline
     kind: function
-    at: 'ui/src/view.ts:L42-L97'
+    at: 'ui/src/view.ts:L57-L110'
 ---
 <!-- context:generated:start -->
 ## Summary

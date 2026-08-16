@@ -58,300 +58,180 @@ covers:
   - symbol: can_read_audit
     kind: function
     at: 'src/auth.rs:L108-L110'
+  - symbol: can_read_evaluation
+    kind: function
+    at: 'src/auth.rs:L112-L114'
   - symbol: AuthError
     kind: enum
-    at: 'src/auth.rs:L115-L122'
+    at: 'src/auth.rs:L119-L126'
   - symbol: IdentityProvider
     kind: interface
-    at: 'src/auth.rs:L126-L135'
+    at: 'src/auth.rs:L130-L139'
   - symbol: authenticate
     kind: function
-    at: 'src/auth.rs:L128-L132'
+    at: 'src/auth.rs:L132-L136'
   - symbol: bootstrap_admin
     kind: function
-    at: 'src/auth.rs:L134-L134'
+    at: 'src/auth.rs:L138-L138'
+  - symbol: argon2
+    kind: function
+    at: 'src/auth.rs:L144-L150'
   - symbol: LocalIdentityProvider
     kind: struct
-    at: 'src/auth.rs:L138-L140'
+    at: 'src/auth.rs:L153-L155'
   - symbol: new
     kind: function
-    at: 'src/auth.rs:L143-L145'
+    at: 'src/auth.rs:L158-L160'
   - symbol: hash_password
     kind: function
-    at: 'src/auth.rs:L148-L154'
+    at: 'src/auth.rs:L163-L169'
   - symbol: authenticate
     kind: function
-    at: 'src/auth.rs:L159-L187'
+    at: 'src/auth.rs:L174-L199'
   - symbol: bootstrap_admin
     kind: function
-    at: 'src/auth.rs:L189-L213'
+    at: 'src/auth.rs:L201-L225'
   - symbol: SessionStore
     kind: struct
-    at: 'src/auth.rs:L217-L219'
+    at: 'src/auth.rs:L232-L234'
+  - symbol: hash_token
+    kind: function
+    at: 'src/auth.rs:L237-L242'
   - symbol: new
     kind: function
-    at: 'src/auth.rs:L222-L224'
+    at: 'src/auth.rs:L245-L247'
   - symbol: TTL_SECS
     kind: constant
-    at: 'src/auth.rs:L227-L227'
+    at: 'src/auth.rs:L250-L250'
   - symbol: issue
     kind: function
-    at: 'src/auth.rs:L230-L240'
+    at: 'src/auth.rs:L253-L263'
   - symbol: validate
     kind: function
-    at: 'src/auth.rs:L243-L274'
+    at: 'src/auth.rs:L266-L298'
   - symbol: revoke
     kind: function
-    at: 'src/auth.rs:L277-L282'
+    at: 'src/auth.rs:L301-L306'
   - symbol: now_secs
     kind: function
-    at: 'src/auth.rs:L286-L291'
+    at: 'src/auth.rs:L310-L315'
   - symbol: tests
     kind: module
-    at: 'src/auth.rs:L294-L369'
+    at: 'src/auth.rs:L318-L393'
   - symbol: mk_storage
     kind: function
-    at: 'src/auth.rs:L298-L300'
+    at: 'src/auth.rs:L322-L324'
   - symbol: role_rank_orders_executive_operator_developer
     kind: function
-    at: 'src/auth.rs:L303-L309'
+    at: 'src/auth.rs:L327-L333'
   - symbol: view_clamp_uses_role_rank_not_string
     kind: function
-    at: 'src/auth.rs:L312-L328'
+    at: 'src/auth.rs:L336-L352'
   - symbol: local_identity_bootstrap_authenticate_and_disable
     kind: function
-    at: 'src/auth.rs:L331-L347'
+    at: 'src/auth.rs:L355-L371'
   - symbol: session_issue_validate_revoke_roundtrip
     kind: function
-    at: 'src/auth.rs:L350-L368'
-  - symbol: RunRecord
+    at: 'src/auth.rs:L374-L392'
+  - symbol: TraceKind
+    kind: enum
+    at: 'src/trace.rs:L15-L18'
+  - symbol: as_str
+    kind: function
+    at: 'src/trace.rs:L21-L26'
+  - symbol: Err
+    kind: type
+    at: 'src/trace.rs:L30-L30'
+  - symbol: from_str
+    kind: function
+    at: 'src/trace.rs:L31-L37'
+  - symbol: TraceEvent
     kind: struct
-    at: 'src/server.rs:L43-L47'
-  - symbol: AppState
-    kind: struct
-    at: 'src/server.rs:L50-L71'
-  - symbol: ApiResponse
-    kind: struct
-    at: 'src/server.rs:L75-L80'
-  - symbol: ok
+    at: 'src/trace.rs:L42-L55'
+  - symbol: TRACE_SEQ
+    kind: constant
+    at: 'src/trace.rs:L57-L57'
+  - symbol: now_ts
     kind: function
-    at: 'src/server.rs:L83-L89'
-  - symbol: error
+    at: 'src/trace.rs:L60-L65'
+  - symbol: new_trace_id
     kind: function
-    at: 'src/server.rs:L94-L100'
-  - symbol: wb_code
+    at: 'src/trace.rs:L68-L74'
+  - symbol: world
     kind: function
-    at: 'src/server.rs:L104-L106'
-  - symbol: now_micros
+    at: 'src/trace.rs:L78-L80'
+  - symbol: world_with_refs
     kind: function
-    at: 'src/server.rs:L109-L115'
-  - symbol: TraceListParams
-    kind: struct
-    at: 'src/server.rs:L119-L134'
-  - symbol: WsParams
-    kind: struct
-    at: 'src/server.rs:L137-L140'
-  - symbol: ViewParam
-    kind: struct
-    at: 'src/server.rs:L143-L146'
-  - symbol: RunBody
-    kind: struct
-    at: 'src/server.rs:L150-L158'
-  - symbol: TraceListDto
-    kind: struct
-    at: 'src/server.rs:L162-L165'
-  - symbol: RunStartDto
-    kind: struct
-    at: 'src/server.rs:L169-L173'
-  - symbol: MemoryRecordDto
-    kind: struct
-    at: 'src/server.rs:L178-L184'
-  - symbol: MemoryListDto
-    kind: struct
-    at: 'src/server.rs:L188-L191'
-  - symbol: PatternDto
-    kind: struct
-    at: 'src/server.rs:L197-L203'
-  - symbol: ProposalDto
-    kind: struct
-    at: 'src/server.rs:L207-L215'
-  - symbol: LearnedDto
-    kind: struct
-    at: 'src/server.rs:L219-L229'
-  - symbol: EvolutionDto
-    kind: struct
-    at: 'src/server.rs:L233-L237'
-  - symbol: router
-    kind: function
-    at: 'src/server.rs:L242-L276'
-  - symbol: serve
-    kind: function
-    at: 'src/server.rs:L283-L305'
-  - symbol: serve_with_timeout
-    kind: function
-    at: 'src/server.rs:L311-L347'
-  - symbol: recover
-    kind: function
-    at: 'src/server.rs:L351-L366'
-  - symbol: auth_layer
-    kind: function
-    at: 'src/server.rs:L373-L403'
-  - symbol: is_public
-    kind: function
-    at: 'src/server.rs:L406-L408'
-  - symbol: bearer_token
-    kind: function
-    at: 'src/server.rs:L411-L415'
-  - symbol: unauthorized
-    kind: function
-    at: 'src/server.rs:L418-L420'
-  - symbol: forbidden
-    kind: function
-    at: 'src/server.rs:L423-L425'
-  - symbol: AuthToken
-    kind: struct
-    at: 'src/server.rs:L429-L429'
-  - symbol: LoginBody
-    kind: struct
-    at: 'src/server.rs:L433-L436'
-  - symbol: auth_login
-    kind: function
-    at: 'src/server.rs:L439-L456'
-  - symbol: auth_logout
-    kind: function
-    at: 'src/server.rs:L459-L467'
-  - symbol: auth_me
-    kind: function
-    at: 'src/server.rs:L470-L476'
-  - symbol: list_trace
-    kind: function
-    at: 'src/server.rs:L480-L504'
-  - symbol: get_trace
-    kind: function
-    at: 'src/server.rs:L507-L517'
-  - symbol: timeline
-    kind: function
-    at: 'src/server.rs:L520-L552'
-  - symbol: list_memory
-    kind: function
-    at: 'src/server.rs:L555-L575'
-  - symbol: list_evolution
-    kind: function
-    at: 'src/server.rs:L579-L642'
-  - symbol: revoke_learned
-    kind: function
-    at: 'src/server.rs:L645-L658'
-  - symbol: AutoApproveBody
-    kind: struct
-    at: 'src/server.rs:L664-L667'
-  - symbol: toggle_auto_approve
-    kind: function
-    at: 'src/server.rs:L669-L701'
-  - symbol: ApprovalAuditDto
-    kind: struct
-    at: 'src/server.rs:L706-L714'
-  - symbol: from
-    kind: function
-    at: 'src/server.rs:L717-L727'
-  - symbol: list_approval_audit_handler
-    kind: function
-    at: 'src/server.rs:L731-L748'
-  - symbol: list_approvals
-    kind: function
-    at: 'src/server.rs:L751-L773'
-  - symbol: ApprovalDecisionBody
-    kind: struct
-    at: 'src/server.rs:L776-L779'
-  - symbol: resolve_approval
-    kind: function
-    at: 'src/server.rs:L782-L818'
-  - symbol: approval_record_to_request
-    kind: function
-    at: 'src/server.rs:L821-L830'
-  - symbol: run_start
-    kind: function
-    at: 'src/server.rs:L833-L928'
-  - symbol: ws_handler
-    kind: function
-    at: 'src/server.rs:L931-L939'
-  - symbol: handle_ws
-    kind: function
-    at: 'src/server.rs:L942-L989'
-  - symbol: collect_history
-    kind: function
-    at: 'src/server.rs:L992-L1019'
-  - symbol: serve_static
-    kind: function
-    at: 'src/server.rs:L1022-L1060'
-  - symbol: content_type
-    kind: function
-    at: 'src/server.rs:L1063-L1085'
-  - symbol: tests
-    kind: module
-    at: 'src/server.rs:L1088-L1104'
-  - symbol: run_start_dto_is_camel_case
-    kind: function
-    at: 'src/server.rs:L1092-L1103'
+    at: 'src/trace.rs:L84-L98'
   - symbol: COGNITIVE_STEPS
     kind: constant
-    at: 'src/trace.rs:L12-L21'
+    at: 'src/trace.rs:L102-L111'
   - symbol: View
     kind: enum
-    at: 'src/trace.rs:L25-L32'
+    at: 'src/trace.rs:L115-L122'
   - symbol: name
     kind: function
-    at: 'src/trace.rs:L36-L42'
+    at: 'src/trace.rs:L126-L132'
   - symbol: from_param
     kind: function
-    at: 'src/trace.rs:L45-L51'
+    at: 'src/trace.rs:L135-L141'
   - symbol: TraceEventDto
     kind: struct
-    at: 'src/trace.rs:L57-L76'
+    at: 'src/trace.rs:L147-L166'
   - symbol: from
     kind: function
-    at: 'src/trace.rs:L79-L93'
+    at: 'src/trace.rs:L169-L183'
+  - symbol: from_view
+    kind: function
+    at: 'src/trace.rs:L192-L210'
   - symbol: TimelineEvent
     kind: struct
-    at: 'src/trace.rs:L99-L114'
+    at: 'src/trace.rs:L216-L231'
   - symbol: DecisionSummary
     kind: struct
-    at: 'src/trace.rs:L118-L122'
+    at: 'src/trace.rs:L235-L239'
   - symbol: RunTimeline
     kind: struct
-    at: 'src/trace.rs:L127-L139'
+    at: 'src/trace.rs:L244-L256'
   - symbol: derive_run_state
     kind: function
-    at: 'src/trace.rs:L142-L159'
+    at: 'src/trace.rs:L261-L287'
   - symbol: to_timeline_event
     kind: function
-    at: 'src/trace.rs:L162-L173'
+    at: 'src/trace.rs:L290-L301'
   - symbol: build_timeline
     kind: function
-    at: 'src/trace.rs:L176-L248'
+    at: 'src/trace.rs:L304-L383'
   - symbol: DecisionText
     kind: interface
-    at: 'src/trace.rs:L251-L253'
+    at: 'src/trace.rs:L386-L388'
   - symbol: description_or_output
     kind: function
-    at: 'src/trace.rs:L252-L252'
+    at: 'src/trace.rs:L387-L387'
   - symbol: description_or_output
     kind: function
-    at: 'src/trace.rs:L255-L262'
+    at: 'src/trace.rs:L390-L397'
   - symbol: tests
     kind: module
-    at: 'src/trace.rs:L266-L300'
+    at: 'src/trace.rs:L401-L490'
   - symbol: timeline_dto_is_camel_case
     kind: function
-    at: 'src/trace.rs:L270-L299'
+    at: 'src/trace.rs:L405-L434'
+  - symbol: ws_from_view_clamps_to_role
+    kind: function
+    at: 'src/trace.rs:L438-L489'
   - symbol: toTimelineEvent
     kind: function
-    at: 'ui/src/view.ts:L24-L35'
+    at: 'ui/src/view.ts:L25-L36'
   - symbol: asString
     kind: function
-    at: 'ui/src/view.ts:L37-L40'
+    at: 'ui/src/view.ts:L38-L41'
+  - symbol: deriveState
+    kind: function
+    at: 'ui/src/view.ts:L45-L55'
   - symbol: buildTimeline
     kind: function
-    at: 'ui/src/view.ts:L42-L97'
+    at: 'ui/src/view.ts:L57-L110'
 ---
 <!-- context:generated:start -->
 ## Summary

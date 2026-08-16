@@ -44,6 +44,7 @@ use trace::get_trace;
 use trace::list_trace;
 use trace::timeline;
 use trace::ws_handler;
+use views::list_audit;
 use views::list_evaluations;
 use views::list_mutations;
 use views::loop_health;
@@ -202,6 +203,7 @@ fn router() -> Router<Arc<AppState>> {
         .route("/api/v1/wb/agent/trace/:id", get(get_trace))
         .route("/api/v1/wb/agent/run/:run_id/timeline", get(timeline))
         .route("/api/v1/wb/agent/evaluation", get(list_evaluations))
+        .route("/api/v1/wb/agent/audit", get(list_audit))
         .route("/api/v1/wb/agent/mutation", get(list_mutations))
         .route("/api/v1/wb/agent/health", get(loop_health))
         .route(

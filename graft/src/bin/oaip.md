@@ -1,23 +1,33 @@
 # src/bin/oaip.rs · [[cli-entry-point]]
 
-- Cli · struct · L22-L27 — Top-level CLI argument struct holding the global db path and the subcommand to dispatch.
-- Cmd · enum · L30-L83 — Enumeration of all top-level CLI subcommands (compile, run, object, relation, event, agent, serve, db, user).
-- AgentCmd · enum · L86-L104 — Subcommand enum for agent operations, currently only 'run' with goal and approval flags.
-- ObjectCmd · enum · L107-L110 — Subcommand enum for object operations, currently only listing objects of a type.
-- RelationCmd · enum · L113-L127 — Subcommand enum for relation operations: link an edge and list relations by source or edge type.
-- EventCmd · enum · L130-L139 — Subcommand enum for world event operations: list the event trace and emit a domain event.
-- DbCmd · enum · L142-L145 — Subcommand enum for database maintenance, currently only resetting the local DB.
-- UserCmd · enum · L148-L156 — Subcommand enum for user management, currently only offline admin account creation.
-- main · function · L159-L229 — Parses CLI args and dispatches each subcommand to its handler function.
-- cmd_compile · function · L231-L244 — Parses an ODL file and generates Rust structs, schema.sql, and ontology.json into ./gen/.
-- cmd_run · function · L246-L261 — Demo command that hard-deletes old demo rows and re-seeds two Customer objects for repeatable TC-006 runs.
-- cmd_object_list · function · L263-L272 — Queries and renders all objects of a given type, with a hint when none exist.
-- cmd_event_list · function · L274-L288 — Lists the world event trace, rendering each event's timestamp, type, id, and refs.
-- cmd_relation_link · function · L290-L306 — Creates a relation edge between source and target via the runtime kernel and reports success or failure.
-- cmd_relation_list · function · L308-L331 — Lists relations filtered by source id or edge type, requiring at least one filter.
-- cmd_event_emit · function · L333-L346 — Emits a domain business event bound to the given object refs through the runtime kernel.
-- cmd_db_reset · function · L348-L359 — Deletes the DB file plus WAL/SHM companions and reopens to rebuild tables from canonical schema.
-- cmd_agent_run · function · L362-L429 — Runs the agent loop: checks Pi engine health, selects an approver (auto vs console), and executes the goal through the Planner.
-- cmd_serve · function · L432-L480 — Boots the observation server, enforcing that an admin account exists (env bootstrap or error) before binding the listener.
-- cmd_user_create_admin · function · L483-L493 — Offline idempotent creation of a Developer-role admin account via the identity provider.
-- load_registry · function · L496-L505 — Builds an ActionRegistry from an optional ODL file, falling back to an empty registry when none is given.
+- Cli · struct · L19-L24 — Top-level CLI argument struct holding the global db path and the subcommand to dispatch.
+- Cmd · enum · L27-L104 — Enumeration of all top-level CLI subcommands (compile, run, object, relation, event, agent, serve, db, user).
+- AgentCmd · enum · L107-L131 — Subcommand enum for agent operations, currently only 'run' with goal and approval flags.
+- WorkerCmd · enum · L134-L154 — enum WorkerCmd
+- ObjectCmd · enum · L157-L160 — Subcommand enum for object operations, currently only listing objects of a type.
+- RelationCmd · enum · L163-L177 — Subcommand enum for relation operations: link an edge and list relations by source or edge type.
+- EventCmd · enum · L180-L189 — Subcommand enum for world event operations: list the event trace and emit a domain event.
+- DbCmd · enum · L192-L195 — Subcommand enum for database maintenance, currently only resetting the local DB.
+- UserCmd · enum · L198-L221 — Subcommand enum for user management, currently only offline admin account creation.
+- main · function · L224-L333 — async fn main() -> Result<(), Box<dyn std::error::Error>>
+- cmd_compile · function · L335-L348 — async fn cmd_compile(file: &str) -> Result<(), Box<dyn std::error::Error>>
+- cmd_run · function · L350-L364 — async fn cmd_run(db: &str) -> Result<(), Box<dyn std::error::Error>>
+- cmd_object_list · function · L366-L375 — async fn cmd_object_list(db: &str, object_type: &str) -> Result<(), Box<dyn std::error::Error>>
+- cmd_event_list · function · L377-L391 — async fn cmd_event_list(db: &str) -> Result<(), Box<dyn std::error::Error>>
+- cmd_relation_link · function · L393-L408 — async fn cmd_relation_link(
+- cmd_relation_list · function · L410-L432 — async fn cmd_relation_list(
+- cmd_event_emit · function · L434-L449 — async fn cmd_event_emit(
+- cmd_db_reset · function · L451-L462 — async fn cmd_db_reset(db: &str) -> Result<(), Box<dyn std::error::Error>>
+- cmd_agent_run · function · L467-L755 — async fn cmd_agent_run(
+- default_worker_env · function · L759-L785 — fn default_worker_env() -> (
+- policy_for_capabilities · function · L788-L798 — fn policy_for_capabilities(caps: &[String]) -> openaip_os::worker::policy::WorkerPolicy
+- cmd_worker_run · function · L802-L916 — async fn cmd_worker_run(
+- cmd_replay · function · L919-L940 — async fn cmd_replay(db: &str) -> Result<(), Box<dyn std::error::Error>>
+- cmd_simulate · function · L944-L964 — async fn cmd_simulate(
+- simulate_inner · function · L966-L1064 — async fn simulate_inner(
+- cmd_health · function · L1067-L1094 — async fn cmd_health(db: &str) -> Result<(), Box<dyn std::error::Error>>
+- cmd_serve · function · L1097-L1151 — async fn cmd_serve(
+- cmd_user_create_admin · function · L1154-L1164 — async fn cmd_user_create_admin(
+- cmd_user_create · function · L1167-L1191 — async fn cmd_user_create(
+- cmd_user_list · function · L1194-L1208 — async fn cmd_user_list(db: &str) -> Result<(), Box<dyn std::error::Error>>
+- cmd_user_delete · function · L1211-L1216 — async fn cmd_user_delete(db: &str, username: &str) -> Result<(), Box<dyn std::error::Error>>
