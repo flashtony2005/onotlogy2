@@ -109,7 +109,12 @@ impl SessionManager {
     /// 创建会话（返回副本；id 单调）。
     pub fn create(&mut self, participants: Vec<String>) -> Session {
         self.seq += 1;
-        let s = Session::new(format!("sess_{:04}", self.seq), participants);
+        self.create_with_id(format!("sess_{:04}", self.seq), participants)
+    }
+
+    /// 以调用方指定 id 创建（Facade FabricService 用：session_id 由请求方持有）。
+    pub fn create_with_id(&mut self, id: impl Into<String>, participants: Vec<String>) -> Session {
+        let s = Session::new(id, participants);
         self.sessions.insert(s.id.clone(), s.clone());
         s
     }

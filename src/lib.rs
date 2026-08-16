@@ -18,6 +18,7 @@ pub mod cognitive;
 pub mod compose;
 pub mod diagnosis;
 pub mod fabric;
+pub mod facade;
 pub mod evaluation {
     pub use oaip_eval_core::*;
     pub mod hook;

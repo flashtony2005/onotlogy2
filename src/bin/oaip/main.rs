@@ -10,6 +10,7 @@
 
 mod agent;
 mod commands;
+mod facade;
 mod serve;
 mod sim;
 mod user;
@@ -56,6 +57,11 @@ enum Cmd {
     Event {
         #[command(subcommand)]
         cmd: EventCmd,
+    },
+    /// Public Semantic Facade（world / audit / fabric 三语义域；单一语义源）
+    Facade {
+        #[command(subcommand)]
+        cmd: FacadeCmd,
     },
     /// Loop Health 六指标
     Health,
@@ -177,6 +183,69 @@ enum EventCmd {
     },
 }
 
+/// Facade 三语义域（Transport 只做参数翻译；语义在 OpenAipFacade）。
+/// 动词层与契约一致：`oaip facade world query` / `audit query` / `fabric submit`。
+#[derive(Subcommand)]
+enum FacadeCmd {
+    /// world 语义域
+    World {
+        #[command(subcommand)]
+        cmd: WorldCmd,
+    },
+    /// audit 语义域
+    Audit {
+        #[command(subcommand)]
+        cmd: AuditCmd,
+    },
+    /// fabric 语义域
+    Fabric {
+        #[command(subcommand)]
+        cmd: FabricCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorldCmd {
+    /// world.query：世界视图（Event Log → Projection → Kernel 只读）
+    Query {
+        #[arg(long)]
+        object_ref: Option<String>,
+        #[arg(long)]
+        predicate: Option<String>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum AuditCmd {
+    /// audit.query：审计语义域（approval.* / fabric.* / evolution.gate_approved / policy.denied）
+    Query {
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        event_type: Option<String>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum FabricCmd {
+    /// fabric.submit：Router → Adapter → 事件 → 世界
+    Submit {
+        #[arg(long)]
+        session: String,
+        #[arg(long, default_value = "dsh")]
+        sender: String,
+        #[arg(long)]
+        intent: String,
+        /// JSON 载荷（args/task/object 等）
+        #[arg(long)]
+        payload: String,
+    },
+}
+
 #[derive(Subcommand)]
 enum DbCmd {
     /// 删除库文件并由 canonical_schema 重建
@@ -227,6 +296,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             EventCmd::Emit { event_type, refs } => {
                 commands::cmd_event_emit(&cli.db, &event_type, &refs).await?
             }
+        },
+        Cmd::Facade { cmd } => match cmd {
+            // Facade 是同步 API（内部 block_on storage）→ 阻塞上下文约定
+            FacadeCmd::World { cmd } => match cmd {
+                WorldCmd::Query {
+                    object_ref,
+                    predicate,
+                    limit,
+                } => tokio::task::block_in_place(|| {
+                    facade::cmd_world_query(
+                        &cli.db,
+                        object_ref.as_deref(),
+                        predicate.as_deref(),
+                        limit,
+                    )
+                })?,
+            },
+            FacadeCmd::Audit { cmd } => match cmd {
+                AuditCmd::Query {
+                    run_id,
+                    event_type,
+                    limit,
+                } => tokio::task::block_in_place(|| {
+                    facade::cmd_audit_query(
+                        &cli.db,
+                        run_id.as_deref(),
+                        event_type.as_deref(),
+                        limit,
+                    )
+                })?,
+            },
+            FacadeCmd::Fabric { cmd } => match cmd {
+                FabricCmd::Submit {
+                    session,
+                    sender,
+                    intent,
+                    payload,
+                } => tokio::task::block_in_place(|| {
+                    facade::cmd_fabric_submit(&cli.db, &session, &sender, &intent, &payload)
+                })?,
+            },
         },
         Cmd::Agent { cmd } => match cmd {
             AgentCmd::Run {

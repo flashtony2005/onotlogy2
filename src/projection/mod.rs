@@ -165,7 +165,12 @@ impl Projection {
             .map_err(|e| ProjectionError::Storage(e.to_string()))?;
         let mut world: Vec<TraceEvent> = events
             .into_iter()
-            .filter(|e| e.kind == TraceKind::World)
+            .filter(|e| {
+                // World 事件全量投影；fabric.* 通信事件（Cognitive）经领域规则
+                // 进入世界状态（通信黑匣子 → World State，facade-v1.md §3）
+                e.kind == TraceKind::World
+                    || (e.kind == TraceKind::Cognitive && e.event_type.starts_with("fabric."))
+            })
             .collect();
         // 确定性序：(timestamp, id)（P4）
         world.sort_by(|a, b| {

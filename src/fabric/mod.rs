@@ -169,7 +169,7 @@ impl Bridge {
     /// Policy 在 Router 前面：RequiresApproval → fabric.approval_requested 事件 +
     /// 返回错误（复用现有 Approval/Gate/Audit 机制裁决；v0.1 只留判定接口）。
     pub fn submit(
-        &mut self,
+        &self,
         sessions: &mut session::SessionManager,
         session_id: &str,
         from: &str,
@@ -197,7 +197,12 @@ impl Bridge {
             .get(&plan.agent_id)
             .ok_or_else(|| FabricError::NoAdapter(plan.agent_id.clone()))?;
 
-        // 2) 规范化 task.request（统一消息语义）
+        // 2) 规范化 task.request（统一消息语义）。
+        // 对象引用（payload.object）提前取：终局事件 refs 的世界语义由请求方持有。
+        let obj_ref: Option<String> = payload
+            .get("object")
+            .and_then(|v| v.as_str())
+            .map(String::from);
         let correlation = crate::trace::new_trace_id();
         let req = AgentMessage {
             id: crate::trace::new_trace_id(),
@@ -254,10 +259,9 @@ impl Bridge {
         } else {
             "fabric.task_failed"
         };
-        let obj = result
-            .payload
-            .get("object")
-            .and_then(|v| v.as_str())
+        let obj = obj_ref
+            .as_deref()
+            .or_else(|| result.payload.get("object").and_then(|v| v.as_str()))
             .unwrap_or(&result.sender);
         self.event(
             ty,
