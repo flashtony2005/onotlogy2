@@ -17,8 +17,8 @@ use openaip_os::compose::{Capability, Service};
 use openaip_os::evolution2::{EvolutionEngine, OutcomeKind};
 use openaip_os::kernel::effect::Reversibility;
 use openaip_os::kernel::{Kernel, Scope};
-use openaip_os::runtime::TraceEvent;
 use openaip_os::session::run::RunStatus;
+use openaip_os::trace::TraceEvent;
 use serde_json::json;
 
 fn services() -> Vec<Service> {

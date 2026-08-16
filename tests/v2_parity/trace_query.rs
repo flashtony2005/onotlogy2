@@ -3,8 +3,8 @@
 //! storage 事件查询层在 M1d 后存活（UI 时间线 REST / WS 重连补齐依赖）；
 //! 本契约钉住：按 run / event_type / after_id 游标过滤。
 
-use openaip_os::runtime::{TraceEvent, TraceKind};
 use openaip_os::storage::{LibSQLStorage, TraceQuery};
+use openaip_os::trace::{TraceEvent, TraceKind};
 use serde_json::json;
 
 fn ev(id: &str, run: &str, ty: &str, out: serde_json::Value) -> TraceEvent {

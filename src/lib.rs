@@ -13,15 +13,12 @@
 //! - `evolution`：Evolution Engine（BL-003 · REQ-017，运行在 Kernel 之上的 Extension）—— Experience→Pattern→Proposal→Validation→LearnedKnowledge，可观察/可验证/可撤销，**不修改 Policy、不绕过审批**
 //! - `server`：axum REST + WebSocket 流 + 三层观察 UI 静态托管
 
-pub mod action;
-pub mod agent;
 pub mod auth;
 pub mod codegen;
 pub mod cognitive;
 pub mod compose;
 pub mod diagnosis;
 pub mod evaluation;
-pub mod evolution;
 pub mod evolution2;
 pub mod health;
 pub mod ir;
@@ -29,23 +26,18 @@ pub mod kernel;
 pub mod mutation;
 pub mod odl;
 pub mod ontology;
-pub mod planner;
 pub mod plugin;
 pub mod rule;
-pub mod runtime;
 pub mod runtime_exec;
 pub mod server;
 pub mod session;
 pub mod simulation;
 pub mod skill;
 pub mod storage;
-pub mod tool_backend;
 pub mod trace;
 pub mod worker;
 pub mod world;
 
-pub use action::{ActionEffect, ActionEngine, ActionError, ActionRegistry};
-pub use agent::{AgentEngine, AgentError, Context, Decision, PiAgentEngine, WorldSnapshot};
 pub use auth::{
     AuthError, AuthUser, IdentityProvider, LocalIdentityProvider, Role, SessionStore, clamp_view,
 };
@@ -55,10 +47,6 @@ pub use evaluation::hook::on_run_end;
 pub use evaluation::{
     EVALUATOR_VERSION, EvaluationPolicy, EvaluationReducer, EvaluationResult, EventRef, Score,
     TaskDefinition,
-};
-pub use evolution::{
-    EvolutionState, Experience, LearnedKnowledge, PATTERN_MIN_HITS, Pattern, Proposal,
-    ProposalKind, ProposalStatus, VALIDATE_THRESHOLD,
 };
 pub use health::{LoopHealth, collect};
 pub use ir::{
@@ -71,22 +59,15 @@ pub use mutation::{
     offline_benchmark, run_offline_benchmark,
 };
 pub use odl::parse_odl;
-pub use planner::{
-    AgentRunResult, ApprovalAuditor, ApprovalRequest, ApprovalState, ApprovalStore, AutoApprover,
-    Capability, ConsoleApprover, LLMGoalParser, PlanStep, Planner, PlannerError, Policy,
-    PolicyApprover, PolicyDecision, RunAuditor, RunStatus, RuntimeConfig, ServerApprover,
-    may_auto_approve,
-};
-pub use runtime::{EventBus, RuntimeKernel, TraceEvent, TraceKind};
+pub use session::run::{RunStatus, fiber_to_run_status, generate_run_id};
 pub use simulation::replay::{
     ReplayDecision, ReplayReport, replay_all, replay_decision, run_decision_replay,
 };
 pub use storage::{
-    ApprovalAudit, LibSQLStorage, MemoryRecord, ObjectEngine, ObjectRecord, RelationEngine,
-    RelationRecord, SessionRecord, TraceQuery, UserRecord,
+    LibSQLStorage, ObjectEngine, ObjectRecord, RelationEngine, RelationRecord, SessionRecord,
+    TraceQuery, UserRecord,
 };
-pub use tool_backend::{ActionHook, NullBackend, ToolBackend, ToolError, ToolOutcome};
-pub use trace::{RunTimeline, TraceEventDto, View};
+pub use trace::{RunTimeline, TraceEvent, TraceEventDto, TraceKind, View};
 pub use worker::orchestrator::{
     TaskOutcome, TaskStatus, WorkerOrchestrator, WorkerRunResult, WorkerTask,
 };

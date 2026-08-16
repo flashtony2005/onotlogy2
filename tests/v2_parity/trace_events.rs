@@ -16,7 +16,7 @@ use openaip_os::compose::{Capability, Service, Task};
 use openaip_os::kernel::effect::Reversibility;
 use openaip_os::kernel::relation::Relation;
 use openaip_os::kernel::{Kernel, Scope};
-use openaip_os::runtime::{TraceEvent, TraceKind};
+use openaip_os::trace::{TraceEvent, TraceKind};
 use serde_json::json;
 
 fn crm_service() -> Service {

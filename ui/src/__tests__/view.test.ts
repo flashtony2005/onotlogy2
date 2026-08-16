@@ -97,12 +97,6 @@ describe('buildTimeline 三层视图', () => {
     expect(tl.events.some((e) => e.reasoning !== undefined)).toBe(true)
   })
 
-  it('memory/evolution/tasks 视图返回空事件列表', () => {
-    for (const v of ['memory', 'evolution', 'tasks'] as const) {
-      const tl = buildTimeline(events, 'r1', 'a', v)
-      expect(tl.events).toEqual([])
-    }
-  })
 })
 
 describe('buildTimeline 事件排序', () => {

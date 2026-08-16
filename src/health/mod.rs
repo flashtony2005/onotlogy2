@@ -15,9 +15,9 @@ use serde::Serialize;
 
 use crate::evaluation::EvaluationResult;
 use crate::mutation::MutationProposal;
-use crate::runtime::TraceEvent;
 use crate::storage::LibSQLStorage;
 use crate::storage::TraceQuery;
+use crate::trace::TraceEvent;
 
 /// 执行环健康。
 #[derive(Debug, Clone, Default, Serialize)]
@@ -234,7 +234,7 @@ pub async fn collect(storage: &LibSQLStorage) -> Result<LoopHealth, crate::stora
         .await?;
     let world_runs: std::collections::HashSet<String> = all_trace
         .iter()
-        .filter(|e| e.kind == crate::runtime::TraceKind::World)
+        .filter(|e| e.kind == crate::trace::TraceKind::World)
         .filter_map(|e| e.run_id.clone())
         .collect();
 
@@ -299,11 +299,7 @@ mod tests {
         }
     }
 
-    fn trace(
-        event_type: &str,
-        kind: crate::runtime::TraceKind,
-        output: Option<&str>,
-    ) -> TraceEvent {
+    fn trace(event_type: &str, kind: crate::trace::TraceKind, output: Option<&str>) -> TraceEvent {
         TraceEvent {
             id: format!("tr_{event_type}"),
             kind,
@@ -338,12 +334,12 @@ mod tests {
         let actions = vec![
             trace(
                 "Action",
-                crate::runtime::TraceKind::Cognitive,
+                crate::trace::TraceKind::Cognitive,
                 Some("Success"),
             ),
             trace(
                 "Action",
-                crate::runtime::TraceKind::Cognitive,
+                crate::trace::TraceKind::Cognitive,
                 Some("Failure"),
             ),
         ];
@@ -355,12 +351,12 @@ mod tests {
         let checks = vec![
             trace(
                 "PolicyCheck",
-                crate::runtime::TraceKind::Cognitive,
+                crate::trace::TraceKind::Cognitive,
                 Some("Deny"),
             ),
             trace(
                 "PolicyCheck",
-                crate::runtime::TraceKind::Cognitive,
+                crate::trace::TraceKind::Cognitive,
                 Some("ALLOW"),
             ),
         ];

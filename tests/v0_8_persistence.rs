@@ -10,9 +10,8 @@
 mod common;
 
 use common::*;
-use openaip_os::planner::generate_run_id;
-use openaip_os::runtime::RuntimeKernel;
-use openaip_os::storage::LibSQLStorage;
+use openaip_os::session::run::generate_run_id;
+use openaip_os::storage::{LibSQLStorage, ObjectEngine};
 use serde_json::Value;
 use serde_json::json;
 use std::sync::Arc;
@@ -22,9 +21,9 @@ use std::time::Duration;
 /// 启动一个服务（file db，支持跨重启持久化验证）。复用调用方 kernel 的同一存储连接。
 /// 简易 HTTP 调用（utf8 文本，Content-Length 裁剪），与 v0_3 同款。
 /// 轮询 wb_run 直到终态（Completed/Failed/Interrupted）或超时。
-async fn wait_run_done(kernel: &RuntimeKernel, run_id: &str) -> openaip_os::storage::RunRecord {
+async fn wait_run_done(kernel: &LibSQLStorage, run_id: &str) -> openaip_os::storage::RunRecord {
     for _ in 0..120 {
-        if let Ok(Some(r)) = kernel.storage().get_run(run_id).await
+        if let Ok(Some(r)) = kernel.get_run(run_id).await
             && r.status != "Running"
         {
             return r;
@@ -51,12 +50,10 @@ fn temp_db() -> String {
 async fn tc_persist_a_run_lifecycle_persisted() {
     let path = temp_db();
     let _ = std::fs::remove_file(&path);
-    let kernel = Arc::new(RuntimeKernel::new(
-        LibSQLStorage::open(&path).await.unwrap(),
-    ));
+    let kernel = Arc::new(LibSQLStorage::open(&path).await.unwrap());
     // 种子一个客户，使声明式挽留闭环有候选
     kernel
-        .create_object("Customer", "001", json!({"name": "Apple"}))
+        .create("Customer", "001", json!({"name": "Apple"}))
         .await
         .unwrap();
     let addr = spawn_server(kernel.clone()).await;
@@ -75,7 +72,7 @@ async fn tc_persist_a_run_lifecycle_persisted() {
         .to_string();
 
     // wb_run 行应已存在（触发即 insert_run，落 Running）
-    let early = kernel.storage().get_run(&run_id).await.unwrap();
+    let early = kernel.get_run(&run_id).await.unwrap();
     assert!(early.is_some(), "wb_run 应在触发时即插入（持久化生效）");
 
     // 完成时状态翻 Completed（DB 真相源）
@@ -90,11 +87,9 @@ async fn tc_persist_b_restart_rebuilds_run_map() {
     let path = temp_db();
     let _ = std::fs::remove_file(&path);
     // 首次启动：触发并跑完一个 run
-    let kernel1 = Arc::new(RuntimeKernel::new(
-        LibSQLStorage::open(&path).await.unwrap(),
-    ));
+    let kernel1 = Arc::new(LibSQLStorage::open(&path).await.unwrap());
     kernel1
-        .create_object("Customer", "001", json!({"name": "Apple"}))
+        .create("Customer", "001", json!({"name": "Apple"}))
         .await
         .unwrap();
     let addr1 = spawn_server(kernel1.clone()).await;
@@ -112,9 +107,7 @@ async fn tc_persist_b_restart_rebuilds_run_map() {
     let _ = wait_run_done(&kernel1, &run_id).await;
 
     // 模拟重启：同一 file db 开新内核 + 新服务（recover 重建 runs 映射）
-    let kernel2 = Arc::new(RuntimeKernel::new(
-        LibSQLStorage::open(&path).await.unwrap(),
-    ));
+    let kernel2 = Arc::new(LibSQLStorage::open(&path).await.unwrap());
     let addr2 = spawn_server(kernel2.clone()).await;
     // 新服务内存 runs 初始为空 → timeline 经 DB 回退得到 Completed
     let (st, body) = http_call(
@@ -132,13 +125,7 @@ async fn tc_persist_b_restart_rebuilds_run_map() {
     );
     // DB 真相源一致
     assert_eq!(
-        kernel2
-            .storage()
-            .get_run(&run_id)
-            .await
-            .unwrap()
-            .unwrap()
-            .status,
+        kernel2.get_run(&run_id).await.unwrap().unwrap().status,
         "Completed"
     );
     let _ = std::fs::remove_file(&path);
@@ -149,33 +136,19 @@ async fn tc_persist_b_restart_rebuilds_run_map() {
 async fn tc_persist_c_crash_running_to_interrupted() {
     let path = temp_db();
     let _ = std::fs::remove_file(&path);
-    let kernel = Arc::new(RuntimeKernel::new(
-        LibSQLStorage::open(&path).await.unwrap(),
-    ));
+    let kernel = Arc::new(LibSQLStorage::open(&path).await.unwrap());
     // 崩溃残留：直接以 Running 落一条 wb_run（无活执行器）
     kernel
-        .storage()
         .insert_run("run_crash", "retention-agent", "restore me")
         .await
         .unwrap();
     assert_eq!(
-        kernel
-            .storage()
-            .get_run("run_crash")
-            .await
-            .unwrap()
-            .unwrap()
-            .status,
+        kernel.get_run("run_crash").await.unwrap().unwrap().status,
         "Running"
     );
     // 启动服务触发恢复（Running → Interrupted）
     spawn_server(kernel.clone()).await;
-    let rec = kernel
-        .storage()
-        .get_run("run_crash")
-        .await
-        .unwrap()
-        .unwrap();
+    let rec = kernel.get_run("run_crash").await.unwrap().unwrap();
     assert_eq!(
         rec.status, "Interrupted",
         "崩溃残留的 Running run 重启应标记 Interrupted"
@@ -183,44 +156,5 @@ async fn tc_persist_c_crash_running_to_interrupted() {
     let _ = std::fs::remove_file(&path);
 }
 
-// ── TC-persist-d：待审批 Pending 跨重启 → orphan 翻 Expired ────────────────────────────
-#[tokio::test]
-async fn tc_persist_d_orphan_pending_to_expired() {
-    let path = temp_db();
-    let _ = std::fs::remove_file(&path);
-    let kernel = Arc::new(RuntimeKernel::new(
-        LibSQLStorage::open(&path).await.unwrap(),
-    ));
-    // 崩溃残留：一条孤立 Pending 审批（无活 run）
-    kernel
-        .storage()
-        .insert_approval(
-            "apr_orphan",
-            "run_x",
-            "retention-agent",
-            "action@t",
-            "需审批",
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        kernel
-            .storage()
-            .list_approvals_by_state("Pending")
-            .await
-            .unwrap()
-            .len(),
-        1
-    );
-    // 启动服务触发恢复（orphan Pending → Expired）
-    spawn_server(kernel.clone()).await;
-    let expired = kernel
-        .storage()
-        .list_approvals_by_state("Expired")
-        .await
-        .unwrap();
-    assert_eq!(expired.len(), 1, "orphan Pending 重启应翻 Expired");
-    assert_eq!(expired[0].id, "apr_orphan");
-    assert_eq!(expired[0].state, "Expired");
-    let _ = std::fs::remove_file(&path);
-}
+// ── TC-persist-d：M1d 删除——orphan 审批恢复依赖 wb_approval 表（已随 V1 门面退役）；
+//    超时/Expired 语义由 v2_parity g2c + v0_3_approval tc023c/d 覆盖（Waiting 注册表路径）。

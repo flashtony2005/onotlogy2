@@ -5,17 +5,13 @@
 import { getToken } from './auth'
 import type {
   ApiResponse,
-  ApprovalAuditDto,
   AuthUserDto,
-  EvolutionStateDto,
-  MemoryListDto,
   PluginDto,
   RawSkillDto,
   RunStartDto,
   SessionDto,
   SessionSummaryDto,
   SkillDto,
-  TaskListDto,
   WorldGraphDto,
   WorkerDto,
 } from './types'
@@ -120,27 +116,6 @@ export async function postRun(agentId: string, goal: string): Promise<RunStartDt
   return unwrap<RunStartDto>(res)
 }
 
-/// `GET /api/v1/wb/agent/memory`：记忆存储全量（V0.5 Memory 视图数据源）。
-export async function getMemory(): Promise<MemoryListDto> {
-  const res = await authFetch('/api/v1/wb/agent/memory')
-  return unwrap<MemoryListDto>(res)
-}
-
-/// `GET /api/v1/wb/agent/tasks`：RetentionTask 状态列表。
-export async function getTasks(): Promise<TaskListDto> {
-  const res = await authFetch('/api/v1/wb/agent/tasks')
-  return unwrap<TaskListDto>(res)
-}
-
-/// `GET /api/v1/wb/agent/evolution`：Evolution 聚合状态（BL-003 · REQ-017）。
-/// 仅暴露知识，不含任何改写 Policy / 绕过 Human Approval 的能力（Learn≠Permission）。
-// ── Phase 10 V2 认知面板 API（带 Bearer 令牌；401 抛 AuthError）─────────
-export async function getSkills(): Promise<SkillDto[]> {
-  const res = await authFetch('/api/v1/v2/skills')
-  if (!res.ok) throw new Error(`skills ${res.status}`)
-  return await res.json()
-}
-
 export async function getSkillRaw(skillId: string): Promise<RawSkillDto> {
   const res = await authFetch(`/api/v1/v2/skills/${skillId}/raw`)
   if (!res.ok) throw new Error(`skill raw ${res.status}`)
@@ -193,33 +168,17 @@ export async function createSession(sessionId: string): Promise<SessionDto> {
   return await res.json()
 }
 
-export async function getEvolution(): Promise<EvolutionStateDto> {
-  const res = await authFetch('/api/v1/wb/agent/evolution')
-  return unwrap<EvolutionStateDto>(res)
+/// `GET /api/v1/wb/graph`：世界对象-关系图（World 页数据源）。
+/** `GET /api/v1/v2/skills`：已导入 Skill 列表（V2 面板数据源）。 */
+export async function getSkills(): Promise<SkillDto[]> {
+  const res = await authFetch('/api/v1/v2/skills')
+  if (!res.ok) throw new Error(`skills ${res.status}`)
+  return await res.json()
 }
 
-/// `GET /api/v1/wb/graph`：世界对象-关系图（World 页数据源）。
 export async function getGraph(): Promise<WorldGraphDto> {
   const res = await authFetch('/api/v1/wb/graph')
   return unwrap<WorldGraphDto>(res)
 }
 
-/// REQ-018：切换某条 LearnedKnowledge 的自动放行资格（可撤销，幂等）。
-/// `enabled=true` 恢复、`false` 撤销（下次该 action 回退 Human Approval）。
-export async function postAutoApproveToggle(
-  id: string,
-  enabled: boolean,
-): Promise<{ id: string; autoApproveEnabled: boolean }> {
-  const res = await authFetch(`/api/v1/wb/agent/evolution/learned/${id}/auto-approve`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enabled }),
-  })
-  return unwrap<{ id: string; autoApproveEnabled: boolean }>(res)
-}
-
 /// REQ-018：列出自动放行审计（wb_approval_audit，可追溯至 LearnedKnowledge + run）。
-export async function getApprovalAudit(): Promise<ApprovalAuditDto[]> {
-  const res = await authFetch('/api/v1/wb/agent/evolution/audit')
-  return unwrap<ApprovalAuditDto[]>(res)
-}

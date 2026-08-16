@@ -3,10 +3,100 @@
 //! 所有事件同源（`TraceEvent`），三层视图（Executive/Operator/Developer）仅是对同一份事件的
 //! 不同裁剪；WebSocket 实时流与离线 timeline 查询共用 `TraceEventDto`（camelCase，单一真相源）。
 
-use crate::planner::RunStatus;
-use crate::runtime::TraceEvent;
-use serde::Serialize;
+use crate::session::run::RunStatus;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// 事件大类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TraceKind {
+    World,
+    Cognitive,
+}
+
+impl TraceKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TraceKind::World => "world",
+            TraceKind::Cognitive => "cognitive",
+        }
+    }
+}
+
+impl FromStr for TraceKind {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "world" => Ok(TraceKind::World),
+            "cognitive" => Ok(TraceKind::Cognitive),
+            other => Err(format!("未知 TraceKind: {other}")),
+        }
+    }
+}
+
+/// 统一事件（world / cognitive 同源）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TraceEvent {
+    pub id: String,
+    pub kind: TraceKind,
+    pub event_type: String,
+    /// 绑定的 Ontology 对象ID数组——可解释性根基，禁止为空（TC-007-b）。
+    pub object_refs: Vec<String>,
+    pub run_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub reasoning: Option<String>,
+    pub input: Option<Value>,
+    pub output: Option<Value>,
+    pub confidence: Option<f64>,
+    pub timestamp: String,
+}
+
+static TRACE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// 当前微秒时间戳（Trace 事件时间轴；G1：认知层复用同一时间源）。
+pub fn now_ts() -> String {
+    let d = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("{}", d.as_micros())
+}
+
+/// 新 Trace 事件 ID（全局单调；G1：认知层复用同一 ID 源）。
+pub fn new_trace_id() -> String {
+    format!(
+        "tr_{}_{}",
+        now_ts(),
+        TRACE_SEQ.fetch_add(1, Ordering::SeqCst)
+    )
+}
+
+impl TraceEvent {
+    /// 构造 world 事件（ObjectCreated/Updated/Deleted）。
+    pub fn world(event_type: &str, object_ref: &str) -> Self {
+        Self::world_with_refs(event_type, &[object_ref.to_string()])
+    }
+
+    /// 构造 world 事件（支持多对象绑定，如 Relation 的 [src, dst]）。
+    /// [强制] object_refs 非空，否则落库被 WB2006 拦截（TC-007-b）。
+    pub fn world_with_refs(event_type: &str, refs: &[String]) -> Self {
+        Self {
+            id: new_trace_id(),
+            kind: TraceKind::World,
+            event_type: event_type.to_string(),
+            object_refs: refs.to_vec(),
+            run_id: None,
+            agent_id: None,
+            reasoning: None,
+            input: None,
+            output: None,
+            confidence: None,
+            timestamp: now_ts(),
+        }
+    }
+}
 
 /// 认知步完整类型（用于进度计算与 Executive 筛选）。
 pub const COGNITIVE_STEPS: &[&str] = &[
@@ -346,7 +436,7 @@ mod tests {
     /// WS 视图钳制：`from_view` 须与 REST `build_timeline` 同一套最小权限规则。
     #[test]
     fn ws_from_view_clamps_to_role() {
-        use crate::runtime::{TraceEvent, TraceKind};
+        use crate::trace::{TraceEvent, TraceKind};
 
         // 一个带细节的推理事件（非 Goal/Action）
         let reasoning_ev = TraceEvent {

@@ -13,7 +13,7 @@ use crate::compose::Service;
 use crate::compose::task::{StepOutcome, Task, TaskExecutor};
 use crate::kernel::fiber::{FiberId, FiberState};
 use crate::kernel::{ContextId, Kernel, KernelError};
-use crate::runtime::{TraceEvent, TraceKind};
+use crate::trace::{TraceEvent, TraceKind};
 
 /// 一轮循环的产出。
 #[derive(Debug, Clone, PartialEq)]
@@ -161,7 +161,7 @@ impl<'k> AgentLoop<'k> {
             return;
         };
         sink.push(TraceEvent {
-            id: crate::runtime::new_trace_id(),
+            id: crate::trace::new_trace_id(),
             kind: TraceKind::Cognitive,
             event_type: event_type.to_string(),
             object_refs: if refs.is_empty() {
@@ -175,7 +175,7 @@ impl<'k> AgentLoop<'k> {
             input,
             output,
             confidence,
-            timestamp: crate::runtime::now_ts(),
+            timestamp: crate::trace::now_ts(),
         });
     }
 
@@ -416,7 +416,7 @@ impl<'k> AgentLoop<'k> {
                     self.kernel.fiber(fiber).map(|f| f.context),
                 ) {
                     sink.push(super::approval::ApprovalRequest {
-                        id: crate::runtime::new_trace_id(),
+                        id: crate::trace::new_trace_id(),
                         run_id: self.run_id.clone().unwrap_or_default(),
                         context,
                         fiber,

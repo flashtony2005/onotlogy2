@@ -8,6 +8,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use super::{APPROVAL_TIMEOUT, lock_mutex};
 use crate::auth::AuthUser;
 use crate::cognitive::approval::{ApprovalDecision, ApprovalRequest};
 use crate::cognitive::runner::run_agent;
@@ -16,9 +17,9 @@ use crate::evaluation::hook::{append_bridged, on_run_end, trace_to_session_event
 use crate::evaluation::{EvaluationPolicy, TaskDefinition};
 use crate::evolution2::EvolutionEngine;
 use crate::kernel::{Kernel, Scope};
-use crate::planner::{RunStatus, lock_mutex};
 use crate::session::event::{EventType, SessionId};
 use crate::session::log::SessionLog;
+use crate::session::run::RunStatus;
 use crate::session::run::generate_run_id;
 use crate::storage::TraceQuery;
 use axum::Json;
@@ -79,11 +80,7 @@ pub(crate) async fn run_start(
         },
     );
     // 持久化 run（DB 真相源，跨重启可恢复状态；G7：wb_run = V2 run store）。
-    let _ = st
-        .kernel
-        .storage()
-        .insert_run(&run_id, &agent_id, &body.goal)
-        .await;
+    let _ = st.storage.insert_run(&run_id, &agent_id, &body.goal).await;
 
     // run 上下文（blocking 线程内使用；全部 Send + 'static）
     let st2 = st.clone();
@@ -106,9 +103,8 @@ pub(crate) async fn run_start(
             Err(e) => {
                 handle.block_on(async {
                     let _ = st2
-                        .kernel
-                        .storage()
-                        .update_run_status(&rid, "Failed", Some(&crate::runtime::now_ts()))
+                        .storage
+                        .update_run_status(&rid, "Failed", Some(&crate::trace::now_ts()))
                         .await;
                 });
                 lock_mutex(&st2.runs).insert(
@@ -122,7 +118,7 @@ pub(crate) async fn run_start(
                 return;
             }
         };
-        let mut trace: Vec<crate::runtime::TraceEvent> = Vec::new();
+        let mut trace: Vec<crate::trace::TraceEvent> = Vec::new();
         let mut approvals: Vec<ApprovalRequest> = Vec::new();
 
         // 审批 resolver：注册到 pending（HTTP 端点可见）→ 阻塞等待裁决。
@@ -154,7 +150,7 @@ pub(crate) async fn run_start(
             let req_id = req.id.clone();
             let tx2 = tx.clone();
             let pending3 = Arc::clone(&pending2);
-            let ttl = timeout2.unwrap_or(crate::planner::APPROVAL_TIMEOUT);
+            let ttl = timeout2.unwrap_or(APPROVAL_TIMEOUT);
             h.spawn(async move {
                 tokio::time::sleep(ttl).await;
                 if lock_mutex(&pending3).remove(&req_id).is_some() {
@@ -193,9 +189,8 @@ pub(crate) async fn run_start(
             Err(e) => {
                 handle.block_on(async {
                     let _ = st2
-                        .kernel
-                        .storage()
-                        .update_run_status(&rid, "Failed", Some(&crate::runtime::now_ts()))
+                        .storage
+                        .update_run_status(&rid, "Failed", Some(&crate::trace::now_ts()))
                         .await;
                 });
                 lock_mutex(&st2.runs).insert(
@@ -217,16 +212,11 @@ pub(crate) async fn run_start(
         let st3 = st2.clone();
         handle.block_on(async move {
             for e in &trace {
-                let _ = st3.kernel.storage().append_trace(e).await;
+                let _ = st3.storage.append_trace(e).await;
             }
             let _ = st3
-                .kernel
-                .storage()
-                .update_run_status(
-                    &rid3,
-                    report.status.as_str(),
-                    Some(&crate::runtime::now_ts()),
-                )
+                .storage
+                .update_run_status(&rid3, report.status.as_str(), Some(&crate::trace::now_ts()))
                 .await;
 
             let mut log = SessionLog::new(SessionId::new(&rid3));
@@ -240,7 +230,7 @@ pub(crate) async fn run_start(
                     ],
                 }),
             );
-            if let Ok(stored) = st3.kernel.list_events(TraceQuery::for_run(&rid3)).await {
+            if let Ok(stored) = st3.storage.list_events(TraceQuery::for_run(&rid3)).await {
                 append_bridged(&mut log, trace_to_session_events(&stored));
             }
             log.append(
@@ -259,7 +249,7 @@ pub(crate) async fn run_start(
                 &rid3,
                 &task,
                 &EvaluationPolicy::default(),
-                &st3.kernel.storage(),
+                &st3.storage,
             )
             .await;
         });

@@ -8,109 +8,12 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use async_trait::async_trait;
-use openaip_os::action::ActionRegistry;
-use openaip_os::agent::{AgentEngine, AgentError, Context, Decision};
 use openaip_os::parse_odl;
-use openaip_os::planner::{Planner, generate_run_id};
-use openaip_os::runtime::RuntimeKernel;
 use openaip_os::server;
 use openaip_os::storage::LibSQLStorage;
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-
-// 辅助库：各测试文件（独立 crate）未必使用全部项，允许死代码。
-#[allow(dead_code)]
-/// 确定性 Fake 认知引擎：按 step 返回结构化决策，绑定世界对象。
-pub struct FakeEngine;
-
-#[async_trait]
-impl AgentEngine for FakeEngine {
-    fn name(&self) -> &str {
-        "fake"
-    }
-    async fn reason(&self, ctx: &Context) -> Result<Decision, AgentError> {
-        let intent = match ctx.step.as_str() {
-            "Goal" => "Customer Retention",
-            "Intent" => "Reduce churn for at-risk customers",
-            "Reasoning" => "Payment delay and order drop signal churn risk",
-            "Planning" => "Create retention tasks and link relations",
-            _ => ctx.step.as_str(),
-        }
-        .to_string();
-        let refs: Vec<String> = ctx
-            .world
-            .objects
-            .iter()
-            .filter_map(|o| o.get("id").and_then(|x| x.as_str()).map(|s| s.to_string()))
-            .collect();
-        Ok(Decision {
-            intent,
-            reasoning: format!("fake reasoning for {}", ctx.step),
-            confidence: 0.9,
-            object_refs: refs,
-            output: json!({ "step": ctx.step }),
-        })
-    }
-}
-
-#[allow(dead_code)]
-pub struct UnavailableEngine;
-
-#[async_trait]
-impl AgentEngine for UnavailableEngine {
-    fn name(&self) -> &str {
-        "unavailable"
-    }
-    async fn reason(&self, _ctx: &Context) -> Result<Decision, AgentError> {
-        Err(AgentError::Unavailable(
-            "test: cognitive engine down".into(),
-        ))
-    }
-    async fn health(&self) -> bool {
-        false
-    }
-}
-
-#[allow(dead_code)]
-pub fn retain_registry() -> ActionRegistry {
-    ActionRegistry::from_ir(
-        &parse_odl(
-            r#"
-object Customer:
-  properties:
-    name: string
-    level: string
-  actions:
-    retain:
-      creates:
-        - type: RetentionTask
-          data:
-            title: "客户挽留计划"
-            customer: self
-          link: needs_retention
-"#,
-        )
-        .expect("retain ODL"),
-    )
-}
-
-#[allow(dead_code)]
-pub async fn seed_and_run(engine: &dyn AgentEngine) -> (RuntimeKernel, String) {
-    let s = LibSQLStorage::open(":memory:").await.unwrap();
-    let kernel = RuntimeKernel::new(s);
-    kernel
-        .create_object("Customer", "001", json!({"name": "Apple", "level": "VIP"}))
-        .await
-        .unwrap();
-    let run_id = generate_run_id();
-    Planner::with_actions(&kernel, retain_registry())
-        .run_goal(engine, "reduce churn", "retention-agent", &run_id)
-        .await
-        .expect("planner 应跑通");
-    (kernel, run_id)
-}
 
 #[allow(dead_code)]
 pub async fn http_call(
@@ -196,7 +99,7 @@ pub async fn http_call_auth(
 }
 
 #[allow(dead_code)]
-pub async fn spawn_server(kernel: std::sync::Arc<RuntimeKernel>) -> SocketAddr {
+pub async fn spawn_server(kernel: std::sync::Arc<LibSQLStorage>) -> SocketAddr {
     // M1c V2 run 路径：retain 服务 + 确定性 V2 引擎（闭环可测，无真实 LLM）。
     let services = retain_services();
     let defs = retain_defs();

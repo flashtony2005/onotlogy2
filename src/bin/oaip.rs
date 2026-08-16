@@ -4,11 +4,10 @@ use clap::{Parser, Subcommand};
 use openaip_os::auth::{IdentityProvider, LocalIdentityProvider};
 use openaip_os::evaluation::hook::{append_bridged, on_run_end, trace_to_session_events};
 use openaip_os::evaluation::{EvaluationPolicy, TaskDefinition};
-use openaip_os::runtime::RuntimeKernel;
 use openaip_os::server;
 use openaip_os::session::event::{EventType, SessionId};
 use openaip_os::session::log::SessionLog;
-use openaip_os::storage::{LibSQLStorage, ObjectEngine, TraceQuery, UserRecord};
+use openaip_os::storage::{LibSQLStorage, ObjectEngine, RelationEngine, TraceQuery, UserRecord};
 use openaip_os::{codegen, parse_odl};
 use serde_json::json;
 use std::net::SocketAddr;
@@ -353,14 +352,13 @@ async fn cmd_run(db: &str) -> Result<(), Box<dyn std::error::Error>> {
     // 演示数据（对应 TC-006）：硬删除旧演示行后重灌，保证可重复运行
     storage.hard_delete("001").await?;
     storage.hard_delete("002").await?;
-    let kernel = RuntimeKernel::new(storage);
-    kernel
-        .create_object("Customer", "001", json!({"name": "Apple", "level": "VIP"}))
+    storage
+        .create("Customer", "001", json!({"name": "Apple", "level": "VIP"}))
         .await?;
-    kernel
-        .create_object("Customer", "002", json!({"name": "Tesla", "level": "GOLD"}))
+    storage
+        .create("Customer", "002", json!({"name": "Tesla", "level": "GOLD"}))
         .await?;
-    let recs = kernel.query_objects("Customer").await?;
+    let recs = storage.query("Customer").await?;
     println!("{}", LibSQLStorage::render_object_list(&recs));
     Ok(())
 }
@@ -399,8 +397,7 @@ async fn cmd_relation_link(
     target: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage = LibSQLStorage::open(db).await?;
-    let kernel = RuntimeKernel::new(storage);
-    match kernel.link_relation(source, edge, target).await {
+    match storage.link(source, edge, target, None).await {
         Ok(rec) => println!(
             "✅ 已建立关系 {}: {} -{}-> {}",
             rec.id, source, edge, target
@@ -416,10 +413,9 @@ async fn cmd_relation_list(
     edge: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage = LibSQLStorage::open(db).await?;
-    let kernel = RuntimeKernel::new(storage);
     let edges = match (from, edge) {
-        (Some(f), _) => kernel.neighbors(&f).await?,
-        (None, Some(e)) => kernel.query_relations(&e).await?,
+        (Some(f), _) => storage.neighbors(&f).await?,
+        (None, Some(e)) => storage.query_by_edge(&e).await?,
         (None, None) => {
             println!("(需 --from <id> 或 --edge <type> 之一)");
             return Ok(());
@@ -441,9 +437,11 @@ async fn cmd_event_emit(
     refs: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage = LibSQLStorage::open(db).await?;
-    let kernel = RuntimeKernel::new(storage);
-    let ref_strs: Vec<&str> = refs.iter().map(|s| s.as_str()).collect();
-    match kernel.emit_domain_event(event_type, &ref_strs).await {
+    let ev = openaip_os::trace::TraceEvent::world(
+        event_type,
+        refs.first().map(String::as_str).unwrap_or("world"),
+    );
+    match storage.append_trace(&ev).await {
         Ok(()) => println!("✅ 已发出领域事件 {}，绑定 refs={:?}", event_type, refs),
         Err(e) => println!("❌ 发出领域事件失败：{e}"),
     }
@@ -586,7 +584,7 @@ async fn cmd_agent_run(
             .update_run_status(
                 &run_id,
                 if ok { "Completed" } else { "Failed" },
-                Some(&openaip_os::runtime::now_ts()),
+                Some(&openaip_os::trace::now_ts()),
             )
             .await?;
         return Ok(());
@@ -598,7 +596,7 @@ async fn cmd_agent_run(
         agent_id,
         kernel.create_context(None, Scope::World, "world")?,
     );
-    let mut trace: Vec<openaip_os::runtime::TraceEvent> = Vec::new();
+    let mut trace: Vec<openaip_os::trace::TraceEvent> = Vec::new();
     let mut approvals: Vec<ApprovalRequest> = Vec::new();
 
     // 审批裁决：--auto-approve 直放；否则 stdin 交互（同 action@target 缓存一次决策）。
@@ -675,7 +673,7 @@ async fn cmd_agent_run(
         .update_run_status(
             &run_id,
             report.status.as_str(),
-            Some(&openaip_os::runtime::now_ts()),
+            Some(&openaip_os::trace::now_ts()),
         )
         .await?;
 
@@ -1124,7 +1122,7 @@ async fn cmd_serve(
             }
         }
     }
-    let kernel = Arc::new(RuntimeKernel::new(storage));
+    let storage = Arc::new(storage);
     // M1c V2 run 路径：ODL → compose::Service 集合 + PiEngine（V2 认知引擎）。
     let odl_src = std::fs::read_to_string(odl.unwrap_or("examples/crm.odl"))?;
     let odl_ir = parse_odl(&odl_src)?;
@@ -1138,7 +1136,7 @@ async fn cmd_serve(
         "🚀 OpenAIP-OS Agent Observation 服务已启动：\n  UI  → http://{addr}/\n  API → http://{addr}/api/v1/wb/agent\n  WS  → ws://{addr}/api/v1/wb/agent/{{runId}}/stream\n  认证 → 已强制（V0.7）；先 POST /api/v1/wb/auth/login 取令牌"
     );
     server::serve(
-        kernel,
+        storage,
         services,
         effect_defs,
         engine,

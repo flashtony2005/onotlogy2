@@ -1,32 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   Boxes,
-  BrainCircuit,
-  Database,
-  FileCheck2,
-  GitBranch,
   LayoutGrid,
-  ListChecks,
   PlayCircle,
   Plug,
   Route,
-  Sparkles,
 } from 'lucide-react'
-import {
-  getEvolution,
-  getMemory,
-  getPlugins,
-  getSessions,
-  getSkills,
-  getTasks,
-} from '../api'
+import { getPlugins, getSessions, getSkills } from '../api'
 import type {
-  EvolutionStateDto,
-  MemoryRecord,
   PluginDto,
   SessionSummaryDto,
   SkillDto,
-  TaskRecord,
   TraceEventDto,
   ViewKind,
 } from '../types'
@@ -209,9 +193,6 @@ export function Dashboard({
   const [skills, setSkills] = useState<SkillDto[]>([])
   const [plugins, setPlugins] = useState<PluginDto[]>([])
   const [sessions, setSessions] = useState<SessionSummaryDto[]>([])
-  const [memories, setMemories] = useState<MemoryRecord[]>([])
-  const [tasks, setTasks] = useState<TaskRecord[]>([])
-  const [evolution, setEvolution] = useState<EvolutionStateDto | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
 
@@ -220,20 +201,14 @@ export function Dashboard({
       setLoading(true)
       setErr(null)
       try {
-        const [sk, pl, se, me, ta, ev] = await Promise.all([
+        const [sk, pl, se] = await Promise.all([
           getSkills(),
           getPlugins(),
           getSessions(),
-          getMemory(),
-          getTasks(),
-          getEvolution(),
         ])
         setSkills(sk)
         setPlugins(pl)
         setSessions(se)
-        setMemories(me.list)
-        setTasks(ta.list)
-        setEvolution(ev)
       } catch (e) {
         setErr(String(e))
       } finally {
@@ -245,22 +220,12 @@ export function Dashboard({
   const activeSkills = skills.filter((s) => s.status === 'Active').length
   const activePlugins = plugins.filter((p) => p.status === 'Active').length
   const totalEvents = sessions.reduce((n, s) => n + s.events, 0)
-  const memHits = memories.reduce((n, m) => n + m.hits, 0)
-  const taskPending = tasks.filter((t) => t.status === 'Pending').length
-  const taskInprogress = tasks.filter((t) => t.status === 'InProgress').length
-  const taskCompleted = tasks.filter((t) => t.status === 'Completed').length
-  const patterns = evolution?.patterns.length ?? 0
-  const proposals = evolution?.proposals.length ?? 0
-  const learned = evolution?.learned.length ?? 0
 
   // 动画数字
   const nSkills = useCountUp(skills.length)
   const nPlugins = useCountUp(plugins.length)
   const nSessions = useCountUp(sessions.length)
   const nEvents = useCountUp(totalEvents)
-  const nMemory = useCountUp(memories.length)
-  const nHits = useCountUp(memHits)
-  const nPatterns = useCountUp(patterns)
 
   // Skill 类型分布（donut 段）
   const typeCount = (t: string) => skills.filter((s) => s.skill_type === t).length
@@ -279,22 +244,11 @@ export function Dashboard({
   ].filter((s) => s.value > 0)
 
   // 六维条形
-  const dimMax = Math.max(
-    skills.length,
-    plugins.length,
-    sessions.length,
-    memories.length,
-    patterns,
-    tasks.length,
-    1,
-  )
+  const dimMax = Math.max(skills.length, plugins.length, sessions.length, 1)
   const dims = [
     { label: 'Skill', value: skills.length },
     { label: 'Plugin', value: plugins.length },
     { label: 'Session', value: sessions.length },
-    { label: 'Memory', value: memories.length },
-    { label: 'Pattern', value: patterns },
-    { label: 'Task', value: tasks.length },
   ]
 
   const now = new Date().toLocaleTimeString('zh-CN', { hour12: false })
@@ -303,11 +257,6 @@ export function Dashboard({
     { label: 'Skill', count: skills.length, icon: Boxes, color: 'var(--accent)' },
     { label: 'Plugin', count: plugins.length, icon: Plug, color: 'var(--purple)' },
     { label: 'Session', count: sessions.length, icon: Route, color: 'var(--teal)' },
-    { label: 'Memory', count: memories.length, icon: Database, color: 'var(--green)' },
-    { label: 'Task', count: tasks.length, icon: ListChecks, color: 'var(--amber)' },
-    { label: 'Pattern', count: patterns, icon: GitBranch, color: 'var(--accent)' },
-    { label: 'Proposal', count: proposals, icon: FileCheck2, color: 'var(--purple)' },
-    { label: 'Learned', count: learned, icon: BrainCircuit, color: 'var(--green)' },
   ]
 
   return (
@@ -363,15 +312,7 @@ export function Dashboard({
               key={o.label}
               className="obj-card"
               onClick={() => {
-                if (o.label === 'Skill' || o.label === 'Plugin' || o.label === 'Session') {
-                  onNavigate('v2')
-                } else if (o.label === 'Memory') {
-                  onNavigate('memory')
-                } else if (o.label === 'Pattern' || o.label === 'Proposal' || o.label === 'Learned') {
-                  onNavigate('evolution')
-                } else if (o.label === 'Task') {
-                  onNavigate('tasks')
-                }
+                onNavigate('v2')
               }}
               title={`查看 ${o.label}`}
             >
@@ -398,25 +339,6 @@ export function Dashboard({
           <div className="dash-sub">{nEvents} events</div>
         </div>
         <div className="dash-card">
-          <div className="dash-num">{nMemory}</div>
-          <div className="dash-label">Memory</div>
-          <div className="dash-sub">{nHits} hits</div>
-        </div>
-        <div className="dash-card">
-          <div className="dash-num">{nPatterns}</div>
-          <div className="dash-label">Patterns</div>
-          <div className="dash-sub">
-            {proposals} proposals · {learned} learned
-          </div>
-        </div>
-        <div className="dash-card">
-          <div className="dash-num">{tasks.length}</div>
-          <div className="dash-label">Tasks</div>
-          <div className="dash-sub">
-            {taskPending} pending · {taskInprogress} run · {taskCompleted} done
-          </div>
-        </div>
-        <div className="dash-card">
           <div className="dash-num">{activeSkills}</div>
           <div className="dash-label">Active Skills</div>
           <div className="dash-sub">of {skills.length} registered</div>
@@ -434,15 +356,6 @@ export function Dashboard({
         <div className="dash-quick">
           <button onClick={() => onNavigate('v2')}>
             <Boxes size={15} /> V2 Runtime
-          </button>
-          <button onClick={() => onNavigate('evolution')}>
-            <Sparkles size={15} /> Evolution
-          </button>
-          <button onClick={() => onNavigate('memory')}>
-            <BrainCircuit size={15} /> Memory
-          </button>
-          <button onClick={() => onNavigate('tasks')}>
-            <ListChecks size={15} /> Tasks
           </button>
           <button onClick={() => onNavigate('developer')}>
             <PlayCircle size={15} /> 全量事件流

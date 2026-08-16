@@ -7,7 +7,6 @@
 mod common;
 use common::*;
 
-use openaip_os::runtime::RuntimeKernel;
 use openaip_os::server;
 use openaip_os::storage::LibSQLStorage;
 use serde_json::{Value, json};
@@ -52,7 +51,7 @@ fn refund_engine() -> openaip_os::cognitive::FakeEngine {
 }
 
 async fn spawn(storage: LibSQLStorage, timeout: Option<Duration>) -> SocketAddr {
-    let kernel = std::sync::Arc::new(RuntimeKernel::new(storage));
+    let storage = std::sync::Arc::new(storage);
     let services = refund_services();
     let defs = refund_defs();
     let engine: std::sync::Arc<dyn openaip_os::cognitive::CognitiveEngine> =
@@ -61,7 +60,16 @@ async fn spawn(storage: LibSQLStorage, timeout: Option<Duration>) -> SocketAddr 
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         let _ = server::serve_with_timeout(
-            kernel, services, defs, engine, listener, "ui/dist", false, false, false, timeout,
+            storage.clone(),
+            services,
+            defs,
+            engine,
+            listener,
+            "ui/dist",
+            false,
+            false,
+            false,
+            timeout,
         )
         .await;
     });

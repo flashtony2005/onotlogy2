@@ -213,7 +213,7 @@ async fn i7_every_run_produces_evaluation() {
     let storage = openaip_os::storage::LibSQLStorage::open(":memory:")
         .await
         .unwrap();
-    let kernel = std::sync::Arc::new(openaip_os::runtime::RuntimeKernel::new(storage.clone()));
+    let kernel = std::sync::Arc::new(storage.clone());
     let addr = {
         use tokio::net::TcpListener;
         let engine: std::sync::Arc<dyn openaip_os::cognitive::CognitiveEngine> =
@@ -373,14 +373,14 @@ async fn i10_every_world_change_is_auditable_event() {
         .await
         .unwrap();
     // world 事件必须绑定对象（WB2006：空 object_refs 禁止落库——不可审计的变化不允许发生）
-    let orphan = openaip_os::runtime::TraceEvent::world_with_refs("ObjectCreated", &[]);
+    let orphan = openaip_os::trace::TraceEvent::world_with_refs("ObjectCreated", &[]);
     let res = storage.append_trace(&orphan).await;
     assert!(
         res.is_err(),
         "I10：无审计痕迹的世界变化必须被拒绝（WB2006）"
     );
     // 正常路径：带 refs 的 world 事件可落库（可审计）
-    let ok = openaip_os::runtime::TraceEvent::world("ObjectCreated", "customer_1");
+    let ok = openaip_os::trace::TraceEvent::world("ObjectCreated", "customer_1");
     assert!(
         storage.append_trace(&ok).await.is_ok(),
         "I10：带 refs 的世界事件可审计落库"

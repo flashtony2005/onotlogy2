@@ -9,8 +9,6 @@
 
 pub mod evaluation;
 pub mod events;
-pub mod evolution;
-pub mod memory;
 pub mod objects;
 pub mod relations;
 pub mod runs;
@@ -19,7 +17,7 @@ pub mod worker_registry;
 pub mod worker_stats;
 
 use crate::codegen;
-pub(crate) use crate::runtime::TraceEvent;
+pub(crate) use crate::trace::TraceEvent;
 use async_trait::async_trait;
 use libsql::Connection;
 use libsql::params;
@@ -30,9 +28,6 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static REL_SEQ: AtomicU64 = AtomicU64::new(0);
-
-/// 审计行自增序列（REQ-018 自动放行审计 id）。
-static TRACE_SEQ_AUDIT: AtomicU64 = AtomicU64::new(0);
 
 /// REQ-018：一条自动放行审计记录（可追溯至 LearnedKnowledge + run）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -205,7 +200,7 @@ pub struct LibSQLStorage {
 
 /// 当前 schema 版本。每次 schema 变更（加列 / 改列名）递增；
 /// 旧库 open 时按 `MIGRATIONS` 顺序自动迁移（事务化），不再要求 `db reset`。
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 
 /// 版本化迁移注册表：`(from_version, sql)`，按版本升序执行；每步成功后推进
 /// `wb_meta.schema_version`。迁移在事务内执行（失败整体回滚，版本不推进，可安全重试）。
@@ -309,6 +304,14 @@ CREATE INDEX IF NOT EXISTS idx_mutation_target ON wb_mutation(target_asset);",
   created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ALTER TABLE wb_worker_stats ADD COLUMN created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP;",
+    ),
+    // V8 → V9（M1d）：V1 门面删除——wb_memory / wb_approval / wb_pattern·proposal·learned
+    // / wb_approval_audit 随 V1 存储层退役（V2 认知状态归 CognitiveStore / Kernel 事实轨）。
+    (
+        8,
+        "DROP TABLE IF EXISTS wb_memory; DROP TABLE IF EXISTS wb_approval; \
+         DROP TABLE IF EXISTS wb_pattern; DROP TABLE IF EXISTS wb_proposal; \
+         DROP TABLE IF EXISTS wb_learned; DROP TABLE IF EXISTS wb_approval_audit;",
     ),
 ];
 
@@ -448,71 +451,6 @@ impl LibSQLStorage {
     }
 }
 
-fn row_to_pattern(row: &libsql::Row) -> Result<crate::evolution::Pattern, StorageError> {
-    let run_ids: String = row.get(4)?;
-    Ok(crate::evolution::Pattern {
-        label: row.get(0)?,
-        action: row.get(1)?,
-        support: row.get(2)?,
-        confidence: row.get(3)?,
-        run_ids: crate::evolution::parse_run_ids(&run_ids),
-    })
-}
-
-fn row_to_proposal(row: &libsql::Row) -> Result<crate::evolution::Proposal, StorageError> {
-    let id: String = row.get(0)?;
-    let kind_s: String = row.get(1)?;
-    let target: String = row.get(2)?;
-    let confidence: f64 = row.get(3)?;
-    let status_s: String = row.get(4)?;
-    let pattern_label: String = row.get(5)?;
-    let run_ids: String = row.get(6)?;
-    let kind = match kind_s.as_str() {
-        "ActionPattern" => crate::evolution::ProposalKind::ActionPattern,
-        _ => crate::evolution::ProposalKind::ActionPattern,
-    };
-    let status = match status_s.as_str() {
-        "Validated" => crate::evolution::ProposalStatus::Validated,
-        "Rejected" => crate::evolution::ProposalStatus::Rejected,
-        _ => crate::evolution::ProposalStatus::Proposed,
-    };
-    Ok(crate::evolution::Proposal {
-        id,
-        kind,
-        target,
-        confidence,
-        status,
-        pattern_label,
-        run_ids: crate::evolution::parse_run_ids(&run_ids),
-    })
-}
-
-fn row_to_learned(row: &libsql::Row) -> Result<crate::evolution::LearnedKnowledge, StorageError> {
-    let id: String = row.get(0)?;
-    let kind_s: String = row.get(1)?;
-    let action: String = row.get(2)?;
-    let confidence: f64 = row.get(3)?;
-    let proposal_id: String = row.get(4)?;
-    let run_ids: String = row.get(5)?;
-    // wb_learned.auto_approve_enabled 为 INTEGER（0/1），libsql 不自动转 bool，需手动映射。
-    let auto_approve_enabled: bool = row.get::<i64>(6)? != 0;
-    let created_at: String = row.get(7)?;
-    let kind = match kind_s.as_str() {
-        "ActionPattern" => crate::evolution::ProposalKind::ActionPattern,
-        _ => crate::evolution::ProposalKind::ActionPattern,
-    };
-    Ok(crate::evolution::LearnedKnowledge {
-        id,
-        kind,
-        action,
-        confidence,
-        proposal_id,
-        run_ids: crate::evolution::parse_run_ids(&run_ids),
-        auto_approve_enabled,
-        created_at,
-    })
-}
-
 fn row_to_object(row: &libsql::Row) -> Result<ObjectRecord, StorageError> {
     let data: String = row.get(2)?;
     Ok(ObjectRecord {
@@ -534,17 +472,6 @@ fn row_to_relation(row: &libsql::Row) -> Result<RelationRecord, StorageError> {
     })
 }
 
-fn row_to_memory(row: &libsql::Row) -> Result<MemoryRecord, StorageError> {
-    let payload: String = row.get(1)?;
-    Ok(MemoryRecord {
-        label: row.get(0)?,
-        payload: serde_json::from_str(&payload)?,
-        hits: row.get(2)?,
-        created_at: row.get(3)?,
-        updated_at: row.get(4)?,
-    })
-}
-
 fn row_to_trace(row: &libsql::Row) -> Result<TraceEvent, StorageError> {
     let obj_refs: String = row.get(3)?;
     let run_id: Option<String> = row.get(4)?;
@@ -556,8 +483,8 @@ fn row_to_trace(row: &libsql::Row) -> Result<TraceEvent, StorageError> {
     let kind_str: String = row.get(1)?;
     Ok(TraceEvent {
         id: row.get(0)?,
-        kind: crate::runtime::TraceKind::from_str(&kind_str)
-            .unwrap_or(crate::runtime::TraceKind::World),
+        kind: crate::trace::TraceKind::from_str(&kind_str)
+            .unwrap_or(crate::trace::TraceKind::World),
         event_type: row.get(2)?,
         object_refs: serde_json::from_str(&obj_refs)?,
         run_id,
@@ -738,16 +665,19 @@ mod tests {
         let storage = LibSQLStorage::open(path.to_str().unwrap())
             .await
             .unwrap_or_else(|e| panic!("V1 库应自动迁移而非失败/要求 db reset: {e}"));
-        // 迁移后 wb_learned 含新列：写入含 auto_approve_enabled 的行应成功
-        storage
+        // M1d：V1 表（wb_learned 等）已被迁移删除——再建同名表不应冲突，且旧表确实不在
+        let mut missing = storage
             .conn
-            .execute(
-                "INSERT INTO wb_learned (id, kind, action, confidence, proposal_id, run_ids, created_at, auto_approve_enabled) \
-                 VALUES ('l1', 'ActionPattern', 'retain', 0.9, 'p1', '[]', 't', 1)",
+            .query(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('wb_learned','wb_memory','wb_approval')",
                 params![],
             )
             .await
             .unwrap();
+        assert!(
+            missing.next().await.unwrap().is_none(),
+            "V1 表应在迁移中被 DROP"
+        );
         // 版本已推进到当前
         let mut rows = storage
             .conn

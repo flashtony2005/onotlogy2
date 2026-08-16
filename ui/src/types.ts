@@ -11,28 +11,12 @@ export type ViewKind =
   // 旧视图保留给后端 timeline 视图钳制与兼容（新菜单不再直接暴露）。
   | 'executive'
   | 'operator'
-  | 'memory'
-  | 'evolution'
-  | 'tasks'
   | 'v2'
 
 /// V0.7 认证用户（对应 server `GET /api/v1/wb/auth/me` / 登录响应 user）。
 export interface AuthUserDto {
   username: string
   role: string
-}
-
-export interface TaskRecord {
-  id: string
-  title: string
-  customer: string
-  status: string
-  priority: string
-}
-
-export interface TaskListDto {
-  total: number
-  list: TaskRecord[]
 }
 
 export interface TraceEventDto {
@@ -88,64 +72,8 @@ export interface ApiResponse<T> {
   data?: T
 }
 
-/// 一条记忆记录（对应后端 wb_memory / GET /memory）。
-export interface MemoryRecord {
-  label: string
-  payload: unknown
-  hits: number
-  createdAt: string
-  updatedAt: string
-}
 
-export interface MemoryListDto {
-  total: number
-  list: MemoryRecord[]
-}
-
-/// Evolution 产物类型（对应 src/evolution.rs；由 GET /evolution 暴露）。
-/// 全程可追溯：Pattern.runIds → Proposal.patternLabel → Learned.proposalId。
-export interface PatternDto {
-  label: string
-  action: string
-  support: number
-  confidence: number
-  runIds: string[]
-}
-
-export interface ProposalDto {
-  id: string
-  kind: string
-  target: string
-  confidence: number
-  status: 'Proposed' | 'Validated' | 'Rejected'
-  patternLabel: string
-  runIds: string[]
-}
-
-export interface LearnedDto {
-  id: string
-  kind: string
-  action: string
-  confidence: number
-  proposalId: string
-  runIds: string[]
-  /// REQ-018 自动放行资格（可撤销）
-  autoApproveEnabled: boolean
-  createdAt: string
-}
-
-/// REQ-018 自动放行审计（对应 wb_approval_audit）
-export interface ApprovalAuditDto {
-  id: string
-  runId: string
-  action: string
-  learnedId: string
-  decision: 'auto_approve' | 'auto_approve_enabled' | 'revoke_disabled'
-  reason: string
-  createdAt: string
-}
-
-// ── Phase 10 V2 认知面板（Skill / Plugin / Session）────────────────────
+/// 已导入 Skill（V2 面板数据源：/api/v1/v2/skills）。
 export interface SkillDto {
   id: string
   name: string
@@ -220,8 +148,3 @@ export interface WorldGraphDto {
   edges: WorldEdgeDto[]
 }
 
-export interface EvolutionStateDto {
-  patterns: PatternDto[]
-  proposals: ProposalDto[]
-  learned: LearnedDto[]
-}

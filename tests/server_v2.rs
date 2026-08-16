@@ -7,7 +7,6 @@
 
 mod common;
 
-use openaip_os::runtime::RuntimeKernel;
 use serde_json::{Value, json};
 
 async fn call(
@@ -33,11 +32,11 @@ async fn call(
 
 #[tokio::test]
 async fn tc_sv1_import_skill_then_list() {
-    let kernel = std::sync::Arc::new(RuntimeKernel::new(
+    let kernel = std::sync::Arc::new(
         openaip_os::storage::LibSQLStorage::open(":memory:")
             .await
             .unwrap(),
-    ));
+    );
     let addr = common::spawn_server(kernel).await;
 
     // 空列表
@@ -78,11 +77,11 @@ async fn tc_sv1_import_skill_then_list() {
 
 #[tokio::test]
 async fn tc_sv1b_skill_raw_view() {
-    let kernel = std::sync::Arc::new(RuntimeKernel::new(
+    let kernel = std::sync::Arc::new(
         openaip_os::storage::LibSQLStorage::open(":memory:")
             .await
             .unwrap(),
-    ));
+    );
     let addr = common::spawn_server(kernel).await;
 
     let md = "# Demo Skill\n\n- goal: 演示\n## Stage 1: A\n- capability: x.y\n## Stage 2: B\n- capability: x.z\n";
@@ -111,11 +110,11 @@ async fn tc_sv1b_skill_raw_view() {
 
 #[tokio::test]
 async fn tc_sv2_plugins_list() {
-    let kernel = std::sync::Arc::new(RuntimeKernel::new(
+    let kernel = std::sync::Arc::new(
         openaip_os::storage::LibSQLStorage::open(":memory:")
             .await
             .unwrap(),
-    ));
+    );
     let addr = common::spawn_server(kernel).await;
     let (s, body) = call(addr, "GET", "/api/v1/v2/plugins", None).await;
     assert_eq!(s, 200);
@@ -124,11 +123,11 @@ async fn tc_sv2_plugins_list() {
 
 #[tokio::test]
 async fn tc_sv4_workers_preseeded() {
-    let kernel = std::sync::Arc::new(RuntimeKernel::new(
+    let kernel = std::sync::Arc::new(
         openaip_os::storage::LibSQLStorage::open(":memory:")
             .await
             .unwrap(),
-    ));
+    );
     let addr = common::spawn_server(kernel).await;
     let (s, body) = call(addr, "GET", "/api/v1/v2/workers", None).await;
     assert_eq!(s, 200);
@@ -154,11 +153,11 @@ async fn tc_sv4_workers_preseeded() {
 
 #[tokio::test]
 async fn tc_sv3_session_create_and_read() {
-    let kernel = std::sync::Arc::new(RuntimeKernel::new(
+    let kernel = std::sync::Arc::new(
         openaip_os::storage::LibSQLStorage::open(":memory:")
             .await
             .unwrap(),
-    ));
+    );
     let addr = common::spawn_server(kernel).await;
 
     let (s1, body1) = call(addr, "POST", "/api/v1/v2/sessions/swe-1/create", None).await;
@@ -181,7 +180,7 @@ async fn tc_sv5_evaluation_endpoint() {
     let storage = openaip_os::storage::LibSQLStorage::open(":memory:")
         .await
         .unwrap();
-    let kernel = std::sync::Arc::new(openaip_os::runtime::RuntimeKernel::new(storage.clone()));
+    let kernel = std::sync::Arc::new(storage.clone());
     let addr = common::spawn_server(kernel).await;
 
     // 空列表
@@ -260,7 +259,7 @@ async fn tc_sv6_mutation_review_endpoint() {
     let storage = openaip_os::storage::LibSQLStorage::open(":memory:")
         .await
         .unwrap();
-    let kernel = std::sync::Arc::new(openaip_os::runtime::RuntimeKernel::new(storage.clone()));
+    let kernel = std::sync::Arc::new(storage.clone());
     let addr = common::spawn_server(kernel).await;
 
     let reducer = openaip_os::evaluation::EvaluationReducer::default();
@@ -398,7 +397,7 @@ async fn tc_sv7_offline_benchmark_endpoint() {
     let storage = openaip_os::storage::LibSQLStorage::open(":memory:")
         .await
         .unwrap();
-    let kernel = std::sync::Arc::new(openaip_os::runtime::RuntimeKernel::new(storage.clone()));
+    let kernel = std::sync::Arc::new(storage.clone());
     let addr = common::spawn_server(kernel).await;
 
     let reducer = openaip_os::evaluation::EvaluationReducer::default();
@@ -510,7 +509,7 @@ async fn tc_sv8_loop_health_endpoint() {
     let storage = openaip_os::storage::LibSQLStorage::open(":memory:")
         .await
         .unwrap();
-    let kernel = std::sync::Arc::new(openaip_os::runtime::RuntimeKernel::new(storage.clone()));
+    let kernel = std::sync::Arc::new(storage.clone());
     let addr = common::spawn_server(kernel).await;
 
     // 种子：1 run + 1 评测（skill_version 基线）→ closure=1.0

@@ -140,60 +140,13 @@ CREATE INDEX IF NOT EXISTS idx_create_time  ON wb_trace_event (create_time);
 
 -- V0.5 Agent 自治：记忆沉淀（Memory = Event 的积累；BL-008）。
 -- 经验按 label 去重并累加 hits，下一轮 run 经 recall 复用，形成 Action→Memory→下次 Plan 的闭环。
-CREATE TABLE IF NOT EXISTS wb_memory (
-  label      TEXT PRIMARY KEY,   -- 记忆标签（如 action.retain / #RetentionPattern）
-  payload    TEXT NOT NULL,      -- 经验载荷 JSON
-  hits       INTEGER NOT NULL DEFAULT 1,  -- 命中/复用次数，自学习沉淀指标
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
 
-CREATE INDEX IF NOT EXISTS idx_memory_hits ON wb_memory (hits);
 
 -- Evolution Engine（BL-003 · REQ-017）：Experience → Pattern → Proposal → Validation → LearnedKnowledge
 -- 全部带可追溯父引用（run_ids / pattern_label / proposal_id），保证 Learn≠Permission（不修改 Policy、不绕过审批）。
-CREATE TABLE IF NOT EXISTS wb_pattern (
-  label      TEXT PRIMARY KEY,    -- pattern.action.retain
-  action     TEXT NOT NULL,       -- 关联动作名
-  support    INTEGER NOT NULL DEFAULT 0,  -- 支持度 = 来源记忆 hits
-  confidence REAL NOT NULL DEFAULT 0.0,   -- min(1, hits/5)
-  run_ids    TEXT NOT NULL DEFAULT '[]',  -- 贡献来源 run（可追溯至 AgentRun）
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
 
-CREATE TABLE IF NOT EXISTS wb_proposal (
-  id          TEXT PRIMARY KEY,    -- proposal.<action>（幂等 upsert）
-  kind        TEXT NOT NULL,       -- ActionPattern
-  target      TEXT NOT NULL,       -- 目标动作名
-  confidence  REAL NOT NULL DEFAULT 0.0,
-  status      TEXT NOT NULL,       -- Proposed / Validated / Rejected
-  pattern_label TEXT NOT NULL,     -- 来源 Pattern（可追溯）
-  run_ids     TEXT NOT NULL DEFAULT '[]',
-  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
 
-CREATE TABLE IF NOT EXISTS wb_learned (
-  id          TEXT PRIMARY KEY,    -- learned.<action>（幂等 upsert）
-  kind        TEXT NOT NULL,
-  action      TEXT NOT NULL,
-  confidence  REAL NOT NULL DEFAULT 0.0,
-  proposal_id TEXT NOT NULL,       -- 来源 Proposal（可追溯）
-  run_ids     TEXT NOT NULL DEFAULT '[]',
-  auto_approve_enabled INTEGER NOT NULL DEFAULT 1,  -- REQ-018：自动放行资格（可撤销，默认开）
-  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
 
-CREATE TABLE IF NOT EXISTS wb_approval_audit (
-  id          TEXT PRIMARY KEY,    -- 审计行稳定 id
-  run_id      TEXT,                -- 触发自动放行的运行（可追溯）
-  action      TEXT NOT NULL,       -- 被自动放行的动作
-  learned_id  TEXT NOT NULL,       -- 依据哪条 LearnedKnowledge
-  decision    TEXT NOT NULL,       -- auto_approve | revoke_disabled | fallback_human
-  reason      TEXT,                -- 决策说明（如「5 道闸门全过」/「审计写库失败回退」）
-  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
 
 -- Phase 11 Domain Agent Evolution（WB-DOC-03-V11.0）：Evaluation = Pure Function(Event Log)。
 -- wb_evaluation 是 Event Log 的**派生结果**（可删表经 Reducer 重建），不是事实源。
@@ -309,20 +262,6 @@ CREATE TABLE IF NOT EXISTS wb_run (
 CREATE INDEX IF NOT EXISTS idx_run_agent ON wb_run(agent_id);
 CREATE INDEX IF NOT EXISTS idx_run_status ON wb_run(status);
 
-CREATE TABLE IF NOT EXISTS wb_approval (
-  id          TEXT PRIMARY KEY,          -- req_id
-  run_id      TEXT NOT NULL,
-  agent_id    TEXT NOT NULL,
-  step_id     TEXT NOT NULL,             -- action@target_id
-  description TEXT,
-  state       TEXT NOT NULL,             -- Pending | Approved | Rejected | Expired
-  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  resolved_by TEXT,                      -- 裁决人（AuthUser.id，预留）
-  resolved_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_appr_run ON wb_approval(run_id);
-CREATE INDEX IF NOT EXISTS idx_appr_state ON wb_approval(state);
 "#
     .to_string()
 }

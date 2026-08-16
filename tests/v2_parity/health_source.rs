@@ -6,11 +6,11 @@
 
 use openaip_os::evaluation::{EvaluationReducer, TaskDefinition};
 use openaip_os::health::collect;
-use openaip_os::runtime::{TraceEvent, TraceKind};
 use openaip_os::session::event::{EventType, SessionId};
 use openaip_os::session::log::SessionLog;
 use openaip_os::session::run::RunStatus;
 use openaip_os::storage::LibSQLStorage;
+use openaip_os::trace::{TraceEvent, TraceKind};
 use serde_json::json;
 
 #[tokio::test]

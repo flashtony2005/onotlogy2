@@ -15,8 +15,8 @@ use super::loop_impl::{Agent, AgentLoop, LoopOutcome};
 use crate::compose::{Service, Task};
 use crate::evolution2::EvolutionEngine;
 use crate::kernel::{Kernel, KernelError};
-use crate::runtime::TraceEvent;
 use crate::session::run::RunStatus;
+use crate::trace::TraceEvent;
 
 /// 一次 run 的编排结果。
 #[derive(Debug, Clone)]

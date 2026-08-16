@@ -118,7 +118,7 @@ impl<'a> WorkerOrchestrator<'a> {
         policy: &'a WorkerPolicy,
         router: WorkerRouter,
     ) -> Self {
-        let run_id = crate::planner::generate_run_id();
+        let run_id = crate::session::run::generate_run_id();
         Self {
             registry,
             policy,

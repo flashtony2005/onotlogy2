@@ -4,8 +4,8 @@
 use openaip_os::codegen;
 use openaip_os::ir::{OntologyIR, PropertyDef, ScalarType};
 use openaip_os::parse_odl;
-use openaip_os::runtime::{RuntimeKernel, TraceEvent, TraceKind};
 use openaip_os::storage::{LibSQLStorage, ObjectEngine, ObjectRecord, StorageError};
+use openaip_os::trace::{TraceEvent, TraceKind};
 use serde_json::json;
 
 // ── TC-001 / TC-001-b：ODL Parser（REQ-001） ──────────────────────────────
@@ -129,25 +129,30 @@ fn tc006_render_list() {
     assert_eq!(out, "001 Apple VIP\n002 Tesla GOLD");
 }
 
-// ── TC-007：TraceEvent(world)（REQ-007） ────────────────────────────────
+// ── TC-007：世界存储 CRUD + 显式 world 事件（M1d：RuntimeKernel 自动发射删除，
+//    事件由调用方 append；观察层契约见 v2_parity g9a）────────────────────
 #[tokio::test]
 async fn tc007_world_trace() {
     let s = LibSQLStorage::open(":memory:").await.unwrap();
-    let k = RuntimeKernel::new(s);
-    k.create_object("Customer", "001", json!({"name": "Apple"}))
+    s.create("Customer", "001", json!({"name": "Apple"}))
         .await
         .unwrap();
-    k.update_object("001", json!({"name": "Apple", "level": "VIP"}))
+    s.update("001", json!({"name": "Apple", "level": "VIP"}))
         .await
         .unwrap();
-    k.delete_object("001").await.unwrap();
+    let rec = s.get("001").await.unwrap().unwrap();
+    assert_eq!(rec.data["level"], "VIP", "CRUD 存活");
 
-    let events = k.list_world_events().await.unwrap();
-    assert_eq!(
-        events.len(),
-        3,
-        "create/update/delete 各产生一条 world 事件"
-    );
+    // 世界事件显式落库（TraceEvent::world 绑定 object_refs）
+    for (ty, ref_) in [
+        ("ObjectCreated", "001"),
+        ("ObjectUpdated", "001"),
+        ("ObjectDeleted", "001"),
+    ] {
+        s.append_trace(&TraceEvent::world(ty, ref_)).await.unwrap();
+    }
+    let events = s.list_world_events().await.unwrap();
+    assert_eq!(events.len(), 3, "3 条显式 world 事件");
     for e in &events {
         assert_eq!(e.kind, TraceKind::World);
         assert_eq!(
@@ -181,25 +186,6 @@ async fn tc007b_missing_refs_blocked() {
         StorageError::Constraint { code, .. } => assert_eq!(code, "WB2006"),
         _ => panic!("缺 object_refs 应返回 WB2006"),
     }
-}
-
-// ── TC-008：Event Bus 分发（REQ-008） ───────────────────────────────────
-#[tokio::test]
-async fn tc008_bus_publish_consistent() {
-    let s = LibSQLStorage::open(":memory:").await.unwrap();
-    let k = RuntimeKernel::new(s);
-    let mut rx = k.event_bus().subscribe();
-
-    k.create_object("Customer", "001", json!({"name": "Apple"}))
-        .await
-        .unwrap();
-
-    // 总线收到的事件，与落库事件一致
-    let published = rx.recv().await.unwrap();
-    let stored = k.list_world_events().await.unwrap();
-    assert_eq!(stored.len(), 1);
-    assert_eq!(published, stored[0]);
-    assert_eq!(published.event_type, "ObjectCreated");
 }
 
 // ── TC-005-b：旧 schema 检测（WB2101，root cause 防护） ─────────────────────

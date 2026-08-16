@@ -56,7 +56,7 @@ pub async fn on_run_end(
 /// | `Action`         | tool.call     | { capability, ok } |
 /// | `ApprovalRequested` | approval.requested | { capability } |
 /// | `ApprovalResolved`  | approval.resolved | { capability, decision } |
-pub fn trace_to_session_events(trace: &[crate::runtime::TraceEvent]) -> Vec<(EventType, Value)> {
+pub fn trace_to_session_events(trace: &[crate::trace::TraceEvent]) -> Vec<(EventType, Value)> {
     trace
         .iter()
         .filter_map(|t| {
@@ -122,8 +122,8 @@ pub fn append_bridged(log: &mut SessionLog, bridged: Vec<(EventType, Value)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::{TraceEvent, TraceKind};
     use crate::session::event::SessionId;
+    use crate::trace::{TraceEvent, TraceKind};
     use serde_json::json;
 
     fn trace(event_type: &str, input: Option<Value>, output: Option<Value>) -> TraceEvent {

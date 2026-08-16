@@ -13,7 +13,7 @@ pub(crate) async fn list_graph(
     State(st): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
 ) -> Response {
-    let (objects, relations) = match st.kernel.storage().get_object_graph().await {
+    let (objects, relations) = match st.storage.get_object_graph().await {
         Ok(g) => g,
         Err(_) => return ApiResponse::<()>::error(5000, "存储错误").into_response(),
     };

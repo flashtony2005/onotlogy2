@@ -17,28 +17,22 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import {
   AuthError,
-  getEvolution,
   getMe,
-  getMemory,
-  getTasks,
   postLogin,
   postLogout,
   postRun,
 } from './api'
-import { EvolutionPanel } from './components/EvolutionPanel'
 import { LoginForm } from './components/LoginForm'
 import { LoginScene } from './components/LoginScene'
-import { MemoryPanel } from './components/MemoryPanel'
-import { TaskPanel } from './components/TaskPanel'
 import { V2Panel } from './components/V2Panel'
 import { Dashboard } from './components/Dashboard'
 import { GovernancePanel } from './components/GovernancePanel'
 import { WorldPanel } from './components/WorldPanel'
-import { debounce, fmtJson, fmtTime } from './format'
+import { fmtJson, fmtTime } from './format'
 import { clearToken, getToken, setToken } from './auth'
 import { useTraceStream } from './hooks/useTraceStream'
 import { buildTimeline } from './view'
-import type { AuthUserDto, EvolutionStateDto, MemoryRecord, TaskRecord, TraceEventDto, ViewKind } from './types'
+import type { AuthUserDto, TraceEventDto, ViewKind } from './types'
 
 const VIEW_GROUPS: { name: string; en: string; items: ViewKind[] }[] = [
   { name: '运行', en: 'Operations', items: ['overview', 'world', 'runs'] },
@@ -124,8 +118,6 @@ export default function App() {
   const [connected, setConnected] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
-  const [memories, setMemories] = useState<MemoryRecord[]>([])
-  const [memoryLoading, setMemoryLoading] = useState(false)
 
   // ── V0.7 认证：会话恢复 + 登录 + 登出 ──────────────────────────────────
   const [user, setUser] = useState<AuthUserDto | null>(null)
@@ -200,58 +192,12 @@ export default function App() {
     const g = VIEW_GROUPS.find((x) => x.items.includes(k))
     if (g) setCollapsed((prev) => (prev[g.name] ? { ...prev, [g.name]: false } : prev))
     if (k === 'learning') {
-      void reloadMemory()
-      void reloadEvolution()
     }
-    if (k === 'runs') void reloadTasks()
   }
 
   // Memory 视图刷新：从 REST /memory 拉取沉淀（hits 随轮次累加）。
-  const reloadMemory = async () => {
-    setMemoryLoading(true)
-    try {
-      const dto = await getMemory()
-      setMemories(dto.list)
-    } catch {
-      /* 后端无记忆或暂未就绪：保留上次结果 */
-    } finally {
-      setMemoryLoading(false)
-    }
-  }
-
-  const [evolution, setEvolution] = useState<EvolutionStateDto | null>(null)
-  const [evolutionLoading, setEvolutionLoading] = useState(false)
-  const [tasks, setTasks] = useState<TaskRecord[]>([])
-  const [tasksLoading, setTasksLoading] = useState(false)
-
-  const reloadTasks = async () => {
-    setTasksLoading(true)
-    try {
-      const dto = await getTasks()
-      setTasks(dto.list)
-    } catch {
-      /* 暂无任务或后端未就绪：保留上次结果 */
-    } finally {
-      setTasksLoading(false)
-    }
-  }
-
-  // Evolution 视图刷新：从 REST /evolution 拉取聚合状态（仅可见性，不改 Policy）。
-  const reloadEvolution = async () => {
-    setEvolutionLoading(true)
-    try {
-      const dto = await getEvolution()
-      setEvolution(dto)
-    } catch {
-      /* 后端无知识或暂未就绪：保留上次结果 */
-    } finally {
-      setEvolutionLoading(false)
-    }
-  }
 
   // 节流版刷新（useMemo 保持单例；内部只依赖稳定 setState，捕获旧闭包无碍）
-  const reloadMemoryDebounced = useMemo(() => debounce(() => void reloadMemory(), 300), [])
-  const reloadTasksDebounced = useMemo(() => debounce(() => void reloadTasks(), 300), [])
 
   // WS 订阅：有 run 时跟 run 流；无 run 时连 agent 流（登录即连接，run 启动后事件实时到达）
   useTraceStream(runId ?? agentId, {
@@ -260,11 +206,8 @@ export default function App() {
       setEvents((prev) => (prev.some((p) => p.id === e.id) ? prev : [...prev, e]))
       // 记忆沉淀/召回事件 → 实时刷新 Memory 视图（hits 累加可见）
       // U4：事件高频到达时合并刷新（300ms 窗口一次），避免并发 REST 互相覆盖
-      if (e.eventType === 'MemoryUpdate' || e.eventType === 'MemoryRecall') {
-        reloadMemoryDebounced()
-      }
+
       if (e.eventType === 'Action' || e.eventType === 'Planning') {
-        reloadTasksDebounced()
       }
     },
     onStatus: setConnected,
@@ -286,8 +229,6 @@ export default function App() {
       const dto = await postRun(agentId, goal)
       setEvents([])
       setRunId(dto.runId)
-      void reloadMemory()
-      void reloadTasks()
     } catch (e) {
       if (!handleAuthError(e)) setError((e as Error).message)
     } finally {
@@ -475,27 +416,12 @@ export default function App() {
 
         {view === 'workers' && <V2Panel initialTab="workers" />}
 
-        {view === 'learning' && (
-          <>
-            <MemoryPanel memories={memories} loading={memoryLoading} onReload={reloadMemory} />
-            <EvolutionPanel
-              state={evolution}
-              loading={evolutionLoading}
-              onReload={reloadEvolution}
-              onAuthError={() => {
-                clearToken()
-                setUser(null)
-                setRunId(null)
-                setEvents([])
-              }}
-            />
-          </>
-        )}
+        {view === 'learning' && <V2Panel initialTab="workers" />}
 
         {view === 'governance' && <GovernancePanel />}
 
         {view === 'runs' && (
-          <TaskPanel tasks={tasks} loading={tasksLoading} onReload={reloadTasks} />
+          <div className="empty">run 时间线见上方（V2 事件流）。</div>
         )}
 
         {runId && timeline.decision && view === 'governance' && (

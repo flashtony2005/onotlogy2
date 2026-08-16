@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::auth::{AuthUser, clamp_view};
-use crate::planner::lock_mutex;
 use crate::storage::TraceQuery;
 use crate::trace::{RunTimeline, TraceEventDto, View, build_timeline};
 use axum::extract::ws::{Message, WebSocket};
@@ -64,7 +63,7 @@ pub(crate) async fn list_trace(
         after_id: q.after_id,
         limit: 1000,
     };
-    let events = st.kernel.list_events(tq).await.unwrap_or_default();
+    let events = st.storage.list_events(tq).await.unwrap_or_default();
     let total = events.len();
     let page = q.page_num.unwrap_or(1).max(1);
     let size = q.page_size.unwrap_or(50).clamp(1, 500);
@@ -85,7 +84,7 @@ pub(crate) async fn get_trace(
     Extension(user): Extension<AuthUser>,
     Path(id): Path<String>,
 ) -> Response {
-    match st.kernel.get_trace(&id).await {
+    match st.storage.get_trace(&id).await {
         Ok(Some(e)) => {
             // M2：单条查询同样按角色钳制（Executive 剥 reasoning/IO 细节）。
             let view = clamp_view(View::Developer, user.role);
@@ -110,7 +109,7 @@ pub(crate) async fn timeline(
     let requested = View::from_param(&q.view.unwrap_or_else(|| "operator".into()));
     let view = clamp_view(requested, user.role);
     let events = st
-        .kernel
+        .storage
         .list_events(TraceQuery::for_run(&run_id))
         .await
         .unwrap_or_default();
@@ -125,7 +124,7 @@ pub(crate) async fn timeline(
         if rec.human_approval {
             tl.human_approval = "Required".to_string();
         }
-    } else if let Ok(Some(rec)) = st.kernel.storage().get_run(&run_id).await {
+    } else if let Ok(Some(rec)) = st.storage.get_run(&run_id).await {
         tl.status = rec.status.clone();
         if rec.human_approval {
             tl.human_approval = "Required".to_string();
@@ -159,8 +158,8 @@ pub(crate) async fn handle_ws(
 
     // 先订阅再补历史：查历史期间到达的增量先入缓冲，杜绝「订阅前事件丢失」窗口
     // （前端按事件 id 去重，缓冲与历史重叠的事件会被前端幂等吸收）。
-    let mut rx = st.kernel.event_bus().subscribe();
-    let mut buffered: Vec<crate::runtime::TraceEvent> = Vec::new();
+    let mut rx = st.event_tx.subscribe();
+    let mut buffered: Vec<crate::trace::TraceEvent> = Vec::new();
     let mut history_fut = Box::pin(collect_history(&st, &id, after.as_deref(), view));
     let history = loop {
         tokio::select! {
@@ -247,18 +246,18 @@ pub(crate) async fn collect_history(
     view: View,
 ) -> Vec<TraceEventDto> {
     let mut run = st
-        .kernel
+        .storage
         .list_events(TraceQuery::for_run(id))
         .await
         .unwrap_or_default();
     let mut agent = st
-        .kernel
+        .storage
         .list_events(TraceQuery::for_agent(id))
         .await
         .unwrap_or_default();
     run.append(&mut agent);
 
-    let mut seen: HashMap<String, crate::runtime::TraceEvent> = HashMap::new();
+    let mut seen: HashMap<String, crate::trace::TraceEvent> = HashMap::new();
     for e in run {
         seen.insert(e.id.clone(), e);
     }

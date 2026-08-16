@@ -6,12 +6,8 @@
 mod common;
 use common::*;
 
-use async_trait::async_trait;
 use futures_util::StreamExt;
-use openaip_os::agent::{AgentEngine, AgentError, Context, Decision};
 use openaip_os::auth::{IdentityProvider, LocalIdentityProvider};
-use openaip_os::planner::generate_run_id;
-use openaip_os::runtime::RuntimeKernel;
 use openaip_os::server;
 use openaip_os::storage::{LibSQLStorage, UserRecord};
 use serde_json::{Value, json};
@@ -22,25 +18,6 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderValue, Request};
-
-/// 确定性 Fake 认知引擎：每个认知步都产出 reasoning + output（用于验证钳制是否剥离细节）。
-struct FakeEngine;
-
-#[async_trait]
-impl AgentEngine for FakeEngine {
-    fn name(&self) -> &str {
-        "fake"
-    }
-    async fn reason(&self, ctx: &Context) -> Result<Decision, AgentError> {
-        Ok(Decision {
-            intent: format!("intent for {}", ctx.step),
-            reasoning: format!("fake reasoning for {}", ctx.step),
-            confidence: 0.9,
-            object_refs: vec!["001".into()],
-            output: json!({ "step": ctx.step }),
-        })
-    }
-}
 
 /// 登录并返回 (status, token)。
 async fn login(addr: SocketAddr, username: &str, password: &str) -> (u16, Option<String>) {
@@ -103,7 +80,7 @@ async fn collect_ws_req(req: Request<()>) -> Result<Vec<Value>, ()> {
 #[tokio::test]
 async fn tc_ws_developer_full_detail() {
     let (addr, storage) = spawn_ws_server_raw().await;
-    let kernel = Arc::new(RuntimeKernel::new(storage.clone()));
+    let kernel = Arc::new(storage.clone());
     seed_and_run(&kernel).await;
     let run_id = last_run_id(&kernel).await;
 
@@ -140,7 +117,7 @@ async fn tc_ws_developer_full_detail() {
 #[tokio::test]
 async fn tc_ws_executive_clamped() {
     let (addr, storage) = spawn_ws_server_raw().await;
-    let kernel = Arc::new(RuntimeKernel::new(storage.clone()));
+    let kernel = Arc::new(storage.clone());
     seed_and_run(&kernel).await;
     let run_id = last_run_id(&kernel).await;
 
@@ -174,7 +151,7 @@ async fn tc_ws_executive_clamped() {
 #[tokio::test]
 async fn tc_ws_no_token_rejected() {
     let (addr, storage) = spawn_ws_server_raw().await;
-    let kernel = Arc::new(RuntimeKernel::new(storage.clone()));
+    let kernel = Arc::new(storage.clone());
     seed_and_run(&kernel).await;
     let run_id = last_run_id(&kernel).await;
 
@@ -187,7 +164,7 @@ async fn tc_ws_no_token_rejected() {
 #[tokio::test]
 async fn tc_ws_query_token_authenticates() {
     let (addr, storage) = spawn_ws_server_raw().await;
-    let kernel = Arc::new(RuntimeKernel::new(storage.clone()));
+    let kernel = Arc::new(storage.clone());
     seed_and_run(&kernel).await;
     let run_id = last_run_id(&kernel).await;
 
@@ -222,7 +199,7 @@ async fn spawn_ws_server_raw() -> (SocketAddr, LibSQLStorage) {
         })
         .await
         .unwrap();
-    let kernel = Arc::new(RuntimeKernel::new(storage.clone()));
+    let kernel = Arc::new(storage.clone());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -244,22 +221,50 @@ async fn spawn_ws_server_raw() -> (SocketAddr, LibSQLStorage) {
     (addr, storage)
 }
 
-/// 种子客户并跑通 Planner 闭环（事件落库，供 WS 历史回放）。
-async fn seed_and_run(kernel: &Arc<RuntimeKernel>) {
-    use openaip_os::planner::Planner;
-    kernel
-        .create_object("Customer", "001", json!({"name": "Apple", "level": "VIP"}))
-        .await
-        .unwrap();
-    let run_id = generate_run_id();
-    Planner::with_actions(kernel.as_ref(), retain_registry())
-        .run_goal(&FakeEngine, "reduce churn", "retention-agent", &run_id)
-        .await
-        .expect("planner 应跑通");
+/// 种子客户并跑通 V2 认知闭环（事件落库，供 WS 历史回放；确定性 FakeEngine）。
+async fn seed_and_run(kernel: &Arc<LibSQLStorage>) {
+    let _ = kernel
+        .create("Customer", "001", json!({"name": "Apple", "level": "VIP"}))
+        .await;
+    use openaip_os::cognitive::runner::run_agent;
+    use openaip_os::cognitive::{Agent, FakeEngine};
+    use openaip_os::kernel::{Kernel, Scope};
+    use openaip_os::storage::ObjectEngine;
+    let mut k = Kernel::new();
+    let mut agent = Agent::new(
+        "retention-agent",
+        k.create_context(None, Scope::World, "world").unwrap(),
+    );
+    let services = retain_services();
+    let defs = retain_defs();
+    let mut trace: Vec<openaip_os::trace::TraceEvent> = Vec::new();
+    let mut approvals: Vec<openaip_os::cognitive::ApprovalRequest> = Vec::new();
+    let _ = run_agent(
+        &mut k,
+        &mut agent,
+        &services,
+        &FakeEngine::new(vec![openaip_os::cognitive::PlanStep {
+            capability: "Customer.retain".into(),
+            args: json!({ "target": "001" }),
+            when: Some(Box::new(|v: &openaip_os::cognitive::AgentView| {
+                !v.related.iter().any(|(_, p, _)| p == "needs_retention")
+            })),
+        }]),
+        Some(defs),
+        None,
+        "run_seed",
+        "reduce churn",
+        &mut trace,
+        &mut approvals,
+        &mut |_| panic!("无审批预期"),
+    );
+    for e in &trace {
+        let _ = kernel.append_trace(e).await;
+    }
 }
 
 /// 取最近一次运行的 run_id（按 trace 事件反查）。
-async fn last_run_id(kernel: &Arc<RuntimeKernel>) -> String {
+async fn last_run_id(kernel: &Arc<LibSQLStorage>) -> String {
     use openaip_os::storage::TraceQuery;
     let events = kernel
         .list_events(TraceQuery::for_agent("retention-agent"))

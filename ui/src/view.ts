@@ -73,9 +73,7 @@ export function buildTimeline(
   let tlEvents: TimelineEvent[] = []
   let decision: DecisionSummary | undefined
 
-  if (view === 'memory' || view === 'evolution' || view === 'tasks') {
-    return { runId, agentId, status, progress, humanApproval, events: [], decision: undefined }
-  } else if (view === 'executive') {
+  if (view === 'executive') {
     // 仅 Mission(Goal) + Decision/Outcome(Action)，隐藏思考细节
     const kept = ordered
       .filter((e) => e.eventType === 'Goal' || e.eventType === 'Action')

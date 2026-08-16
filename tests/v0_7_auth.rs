@@ -7,7 +7,6 @@ mod common;
 use common::*;
 
 use openaip_os::auth::{IdentityProvider, LocalIdentityProvider};
-use openaip_os::runtime::RuntimeKernel;
 use openaip_os::server;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine, UserRecord};
 use serde_json::{Value, json};
@@ -47,7 +46,7 @@ async fn spawn_auth_server() -> (SocketAddr, LibSQLStorage) {
         })
         .await
         .unwrap();
-    let kernel = Arc::new(RuntimeKernel::new(storage.clone()));
+    let kernel = Arc::new(storage.clone());
     let services = retain_services();
     let defs = retain_defs();
     let engine: Arc<dyn openaip_os::cognitive::CognitiveEngine> =
@@ -237,18 +236,20 @@ async fn tc_auth_h_graph_clamped_to_role() {
 async fn tc_auth_i_trace_list_clamped_to_role() {
     let (addr, storage) = spawn_auth_server().await;
     // 经同一存储句柄造一条带推理细节的认知事件（server 与测试共享连接）
-    let kernel = Arc::new(RuntimeKernel::new(storage.clone()));
-    kernel
-        .emit_cognitive(
-            "Reasoning",
-            "run_1",
-            "retention-agent",
-            &["001".to_string()],
-            Some("内部推理：高流失风险"),
-            Some(serde_json::json!({"candidates": ["001"]})),
-            Some(serde_json::json!({"risk": "high"})),
-            Some(0.4),
-        )
+    storage
+        .append_trace(&openaip_os::trace::TraceEvent {
+            id: "tr_evt".into(),
+            kind: openaip_os::trace::TraceKind::Cognitive,
+            event_type: "Reasoning".into(),
+            object_refs: vec!["001".into()],
+            run_id: Some("run_1".into()),
+            agent_id: Some("retention-agent".into()),
+            reasoning: Some("内部推理：高流失风险".into()),
+            input: None,
+            output: None,
+            confidence: Some(0.4),
+            timestamp: "0".into(),
+        })
         .await
         .unwrap();
 

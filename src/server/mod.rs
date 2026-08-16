@@ -14,19 +14,19 @@ pub mod v2;
 pub mod views;
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use crate::auth::{AuthUser, IdentityProvider, LocalIdentityProvider, Role, SessionStore};
 use crate::cognitive::approval::{ApprovalDecision, ApprovalRequest};
 use crate::compose::Service;
-use crate::planner::{RunStatus, lock_mutex};
-use crate::runtime::RuntimeKernel;
+use crate::session::run::RunStatus;
+use crate::storage::LibSQLStorage;
 use axum::extract::{Extension, Request};
 use axum::http::{StatusCode, header::AUTHORIZATION};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Serialize;
 use tokio::net::TcpListener;
@@ -44,17 +44,19 @@ use trace::get_trace;
 use trace::list_trace;
 use trace::timeline;
 use trace::ws_handler;
-use views::list_approval_audit_handler;
 use views::list_evaluations;
-use views::list_evolution;
-use views::list_memory;
 use views::list_mutations;
-use views::list_tasks;
 use views::loop_health;
 use views::offline_benchmark_mutation;
 use views::review_mutation;
-use views::revoke_learned;
-use views::toggle_auto_approve;
+
+/// 获取互斥锁：poison 时恢复内层数据（不 panic），避免审批/runs 映射路径因 poison 整进程崩溃。
+pub(crate) fn lock_mutex<'a, T>(m: &'a Mutex<T>) -> MutexGuard<'a, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// HTTP 审批挂起的最长等待时间；超时按 Expire 裁决（不授予权限）。
+pub(crate) const APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
 
 struct RunRecord {
     status: RunStatus,
@@ -75,7 +77,7 @@ pub struct PendingApproval {
 pub struct AppState {
     /// Phase 10 V2 认知状态（Skill/Plugin/Session）。
     pub v2: v2::SharedV2,
-    pub kernel: Arc<RuntimeKernel>,
+    pub storage: Arc<LibSQLStorage>,
     /// M1c V2 组合层：run 路径的服务集合（ODL → compose::Service）。
     pub v2_services: Arc<Vec<Service>>,
     /// M1c V2 世界效应声明（Phase 5：Effect 真实改变 World）。
@@ -90,6 +92,8 @@ pub struct AppState {
     approval_timeout: Option<Duration>,
     /// M1c 挂起审批注册表（run 路径 Waiting 时注册；HTTP 端点据此列表/裁决）。
     pub pending: Arc<Mutex<HashMap<String, PendingApproval>>>,
+    /// 事件发布（WS 实时流；run 终局 flush 时逐条发布，订阅者与历史补齐同源去重）。
+    pub event_tx: tokio::sync::broadcast::Sender<crate::trace::TraceEvent>,
     runs: Mutex<HashMap<String, RunRecord>>,
     pub static_dir: String,
     /// 身份提供方（V0.7 认证）：本地账号实现；OIDC 后续同 trait 插拔。
@@ -197,9 +201,6 @@ fn router() -> Router<Arc<AppState>> {
         .route("/api/v1/wb/agent/trace", get(list_trace))
         .route("/api/v1/wb/agent/trace/:id", get(get_trace))
         .route("/api/v1/wb/agent/run/:run_id/timeline", get(timeline))
-        .route("/api/v1/wb/agent/memory", get(list_memory))
-        .route("/api/v1/wb/agent/tasks", get(list_tasks))
-        .route("/api/v1/wb/agent/evolution", get(list_evolution))
         .route("/api/v1/wb/agent/evaluation", get(list_evaluations))
         .route("/api/v1/wb/agent/mutation", get(list_mutations))
         .route("/api/v1/wb/agent/health", get(loop_health))
@@ -210,18 +211,6 @@ fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/v1/wb/agent/mutation/:id/offline-benchmark",
             post(offline_benchmark_mutation),
-        )
-        .route(
-            "/api/v1/wb/agent/evolution/learned/:id",
-            delete(revoke_learned),
-        )
-        .route(
-            "/api/v1/wb/agent/evolution/learned/:id/auto-approve",
-            post(toggle_auto_approve),
-        )
-        .route(
-            "/api/v1/wb/agent/evolution/audit",
-            get(list_approval_audit_handler),
         )
         .route("/api/v1/wb/agent/run", post(run_start))
         .route(
@@ -264,7 +253,7 @@ fn router() -> Router<Arc<AppState>> {
 /// `enforce_auth`：是否强制认证（V0.7）；生产传 `true`，集成测试传 `false`（注入合成 Developer）。
 #[allow(clippy::too_many_arguments)]
 pub async fn serve(
-    kernel: Arc<RuntimeKernel>,
+    storage: Arc<LibSQLStorage>,
     services: Vec<Service>,
     effect_defs: Vec<crate::ontology::RuntimeDefinition>,
     engine: Arc<dyn crate::cognitive::CognitiveEngine>,
@@ -275,7 +264,7 @@ pub async fn serve(
     enforce_auth: bool,
 ) -> std::io::Result<()> {
     serve_with_timeout(
-        kernel,
+        storage,
         services,
         effect_defs,
         engine,
@@ -294,7 +283,7 @@ pub async fn serve(
 #[doc(hidden)]
 #[allow(clippy::too_many_arguments)]
 pub async fn serve_with_timeout(
-    kernel: Arc<RuntimeKernel>,
+    storage: Arc<LibSQLStorage>,
     services: Vec<Service>,
     effect_defs: Vec<crate::ontology::RuntimeDefinition>,
     engine: Arc<dyn crate::cognitive::CognitiveEngine>,
@@ -305,13 +294,13 @@ pub async fn serve_with_timeout(
     enforce_auth: bool,
     approval_timeout: Option<Duration>,
 ) -> std::io::Result<()> {
-    // 认证/会话提供方复用内核同一存储句柄（LibSQLStorage 内部 Arc，单连接共享库）。
-    let storage = kernel.storage();
-    let idp: Arc<dyn IdentityProvider> = Arc::new(LocalIdentityProvider::new(storage.clone()));
-    let sessions = SessionStore::new(storage);
+    // 认证/会话提供方复用同一存储句柄（LibSQLStorage 内部 Arc，单连接共享库）。
+    let idp: Arc<dyn IdentityProvider> =
+        Arc::new(LocalIdentityProvider::new(storage.as_ref().clone()));
+    let sessions = SessionStore::new(storage.as_ref().clone());
     let state = Arc::new(AppState {
         v2: Arc::new(v2::V2State::default()),
-        kernel,
+        storage,
         v2_services: Arc::new(services),
         v2_effect_defs: Arc::new(effect_defs),
         v2_engine: engine,
@@ -319,6 +308,10 @@ pub async fn serve_with_timeout(
         auto_approve_evolution,
         approval_timeout,
         pending: Arc::new(Mutex::new(HashMap::new())),
+        event_tx: {
+            let (tx, _rx) = tokio::sync::broadcast::channel(1024);
+            tx
+        },
         runs: Mutex::new(HashMap::new()),
         static_dir: static_dir.into(),
         idp,
@@ -374,7 +367,7 @@ fn bootstrap_v2_workers(state: &Arc<AppState>) {
 /// 重启恢复（V0.7 持久化）：重建 runs 内存映射；崩溃残留 Running→Interrupted、orphan Pending→Expired
 /// （简化分支：无"活 run"可恢复，故不做"run 存活→Pending 保留"死分支）。
 async fn recover(state: &Arc<AppState>) {
-    let runs = match state.kernel.storage().recover_persisted_state().await {
+    let runs = match state.storage.recover_persisted_state().await {
         Ok(r) => r,
         Err(_) => return,
     };
