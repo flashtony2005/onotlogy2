@@ -24,6 +24,14 @@
 ### 4.1 问题记录
 | 日期 | 问题 | 根因 | 改进项 | 责任人 |
 |------|------|------|--------|--------|
+| 2026-08-14 | H1 无 Saga 补偿（planner 失败不回滚） | V1 run_goal 设计取舍 | ✅ V2 Kernel 补偿链（P1 逆序补偿 + ESCALATED）接管 | lushaohui |
+| 2026-08-14 | H3 link TOCTOU 双插 | 无事务检测+插入 | ✅ 事务串行化（storage/relations.rs + tc012b） | lushaohui |
+| 2026-08-14 | H4 乐观锁形同虚设 | 读-改-写无 CAS | ✅ version 原子递增（storage/objects.rs + 并发测试） | lushaohui |
+| 2026-08-14 | M4 明文 token 落库 | 会话表直接存令牌 | ✅ SHA-256 哈希入库（auth.rs hash_token + tc_auth_k） | lushaohui |
+| 2026-08-14 | M7 迁移脆弱（单常量+吞错） | 无版本化迁移 | ✅ SCHEMA_VERSION 8→9 版本化迁移（MIGRATIONS + 事务回滚） | lushaohui |
+| 2026-08-16 | 双轨并行（V1 planner ∥ V2 loop） | 无退役日期的并行迁移 | ✅ M1d 物理删除，AgentLoop 唯一路径（b75e7b0） | lushaohui |
+| 2026-08-16 | 三套 Learn 口径并存 | V1/V2 演化各自为政 | ✅ M1d 删除 evolution.rs + 三表；Gate/rule/skill 一层口径 | lushaohui |
+| 2026-08-16 | 审计查询缺失（REQ-018 可审计承诺断链） | V1 审计表随门面删除 | ✅ M2 /audit 端点读事实轨（b6a80d5） | lushaohui |
 
 
 ## 5. 风险点 & 注意事项
