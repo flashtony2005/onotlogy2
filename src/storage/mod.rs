@@ -15,6 +15,7 @@ pub mod objects;
 pub mod relations;
 pub mod runs;
 pub mod users;
+pub mod worker_stats;
 
 use crate::codegen;
 pub(crate) use crate::runtime::TraceEvent;
@@ -203,7 +204,7 @@ pub struct LibSQLStorage {
 
 /// 当前 schema 版本。每次 schema 变更（加列 / 改列名）递增；
 /// 旧库 open 时按 `MIGRATIONS` 顺序自动迁移（事务化），不再要求 `db reset`。
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 /// 版本化迁移注册表：`(from_version, sql)`，按版本升序执行；每步成功后推进
 /// `wb_meta.schema_version`。迁移在事务内执行（失败整体回滚，版本不推进，可安全重试）。
@@ -268,6 +269,20 @@ CREATE INDEX IF NOT EXISTS idx_mutation_target ON wb_mutation(target_asset);",
   task_id    TEXT PRIMARY KEY,
   definition TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)",
+    ),
+    // V5 → V6：V2 Router Selection Learning（Trust 轴）。
+    // wb_worker_stats：(capability, worker) 执行统计（派生层，可回放重建）。
+    (
+        5,
+        "CREATE TABLE IF NOT EXISTS wb_worker_stats (
+  capability       TEXT NOT NULL,
+  worker_id        TEXT NOT NULL,
+  runs             INTEGER NOT NULL DEFAULT 0,
+  success          INTEGER NOT NULL DEFAULT 0,
+  total_duration_ms INTEGER NOT NULL DEFAULT 0,
+  updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (capability, worker_id)
 )",
     ),
 ];

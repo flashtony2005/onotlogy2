@@ -86,3 +86,4 @@ pub use trace::{RunTimeline, TraceEventDto, View};
 pub use worker::orchestrator::{
     TaskOutcome, TaskStatus, WorkerOrchestrator, WorkerRunResult, WorkerTask,
 };
+pub use worker::stats::{WorkerStat, learned_trust, learned_trust_map, record_outcomes};

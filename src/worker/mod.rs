@@ -17,3 +17,4 @@ pub mod process;
 pub mod registry;
 pub mod router;
 pub mod sdk;
+pub mod stats;

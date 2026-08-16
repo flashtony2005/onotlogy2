@@ -897,3 +897,128 @@ async fn tc_w15_pi_worker_e2e() {
         }
     }
 }
+
+// ── W16：Router Selection Learning（Trust 轴）────────────────────────
+#[tokio::test]
+async fn tc_w16_router_selection_learning() {
+    use openaip_os::worker::process::ProcessWorker;
+    use openaip_os::worker::router::WorkerRouter;
+    use openaip_os::worker::stats::{WorkerStat, learned_trust};
+    use std::collections::HashMap;
+
+    // 两个同质候选：声明 quality/trust 完全相同 → 经验打破平局
+    let mut registry = WorkerRegistry::new();
+    for id in ["w-a", "w-b"] {
+        let mut m = openaip_os::worker::manifest::WorkerManifest::new(id, "agent")
+            .with_capabilities(&["code.read"])
+            .with_quality(0.9)
+            .with_trust(0.8);
+        m.execution = ExecutionProtocol::Process;
+        registry
+            .register(Box::new(ProcessWorker::new(m, "echo")))
+            .unwrap();
+    }
+    // 经验：w-a 10 次全成功（+0.1），w-b 10 次全失败（−0.1）
+    let mut learned = HashMap::new();
+    learned.insert(
+        ("code.read".into(), "w-a".into()),
+        learned_trust(&WorkerStat {
+            capability: "code.read".into(),
+            worker_id: "w-a".into(),
+            runs: 10,
+            success: 10,
+            total_duration_ms: 0,
+        })
+        .unwrap(),
+    );
+    learned.insert(
+        ("code.read".into(), "w-b".into()),
+        learned_trust(&WorkerStat {
+            capability: "code.read".into(),
+            worker_id: "w-b".into(),
+            runs: 10,
+            success: 0,
+            total_duration_ms: 0,
+        })
+        .unwrap(),
+    );
+    let router = WorkerRouter::new(RouterCriteria {
+        learned_trust: learned,
+        ..Default::default()
+    });
+    let sel = router
+        .route(
+            &registry,
+            "code.read",
+            &WorkerPolicy::new().allow("code.read"),
+        )
+        .unwrap();
+    assert_eq!(sel.worker_id, "w-a", "经验打破平局：w-a 成功率更高");
+    assert!(
+        sel.reason.contains("learned"),
+        "路由理由可解释: {}",
+        sel.reason
+    );
+
+    // Trust 轴边界：learned 再高也不能授予被 deny 的能力（Policy Filter 在前）
+    let denied = router.route(
+        &registry,
+        "code.read",
+        &WorkerPolicy::new().deny("code.read"),
+    );
+    assert!(denied.is_err(), "learned trust ≠ 能力授予（I4）");
+}
+
+// ── W17：统计持久化 + 学习 map 重建（可回放派生）───────────────────
+#[tokio::test]
+async fn tc_w17_stats_persist_and_rebuild() {
+    use openaip_os::worker::orchestrator::{TaskOutcome, TaskStatus};
+    use openaip_os::worker::stats::{learned_trust_map, record_outcomes};
+
+    let storage = openaip_os::storage::LibSQLStorage::open(":memory:")
+        .await
+        .unwrap();
+    let outcome = |worker: &str, ok: bool| TaskOutcome {
+        capability: "code.read".into(),
+        worker_id: Some(worker.into()),
+        status: if ok {
+            TaskStatus::Completed
+        } else {
+            TaskStatus::Failed
+        },
+        output: None,
+        error: None,
+        duration_ms: 100,
+    };
+    // w-a 5 次全成功；w-b 5 次全失败（=门限生效）
+    let mut outcomes = Vec::new();
+    for _ in 0..5 {
+        outcomes.push(outcome("w-a", true));
+        outcomes.push(outcome("w-b", false));
+    }
+    record_outcomes(&storage, &outcomes).await.unwrap();
+
+    let map = learned_trust_map(&storage).await.unwrap();
+    assert_eq!(
+        map.get(&("code.read".into(), "w-a".into())),
+        Some(&0.1),
+        "w-a 100% → +0.1"
+    );
+    assert_eq!(
+        map.get(&("code.read".into(), "w-b".into())),
+        Some(&-0.1),
+        "w-b 0% → −0.1"
+    );
+
+    // 样本不足不学习：w-c 仅 2 次 → 不进 map
+    let mut few = Vec::new();
+    for _ in 0..2 {
+        few.push(outcome("w-c", true));
+    }
+    record_outcomes(&storage, &few).await.unwrap();
+    let map2 = learned_trust_map(&storage).await.unwrap();
+    assert!(
+        !map2.contains_key(&("code.read".into(), "w-c".into())),
+        "2 runs 不学习（门限 5）"
+    );
+}

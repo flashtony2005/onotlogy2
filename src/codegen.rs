@@ -243,6 +243,18 @@ CREATE TABLE IF NOT EXISTS wb_task (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- V2 Router Selection Learning（Trust 轴）：(capability, worker) 执行统计。
+-- 派生层（可回放重建）；只影响 Router 评分（Policy Filter 之后）；Capability/Approval 永不学习。
+CREATE TABLE IF NOT EXISTS wb_worker_stats (
+  capability       TEXT NOT NULL,
+  worker_id        TEXT NOT NULL,
+  runs             INTEGER NOT NULL DEFAULT 0,
+  success          INTEGER NOT NULL DEFAULT 0,
+  total_duration_ms INTEGER NOT NULL DEFAULT 0,
+  updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (capability, worker_id)
+);
+
 -- V0.7 认证与授权（P0 风险「无认证」）：本地账号 + 不透明会话令牌。
 -- 不依赖外键（libsql 默认 foreign_keys=OFF）；用户禁用时由应用层级联清理会话（delete_sessions_for_user）。
 CREATE TABLE IF NOT EXISTS wb_user (

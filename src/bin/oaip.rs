@@ -535,6 +535,8 @@ async fn cmd_agent_run(
             WorkerRouter::new(RouterCriteria::default()),
         );
         let result = orch.run_plan(&tasks).await;
+        let _ =
+            openaip_os::worker::stats::record_outcomes(&kernel.storage(), &result.outcomes).await;
         println!(
             "🧠 Worker 计划执行：run_id={} all_ok={}",
             result.run_id, result.all_ok
@@ -756,11 +758,14 @@ async fn cmd_worker_run(
     let (registry, _) = default_worker_env();
     let policy = policy_for_capabilities(&caps);
 
+    // Router Selection Learning（Trust 轴）：经验影响下一次选择（Policy Filter 之后）
+    let learned = openaip_os::worker::stats::learned_trust_map(&storage).await?;
     let router = WorkerRouter::new(RouterCriteria {
         min_quality: 0.0,
         max_cost: u32::MAX,
         max_risk: 10,
         explicit: explicit_worker.map(String::from),
+        learned_trust: learned,
     });
 
     let tasks: Vec<openaip_os::worker::orchestrator::WorkerTask> = capabilities
@@ -776,6 +781,8 @@ async fn cmd_worker_run(
 
     let mut orch = WorkerOrchestrator::new(&registry, &policy, router);
     let result = orch.run_plan(&tasks).await;
+    // Router Selection Learning：本次执行结果沉淀为 (capability, worker) 统计
+    let _ = openaip_os::worker::stats::record_outcomes(&storage, &result.outcomes).await;
     println!(
         "🧠 Worker 计划执行：run_id={} all_ok={}",
         result.run_id, result.all_ok
