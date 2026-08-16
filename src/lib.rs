@@ -31,12 +31,14 @@ pub use oaip_session as session;
 pub use oaip_storage as storage;
 pub use oaip_trace as trace;
 pub use oaip_worker_core as worker_core;
+pub use projection::Projection;
 pub mod mutation {
     pub use oaip_mutation_core::*;
     pub mod benchmark;
     pub use benchmark::{offline_benchmark, run_offline_benchmark};
 }
 pub mod plugin;
+pub mod projection;
 pub mod rule;
 pub mod server;
 pub mod simulation;
