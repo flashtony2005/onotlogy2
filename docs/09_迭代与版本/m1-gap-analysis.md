@@ -76,22 +76,26 @@
 - 测试：`tests/v2_parity/approval_audit.rs`——gate 放行与人工审批均有可回放审计事实；
   撤销吸收态在审计里可查。
 
-### G5 「无失败」数据源切换
+### G5 「无失败」数据源切换 ✅ 已确认（characterization，commit d1e86b0）
 
 - V1：`count_action_failed` 从 trace 表统计 `ActionFailed` 事件喂给 AutoApprove 闸门。
-- V2：`EvolutionEngine` 内存态分账（Success/Failed/Denied/Compensated），未持久化。
-- 补齐：gate 的 failure 判定改读 evolution2 分账；分账经 `CognitiveStore` save/restore
-  （配合 C4，Phase 10 已承诺）。
-- 测试：`tests/v2_parity/gate_failure_source.rs`——失败历史经持久化后跨 run 生效，
-  与 V1 count_action_failed 语义对齐（限定键 `(type, action)`）。
+- V2 现状核实：`EvolutionGate::check` 的 `failed == 0` 条件读 evolution2 分账
+  （Success/Failed/Denied/Compensated 账本），非 trace 计数；分账经
+  `snapshot()/restore()` + CognitiveStore 持久化（tc_cp2 已覆盖往返）。
+- 结论：数据源切换在 V2 已天然完成，无需改产品代码；新增 3 例契约测试钉住跨快照语义
+  （失败阻断跨重启 / 纯成功放行 / 恢复后失败即收回）——`tests/v2_parity/gate_source.rs`。
+  删除 V1 后 `count_action_failed` + `ActionFailed` 事件计数随 planner 一并移除。
 
-### G6 run 状态映射与持久化
+### G6 run 状态映射与持久化 ✅ 语义搬迁完成（commit d1e86b0）
 
 - V1：`RunRecord{status, human_approval}` + `wb_run` 表 + 重启恢复；UI `deriveState` 依赖。
-- V2：Fiber 状态机（CREATED→…→COMPLETED/FAILED/COMPENSATED/ESCALATED）。
-- 补齐：`FiberState → RunStatus` 纯函数 + run 元数据落库（run_id/goal/agent_id/状态），
-  供 health 与 UI 使用。
-- 测试：`tests/v2_parity/run_status.rs`——全状态映射表 + 持久化往返。
+- 已落地：`RunStatus` 与 `generate_run_id` 迁至 `session/run.rs`（planner 退役后存活，
+  planner 暂时 re-export，M1d 收口消费方 import）；
+  `fiber_to_run_status` 全映射 13 变体（Waiting/Paused=Running、补偿三态+Cancelled=Failed、
+  Interrupted 独立）；`LoopOutcome::to_run_status` → (status, human_approval)。
+- 持久化：`storage/runs.rs`（wb_run 表 + rebuild/Interrupted 恢复）已是 String 状态、
+  与 planner 解耦——M1c 入口接线直接用；v0_8 重启恢复测试继续有效。
+- 契约测试：`tests/v2_parity/run_status.rs` 3 例全绿（映射表 / outcome 映射 / id+字符串往返）。
 
 ### G7 health 数据源
 
