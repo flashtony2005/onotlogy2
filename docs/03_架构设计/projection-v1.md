@@ -71,7 +71,20 @@ P5  写入约束：EveryWorldChange → Event——对象/关系写入必须伴�
 P6  闭环约束：Effect 提交（step Committed）产生的 Kernel 世界变化必须回写
      world 事件（ObjectUpdated/RelationLinked 形式）——Event Log 才完整，
      P1 重放才包含 Runtime 造成的变化（两个 Kernel 写入者收敛为单向流）
+P7  No Unlogged World Mutation（拍板追加的验收不变量）：
+     ∀ WorldMutation m, ∃ Event e : e represents(m)
+     ——不存在没有 Event 的 World Mutation。
+     判定标准：Kernel 不接受不可追溯的 World Mutation；
+     测试形态（双向）：裸写（storage.create 不带事件）→ 投影世界不含该实体；
+     seed / Effect 提交后事件日志与对象/关系一一对应。
 ```
+
+## 1.5 拍板记录（2026-08-16）
+
+P1–P7 全部采纳为正式契约。P6 是契约正文而非实现细节：所有 World Change 必须先成为
+Event，再由 Event Projection 成 Kernel State——恢复核心不变量
+`WorldState = Reduce(WorldEventLog)`。Kernel 不是第二个事实源：Effect → Event、
+Projection → Kernel，两个写入者收敛为单向流。
 
 实现机制：watermark 保证 P2/P3；时间戳作为 valid_from/valid_until 保证 P1/P4；
 P5/P6 是写入路径的强约束（CLI/runner/server 三处接线时落实）。
@@ -91,6 +104,10 @@ P5/P6 是写入路径的强约束（CLI/runner/server 三处接线时落实）�
 - **P5.5 阶段**：per-run 全量投影——CLI `oaip agent run` 与 server `POST /run` 在
   新建 Kernel 后、`run_agent` 前，把事件日志全量投影进 Kernel（正确性优先；
   server 每次 run 重建 Kernel 是现有架构事实，投影随之重建）。
+- **P6 事务语义（拍板）**：禁止「先改 Kernel、再异步补 Event」。正确序列是
+  `Commit(WorldChange + WorldEvent)` 步骤级一致——Effect 提交造成的世界变化在
+  提交点立即转为 world 事件落库，再更新 Kernel 投影；崩溃窗口只剩单步内，
+  且语义自洽（Kernel 是内存投影，持久真相是事件，重建后世界一致）。
 - **后续里程碑**：跨 run 常驻 Kernel + watermark 增量投影（性能问题，非正确性问题）。
 
 ## 6. 接入闭环（P5.5 验收）
