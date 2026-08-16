@@ -1543,6 +1543,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "oaip-worker-core"
+version = "0.9.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1569,6 +1579,7 @@ dependencies = [
  "oaip-kernel",
  "oaip-session",
  "oaip-trace",
+ "oaip-worker-core",
  "rand_core 0.6.4",
  "reqwest",
  "serde",

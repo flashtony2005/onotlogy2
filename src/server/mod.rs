@@ -338,8 +338,8 @@ pub async fn serve_with_timeout(
 /// 未安装时注册仍成功（能力声明可见），执行阶段才失败。
 fn bootstrap_v2_workers(state: &Arc<AppState>) {
     use crate::worker::adapters::{claude_worker, codex_worker};
-    use crate::worker::manifest::{ExecutionProtocol, WorkerManifest};
     use crate::worker::process::ProcessWorker;
+    use crate::worker_core::manifest::{ExecutionProtocol, WorkerManifest};
 
     let mut reg = state.v2.workers.write().unwrap();
     // echo CLI（text.echo）

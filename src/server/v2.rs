@@ -14,7 +14,7 @@ use crate::plugin::registry::PluginRegistry;
 use crate::session::event::{EventType, SessionId};
 use crate::session::log::SessionLog;
 use crate::skill::registry::SkillRegistry;
-use crate::worker::registry::WorkerRegistry;
+use crate::worker_core::registry::WorkerRegistry;
 
 /// V2 认知状态容器（挂载到 AppState）。
 #[derive(Default)]

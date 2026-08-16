@@ -903,7 +903,7 @@ async fn tc_w15_pi_worker_e2e() {
 async fn tc_w16_router_selection_learning() {
     use openaip_os::worker::process::ProcessWorker;
     use openaip_os::worker::router::WorkerRouter;
-    use openaip_os::worker::stats::{WorkerStat, learned_trust};
+    use openaip_os::worker_core::{WorkerStat, learned_trust};
     use std::collections::HashMap;
 
     // 两个同质候选：声明 quality/trust 完全相同 → 经验打破平局

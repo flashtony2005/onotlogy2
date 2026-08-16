@@ -9,14 +9,14 @@
 pub mod adapters;
 pub mod exec;
 pub mod http;
-pub mod manifest;
+pub use crate::worker_core::manifest;
 pub mod mcp;
 pub mod orchestrator;
 pub mod policy;
 pub mod process;
-pub mod registry;
+pub use crate::worker_core::registry;
 pub mod router;
-pub mod sdk;
+pub use crate::worker_core::sdk;
 pub mod stats;
 pub mod thinker;
 

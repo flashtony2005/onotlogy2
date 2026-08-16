@@ -157,7 +157,7 @@ impl WorkerRouter {
     /// effective trust = declared + learned 修正（clamp 0..1；修正已在 stats 层封顶 ±0.1）。
     fn effective_trust(
         &self,
-        m: &crate::worker::manifest::WorkerManifest,
+        m: &crate::worker_core::manifest::WorkerManifest,
         capability: &str,
     ) -> f64 {
         let learned = self

@@ -24,6 +24,7 @@ pub use oaip_abi as abi;
 pub use oaip_kernel as kernel;
 pub use oaip_session as session;
 pub use oaip_trace as trace;
+pub use oaip_worker_core as worker_core;
 pub mod mutation;
 pub mod plugin;
 pub mod rule;
@@ -63,4 +64,5 @@ pub use trace::{
 pub use worker::orchestrator::{
     TaskOutcome, TaskStatus, WorkerOrchestrator, WorkerRunResult, WorkerTask,
 };
-pub use worker::stats::{WorkerStat, learned_trust, learned_trust_map, record_outcomes};
+pub use worker::stats::{learned_trust_map, record_outcomes};
+pub use worker_core::{WorkerStat, learned_trust, learned_trust_eff};

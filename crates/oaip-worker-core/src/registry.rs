@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use super::sdk::{Worker, WorkerError};
+use crate::sdk::{Worker, WorkerError};
 
 /// Worker 状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

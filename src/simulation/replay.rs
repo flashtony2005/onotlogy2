@@ -18,8 +18,8 @@ use crate::evaluation::WorkerOutcome;
 use crate::kernel::projection::Projection;
 use crate::storage::LibSQLStorage;
 use crate::storage::StorageError;
-use crate::worker::manifest::WorkerManifest;
-use crate::worker::stats::WorkerStat;
+use crate::worker_core::manifest::WorkerManifest;
+use crate::worker_core::stats::WorkerStat;
 
 /// 单条重放决策（实际 vs 重放，可审计）。
 #[derive(Debug, Clone, Serialize)]
@@ -57,7 +57,7 @@ pub fn replay_decision(
         stats
             .iter()
             .find(|s| s.capability == outcome.capability && s.worker_id == worker_id)
-            .and_then(crate::worker::stats::learned_trust)
+            .and_then(crate::worker_core::stats::learned_trust)
             .unwrap_or(0.0)
     };
     // 候选 + 评分（quality × (declared + learned)，clamp 0..1；tie: cost/latency）

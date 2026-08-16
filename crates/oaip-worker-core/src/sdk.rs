@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use super::manifest::WorkerManifest;
+use crate::manifest::WorkerManifest;
 
 /// Worker 执行错误。
 #[derive(Debug, thiserror::Error)]

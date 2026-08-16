@@ -4,8 +4,8 @@
 use libsql::params;
 
 use super::*;
-use crate::worker::manifest::{ExecutionProtocol, WorkerManifest};
-use crate::worker::registry::WorkerRegistry;
+use crate::worker_core::WorkerRegistry;
+use crate::worker_core::{ExecutionProtocol, WorkerManifest};
 
 impl LibSQLStorage {
     /// 注册/更新 Worker manifest（幂等 upsert：id 主键）。

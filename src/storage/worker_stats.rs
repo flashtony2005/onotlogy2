@@ -4,7 +4,7 @@
 use libsql::params;
 
 use super::*;
-use crate::worker::stats::WorkerStat;
+use crate::worker_core::stats::WorkerStat;
 
 impl LibSQLStorage {
     /// 记录一次 worker 执行（upsert 累积：runs+1，success 按成败）。
