@@ -417,6 +417,15 @@ impl Kernel {
             }
             let _ = self.advance(f, FiberState::Running);
             self.record_event(Some(f), "fiber.resumed", json!({ "by": format!("{id}") }));
+            // G4：审批类恢复必须落 granted 审计（外部事件入口与 k.approve 同源可回放；
+            // by = 关系 source，即审批人/外部系统）。
+            if relation.predicate == "Approval" {
+                self.record_event(
+                    Some(f),
+                    "approval.granted",
+                    json!({ "by": relation.source.clone() }),
+                );
+            }
         }
         Ok(id)
     }

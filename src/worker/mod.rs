@@ -18,3 +18,6 @@ pub mod registry;
 pub mod router;
 pub mod sdk;
 pub mod stats;
+pub mod thinker;
+
+pub use thinker::Thinker;

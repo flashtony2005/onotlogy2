@@ -2,8 +2,10 @@
 //! 差集依据：docs/09_迭代与版本/m1-gap-analysis.md（G1–G10）。
 
 mod approval;
+mod approval_audit;
 mod gate_source;
 mod health_source;
 mod pi_engine;
 mod run_status;
 mod trace_events;
+mod via_workers;
