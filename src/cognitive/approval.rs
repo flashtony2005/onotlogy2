@@ -36,8 +36,16 @@ pub struct ApprovalRequest {
 /// 裁决决策。
 #[derive(Debug, Clone, PartialEq)]
 pub enum ApprovalDecision {
-    Approve { by: String },
-    Reject { by: String },
+    Approve {
+        by: String,
+    },
+    Reject {
+        by: String,
+    },
+    /// 超时裁决（HTTP 适配器 TTL 到期；audit = approval.expired，与 Reject 区分）。
+    Expire {
+        by: String,
+    },
 }
 
 /// 裁决结果。
@@ -75,6 +83,8 @@ pub fn resolve(
             k.reject_approval(req.fiber, by)?;
             Ok(ApprovalResolution::Rejected)
         }
+        // Expire 经 expire()（独立审计种类），不走 resolve
+        ApprovalDecision::Expire { .. } => Ok(ApprovalResolution::AlreadyResolved),
     }
 }
 

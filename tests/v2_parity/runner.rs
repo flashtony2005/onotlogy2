@@ -275,3 +275,43 @@ fn r5_evolution_gate_bypasses_resolver() {
     assert_eq!(resolver_calls, 0, "Gate 放行不得惊动 resolver");
     assert!(k.relations().any(|r| r.predicate == "refunded"));
 }
+
+// ── R6：resolver Expire → Failed + human，审计 approval.expired ─────────
+#[test]
+fn r6_expire_decision_fails_with_expired_audit() {
+    let mut k = Kernel::new();
+    let mut agent = spawn_agent(&mut k);
+    let engine = FakeEngine::new(vec![PlanStep {
+        capability: "customer.refund".into(),
+        args: json!({ "target": "u1", "amount": 100 }),
+        when: Some(Box::new(|v: &AgentView| {
+            !v.has_relation("refunded", "true")
+        })),
+    }]);
+    let mut trace: Vec<TraceEvent> = Vec::new();
+    let mut approvals: Vec<ApprovalRequest> = Vec::new();
+
+    let report = run_agent(
+        &mut k,
+        &mut agent,
+        &services(),
+        &engine,
+        None,
+        "run_r6",
+        "退款 u1",
+        &mut trace,
+        &mut approvals,
+        &mut |_req| ApprovalDecision::Expire {
+            by: "timeout".into(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(report.status, RunStatus::Failed);
+    assert!(report.human_approval);
+    assert!(
+        k.events().iter().any(|e| e.ty == "approval.expired"),
+        "Expire 裁决应落 approval.expired 审计（与 Rejected 区分）"
+    );
+    assert!(!k.relations().any(|r| r.predicate == "refunded"));
+}

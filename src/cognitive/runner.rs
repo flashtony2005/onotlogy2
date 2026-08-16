@@ -73,7 +73,14 @@ pub fn run_agent<'k>(
                     .expect("挂起必注册 ApprovalRequest（with_approvals 保证）");
                 fiber = Some(req.fiber);
                 let decision = resolver(&req);
-                match resolve(kernel, &req, &decision)? {
+                let resolution = match &decision {
+                    // 超时裁决走 expire（审计与 Reject 区分，G2 契约）
+                    ApprovalDecision::Expire { .. } => {
+                        crate::cognitive::approval::expire(kernel, &req)?
+                    }
+                    _ => resolve(kernel, &req, &decision)?,
+                };
+                match resolution {
                     ApprovalResolution::Approved => continue,
                     _ => {
                         // Rejected / Expired / AlreadyResolved → 终局（人工裁决失败）
