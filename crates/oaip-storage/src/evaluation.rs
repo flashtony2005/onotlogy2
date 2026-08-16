@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 use libsql::params;
 
 use super::*;
-use crate::evaluation::{EvaluationResult, Score, TaskDefinition};
-use crate::mutation::{MutationProposal, MutationStatus};
+use oaip_eval_core::{EvaluationResult, Score, TaskDefinition};
+use oaip_mutation_core::{MutationProposal, MutationStatus};
 use serde_json::{Value, json};
 
 impl LibSQLStorage {

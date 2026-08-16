@@ -1,0 +1,17 @@
+[package]
+name = "oaip-storage"
+version = "0.9.0"
+edition = "2024"
+description = "OpenAIP-OS 持久化层 —— 对象/关系/事件/run/评估/用户（libSQL）"
+
+[dependencies]
+async-trait = "0.1"
+libsql = "0.9.30"
+oaip-abi = { path = "../oaip-abi" }
+oaip-eval-core = { path = "../oaip-eval-core" }
+oaip-mutation-core = { path = "../oaip-mutation-core" }
+oaip-trace = { path = "../oaip-trace" }
+oaip-worker-core = { path = "../oaip-worker-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"

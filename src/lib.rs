@@ -28,6 +28,7 @@ pub use oaip_eval_core as eval_core;
 pub use oaip_kernel as kernel;
 pub use oaip_mutation_core as mutation_core;
 pub use oaip_session as session;
+pub use oaip_storage as storage;
 pub use oaip_trace as trace;
 pub use oaip_worker_core as worker_core;
 pub mod mutation {
@@ -40,7 +41,6 @@ pub mod rule;
 pub mod server;
 pub mod simulation;
 pub mod skill;
-pub mod storage;
 pub mod worker;
 pub mod world;
 pub mod world_exec;

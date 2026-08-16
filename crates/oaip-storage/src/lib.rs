@@ -4,8 +4,7 @@
 //! 使用 libSQL 0.9 异步 API。列名与 sql-script.md 权威 DDL 一致（type / source / relation / target）。
 //! 另用 `wb_meta.schema_version` 记录 schema 版本，open 据此拦截旧库（WB2101）。
 //!
-//! 模块拆分（长文件模块化）：核心类型/初始化在 `mod`，对象在 `objects`，关系在 `relations`，
-//! 事件在 `events`，记忆在 `memory`，演化在 `evolution`，运行态在 `runs`，账号会话在 `users`。
+//! M4：独立 crate（依赖 abi/trace/eval-core/mutation-core/worker-core——三个类型环已解）。
 
 pub mod evaluation;
 pub mod events;
@@ -16,11 +15,11 @@ pub mod users;
 pub mod worker_registry;
 pub mod worker_stats;
 
-use crate::abi::codegen;
-pub(crate) use crate::trace::TraceEvent;
 use async_trait::async_trait;
 use libsql::Connection;
 use libsql::params;
+use oaip_abi::codegen;
+pub(crate) use oaip_trace::TraceEvent;
 pub use runs::{ApprovalRecord, RunRecord};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -483,8 +482,7 @@ fn row_to_trace(row: &libsql::Row) -> Result<TraceEvent, StorageError> {
     let kind_str: String = row.get(1)?;
     Ok(TraceEvent {
         id: row.get(0)?,
-        kind: crate::trace::TraceKind::from_str(&kind_str)
-            .unwrap_or(crate::trace::TraceKind::World),
+        kind: oaip_trace::TraceKind::from_str(&kind_str).unwrap_or(oaip_trace::TraceKind::World),
         event_type: row.get(2)?,
         object_refs: serde_json::from_str(&obj_refs)?,
         run_id,
