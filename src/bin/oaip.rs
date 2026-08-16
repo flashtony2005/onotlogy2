@@ -63,6 +63,8 @@ enum Cmd {
     },
     /// Loop Health（V2 多速率环元评估）：四平面六指标
     Health,
+    /// Decision Replay（S1）：用当前 Trust 重跑历史路由决策（Learning Counterfactual，Projection 不改变历史）
+    Replay,
     /// 启动 Agent 观察服务（HTTP + WebSocket + 三层观察 UI）
     Serve {
         #[arg(long, default_value_t = 8080)]
@@ -276,6 +278,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         },
         Cmd::Health => cmd_health(&cli.db).await?,
+        Cmd::Replay => cmd_replay(&cli.db).await?,
         Cmd::Serve {
             port,
             host,
@@ -763,6 +766,7 @@ async fn cmd_worker_run(
         .filter(|c| !c.is_empty())
         .collect();
     let (registry, _) = default_worker_env();
+    let _ = storage.sync_workers(&registry).await;
     let policy = policy_for_capabilities(&caps);
 
     // Router Selection Learning（Trust 轴）：经验影响下一次选择（Policy Filter 之后）
@@ -845,6 +849,30 @@ async fn cmd_worker_run(
             }
             Err(e) => println!("⚠️ 评测失败（不影响运行结果）：{e}"),
         }
+    }
+    Ok(())
+}
+
+/// Decision Replay（S1）：当前 Trust 重跑历史路由决策（Projection，永不改历史）。
+async fn cmd_replay(db: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let storage = LibSQLStorage::open(db).await?;
+    let report = openaip_os::simulation::replay::run_decision_replay(&storage).await?;
+    println!(
+        "🔁 Decision Replay（Learning Counterfactual）：{} 条决策，{} 条会因当前经验改变（{:.0}%）",
+        report.total_decisions,
+        report.changed,
+        report.change_rate * 100.0
+    );
+    for d in &report.decisions {
+        if d.changed {
+            println!(
+                "   ⚡ run={} capability={} actual={} → replay={}",
+                d.run_id, d.capability, d.actual_worker, d.replay_worker
+            );
+        }
+    }
+    if report.decisions.is_empty() {
+        println!("   （无历史决策数据——先跑几次 oaip worker run 积累经验）");
     }
     Ok(())
 }

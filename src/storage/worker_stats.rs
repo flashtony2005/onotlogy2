@@ -48,7 +48,7 @@ impl LibSQLStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT capability, worker_id, runs, success, total_duration_ms \
+                "SELECT capability, worker_id, runs, success, total_duration_ms, created_at, updated_at \
                  FROM wb_worker_stats ORDER BY capability ASC, worker_id ASC",
                 params![],
             )
@@ -63,6 +63,8 @@ impl LibSQLStorage {
                 total_duration_ms: row.get(4)?,
                 policy_compliance: None,
                 avg_cost: None,
+                first_seen: Some(row.get(5)?),
+                last_seen: Some(row.get(6)?),
             });
         }
         Ok(out)

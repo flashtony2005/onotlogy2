@@ -244,6 +244,22 @@ CREATE TABLE IF NOT EXISTS wb_task (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- V2 Worker Registry 持久化（S1 Decision Replay 的前置：重跑 Router 需要 declared 属性）。
+-- manifest 全量：id/type/capabilities/评分维度/执行协议。
+CREATE TABLE IF NOT EXISTS wb_worker (
+  id           TEXT PRIMARY KEY,
+  worker_type  TEXT NOT NULL,
+  capabilities TEXT NOT NULL DEFAULT '[]',   -- JSON 数组
+  quality      REAL NOT NULL DEFAULT 0.0,
+  trust        REAL NOT NULL DEFAULT 0.0,
+  risk         INTEGER NOT NULL DEFAULT 1,
+  cost         INTEGER NOT NULL DEFAULT 1,
+  latency_ms   INTEGER NOT NULL DEFAULT 100,
+  availability TEXT NOT NULL DEFAULT 'local',
+  execution    TEXT NOT NULL DEFAULT 'Process',
+  created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- V2 Router Selection Learning（Trust 轴）：(capability, worker) 执行统计。
 -- 派生层（可回放重建）；只影响 Router 评分（Policy Filter 之后）；Capability/Approval 永不学习。
 CREATE TABLE IF NOT EXISTS wb_worker_stats (
@@ -252,6 +268,7 @@ CREATE TABLE IF NOT EXISTS wb_worker_stats (
   runs             INTEGER NOT NULL DEFAULT 0,
   success          INTEGER NOT NULL DEFAULT 0,
   total_duration_ms INTEGER NOT NULL DEFAULT 0,
+  created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (capability, worker_id)
 );

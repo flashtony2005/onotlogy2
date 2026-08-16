@@ -36,6 +36,7 @@ pub mod runtime;
 pub mod runtime_exec;
 pub mod server;
 pub mod session;
+pub mod simulation;
 pub mod skill;
 pub mod storage;
 pub mod tool_backend;
@@ -77,6 +78,9 @@ pub use planner::{
     may_auto_approve,
 };
 pub use runtime::{EventBus, RuntimeKernel, TraceEvent, TraceKind};
+pub use simulation::replay::{
+    ReplayDecision, ReplayReport, replay_all, replay_decision, run_decision_replay,
+};
 pub use storage::{
     ApprovalAudit, LibSQLStorage, MemoryRecord, ObjectEngine, ObjectRecord, RelationEngine,
     RelationRecord, SessionRecord, TraceQuery, UserRecord,

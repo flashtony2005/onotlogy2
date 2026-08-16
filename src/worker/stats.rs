@@ -28,6 +28,10 @@ pub struct WorkerStat {
     pub policy_compliance: Option<f64>,
     /// 平均成本（per-worker cost 数据接入后的扩展位；当前无数据源 → None）。
     pub avg_cost: Option<f64>,
+    /// 首次记录时间（first_seen；表列 created_at）。
+    pub first_seen: Option<String>,
+    /// 最近记录时间（last_seen；表列 updated_at）。
+    pub last_seen: Option<String>,
 }
 
 impl WorkerStat {
@@ -125,6 +129,8 @@ mod tests {
             total_duration_ms: runs * 1000,
             policy_compliance: None,
             avg_cost: None,
+            first_seen: None,
+            last_seen: None,
         }
     }
 

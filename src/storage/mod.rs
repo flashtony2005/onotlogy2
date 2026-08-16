@@ -15,6 +15,7 @@ pub mod objects;
 pub mod relations;
 pub mod runs;
 pub mod users;
+pub mod worker_registry;
 pub mod worker_stats;
 
 use crate::codegen;
@@ -204,7 +205,7 @@ pub struct LibSQLStorage {
 
 /// 当前 schema 版本。每次 schema 变更（加列 / 改列名）递增；
 /// 旧库 open 时按 `MIGRATIONS` 顺序自动迁移（事务化），不再要求 `db reset`。
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 /// 版本化迁移注册表：`(from_version, sql)`，按版本升序执行；每步成功后推进
 /// `wb_meta.schema_version`。迁移在事务内执行（失败整体回滚，版本不推进，可安全重试）。
@@ -271,12 +272,6 @@ CREATE INDEX IF NOT EXISTS idx_mutation_target ON wb_mutation(target_asset);",
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 )",
     ),
-    // V6 → V7：V2 Router Selection Learning 可回放化。
-    // wb_evaluation 加 worker_outcomes（per-worker 结果；WorkerStats 重建的数据源）。
-    (
-        6,
-        "ALTER TABLE wb_evaluation ADD COLUMN worker_outcomes TEXT NOT NULL DEFAULT '[]'",
-    ),
     // V5 → V6：V2 Router Selection Learning（Trust 轴）。
     // wb_worker_stats：(capability, worker) 执行统计（派生层，可回放重建）。
     (
@@ -290,6 +285,30 @@ CREATE INDEX IF NOT EXISTS idx_mutation_target ON wb_mutation(target_asset);",
   updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (capability, worker_id)
 )",
+    ),
+    // V6 → V7：V2 Router Selection Learning 可回放化。
+    // wb_evaluation 加 worker_outcomes（per-worker 结果；WorkerStats 重建的数据源）。
+    (
+        6,
+        "ALTER TABLE wb_evaluation ADD COLUMN worker_outcomes TEXT NOT NULL DEFAULT '[]'",
+    ),
+    // V7 → V8：S1 Decision Replay 前置——Worker Registry 持久化 + stats.first_seen。
+    (
+        7,
+        "CREATE TABLE IF NOT EXISTS wb_worker (
+  id           TEXT PRIMARY KEY,
+  worker_type  TEXT NOT NULL,
+  capabilities TEXT NOT NULL DEFAULT '[]',
+  quality      REAL NOT NULL DEFAULT 0.0,
+  trust        REAL NOT NULL DEFAULT 0.0,
+  risk         INTEGER NOT NULL DEFAULT 1,
+  cost         INTEGER NOT NULL DEFAULT 1,
+  latency_ms   INTEGER NOT NULL DEFAULT 100,
+  availability TEXT NOT NULL DEFAULT 'local',
+  execution    TEXT NOT NULL DEFAULT 'Process',
+  created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+ALTER TABLE wb_worker_stats ADD COLUMN created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP;",
     ),
 ];
 

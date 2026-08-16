@@ -95,6 +95,7 @@ impl<'a> WorkerRuntime<'a> {
         self.emit(
             EventType::WorkerSelected,
             json!({
+                "run_id": self.log.as_ref().map(|l| l.session_id.0.clone()).unwrap_or_default(),
                 "worker": sel.worker_id,
                 "capability": sel.capability,
                 "reason": sel.reason,

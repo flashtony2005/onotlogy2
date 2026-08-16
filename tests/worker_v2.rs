@@ -930,6 +930,8 @@ async fn tc_w16_router_selection_learning() {
             total_duration_ms: 0,
             policy_compliance: None,
             avg_cost: None,
+            first_seen: None,
+            last_seen: None,
         })
         .unwrap(),
     );
@@ -943,6 +945,8 @@ async fn tc_w16_router_selection_learning() {
             total_duration_ms: 0,
             policy_compliance: None,
             avg_cost: None,
+            first_seen: None,
+            last_seen: None,
         })
         .unwrap(),
     );
