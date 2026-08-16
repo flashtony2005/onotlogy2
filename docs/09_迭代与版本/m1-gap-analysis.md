@@ -189,8 +189,11 @@
 - ✅ **CLI 已切换**（commit 93d3e00）：`oaip agent run` 走 V2 AgentLoop（PiEngine + runner），
   `--via-workers` 走 V2 Thinker；trace 落库 wb_trace_event、run 状态写 wb_run、
   evolution 快照经 CognitiveStore 持久化；真实 pi 实测端到端跑通。
-- ⬜ **server 切换**（下一轮）：AppState → V2 三件套；HTTP 审批端点接 Waiting 注册表；
-  v0_3_approval / v0_9_ws_clamp / run 门测试重写。
+- ✅ **server 已切换**（commit f58772f）：POST /run 走 spawn_blocking + run_agent
+  （resolver 经 mpsc 通道对接 HTTP 端点 + 超时看门狗 Expire）；approvals 端点改 pending
+  注册表；serve 签名换 V2 三件套；v0_3_approval 5 例重写为 V2 HTTP 契约全绿。
+- ⬜ **M1d 物理删除**（下一轮）：按矩阵删 planner/action/agent/runtime 门面 + wb_memory/
+  wb_approval 两表 + 三端点 + v0_3 系测试。
 - ⚠️ **已知限制（Phase 5 语义投影范畴，非 M1 范围）**：storage 世界对象
   （wb_ontology_object）尚未投影进 V2 Kernel 关系——CLI 的 V2 loop 观察不到 V1 演示数据
   （实测表现为前置条件对空世界判 Deny）。runtime-kernel-v2 Phase 5 落地语义投影时解决；
