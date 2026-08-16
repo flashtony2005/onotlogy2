@@ -62,7 +62,24 @@ CLI `oaip agent run` / server `POST /run`
 5. **M6**：unwrap 预算门禁（只降不升）+ 核心路径 deny(clippy::unwrap_used)。
 6. **M7（本文）**：文档与代码对齐，旧文档 [废弃] 归档。
 
-## 6. 已知边界（诚实声明）
+## 6. Workspace 依赖 DAG（M4 进行中）
+
+```
+oaip-abi（语言前端：odl/ir/codegen）
+  → oaip-kernel（L0 四 Primitive，零上层依赖）
+      → oaip-session（Session Log + run 生命周期）
+          → oaip-trace（TraceEvent 单词汇表 + 三层视图）
+── 上层（根 crate 门面内，M4 剩余）──
+  storage（↔evaluation/mutation/worker 类型环，需类型下沉后拆）
+  compose / cognitive / world_exec / evolution2 / rule / skill
+  worker / plugin / simulation / health / diagnosis
+  server / auth / cli（bin）
+```
+
+`cargo build -p oaip-kernel` 不依赖任何上层——「插件不得污染 Kernel」编译期强制。
+剩余上层拆分是机械迁移（类型环已在 evaluation/mutation/worker 三处定位）。
+
+## 7. 已知边界（诚实声明）
 
 - storage 世界对象尚未投影进 Kernel 关系（Phase 5 语义投影范畴）：CLI/server 的
   V2 闭环以 Kernel 内关系为世界；演示数据（wb_ontology_object）与 Kernel 世界
