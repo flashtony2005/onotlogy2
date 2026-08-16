@@ -129,3 +129,75 @@ async fn replay_without_experience_is_unchanged() {
         .unwrap();
     assert_eq!(report.changed, 0, "无经验不改变选择");
 }
+
+// ── S2/S3：Projection Simulation 端到端（真实事件源状态 as_of → 假设投影）──
+#[tokio::test]
+async fn projection_uses_event_sourced_state() {
+    use openaip_os::kernel::effect::Reversibility;
+    use openaip_os::kernel::persistence::Persistence;
+    use openaip_os::kernel::relation::Relation;
+    use openaip_os::kernel::{Kernel, Scope};
+    use openaip_os::simulation::projection::{HypotheticalAction, counterfactual, project};
+    use openaip_os::world::World;
+
+    // 事件源世界：Kernel 写关系 → Persistence 落盘 → as_of(t) 重建 State
+    let path = std::env::temp_dir().join(format!("s2_{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let mut k = Kernel::with_clock(|| 100);
+    let ctx = k.create_context(None, Scope::World, "world").unwrap();
+    k.relate(Relation::new(ctx, "order_1", "owns", "customer_1", k.now()))
+        .unwrap();
+    k.relate(Relation::new(
+        ctx,
+        "customer_1",
+        "status",
+        "active",
+        k.now(),
+    ))
+    .unwrap();
+    let p = Persistence::open(path.to_str().unwrap()).await.unwrap();
+    p.save(&k).await.unwrap();
+    let snap = World::new(&p).as_of(1000).await.unwrap();
+    let state: Vec<(String, String, String)> = snap.relations;
+
+    // S2：假设动作投影到真实事件源状态
+    let mut deploy = HypotheticalAction::new(
+        "DeployProduction",
+        Some("version"),
+        Some("V2"),
+        Reversibility::Irreversible,
+    );
+    deploy.capability = Some("deploy.production".into());
+    let proj = project(&state, &deploy);
+    assert!(proj.hypothetical(), "I2：投影是假设轨");
+    assert_eq!(
+        proj.predicted_state["relations"].as_array().unwrap().len(),
+        3,
+        "2 真实 + 1 假设"
+    );
+    assert_eq!(
+        proj.predicted_state["added"][0],
+        json!(["DeployProduction", "version", "V2"])
+    );
+
+    // S3：双动作对比（deny 侧出局 → 推荐 canary）
+    let policy = openaip_os::worker::policy::WorkerPolicy::new().allow("deploy.production");
+    let mut canary = HypotheticalAction::new(
+        "CanaryDeploy",
+        Some("version"),
+        Some("V2-canary"),
+        Reversibility::Compensatable,
+    );
+    canary.capability = Some("deploy.production".into());
+    let report = counterfactual(&state, &deploy, &canary, &policy, &[]);
+    assert_eq!(
+        report.recommendation.as_deref(),
+        Some("CanaryDeploy"),
+        "低风险优先"
+    );
+
+    // 事件源不被假设污染：重放状态仍是 2 条关系
+    let snap2 = World::new(&p).as_of(1000).await.unwrap();
+    assert_eq!(snap2.relations.len(), 2, "I2：假设投影永不写入事件源");
+    let _ = std::fs::remove_file(&path);
+}
