@@ -180,8 +180,21 @@
 ## 5. 待确认（M1c 设计时定案）
 
 1. G4 审计落库位置：Session Log 事实轨 vs 独立表——倾向 Session Log（I1 原则），M2 定。
-2. G10 面板合并：三面板并入 V2Panel vs 独立保留——倾向并入，减少 UI 面。
+2. G10 面板合并：三面板并入 V2Panel vs 独立保留——**已定案：并入（三面板随 M1d 删除）**。
 3. server 门面形态：`AppState` 从 RuntimeKernel 切换为（V2 Kernel + LibSQLStorage + CognitiveStore）三件套。
+   **M1c-server 按此执行（下一轮）**。
+
+## 6. M1c 进度与已知限制（2026-08-16）
+
+- ✅ **CLI 已切换**（commit 93d3e00）：`oaip agent run` 走 V2 AgentLoop（PiEngine + runner），
+  `--via-workers` 走 V2 Thinker；trace 落库 wb_trace_event、run 状态写 wb_run、
+  evolution 快照经 CognitiveStore 持久化；真实 pi 实测端到端跑通。
+- ⬜ **server 切换**（下一轮）：AppState → V2 三件套；HTTP 审批端点接 Waiting 注册表；
+  v0_3_approval / v0_9_ws_clamp / run 门测试重写。
+- ⚠️ **已知限制（Phase 5 语义投影范畴，非 M1 范围）**：storage 世界对象
+  （wb_ontology_object）尚未投影进 V2 Kernel 关系——CLI 的 V2 loop 观察不到 V1 演示数据
+  （实测表现为前置条件对空世界判 Deny）。runtime-kernel-v2 Phase 5 落地语义投影时解决；
+  期间 V2 测试以 kernel 内关系为世界（r1-r5 契约已钉）。
 
 ## 修订日志
 
