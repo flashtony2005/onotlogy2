@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  Activity,
   Boxes,
-  BrainCircuit,
   ChevronDown,
   ChevronRight,
   Code2,
+  Globe2,
   LayoutDashboard,
-  ListChecks,
   LogOut,
-  PlayCircle,
   ShieldCheck,
   Sparkles,
+  Users,
   Wifi,
   WifiOff,
 } from 'lucide-react'
@@ -32,6 +32,8 @@ import { MemoryPanel } from './components/MemoryPanel'
 import { TaskPanel } from './components/TaskPanel'
 import { V2Panel } from './components/V2Panel'
 import { Dashboard } from './components/Dashboard'
+import { GovernancePanel } from './components/GovernancePanel'
+import { WorldPanel } from './components/WorldPanel'
 import { debounce, fmtJson, fmtTime } from './format'
 import { clearToken, getToken, setToken } from './auth'
 import { useTraceStream } from './hooks/useTraceStream'
@@ -39,9 +41,9 @@ import { buildTimeline } from './view'
 import type { AuthUserDto, EvolutionStateDto, MemoryRecord, TaskRecord, TraceEventDto, ViewKind } from './types'
 
 const VIEW_GROUPS: { name: string; en: string; items: ViewKind[] }[] = [
-  { name: '运营', en: 'Operations', items: ['overview', 'operator', 'tasks'] },
-  { name: '构建', en: 'Build', items: ['v2', 'developer'] },
-  { name: '治理', en: 'Governance', items: ['executive', 'memory', 'evolution'] },
+  { name: '运行', en: 'Operations', items: ['overview', 'world', 'runs'] },
+  { name: '学习', en: 'Learning', items: ['workers', 'learning'] },
+  { name: '治理', en: 'Governance', items: ['governance', 'developer'] },
 ]
 
 interface ViewMeta {
@@ -63,60 +65,52 @@ const VIEWS: ViewMeta[] = [
     desc: '整个系统当前状态、运行情况、重要指标、有没有异常',
   },
   {
-    key: 'executive',
-    label: 'Executive',
-    cn: '高管',
-    icon: ShieldCheck,
-    q: '现在有什么重要事情需要我决定？',
-    desc: '风险、重大任务、需要人工决策的事情、整体经营/管理情况',
+    key: 'world',
+    label: 'World',
+    cn: '世界',
+    icon: Globe2,
+    q: '世界现在是什么状态？',
+    desc: '世界对象、关系图、对象当前状态与变化链',
   },
   {
-    key: 'operator',
-    label: 'Operator',
-    cn: '操作台',
-    icon: PlayCircle,
-    q: '系统现在正在干什么？我能不能控制它？',
-    desc: '正在运行的任务、流水线走到哪一步、暂停/继续/停止/重试',
+    key: 'runs',
+    label: 'Runs',
+    cn: '运行',
+    icon: Activity,
+    q: 'Agent 正在做什么？',
+    desc: '运行中的 Agent、任务状态、认知闭环推进到哪一步',
+  },
+  {
+    key: 'workers',
+    label: 'Workers',
+    cn: '工人',
+    icon: Users,
+    q: '谁在执行？',
+    desc: 'Worker 能力、状态、质量与执行记录',
+  },
+  {
+    key: 'learning',
+    label: 'Learning',
+    cn: '学习',
+    icon: Sparkles,
+    q: '系统学到了什么？',
+    desc: '经验沉淀、Pattern、Proposal、Learned 知识',
+  },
+  {
+    key: 'governance',
+    label: 'Governance',
+    cn: '治理',
+    icon: ShieldCheck,
+    q: '有没有越界？',
+    desc: '决策摘要、策略检查、审批与审计',
   },
   {
     key: 'developer',
     label: 'Developer',
     cn: '开发者',
     icon: Code2,
-    q: '系统内部到底发生了什么？',
+    q: '到底发生了什么？',
     desc: '输入、输出、API、Tool 调用、事件、错误、完整技术日志',
-  },
-  {
-    key: 'memory',
-    label: 'Memory',
-    cn: '记忆',
-    icon: BrainCircuit,
-    q: '系统以前记住了什么？',
-    desc: 'Agent 从过去任务中留下的事实、经验、偏好、结论',
-  },
-  {
-    key: 'evolution',
-    label: 'Evolution',
-    cn: '进化',
-    icon: Sparkles,
-    q: '系统有没有因为做事情而变聪明？',
-    desc: '哪些经验被总结成知识、规则、Skill，系统能力如何增长',
-  },
-  {
-    key: 'tasks',
-    label: 'Tasks',
-    cn: '任务',
-    icon: ListChecks,
-    q: '我要做什么？现在做到哪了？',
-    desc: '所有任务：待办、执行中、成功、失败、暂停、已完成',
-  },
-  {
-    key: 'v2',
-    label: 'V2 Runtime',
-    cn: '运行时',
-    icon: Boxes,
-    q: 'AI 干活的底层机器是怎么运转的？',
-    desc: 'Skill、Plugin、Session，以及 Agent 实际执行任务的运行环境',
   },
 ]
 
@@ -205,9 +199,11 @@ export default function App() {
     setView(k)
     const g = VIEW_GROUPS.find((x) => x.items.includes(k))
     if (g) setCollapsed((prev) => (prev[g.name] ? { ...prev, [g.name]: false } : prev))
-    if (k === 'memory') void reloadMemory()
-    if (k === 'evolution') void reloadEvolution()
-    if (k === 'tasks') void reloadTasks()
+    if (k === 'learning') {
+      void reloadMemory()
+      void reloadEvolution()
+    }
+    if (k === 'runs') void reloadTasks()
   }
 
   // Memory 视图刷新：从 REST /memory 拉取沉淀（hits 随轮次累加）。
@@ -460,41 +456,51 @@ export default function App() {
         {error && <div className="error">⚠ {error}</div>}
 
         <main className="content">
-        {!runId && view !== 'overview' && view !== 'memory' && view !== 'evolution' && view !== 'tasks' && view !== 'v2' && (
+        {!runId && (view === 'runs' || view === 'developer') && (
           <div className="empty">
             输入目标并点击「触发 Agent 运行」，实时观察 Agent 认知闭环。
           </div>
         )}
 
-        {view === 'memory' && (
-          <MemoryPanel memories={memories} loading={memoryLoading} onReload={reloadMemory} />
-        )}
-
-        {view === 'overview' && <Dashboard onNavigate={goView} />}
-
-        {view === 'v2' && <V2Panel />}
-
-        {view === 'evolution' && (
-          <EvolutionPanel
-            state={evolution}
-            loading={evolutionLoading}
-            onReload={reloadEvolution}
-            onAuthError={() => {
-              clearToken()
-              setUser(null)
-              setRunId(null)
-              setEvents([])
-            }}
+        {view === 'overview' && (
+          <Dashboard
+            onNavigate={goView}
+            events={events}
+            runId={runId}
+            runStatus={runId ? timeline.status : null}
           />
         )}
 
-        {view === 'tasks' && (
+        {view === 'world' && <WorldPanel />}
+
+        {view === 'workers' && <V2Panel initialTab="workers" />}
+
+        {view === 'learning' && (
+          <>
+            <MemoryPanel memories={memories} loading={memoryLoading} onReload={reloadMemory} />
+            <EvolutionPanel
+              state={evolution}
+              loading={evolutionLoading}
+              onReload={reloadEvolution}
+              onAuthError={() => {
+                clearToken()
+                setUser(null)
+                setRunId(null)
+                setEvents([])
+              }}
+            />
+          </>
+        )}
+
+        {view === 'governance' && <GovernancePanel />}
+
+        {view === 'runs' && (
           <TaskPanel tasks={tasks} loading={tasksLoading} onReload={reloadTasks} />
         )}
 
-        {runId && timeline.decision && view !== 'overview' && view !== 'memory' && view !== 'evolution' && view !== 'tasks' && view !== 'v2' && (
+        {runId && timeline.decision && view === 'governance' && (
           <div className="decision">
-            <h3>📊 决策摘要（Executive）</h3>
+            <h3>决策摘要</h3>
             <div>
               <span>使命</span>
               <p>{timeline.decision.mission}</p>
@@ -510,11 +516,11 @@ export default function App() {
           </div>
         )}
 
-        {runId && view !== 'overview' && view !== 'memory' && view !== 'evolution' && view !== 'tasks' && view !== 'v2' && timeline.events.length === 0 && (
+        {runId && (view === 'runs' || view === 'developer') && timeline.events.length === 0 && (
           <div className="empty">等待认知事件…</div>
         )}
 
-        {view !== 'overview' && view !== 'memory' && view !== 'evolution' && view !== 'tasks' && view !== 'v2' && timeline.events.length > 0 &&
+        {(view === 'runs' || view === 'developer') && timeline.events.length > 0 &&
           timeline.events.map((ev) => (
           <article key={ev.id} className={`event ${ev.eventType.toLowerCase()}`}>
             <div className="ev-head">

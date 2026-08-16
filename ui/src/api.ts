@@ -16,6 +16,7 @@ import type {
   SessionSummaryDto,
   SkillDto,
   TaskListDto,
+  WorldGraphDto,
   WorkerDto,
 } from './types'
 
@@ -195,6 +196,12 @@ export async function createSession(sessionId: string): Promise<SessionDto> {
 export async function getEvolution(): Promise<EvolutionStateDto> {
   const res = await authFetch('/api/v1/wb/agent/evolution')
   return unwrap<EvolutionStateDto>(res)
+}
+
+/// `GET /api/v1/wb/graph`：世界对象-关系图（World 页数据源）。
+export async function getGraph(): Promise<WorldGraphDto> {
+  const res = await authFetch('/api/v1/wb/graph')
+  return unwrap<WorldGraphDto>(res)
 }
 
 /// REQ-018：切换某条 LearnedKnowledge 的自动放行资格（可撤销，幂等）。

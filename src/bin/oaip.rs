@@ -790,6 +790,12 @@ async fn cmd_worker_run(
         return Ok(());
     }
 
+    // 注册 run 记录（Loop Health closure_rate 的分母；评测在 run 尾部落库）
+    let run_id = openaip_os::planner::generate_run_id();
+    let _ = storage
+        .insert_run(&run_id, "worker-cli", capabilities)
+        .await;
+
     let mut orch = WorkerOrchestrator::new(&registry, &policy, router);
     let result = orch.run_plan(&tasks).await;
     // Router Selection Learning：本次执行结果沉淀为 (capability, worker) 统计

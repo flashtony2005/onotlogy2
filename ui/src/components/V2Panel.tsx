@@ -34,8 +34,12 @@ const DEMO_SKILL_MD = `# YouTube Channel Growth
 const KNOWN = ['web.search', 'video.generate', 'llm.reason']
 
 /** Phase 10 V2 认知面板：Skill Registry / Plugin Registry / Session Log。 */
-export function V2Panel() {
-  const [tab, setTab] = useState<'skills' | 'plugins' | 'workers' | 'sessions'>('skills')
+export function V2Panel({
+  initialTab = 'skills',
+}: {
+  initialTab?: 'skills' | 'plugins' | 'workers' | 'sessions'
+}) {
+  const [tab, setTab] = useState<'skills' | 'plugins' | 'workers' | 'sessions'>(initialTab)
   const [skills, setSkills] = useState<SkillDto[]>([])
   const [plugins, setPlugins] = useState<PluginDto[]>([])
   const [workers, setWorkers] = useState<WorkerDto[]>([])

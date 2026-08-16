@@ -27,6 +27,7 @@ import type {
   SessionSummaryDto,
   SkillDto,
   TaskRecord,
+  TraceEventDto,
   ViewKind,
 } from '../types'
 
@@ -144,8 +145,67 @@ function ArchFlow() {
   )
 }
 
+const LOOP_STEPS = [
+  { label: 'Goal', eventType: 'Goal' },
+  { label: 'Think', eventType: 'Reasoning' },
+  { label: 'Govern', eventType: 'PolicyCheck' },
+  { label: 'Worker', eventType: 'Planning' },
+  { label: 'Action', eventType: 'Action' },
+  { label: 'Event', eventType: 'MemoryUpdate' },
+  { label: 'World', eventType: 'World' },
+]
+
+/** Live Agent Loop：根据实时事件推导每一步的 done/active/todo。 */
+function LoopStrip({
+  events,
+  runId,
+  runStatus,
+}: {
+  events: TraceEventDto[]
+  runId: string | null
+  runStatus: string | null
+}) {
+  const seen = new Set(events.map((e) => e.eventType))
+  const worldSeen = events.some((e) => e.objectRefs && e.objectRefs.length > 0)
+  const firstUndone = LOOP_STEPS.findIndex((s) => (s.eventType === 'World' ? !worldSeen : !seen.has(s.eventType)))
+  return (
+    <div className="loop">
+      <div className="loop-head">
+        <h4>Live Agent Loop</h4>
+        <span className={`loop-pill ${runId ? (runStatus ?? '').toLowerCase() : 'idle'}`}>
+          {runId ? runStatus ?? 'RUNNING' : 'IDLE'}
+        </span>
+      </div>
+      <div className="loop-strip">
+        {LOOP_STEPS.map((s, i) => {
+          const done = s.eventType === 'World' ? worldSeen : seen.has(s.eventType)
+          const active = !!runId && i === firstUndone
+          return (
+            <div key={s.label} className="loop-item">
+              <span className={`loop-step ${done ? 'done' : active ? 'active' : runId ? 'todo' : 'idle'}`}>
+                {s.label}
+              </span>
+              {i < LOOP_STEPS.length - 1 && <span className="loop-arrow">→</span>}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 /** 系统总览 Dashboard：环形图 + 维度条形 + 指标卡 + 架构流动 + 快速入口。 */
-export function Dashboard({ onNavigate }: { onNavigate: (v: ViewKind) => void }) {
+export function Dashboard({
+  onNavigate,
+  events = [],
+  runId = null,
+  runStatus = null,
+}: {
+  onNavigate: (v: ViewKind) => void
+  events?: TraceEventDto[]
+  runId?: string | null
+  runStatus?: string | null
+}) {
   const [skills, setSkills] = useState<SkillDto[]>([])
   const [plugins, setPlugins] = useState<PluginDto[]>([])
   const [sessions, setSessions] = useState<SessionSummaryDto[]>([])
@@ -262,6 +322,8 @@ export function Dashboard({ onNavigate }: { onNavigate: (v: ViewKind) => void })
 
       {err && <div className="err-msg">⚠️ {err}</div>}
       {loading && <div className="empty-sm">❯ 聚合数据加载中…</div>}
+
+      <LoopStrip events={events} runId={runId} runStatus={runStatus} />
 
       {/* 核心区：环形图（Skill 分布）+ 六维条形 */}
       <div className="dash-hero">

@@ -1,6 +1,20 @@
 // 与 src/trace.rs / docs/05_接口文档/api-agent-trace.md 4.1 同源（camelCase，单一真相源）
 
-export type ViewKind = 'overview' | 'executive' | 'operator' | 'developer' | 'memory' | 'evolution' | 'tasks' | 'v2'
+export type ViewKind =
+  | 'overview'
+  | 'world'
+  | 'runs'
+  | 'workers'
+  | 'learning'
+  | 'governance'
+  | 'developer'
+  // 旧视图保留给后端 timeline 视图钳制与兼容（新菜单不再直接暴露）。
+  | 'executive'
+  | 'operator'
+  | 'memory'
+  | 'evolution'
+  | 'tasks'
+  | 'v2'
 
 /// V0.7 认证用户（对应 server `GET /api/v1/wb/auth/me` / 登录响应 user）。
 export interface AuthUserDto {
@@ -184,6 +198,26 @@ export interface SessionSummaryDto {
 export interface SessionDto {
   session_id: string
   events: SessionEventDto[]
+}
+
+// ── World 视图（GET /api/v1/wb/graph）───────────────────────────
+export interface WorldNodeDto {
+  id: string
+  type: string
+  data?: unknown
+}
+
+export interface WorldEdgeDto {
+  id: string
+  source: string
+  target: string
+  type: string
+  data?: unknown
+}
+
+export interface WorldGraphDto {
+  nodes: WorldNodeDto[]
+  edges: WorldEdgeDto[]
 }
 
 export interface EvolutionStateDto {
