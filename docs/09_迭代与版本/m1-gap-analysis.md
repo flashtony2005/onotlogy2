@@ -132,13 +132,19 @@
   （认证与持久化能力存活，只改其对 run 的依赖面）。
 - 出口：v2_parity 全绿后，v0_3_* 与 common 的 run_goal 依赖整体删除。
 
-### G10 UI 面板数据源
+### G10 UI 面板数据源 ✅ 定案（M1c/M1d 执行）
 
 - `MemoryPanel`（GET /memory）、`TaskPanel`（GET /tasks）、`EvolutionPanel`（GET /evolution）
   读 V1 表；`V2Panel` 已是 V2。
-- 动作：三面板改接 V2 数据源（Memory/CognitiveStore、Task/Fiber、Evolution/evolution2），
-  或删除并并入 V2Panel——按「最少面板数」原则在 M1c 定案。
-- 测试：UI 侧 vitest 契约（数据形状）更新。
+- **定案（最少面板数）**：三面板 + 三端点 + UI 导航三个视图标签（memory/tasks/evolution）
+  在 M1d 一并删除，`V2Panel` 承担 V2 状态展示；记忆如需展示，M1c 在 V2Panel 内接
+  CognitiveStore 数据（MemoryItem 与 V1 MemoryRecord 同形：label/payload/hits）。
+  Evolution 审计/撤销 API 随 M2（evolution.rs 删除）移除。
+- 证据：TaskPanel 期望 V1 域对象 RetentionTask，而 wb_task 现为 TaskDefinition 存储
+  （evaluation 用）——域语义已死，面板无数据可展示；MemoryPanel 的数据源 wb_memory
+  随 M1d 删除。
+- 测试：UI view.ts 的 memory/tasks/evolution 分支随 M1d 删除（view.test.ts 同步）；
+  时间线行为已由 v2_parity g9b/g9c 钉住（UI 无需改动即消费 V2 事件）。
 
 ## 4. M1d 删除范围清单（依据调用面核查）
 
