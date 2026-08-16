@@ -1,6 +1,5 @@
 use std::sync::Mutex;
 use std::sync::MutexGuard;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// HTTP 审批挂起的最长等待时间；超时按拒绝处理（不授予权限）。
@@ -30,17 +29,8 @@ pub(super) fn now_micros() -> String {
         .to_string()
 }
 
-/// 生成运行 ID（run_{micros}_{seq}）。
-fn new_run_id() -> String {
-    static RUN_SEQ: AtomicU64 = AtomicU64::new(0);
-    format!(
-        "run_{}_{}",
-        now_micros(),
-        RUN_SEQ.fetch_add(1, Ordering::SeqCst)
-    )
-}
-
 /// 预生成运行 ID（server 在触发运行前占坑状态映射）。
+/// M1b G6：实现已迁至 `session::run`（planner 退役后仍存活）。
 pub fn generate_run_id() -> String {
-    new_run_id()
+    crate::session::run::generate_run_id()
 }

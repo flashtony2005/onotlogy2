@@ -2,4 +2,6 @@
 //! 差集依据：docs/09_迭代与版本/m1-gap-analysis.md（G1–G10）。
 
 mod approval;
+mod gate_source;
+mod run_status;
 mod trace_events;

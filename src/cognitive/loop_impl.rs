@@ -30,6 +30,22 @@ pub enum LoopOutcome {
     Failed(String),
 }
 
+impl LoopOutcome {
+    /// G6：结局 → (run 状态, 是否需人工裁决)。
+    /// Waiting = 运行中但挂起待批；Denied = 人工拒绝致失败；
+    /// Failed = 运行失败（无人工）；Continue 不应作为最终结局，映射 Running。
+    pub fn to_run_status(&self) -> (crate::session::run::RunStatus, bool) {
+        use crate::session::run::RunStatus;
+        match self {
+            LoopOutcome::Completed => (RunStatus::Completed, false),
+            LoopOutcome::Waiting => (RunStatus::Running, true),
+            LoopOutcome::Denied(_) => (RunStatus::Failed, true),
+            LoopOutcome::Failed(_) => (RunStatus::Failed, false),
+            LoopOutcome::Continue => (RunStatus::Running, false),
+        }
+    }
+}
+
 /// Agent：长期认知实体（记忆 + 引擎 + 作用域）。
 pub struct Agent {
     pub id: String,

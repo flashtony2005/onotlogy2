@@ -52,35 +52,9 @@ pub enum PlannerError {
 }
 
 /// 运行状态码（与 timeline.status 对齐）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RunStatus {
-    Running,
-    Completed,
-    Failed,
-    /// 进程崩溃未正常结束（重启恢复时由 Running 标记，区别于 Failed）。
-    Interrupted,
-}
-
-impl RunStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            RunStatus::Running => "Running",
-            RunStatus::Completed => "Completed",
-            RunStatus::Failed => "Failed",
-            RunStatus::Interrupted => "Interrupted",
-        }
-    }
-
-    /// 持久化字符串 → 状态（未知 → Interrupted，安全兜底，避免回退成 Running）。
-    pub fn from_db_str(s: &str) -> RunStatus {
-        match s {
-            "Running" => RunStatus::Running,
-            "Completed" => RunStatus::Completed,
-            "Failed" => RunStatus::Failed,
-            _ => RunStatus::Interrupted,
-        }
-    }
-}
+/// M1b G6：语义枚举已迁至 `session::run`（planner 退役后仍存活）；
+/// 此处仅保留 re-export，M1d 删除 planner 时消费方改 import session。
+pub use crate::session::run::RunStatus;
 
 /// 一次 Agent 运行的结果。
 #[derive(Debug, Clone)]
