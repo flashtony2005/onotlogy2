@@ -21,6 +21,7 @@
 | L3 演化 | `evolution2/` `rule/` `skill/` | 经验分账 → Gate → 行为规则 → Skill 资产 | Learn ≠ Permission；一层口径 |
 | L4 Worker | `worker/` | Skill → Capability → Router → Worker（CLI/HTTP/MCP） | Provider Agnostic；fail-closed |
 | L4 插件 | `plugin/` | 外部能力接入 | Secret ≠ EventLog |
+| L4 通信 | `fabric/` | Agent Communication Fabric（OAB）：AgentMessage / Session / Adapter / Router（Intent→Capability→Policy→Selection）| Adapter 管协议、Bridge 管语义；不直传 Agent 消息；通信事件全量入 Event Log（契约 agent-fabric-v1.md） |
 | L5 观察 | `trace/` `server/` `ui/` | TraceEvent 单词汇表 → REST/WS/UI | 三层视图钳制同源 |
 | L5 存储 | `storage/` | 对象/关系/事件/run/评估/用户 | SQL 参数化；迁移版本化 |
 | L5 认知状态 | `cognitive/persist.rs` | CognitiveStore（记忆/演化快照/SessionLog） | 显式 save/restore |
