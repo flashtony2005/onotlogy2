@@ -69,15 +69,18 @@
 - 契约测试：`tests/v2_parity/pi_engine.rs` 6 例全绿（结构化决策 / none / 未知能力拒绝 /
   不可用 / 超时杀进程 / health 探测）+ 4 个假 pi fixtures。基线 370 → 379。
 
-### G4 审批审计落库（REQ-018 可审计承诺，已部分覆盖）
+### G4 审批审计落库（REQ-018 可审计承诺）✅ 审计事实补齐（commit 1d4526f）
 
 - V1：`wb_approval_audit` 表 + `GET /evolution/audit` + AutoApprove 可撤销 API。
 - V2 已覆盖（经 tc_e6/tc_e7 验证）：gate 放行 emit `evolution.gate_approved` 审计事件
   （进 Kernel 事实轨）；撤销 = `EvolutionPermissionState::Revoked` 吸收态（revoke 后不复活）。
-- 剩余缺口：① 人工审批路径（relate Approval → 放行）的审计事件种类确认/补齐；
-  ② 审计查询入口（现有 `GET /evolution/audit` 读 V1 表，需改读事实轨）。
-- 测试：`tests/v2_parity/approval_audit.rs`——gate 放行与人工审批均有可回放审计事实；
-  撤销吸收态在审计里可查。
+- 已补齐：relate(Approval) 恢复路径落 `approval.granted`（by=关系 source）——
+  外部事件统一入口与 `k.approve` 同源可回放；全链审计种类（requested/granted/
+  rejected/expired/gate_approved）各司其职。
+- 剩余（M2 定案）：审计查询入口——现有 `GET /evolution/audit` 读 V1 表，改读事实轨
+  （与 wb_approval_audit 表的处置一起在 M2 归一）。
+- 契约测试：`tests/v2_parity/approval_audit.rs` 3 例全绿（relate granted / 显式 approve /
+  拒绝与超时种类区分）。
 
 ### G5 「无失败」数据源切换 ✅ 已确认（characterization，commit d1e86b0）
 
@@ -110,15 +113,15 @@
 - 契约测试：`tests/v2_parity/health_source.rs` 2 例全绿——六指标从 V2 写入数据派生
   （total_runs=3、closure=1/3、action_success=1、world_change=1/3）+ 空库零分母保护。
 
-### G8 `--via-workers` 桥的 Thinker
+### G8 `--via-workers` 桥的 Thinker ✅ 已落地（commit 1d4526f）
 
 - 现状：`cmd_agent_run(via_workers=true)` 走 `Planner::plan()` 产出 PlanStep → worker 任务。
-- 影响：删除 planner 后此桥断。
-- 补齐：Thinker 改为 V2 路径——`CognitiveEngine::decide`（或 skill-based planner）
-  产出 Decision → worker capability 映射；`PlanStep::worker_capability` 映射逻辑迁至
-  worker 侧或 compose 层。
-- 测试：`tests/v2_parity/via_workers.rs`——goal → Thinker 决策 → worker 执行 → 结果，
-  与现 bridge_v2 / worker_v2 测试不重复。
+- 已落地：`worker/thinker.rs::Thinker`——`CognitiveEngine::decide` 循环的纯规划形态
+  （不执行、无世界副作用）；防环收敛（None / 重复能力 / 能力数上限）；
+  `Decision.capability` 与 Worker 能力市场同名直映（compose 命名已是点分形式），
+  `PlanStep::worker_capability` 映射随 planner 一并删除；`to_tasks` 保序。
+- M1c 动作：`cmd_agent_run(via_workers=true)` 改走 Thinker + WorkerOrchestrator（不再触 planner）。
+- 契约测试：`tests/v2_parity/via_workers.rs` 4 例全绿（全链执行 / 防环收敛 / 空任务 / 保序）。
 
 ### G9 测试迁移（v0_3_* → v2_parity）
 
