@@ -14,17 +14,15 @@
 //! - `server`：axum REST + WebSocket 流 + 三层观察 UI 静态托管
 
 pub mod auth;
-pub mod codegen;
 pub mod cognitive;
 pub mod compose;
 pub mod diagnosis;
 pub mod evaluation;
 pub mod evolution2;
 pub mod health;
-pub mod ir;
+pub use oaip_abi as abi;
 pub use oaip_kernel as kernel;
 pub mod mutation;
-pub mod odl;
 pub mod plugin;
 pub mod rule;
 pub mod server;
@@ -40,7 +38,6 @@ pub mod world_exec;
 pub use auth::{
     AuthError, AuthUser, IdentityProvider, LocalIdentityProvider, Role, SessionStore, clamp_view,
 };
-pub use codegen::{CodegenOutput, ObjectDef, codegen};
 pub use diagnosis::{Diagnoser, Diagnosis, DiagnosisConfig, propose_from_diagnosis, run_diagnosis};
 pub use evaluation::hook::on_run_end;
 pub use evaluation::{
@@ -48,16 +45,11 @@ pub use evaluation::{
     TaskDefinition,
 };
 pub use health::{LoopHealth, collect};
-pub use ir::{
-    ActionDef, Clause, CompareOp, CreateEffect, FieldUpdate, ObjectType, OntologyIR, ParamDef,
-    PolicyDef, PropertyDef, ScalarType, ValueExpr,
-};
 pub use mutation::{
     BenchmarkConfig, BenchmarkMetric, BenchmarkVerdict, DEFAULT_MIN_EFFECT_SIZE, DEFAULT_MIN_RUNS,
     MutationError, MutationProposal, MutationStatus, OfflineConfig, OfflineVerdict, benchmark,
     offline_benchmark, run_offline_benchmark,
 };
-pub use odl::parse_odl;
 pub use session::run::{RunStatus, fiber_to_run_status, generate_run_id};
 pub use simulation::replay::{
     ReplayDecision, ReplayReport, replay_all, replay_decision, run_decision_replay,

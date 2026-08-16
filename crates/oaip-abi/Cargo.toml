@@ -1,0 +1,10 @@
+[package]
+name = "oaip-abi"
+version = "0.9.0"
+edition = "2024"
+description = "OpenAIP-OS 语言前端 —— ODL 解析 → IR → codegen（Rust/SQL/JSON）"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"

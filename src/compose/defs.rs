@@ -88,8 +88,8 @@ pub struct RelationDefinition {
     pub predicate: String,
 }
 use super::policy::{Policy, Precondition};
+use crate::abi::ir::{CreateEffect, FieldUpdate, OntologyIR};
 use crate::compose::{Capability, Service};
-use crate::ir::{CreateEffect, FieldUpdate, OntologyIR};
 use crate::kernel::Reversibility;
 
 /// 动作语义名：`retain` → `RetainCustomer`（首字母大写 + 类型前缀）。
@@ -110,10 +110,10 @@ fn create_effect(c: &CreateEffect) -> EffectDefinition {
 /// ODL `updates:` → EffectDefinition（value 表达式编译为 EffectValue，执行期求值）。
 fn update_effect(u: &FieldUpdate) -> EffectDefinition {
     let value = match &u.value {
-        crate::ir::ValueExpr::Literal(l) => EffectValue::Literal(l.clone()),
-        crate::ir::ValueExpr::Param(p) => EffectValue::Param(p.clone()),
-        crate::ir::ValueExpr::SelfId => EffectValue::SelfRef,
-        crate::ir::ValueExpr::SelfField(f) => EffectValue::SelfField(f.clone()),
+        crate::abi::ir::ValueExpr::Literal(l) => EffectValue::Literal(l.clone()),
+        crate::abi::ir::ValueExpr::Param(p) => EffectValue::Param(p.clone()),
+        crate::abi::ir::ValueExpr::SelfId => EffectValue::SelfRef,
+        crate::abi::ir::ValueExpr::SelfField(f) => EffectValue::SelfField(f.clone()),
     };
     EffectDefinition::Update {
         field: u.field.clone(),
@@ -152,12 +152,12 @@ pub fn ir_to_runtime(ir: &OntologyIR) -> Vec<RuntimeDefinition> {
                                 .map(|cl| PreconditionDefinition {
                                     field: cl.field.clone(),
                                     op: match cl.op {
-                                        crate::ir::CompareOp::Eq => crate::compose::Cmp::Eq,
-                                        crate::ir::CompareOp::Ne => crate::compose::Cmp::Ne,
-                                        crate::ir::CompareOp::Lt => crate::compose::Cmp::Lt,
-                                        crate::ir::CompareOp::Le => crate::compose::Cmp::Le,
-                                        crate::ir::CompareOp::Gt => crate::compose::Cmp::Gt,
-                                        crate::ir::CompareOp::Ge => crate::compose::Cmp::Ge,
+                                        crate::abi::ir::CompareOp::Eq => crate::compose::Cmp::Eq,
+                                        crate::abi::ir::CompareOp::Ne => crate::compose::Cmp::Ne,
+                                        crate::abi::ir::CompareOp::Lt => crate::compose::Cmp::Lt,
+                                        crate::abi::ir::CompareOp::Le => crate::compose::Cmp::Le,
+                                        crate::abi::ir::CompareOp::Gt => crate::compose::Cmp::Gt,
+                                        crate::abi::ir::CompareOp::Ge => crate::compose::Cmp::Ge,
                                     },
                                     value: resolve_literal(&cl.value),
                                 })
@@ -190,12 +190,12 @@ pub fn ir_to_runtime(ir: &OntologyIR) -> Vec<RuntimeDefinition> {
 }
 
 /// ValueExpr 字面量 → Value（引用参数/self 在策略求值时解析，此处仅取字面量）。
-fn resolve_literal(v: &crate::ir::ValueExpr) -> serde_json::Value {
+fn resolve_literal(v: &crate::abi::ir::ValueExpr) -> serde_json::Value {
     match v {
-        crate::ir::ValueExpr::Literal(l) => l.clone(),
-        crate::ir::ValueExpr::Param(p) => serde_json::Value::String(p.clone()),
-        crate::ir::ValueExpr::SelfId => serde_json::Value::String("self".into()),
-        crate::ir::ValueExpr::SelfField(f) => serde_json::Value::String(format!("self.{f}")),
+        crate::abi::ir::ValueExpr::Literal(l) => l.clone(),
+        crate::abi::ir::ValueExpr::Param(p) => serde_json::Value::String(p.clone()),
+        crate::abi::ir::ValueExpr::SelfId => serde_json::Value::String("self".into()),
+        crate::abi::ir::ValueExpr::SelfField(f) => serde_json::Value::String(format!("self.{f}")),
     }
 }
 
@@ -240,6 +240,6 @@ pub fn service_from(def: &RuntimeDefinition) -> Service {
 }
 
 /// 便捷：IR → 服务列表（ir_to_runtime + service_from 两步）。
-pub fn ir_to_services(ir: &crate::ir::OntologyIR) -> Vec<crate::compose::Service> {
+pub fn ir_to_services(ir: &crate::abi::ir::OntologyIR) -> Vec<crate::compose::Service> {
     ir_to_runtime(ir).iter().map(service_from).collect()
 }

@@ -1,7 +1,8 @@
 //! 世界与编译命令（M5 拆分）：compile / run / object / relation / event / db。
 
+use openaip_os::abi::codegen;
+use openaip_os::abi::odl::parse_odl;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine, RelationEngine};
-use openaip_os::{codegen, parse_odl};
 use serde_json::json;
 
 pub async fn cmd_compile(file: &str) -> Result<(), Box<dyn std::error::Error>> {

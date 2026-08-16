@@ -1,7 +1,7 @@
 //! 观察服务命令（M5 拆分）：serve / health。
 
+use openaip_os::abi::odl::parse_odl;
 use openaip_os::auth::{IdentityProvider, LocalIdentityProvider};
-use openaip_os::parse_odl;
 use openaip_os::server;
 use openaip_os::storage::LibSQLStorage;
 use std::net::SocketAddr;

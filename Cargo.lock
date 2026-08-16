@@ -1506,6 +1506,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "oaip-abi"
+version = "0.9.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "oaip-kernel"
 version = "0.9.0"
 dependencies = [
@@ -1538,6 +1547,7 @@ dependencies = [
  "futures-util",
  "hex",
  "libsql",
+ "oaip-abi",
  "oaip-kernel",
  "rand_core 0.6.4",
  "reqwest",

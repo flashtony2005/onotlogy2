@@ -10,6 +10,7 @@
 //! O6 AgentViewV2 注入（D5：观察 = 实体 + 子图，认知引擎据此决策）
 //! O7 ODL 端到端闭环（Ontology → Runtime → Agent → World → 重投影）
 
+use openaip_os::abi::odl::parse_odl;
 use openaip_os::cognitive::engine::{AgentView, FakeEngine, PlanStep};
 use openaip_os::cognitive::observe::observe;
 use openaip_os::cognitive::{Agent, AgentLoop, CognitiveEngine, LoopOutcome, Memory};
@@ -19,7 +20,6 @@ use openaip_os::kernel::effect::{Effect, Reversibility};
 use openaip_os::kernel::fiber::FiberState;
 use openaip_os::kernel::relation::Relation;
 use openaip_os::kernel::{Compensation, Kernel, Scope};
-use openaip_os::parse_odl;
 use openaip_os::world::{derive_entities, subgraph};
 use openaip_os::world_exec::{EffectExecutor, RelationEffectExecutor};
 use serde_json::json;

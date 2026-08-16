@@ -1,9 +1,9 @@
 //! V0.1 全链路测试契约（对应 docs/07_测试文档/test-case.md TC-001~008）
 //! 一条用例定义一个能力的边界（Red→Green）。
 
-use openaip_os::codegen;
-use openaip_os::ir::{OntologyIR, PropertyDef, ScalarType};
-use openaip_os::parse_odl;
+use openaip_os::abi::codegen;
+use openaip_os::abi::ir::{OntologyIR, PropertyDef, ScalarType};
+use openaip_os::abi::odl::parse_odl;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine, ObjectRecord, StorageError};
 use openaip_os::trace::{TraceEvent, TraceKind};
 use serde_json::json;

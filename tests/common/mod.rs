@@ -8,7 +8,7 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use openaip_os::parse_odl;
+use openaip_os::abi::odl::parse_odl;
 use openaip_os::server;
 use openaip_os::storage::LibSQLStorage;
 use serde_json::json;

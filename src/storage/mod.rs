@@ -16,7 +16,7 @@ pub mod users;
 pub mod worker_registry;
 pub mod worker_stats;
 
-use crate::codegen;
+use crate::abi::codegen;
 pub(crate) use crate::trace::TraceEvent;
 use async_trait::async_trait;
 use libsql::Connection;
