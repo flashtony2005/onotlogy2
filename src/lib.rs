@@ -22,15 +22,15 @@ pub mod evolution2;
 pub mod health;
 pub use oaip_abi as abi;
 pub use oaip_kernel as kernel;
+pub use oaip_session as session;
+pub use oaip_trace as trace;
 pub mod mutation;
 pub mod plugin;
 pub mod rule;
 pub mod server;
-pub mod session;
 pub mod simulation;
 pub mod skill;
 pub mod storage;
-pub mod trace;
 pub mod worker;
 pub mod world;
 pub mod world_exec;
@@ -50,7 +50,6 @@ pub use mutation::{
     MutationError, MutationProposal, MutationStatus, OfflineConfig, OfflineVerdict, benchmark,
     offline_benchmark, run_offline_benchmark,
 };
-pub use session::run::{RunStatus, fiber_to_run_status, generate_run_id};
 pub use simulation::replay::{
     ReplayDecision, ReplayReport, replay_all, replay_decision, run_decision_replay,
 };
@@ -58,7 +57,9 @@ pub use storage::{
     LibSQLStorage, ObjectEngine, ObjectRecord, RelationEngine, RelationRecord, SessionRecord,
     TraceQuery, UserRecord,
 };
-pub use trace::{RunTimeline, TraceEvent, TraceEventDto, TraceKind, View};
+pub use trace::{
+    RunTimeline, TraceEvent, TraceEventDto, TraceKind, View, build_timeline, derive_run_state,
+};
 pub use worker::orchestrator::{
     TaskOutcome, TaskStatus, WorkerOrchestrator, WorkerRunResult, WorkerTask,
 };

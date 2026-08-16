@@ -4,7 +4,7 @@
 //! 不同裁剪；WebSocket 实时流与离线 timeline 查询共用 `TraceEventDto`（camelCase，单一真相源）。
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
-use crate::session::run::RunStatus;
+use oaip_session::RunStatus;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::str::FromStr;
@@ -437,7 +437,7 @@ mod tests {
     /// WS 视图钳制：`from_view` 须与 REST `build_timeline` 同一套最小权限规则。
     #[test]
     fn ws_from_view_clamps_to_role() {
-        use crate::trace::{TraceEvent, TraceKind};
+        use crate::{TraceEvent, TraceKind};
 
         // 一个带细节的推理事件（非 Goal/Action）
         let reasoning_ev = TraceEvent {

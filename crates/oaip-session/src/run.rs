@@ -13,7 +13,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::kernel::FiberState;
+use oaip_kernel::FiberState;
 
 /// run 状态（持久化语义；UI deriveState 与表状态同源）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
