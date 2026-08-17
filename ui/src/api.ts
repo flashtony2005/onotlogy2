@@ -13,6 +13,8 @@ import type {
   AuditViewDto,
   FabricRequestDto,
   FabricSubmissionDto,
+  PendingApprovalDto,
+  ApprovalDecisionDto,
   ProjectCreateDto,
   ProjectDto,
   ProjectEventDto,
@@ -288,4 +290,30 @@ export async function postFabricSubmit(req: FabricRequestDto): Promise<FabricSub
     throw new Error(json.msg || `fabric 提交失败 (code=${json.code})`)
   }
   return json.data
+}
+
+// ── T1 Bridge 审批裁决（GET /run/:run_id/approvals + POST /run/:run_id/approval/:req_id）──
+
+/// `GET /api/v1/wb/agent/run/:run_id/approvals`：列出某 run 的挂起审批（需 Operator 及以上）。
+export async function getRunApprovals(runId: string): Promise<PendingApprovalDto[]> {
+  const r = await authFetch(`/api/v1/wb/agent/run/${encodeURIComponent(runId)}/approvals`)
+  return unwrap<PendingApprovalDto[]>(r)
+}
+
+/// `POST /api/v1/wb/agent/run/:run_id/approval/:req_id`：裁决一条挂起审批，唤醒执行（需 Operator 及以上）。
+/// `approve=true` → decision=approve（放行续跑）；`approve=false` → decision=reject（终止）。
+export async function postRunApprovalDecision(
+  runId: string,
+  reqId: string,
+  approve: boolean,
+): Promise<ApprovalDecisionDto> {
+  const r = await authFetch(
+    `/api/v1/wb/agent/run/${encodeURIComponent(runId)}/approval/${encodeURIComponent(reqId)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: approve ? 'approve' : 'reject' }),
+    },
+  )
+  return unwrap<ApprovalDecisionDto>(r)
 }

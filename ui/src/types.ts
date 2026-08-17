@@ -220,6 +220,26 @@ export interface FabricSubmissionDto {
   }
 }
 
+// ── T1 Bridge 审批裁决（GET /run/:run_id/approvals + POST /run/:run_id/approval/:req_id）──
+
+/// 挂起审批列表项（后端 PendingApprovalDto，camelCase wire）。
+export interface PendingApprovalDto {
+  reqId: string
+  runId: string
+  capability: string
+  action: string
+  args: unknown
+  state: string
+}
+
+/// 裁决结果（后端 resolve_approval 成功体）。
+export interface ApprovalDecisionDto {
+  reqId: string
+  decision: string
+  status?: string
+  sender?: string
+}
+
 // ── Phase 8 Project（项目 = 世界/事件/运营的顶层组织单元）──
 
 export interface ProjectDto {

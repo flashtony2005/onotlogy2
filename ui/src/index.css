@@ -2494,6 +2494,39 @@ button {
   margin-top: 3px;
 }
 
+/* ── T1 Bridge 审批裁决按钮 ───────────────────────────────────── */
+.gov-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 7px;
+}
+.gov-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.gov-actions button.approve {
+  background: rgba(127, 227, 192, 0.12);
+  border-color: #2f6a58;
+  color: #7fe3c0;
+}
+.gov-actions button.approve:hover {
+  background: rgba(127, 227, 192, 0.22);
+}
+.gov-actions button.reject {
+  background: rgba(224, 106, 99, 0.12);
+  border-color: rgba(224, 106, 99, 0.4);
+  color: var(--red);
+}
+.gov-actions button.reject:hover {
+  background: rgba(224, 106, 99, 0.22);
+}
+
 /* ── Phase 8：项目管理 ───────────────────────────────────────────────── */
 .project-list {
   display: flex;
