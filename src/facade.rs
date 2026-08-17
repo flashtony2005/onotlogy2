@@ -25,7 +25,7 @@ use serde_json::Value;
 use crate::compose::task::WorldEventSink;
 use crate::fabric::adapter::AgentAdapter;
 use crate::fabric::router::FabricRouter;
-use crate::fabric::session::SessionManager;
+use crate::fabric::session::{Session, SessionManager};
 use crate::fabric::{AgentMessage, Bridge};
 use crate::kernel::{Kernel, KernelError, Scope};
 use crate::projection::{Projection, ProjectionError};
@@ -226,6 +226,26 @@ impl Facade {
         approve: bool,
     ) -> Result<AgentMessage, FacadeError> {
         self.fabric.resolve(session_id, run_id, approve)
+    }
+
+    /// fabric.cancel()：按 correlation_id 取消运行（反查 session + 通知 adapter）。
+    pub fn fabric_cancel(&self, correlation_id: &str) -> Result<(), FacadeError> {
+        self.fabric.cancel(correlation_id)
+    }
+
+    /// fabric.stream()：取会话消息快照（同步；实时推送见 WS 端点）。
+    pub fn fabric_stream(&self, session_id: &str) -> Result<Vec<AgentMessage>, FacadeError> {
+        self.fabric.stream(session_id)
+    }
+
+    /// capability.discover()：已接入能力提供者（adapter）id 列表。
+    pub fn capability_discover(&self) -> Vec<String> {
+        self.fabric.discover()
+    }
+
+    /// session.get()：按 id 取会话副本。
+    pub fn session_get(&self, session_id: &str) -> Result<Session, FacadeError> {
+        self.fabric.get(session_id)
     }
 }
 
@@ -486,10 +506,88 @@ impl FabricService {
             Err(crate::fabric::FabricError::Denied(format!("审批拒绝: {run_id}")).into())
         }
     }
+
+    /// fabric.cancel()（契约未来扩展 → 本次落地）：按 correlation_id 取消运行。
+    /// 反查所属 session → 标记 Cancelled；并通知各 adapter 尽力取消（best-effort / idempotent）。
+    pub fn cancel(&self, correlation_id: &str) -> Result<(), FacadeError> {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| FacadeError::Fabric("会话表锁中毒".into()))?;
+        if let Some(sid) = sessions.find_session_id_by_correlation(correlation_id)
+            && let Some(s) = sessions.get_mut(&sid)
+        {
+            s.cancel();
+        }
+        // 通知各 adapter 取消（best-effort：个别 adapter 失败不影响整体取消语义）
+        self.bridge
+            .cancel(correlation_id)
+            .map_err(|e| FacadeError::Fabric(e.to_string()))?;
+        Ok(())
+    }
+
+    /// fabric.stream()（契约未来扩展 → 本次落地）：返回会话累积的消息快照（通信真相源）。
+    /// v0.1 为同步快照——真实实时推送由 `/api/v1/wb/agent/:id/stream` WS 承担。
+    pub fn stream(&self, session_id: &str) -> Result<Vec<AgentMessage>, FacadeError> {
+        let sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| FacadeError::Fabric("会话表锁中毒".into()))?;
+        match sessions.get(session_id) {
+            Some(s) => Ok(s.messages().to_vec()),
+            None => Err(FacadeError::Fabric(format!("会话不存在: {session_id}"))),
+        }
+    }
+
+    /// capability.discover()（契约未来扩展 → 本次落地）：返回已接入的能力提供者（adapter）id。
+    pub fn discover(&self) -> Vec<String> {
+        self.bridge.discover()
+    }
+
+    /// session.get()（契约未来扩展 → 本次落地）：按 id 取会话副本（participants/state/messages）。
+    pub fn get(&self, session_id: &str) -> Result<Session, FacadeError> {
+        let sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| FacadeError::Fabric("会话表锁中毒".into()))?;
+        match sessions.get(session_id) {
+            Some(s) => Ok(s.clone()),
+            None => Err(FacadeError::Fabric(format!("会话不存在: {session_id}"))),
+        }
+    }
 }
 
 impl From<crate::fabric::FabricError> for FacadeError {
     fn from(e: crate::fabric::FabricError) -> Self {
         FacadeError::Fabric(e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FabricService;
+    use crate::fabric::{Bridge, router::FabricRouter};
+
+    /// 无适配器 / 无 sink 的空 FabricService：验证四个契约方法编译通过且错误路径正确。
+    fn empty_service() -> super::FabricService {
+        FabricService::new(Bridge::new(FabricRouter::new(), None))
+    }
+
+    #[test]
+    fn capability_discover_empty_without_adapters() {
+        assert!(empty_service().discover().is_empty());
+    }
+
+    #[test]
+    fn fabric_cancel_is_best_effort_ok() {
+        // 无 session / 无 adapter：取消是 best-effort，不应报错。
+        assert!(empty_service().cancel("corr_missing").is_ok());
+    }
+
+    #[test]
+    fn fabric_stream_get_unknown_session_errors() {
+        let svc = empty_service();
+        assert!(svc.stream("nope").is_err());
+        assert!(svc.get("nope").is_err());
     }
 }

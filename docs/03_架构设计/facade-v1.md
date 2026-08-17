@@ -120,14 +120,23 @@ Server（HTTP /api/world/query 等）、Plugin 全部最终调用 `OpenAipFacade
 codex 声明的是 code.write 系而非契约示例的 coding.modify——能力名由
 Adapter discover 决定，语义由意图映射层对齐）。
 
-## 4. 未来扩展（列入契约，但**现在不实现**）
+## 4. 扩展方法
+
+原列于契约「未来扩展」的四个方法已在 `fix/survivor-gaps` 落地为 Facade API
+（`FabricService` 实现，`Facade` 以固有方法暴露，与 `fabric_resolve` 同约定）：
+
+- `fabric.cancel(correlation_id)` → `Facade::fabric_cancel`：按 correlation_id 取消运行
+  （反查所属 session 标记 Cancelled + 通知各 adapter，best-effort / idempotent）。
+- `fabric.stream(session_id)` → `Facade::fabric_stream`：返回会话消息快照（同步；
+  实时推送由 `/api/v1/wb/agent/:id/stream` WS 端点承担）。
+- `capability.discover()` → `Facade::capability_discover`：已接入能力提供者（adapter）id 列表。
+- `session.get(session_id)` → `Facade::session_get`：按 id 取会话副本（participants/state/messages）。
+
+仍属未来扩展（未实现）：
 
 ```
 world.observe() / world.subscribe()
 audit.trace()
-fabric.cancel() / fabric.stream()
-capability.discover()
-session.get()
 ```
 
 ## 5. 验收（契约测试）
@@ -147,3 +156,4 @@ session.get()
 | V1.1 | lushaohui | 2026-08-16 | 实现落地：src/facade.rs（三 Service + Facade 聚合）；契约测试 tc_g1–g4 红→绿；CLI Transport（`oaip facade world query` / `audit query` / `fabric submit`，block_in_place 约定）；投影扩展：fabric.* 通信事件（Cognitive）经领域规则可投影进 World State；Bridge.submit 对象引用以请求 payload.object 优先（世界语义由请求方持有） |
 | V1.2 | lushaohui | 2026-08-16 | Server Transport + Web UI 落地：`/api/v1/facade/world/query` / `audit/query` / `fabric/submit`（内部 block_in_place 调 Facade；AppState 装配按 runtime flavor 分支——multi_thread 全装配、current_thread 测试环境空 Facade）；/audit 旧端点补 fabric 域；UI 三件套：WorldPanel 投影世界（world.query 关系表 + object/predicate 过滤）、FabricPanel（Agent 拓扑 + 通信事件流 + submit 表单）、时间线 fabric 事件文案（tc_sf1–sf4 红→绿） |
 | V1.3 | lushaohui | 2026-08-17 | Phase 8 Project Scope：world/audit/fabric 语义域全部支持 project_id（项目范围世界）；新增 project.create/list 语义域（wb_project 注册表 + ontology 定义）；世界按项目过滤投影（事件 → 项目 Kernel Context，项目隔离）；CLI `oaip facade project seed` 落地 OpenAIP-OS 工程本体（模块/文件/测试 → 项目世界，tc_p1–p3 红→绿） |
+| V1.4 | lushaohui | 2026-08-18 | 扩展方法落地（fix/survivor-gaps）：`fabric.cancel`/`fabric.stream`/`capability.discover`/`session.get` 实现为 Facade API（`FabricService` + `Facade` 固有方法）；§4「未来扩展」拆分——四项已落地，world.observe/subscribe 与 audit.trace 仍为未来扩展 |

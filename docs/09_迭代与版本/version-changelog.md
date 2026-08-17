@@ -35,10 +35,13 @@
 5. **T2b 异步契约**（已实现，待合入 master：`feat/t2b-realtime`）：`Bridge::submit` 立即返 `running` + `correlation_id`，子进程 `spawn_blocking` 后台执行（fire-and-forget）；CLI 轮询审计事件拿终局；tc_f9 端到端 live cancel
 6. **P3 增量投影（watermark）**：世界关系 + watermark 持久化于 `wb_meta`（JSON blob，零 schema 迁移）；`after_id` 只应用新事件，跨 run 不再全量重放；`tc_pj9` 钉增量终局==全量重放
 
-### 已知缺口（诚实声明，修复见 tech-debt-reduction-plan.md）
-1. 存储正确性：`link()` 无 UNIQUE 约束（事务内 SELECT+INSERT 非并发安全，TOCTOU 未真杜绝）；`update()` 无 `WHERE version` 乐观锁（`version=version+1` 盲目自增，两并发更新后写覆盖前写）
-2. 投影类型丢失：`stringify()` 把标量文本化（`5`→`"5"`），数值语义本应由 EntityView 还原但当前未接线
-3. Facade 契约方法未暴露：`fabric.cancel()` / `fabric.stream()` / `capability.discover()` / `session.get()` 列于 facade-v1.md 但未实现为 Facade API（cancel 仅 HTTP 端点功能可用）
+### 已知缺口（已修复，见 tech-debt-reduction-plan.md 与 fix/survivor-gaps）
+
+> 以下三项原于 V1.3 诚实声明为「仍存缺口」，已于 `fix/survivor-gaps` 全部修复并钉测试：
+
+1. ~~存储正确性~~ → 已修复：`link()` 加 `uq_edge_active` 部分唯一索引（活跃边不重复，并发双插归 WB2007）；`update()` 加 `WHERE version=?` 乐观锁 + `StorageError::Conflict`（并发后写覆盖前写归 Conflict，重试最新版本成功）。
+2. ~~投影类型丢失~~ → 已修复：投影写 `Relation.metadata` 保留类型化值（数值不文本化），`EntityView` 出边优先取 `metadata`，`tc_o4` 钉 `amount=100 → Number(100)`。
+3. ~~Facade 契约方法未暴露~~ → 已修复：`fabric.cancel`/`fabric.stream`/`capability.discover`/`session.get` 落地为 `FabricService` + `Facade` 固有方法（facade-v1.md V1.4）。
 
 ## V0.10.0（模块化重构 + 认证收口 + 测试基建，2026-08-14）
 ### 优化
@@ -158,4 +161,5 @@
 | V1.1 | lushaohui | 2026-08-11 | 重写 changelog 为 OpenAIP-OS V0.1~V0.5 产品路线 |
 | V1.2 | lushaohui | 2026-08-13 | 同步 V0.1~V0.6 已实现状态；记录 V0.6.1 工程化清理 |
 | V1.3 | lushaohui | 2026-08-18 | 补 V2 架构落地条目（M1/M2 退役 V1 planner + 演化归一、Phase 5–8 投影、T1/T2b/P3），并诚实声明存储/投影/Facade 三项仍存缺口 |
+| V1.4 | lushaohui | 2026-08-18 | 修复 V1.3 声明三项缺口（fix/survivor-gaps）：① `link()` 加 `uq_edge_active` 部分唯一索引杜绝并发双插、`update()` 加 `WHERE version` 乐观锁 + `Conflict`；② 投影写 `Relation.metadata` 保留数值类型、`EntityView` 出边优先取 metadata；③ Facade 暴露 `fabric.cancel/stream`/`capability.discover`/`session.get`（facade-v1.md V1.4）；全部钉测试（storage 并发 link/update、tc_o4、facade/session 单测） |
 

@@ -261,8 +261,11 @@ async fn tc_o4_entity_view_derivation() {
         .unwrap();
     k.relate(Relation::new(ctx, "user-001", "owns", "order-001", t0))
         .unwrap();
-    k.relate(Relation::new(ctx, "order-001", "amount", "100", t0))
-        .unwrap();
+    // amount=100 数值：target 仍文本化（图边），元数据 metadata 保留 Number(100)——
+    // 与投影行为一致（src/projection/mod.rs 写入 metadata 还原数值类型）。
+    let mut amount_rel = Relation::new(ctx, "order-001", "amount", "100", t0);
+    amount_rel.metadata = json!(100);
+    k.relate(amount_rel).unwrap();
 
     let entities = derive_entities(&k, ctx);
     let user = entities
@@ -273,11 +276,11 @@ async fn tc_o4_entity_view_derivation() {
     assert_eq!(user.outgoing.len(), 2);
     assert!(
         user.outgoing
-            .contains(&("status".to_string(), "active".to_string()))
+            .contains(&("status".to_string(), json!("active")))
     );
     assert!(
         user.outgoing
-            .contains(&("owns".to_string(), "order-001".to_string()))
+            .contains(&("owns".to_string(), json!("order-001")))
     );
 
     let order = entities
@@ -287,12 +290,10 @@ async fn tc_o4_entity_view_derivation() {
     assert_eq!(order.entity_type, "order");
     assert_eq!(
         order.incoming,
-        vec![("user-001".to_string(), "owns".to_string())]
+        vec![("user-001".to_string(), json!("owns"))]
     );
-    assert_eq!(
-        order.outgoing,
-        vec![("amount".to_string(), "100".to_string())]
-    );
+    // 数值字段 amount=100 保留为 Number（不再文本化为 "100"）—— 类型还原修复验证
+    assert_eq!(order.outgoing, vec![("amount".to_string(), json!(100))]);
 }
 
 // ── O5：Subgraph 图遍历（D3：GraphRAG = BFS，无 embedding）─────────────

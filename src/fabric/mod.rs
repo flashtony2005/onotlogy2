@@ -163,6 +163,21 @@ impl Bridge {
         }
     }
 
+    /// 取消运行中任务：遍历所有 Adapter，按 correlation_id 取消
+    /// （仅持有该 correlation 的 Adapter 实际 kill 子进程，其余幂等 Ok）。
+    /// 会话态由调用方（FabricService）设置。
+    pub fn cancel(&self, correlation_id: &str) -> Result<(), FabricError> {
+        for adapter in self.adapters.values() {
+            let _ = adapter.cancel(correlation_id);
+        }
+        Ok(())
+    }
+
+    /// 能力发现：返回已接入的 Agent（能力提供者）id 列表。
+    pub fn discover(&self) -> Vec<String> {
+        self.adapters.keys().cloned().collect()
+    }
+
     /// 提交任务（OAB v0.1 主链路）：
     /// `Intent → Router（Capability → Policy → Selection）→ Adapter.send →
     /// task.result → 事件 → Session 记录`。

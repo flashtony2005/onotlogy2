@@ -206,6 +206,7 @@ impl Projection {
                 r.valid_from,
             );
             rel.valid_until = r.valid_until;
+            rel.metadata = r.metadata.clone(); // 还原类型化值（跨 run 不丢数值类型）
             let _ = kernel.relate(rel);
         }
     }
@@ -267,6 +268,7 @@ impl Projection {
                 target: r.target.clone(),
                 valid_from: r.valid_from,
                 valid_until: None,
+                metadata: r.metadata.clone(), // 持久化类型化值
             })
             .collect();
         let next = PersistedWorld {
@@ -304,7 +306,9 @@ impl Projection {
         kernel.relate(Relation::new(self.ctx, id.clone(), "type", ty, ts))?;
         if let Some(data) = input.get("data").and_then(|v| v.as_object()) {
             for (k, v) in data {
-                kernel.relate(Relation::new(self.ctx, id.clone(), k, stringify(v), ts))?;
+                let mut rel = Relation::new(self.ctx, id.clone(), k, stringify(v), ts);
+                rel.metadata = v.clone(); // 保留原始类型（数值语义由 EntityView 还原，不丢类型）
+                kernel.relate(rel)?;
             }
         }
         Ok(())
@@ -332,7 +336,9 @@ impl Projection {
         )?;
         if let Some(data) = input.get("data").and_then(|v| v.as_object()) {
             for (k, v) in data {
-                kernel.relate(Relation::new(self.ctx, id.clone(), k, stringify(v), ts))?;
+                let mut rel = Relation::new(self.ctx, id.clone(), k, stringify(v), ts);
+                rel.metadata = v.clone(); // 保留原始类型（数值语义由 EntityView 还原，不丢类型）
+                kernel.relate(rel)?;
             }
         }
         Ok(())

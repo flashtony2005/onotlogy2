@@ -82,7 +82,7 @@ async fn tc004_object_crud() {
     assert_eq!(got.data, json!({"name": "Apple", "level": "VIP"}));
 
     let u = s
-        .update("001", json!({"name": "Apple", "level": "GOLD"}))
+        .update("001", json!({"name": "Apple", "level": "GOLD"}), 1)
         .await
         .unwrap();
     assert_eq!(u.version, 2, "update 必须使 version 自增");
@@ -137,7 +137,7 @@ async fn tc007_world_trace() {
     s.create("Customer", "001", json!({"name": "Apple"}))
         .await
         .unwrap();
-    s.update("001", json!({"name": "Apple", "level": "VIP"}))
+    s.update("001", json!({"name": "Apple", "level": "VIP"}), 1)
         .await
         .unwrap();
     let rec = s.get("001").await.unwrap().unwrap();

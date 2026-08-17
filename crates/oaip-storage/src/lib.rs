@@ -110,6 +110,9 @@ pub struct WorldRelation {
     pub target: String,
     pub valid_from: i64,
     pub valid_until: Option<i64>,
+    /// 原始字段值的类型化副本（投影写入时从 Relation.metadata 镜像）；
+    /// 避免 `stringify` 把数值文本化后跨 run 丢失类型（EntityView 据此还原）。
+    pub metadata: Value,
 }
 
 /// 一条记忆记录（对应 `wb_memory`，V0.5 记忆沉淀 / BL-008）。
@@ -134,6 +137,9 @@ pub enum StorageError {
     Json(#[from] serde_json::Error),
     #[error("约束违反 {code}: {message}")]
     Constraint { code: &'static str, message: String },
+    /// 乐观锁冲突：传入版本与当前版本不符（对象已被并发修改）。
+    #[error("乐观锁冲突（期望版本 {expected}，实际不符）: {id}")]
+    Conflict { id: String, expected: i64 },
 }
 
 /// Trace 事件查询条件（run/agent/object/type 过滤 + 游标 after_id 断线重连补齐）。
@@ -189,7 +195,12 @@ pub trait ObjectEngine {
         data: Value,
     ) -> Result<ObjectRecord, StorageError>;
     async fn get(&self, id: &str) -> Result<Option<ObjectRecord>, StorageError>;
-    async fn update(&self, id: &str, data: Value) -> Result<ObjectRecord, StorageError>;
+    async fn update(
+        &self,
+        id: &str,
+        data: Value,
+        expected_version: i64,
+    ) -> Result<ObjectRecord, StorageError>;
     async fn query(&self, object_type: &str) -> Result<Vec<ObjectRecord>, StorageError>;
     async fn delete(&self, id: &str) -> Result<(), StorageError>;
 }
@@ -663,9 +674,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    // 并发 update 同一对象：version 原子递增，不得丢更新（读-改-写竞态回归）
+    // 乐观锁：并发 update 同一对象，仅一个成功、另一个版本冲突（杜绝丢失更新）
     #[tokio::test]
-    async fn concurrent_updates_increment_version_atomically() {
+    async fn concurrent_updates_optimistic_lock_prevents_lost_update() {
         let s = LibSQLStorage::open(":memory:").await.unwrap();
         s.create(
             "Customer",
@@ -676,41 +687,63 @@ mod tests {
         .unwrap();
         let s1 = s.clone();
         let s2 = s.clone();
+        // 两方都基于读到的版本 1 并发写
         let (a, b) = tokio::join!(
             async {
-                s1.update("001", serde_json::json!({"name": "A", "level": "GOLD"}))
+                s1.update("001", serde_json::json!({"name": "A", "level": "GOLD"}), 1)
                     .await
-                    .unwrap()
             },
             async {
-                s2.update("001", serde_json::json!({"name": "A", "level": "PLATINUM"}))
-                    .await
-                    .unwrap()
+                s2.update(
+                    "001",
+                    serde_json::json!({"name": "A", "level": "PLATINUM"}),
+                    1,
+                )
+                .await
             },
         );
-        // 两次更新都生效：version 1 → 2 → 3（返回值是 {2,3} 的某个排列）
-        let mut versions = [a.version, b.version];
-        versions.sort();
-        assert_eq!(versions, [2, 3], "并发 update 不得丢版本（原子递增）");
+        // 恰一个成功（version→2），另一个 Conflict（版本不符）
+        let ok_count = [a.is_ok(), b.is_ok()].iter().filter(|x| **x).count();
+        assert_eq!(ok_count, 1, "并发 update 恰一个成功（乐观锁）");
+        assert!(a.is_err() || b.is_err(), "另一个必须版本冲突（无丢失更新）");
         let rec = s.get("001").await.unwrap().unwrap();
-        assert_eq!(rec.version, 3, "最终版本应为 3（两次更新均生效）");
+        assert_eq!(rec.version, 2, "最终版本应为 2（仅一次更新生效）");
+        // 基于最新版本（2）重试应成功
+        let retried = s
+            .update(
+                "001",
+                serde_json::json!({"name": "A", "level": "RETRY"}),
+                rec.version,
+            )
+            .await;
+        assert!(retried.is_ok(), "基于最新版本重试应成功");
+        assert_eq!(retried.unwrap().version, 3);
     }
 
-    // 并发 link 同一对边：事务串行化，恰一条成功、另一条 WB2007，不得双插（TOCTOU 回归）
+    // 并发 link 同一对边：两条独立连接 → 事务竞争；`uq_edge_active` 部分唯一索引
+    // 作硬保证，恰一条成功、另一条 WB2007，不得双插（link TOCTOU 回归）。
+    // 注意：`:memory:` + clone 共享单连接，无法真正并发；故用同一文件的两条连接。
     #[tokio::test]
     async fn concurrent_link_same_edge_no_duplicate() {
-        let s = LibSQLStorage::open(":memory:").await.unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "oaip_link_{}_{}.db",
+            std::process::id(),
+            "concurrent"
+        ));
+        let _ = std::fs::remove_file(&path);
+        let s = LibSQLStorage::open(path.to_str().unwrap()).await.unwrap();
         s.create("Customer", "001", serde_json::json!({"name": "A"}))
             .await
             .unwrap();
         s.create("Task", "t1", serde_json::json!({"title": "T"}))
             .await
             .unwrap();
-        let s1 = s.clone();
-        let s2 = s.clone();
+        // 两条独立连接到同一文件 → 真正并发写入（unique 索引仲裁）
+        let s1 = LibSQLStorage::open(path.to_str().unwrap()).await.unwrap();
+        let s2 = LibSQLStorage::open(path.to_str().unwrap()).await.unwrap();
         let (r1, r2) = tokio::join!(async { s1.link("001", "owns", "t1", None).await }, async {
             s2.link("001", "owns", "t1", None).await
-        },);
+        });
         let ok_count = [r1.is_ok(), r2.is_ok()].iter().filter(|b| **b).count();
         assert_eq!(ok_count, 1, "并发 link 应恰一条成功");
         let dup = [r1, r2].into_iter().find_map(|r| match r {
@@ -718,8 +751,9 @@ mod tests {
             _ => None,
         });
         assert_eq!(dup.as_deref(), Some("WB2007"), "另一条应拒 WB2007");
-        let edges = s.neighbors("001").await.unwrap();
+        let edges = s1.neighbors("001").await.unwrap();
         assert_eq!(edges.len(), 1, "不得双插同一条边");
+        let _ = std::fs::remove_file(&path);
     }
 
     // C1 迁移：V1 旧库（wb_learned 缺 auto_approve_enabled 列）→ open 自动迁移到当前版本

@@ -126,4 +126,57 @@ impl SessionManager {
     pub fn get_mut(&mut self, id: &str) -> Option<&mut Session> {
         self.sessions.get_mut(id)
     }
+
+    /// 按 correlation_id 反查所属 session id（会话消息携带 correlation_id）。
+    /// 用于 Fabric 取消 / 查询：提交返回的 correlation_id 定位到会话。
+    pub fn find_session_id_by_correlation(&self, correlation_id: &str) -> Option<String> {
+        self.sessions
+            .values()
+            .find(|s| {
+                s.messages()
+                    .iter()
+                    .any(|m| m.correlation_id.as_deref() == Some(correlation_id))
+            })
+            .map(|s| s.id.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fabric::{AgentMessage, MessageKind};
+    use serde_json::json;
+
+    fn msg(session_id: &str, correlation_id: &str) -> AgentMessage {
+        AgentMessage {
+            id: "m1".into(),
+            session_id: session_id.into(),
+            sender: "a".into(),
+            receiver: "*".into(),
+            kind: MessageKind::TaskRequest,
+            intent: Some("modify_code".into()),
+            payload: json!({}),
+            context: json!({}),
+            capability: Some("code.write".into()),
+            correlation_id: Some(correlation_id.into()),
+            causation_id: None,
+            timestamp: 0,
+        }
+    }
+
+    #[test]
+    fn find_session_id_by_correlation_matches_message() {
+        let mut mgr = SessionManager::new();
+        let s = mgr.create_with_id("sess_x", vec!["a".into()]);
+        mgr.get_mut(&s.id)
+            .unwrap()
+            .append(msg(&s.id, "corr_1"))
+            .unwrap();
+
+        assert_eq!(
+            mgr.find_session_id_by_correlation("corr_1"),
+            Some(s.id.clone())
+        );
+        assert_eq!(mgr.find_session_id_by_correlation("nope"), None);
+    }
 }

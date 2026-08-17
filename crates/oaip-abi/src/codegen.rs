@@ -135,6 +135,10 @@ CREATE INDEX IF NOT EXISTS idx_obj_create  ON wb_ontology_object (create_time);
 CREATE INDEX IF NOT EXISTS idx_edge_source ON wb_relation_edge (source);
 CREATE INDEX IF NOT EXISTS idx_edge_target ON wb_relation_edge (target);
 CREATE INDEX IF NOT EXISTS idx_edge_rel    ON wb_relation_edge (relation);
+-- 部分唯一索引：活跃边（is_delete=0）的 (source,relation,target) 不重复。
+-- 杜绝 link() 并发 TOCTOU 双插（事务内 SELECT+INSERT 仅作旧库兜底，此索引为硬保证）。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_edge_active
+  ON wb_relation_edge (source, relation, target) WHERE is_delete = 0;
 CREATE INDEX IF NOT EXISTS idx_trace_run    ON wb_trace_event (run_id);
 CREATE INDEX IF NOT EXISTS idx_trace_project ON wb_trace_event (project_id);
 CREATE INDEX IF NOT EXISTS idx_trace_agent  ON wb_trace_event (agent_id);

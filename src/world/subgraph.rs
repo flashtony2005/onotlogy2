@@ -3,6 +3,7 @@
 //! seed → 关系可达遍历（深度限制）→ 子图（实体 + 关系），注入 AgentView。
 
 use crate::kernel::Kernel;
+use serde_json::Value;
 
 use super::entity::EntityView;
 
@@ -60,15 +61,15 @@ pub fn subgraph(
     // 实体视图（出入边限定在子图内）
     let mut entities: Vec<EntityView> = Vec::new();
     for id in &visited {
-        let outgoing: Vec<(String, String)> = sub_rels
+        let outgoing: Vec<(String, Value)> = sub_rels
             .iter()
             .filter(|(s, _, _)| s == id)
-            .map(|(_, p, t)| (p.clone(), t.clone()))
+            .map(|(_, p, t)| (p.clone(), Value::String(t.clone())))
             .collect();
-        let incoming: Vec<(String, String)> = sub_rels
+        let incoming: Vec<(String, Value)> = sub_rels
             .iter()
             .filter(|(_, _, t)| t == id)
-            .map(|(s, p, _)| (s.clone(), p.clone()))
+            .map(|(s, p, _)| (s.clone(), Value::String(p.clone())))
             .collect();
         entities.push(EntityView {
             id: id.clone(),

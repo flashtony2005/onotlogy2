@@ -91,19 +91,43 @@ impl ObjectEngine for LibSQLStorage {
         }
     }
 
-    async fn update(&self, id: &str, data: Value) -> Result<ObjectRecord, StorageError> {
+    async fn update(
+        &self,
+        id: &str,
+        data: Value,
+        expected_version: i64,
+    ) -> Result<ObjectRecord, StorageError> {
         let data_str = serde_json::to_string(&data)?;
-        // 原子递增：单语句 UPDATE version=version+1，避免「读-改-写」并发丢更新
-        // （两个并发 update 各自读到旧 version、各自写 version+1 → 一方更新静默丢失）。
+        // 乐观锁：WHERE id AND version=? —— 仅当客户端读到的版本仍是最新时才写入，
+        // version=version+1 原子自增。两并发更新：后到者 version 不符 → 影响 0 行 → 冲突。
+        // （旧实现仅靠 version=version+1 盲目自增，无法检测丢失更新，注释声称的防护是错的。）
         let n = self
             .conn
             .execute(
                 "UPDATE wb_ontology_object SET data=?1, version=version+1, \
-                 update_time=CURRENT_TIMESTAMP WHERE id=?2 AND is_delete=0",
-                params![data_str, id],
+                 update_time=CURRENT_TIMESTAMP WHERE id=?2 AND version=?3 AND is_delete=0",
+                params![data_str, id, expected_version],
             )
             .await?;
         if n == 0 {
+            // 0 行：要么对象不存在（is_delete=1 / id 错），要么版本不符（乐观锁冲突）。
+            // 用 get 区分：能读到非删除行说明是版本冲突，否则是不存在。
+            let exists = self
+                .conn
+                .query(
+                    "SELECT id FROM wb_ontology_object WHERE id=?1 AND is_delete=0",
+                    params![id],
+                )
+                .await?
+                .next()
+                .await?
+                .is_some();
+            if exists {
+                return Err(StorageError::Conflict {
+                    id: id.to_string(),
+                    expected: expected_version,
+                });
+            }
             return Err(StorageError::NotFound(id.to_string()));
         }
         // 读回最新行（含原子递增后的 version）

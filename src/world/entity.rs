@@ -15,10 +15,11 @@ pub struct EntityView {
     /// 类型（前缀推导，如 "user-001" → "user"；EntityDataProvider 可覆写）。
     pub entity_type: String,
     pub state: Value,
-    /// 出边 (predicate, target)。
-    pub outgoing: Vec<(String, String)>,
-    /// 入边 (source, predicate)。
-    pub incoming: Vec<(String, String)>,
+    /// 出边 (predicate, 类型化值)。值优先取 relation.metadata（保留数值类型），
+    /// 否则回退 String(target)（兼容旧关系 / 纯字符串目标）。
+    pub outgoing: Vec<(String, Value)>,
+    /// 入边 (source 实体 id, predicate)。
+    pub incoming: Vec<(String, Value)>,
 }
 
 /// 实体数据提供方（V1 对象桥接留口；Phase 5 默认不实现）。
@@ -55,14 +56,28 @@ fn type_of(id: &str) -> String {
 /// 从 Kernel relations 聚合出实体视图集合（当前有效关系）。
 pub fn derive_entities(kernel: &Kernel, ctx: crate::kernel::ContextId) -> Vec<EntityView> {
     let now = kernel.now();
-    let rels: Vec<_> = kernel
+    // (source, predicate, target, 类型化值)；类型化值优先取 relation.metadata（数值不文本化），
+    // 否则回退 String(target)（兼容未带 metadata 的旧关系 / 纯字符串目标）。
+    let rels: Vec<(String, String, String, Value)> = kernel
         .relations()
         .filter(|r| r.context == ctx && r.is_current(now))
-        .map(|r| (r.source.clone(), r.predicate.clone(), r.target.clone()))
+        .map(|r| {
+            let typed = if r.metadata.is_null() {
+                Value::String(r.target.clone())
+            } else {
+                r.metadata.clone()
+            };
+            (
+                r.source.clone(),
+                r.predicate.clone(),
+                r.target.clone(),
+                typed,
+            )
+        })
         .collect();
 
     let mut ids: Vec<String> = Vec::new();
-    for (s, _, t) in &rels {
+    for (s, _, t, _) in &rels {
         if !ids.contains(s) {
             ids.push(s.clone());
         }
@@ -74,15 +89,15 @@ pub fn derive_entities(kernel: &Kernel, ctx: crate::kernel::ContextId) -> Vec<En
 
     ids.into_iter()
         .map(|id| {
-            let outgoing: Vec<(String, String)> = rels
+            let outgoing: Vec<(String, Value)> = rels
                 .iter()
-                .filter(|(s, _, _)| s == &id)
-                .map(|(_, p, t)| (p.clone(), t.clone()))
+                .filter(|(s, _, _, _)| s == &id)
+                .map(|(_, p, _, v)| (p.clone(), v.clone()))
                 .collect();
-            let incoming: Vec<(String, String)> = rels
+            let incoming: Vec<(String, Value)> = rels
                 .iter()
-                .filter(|(_, _, t)| t == &id)
-                .map(|(s, p, _)| (s.clone(), p.clone()))
+                .filter(|(_, _, t, _)| t == &id)
+                .map(|(s, p, _, _)| (s.clone(), Value::String(p.clone())))
                 .collect();
             EntityView {
                 entity_type: type_of(&id),

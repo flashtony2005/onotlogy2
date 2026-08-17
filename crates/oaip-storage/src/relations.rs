@@ -3,6 +3,12 @@ use serde_json::Value;
 
 use super::*;
 
+/// 判断 libsql 错误是否为唯一约束冲突（uq_edge_active 部分唯一索引兜底 link 并发竞态）。
+/// libSQL 错误信息形如 "UNIQUE constraint failed: wb_relation_edge.source, ..."。
+fn is_unique_violation(e: &libsql::Error) -> bool {
+    e.to_string().contains("UNIQUE constraint failed")
+}
+
 #[async_trait]
 impl RelationEngine for LibSQLStorage {
     async fn link(
@@ -12,8 +18,12 @@ impl RelationEngine for LibSQLStorage {
         target_id: &str,
         data: Option<Value>,
     ) -> Result<RelationRecord, StorageError> {
-        // 事务内「检测 + 插入」：两个并发 link 同一对边时，重复检测与插入原子，
-        // 杜绝 TOCTOU 双插（检查通过后另一事务已插入 → 唯一性由事务串行保证）。
+        // 并发安全：先事务内 SELECT 去重（旧库无唯一索引时的第一道兜底），
+        // 再普通 INSERT——`uq_edge_active` 部分唯一索引（活跃边 is_delete=0 不重复）作硬保证。
+        // 注意：libSQL 的 SQLite 不支持 `ON CONFLICT(索引名)` 形式（会报 "no such column"），
+        // 且部分唯一索引也无法被 `ON CONFLICT(列列表)` 匹配；故直接 INSERT，
+        // 若竞态下另一事务已插入，部分唯一索引会以 UNIQUE constraint failed 拒绝——
+        // 此处捕获并转为 WB2007（而不是把底层约束错误泄漏给调用方）。
         let tx = self.conn.transaction().await?;
         let mut dup = tx
             .query(
@@ -34,11 +44,31 @@ impl RelationEngine for LibSQLStorage {
             REL_SEQ.fetch_add(1, Ordering::SeqCst)
         );
         let data_str = data.as_ref().map(serde_json::to_string).transpose()?;
-        tx.execute(
-            "INSERT INTO wb_relation_edge (id, relation, source, target, data) VALUES (?1,?2,?3,?4,?5)",
-            params![id.clone(), edge_type, source_id, target_id, data_str],
-        )
-        .await?;
+        let affected = match tx
+            .execute(
+                "INSERT INTO wb_relation_edge (id, relation, source, target, data) \
+                 VALUES (?1,?2,?3,?4,?5)",
+                params![id.clone(), edge_type, source_id, target_id, data_str],
+            )
+            .await
+        {
+            Ok(n) => n,
+            Err(e) if is_unique_violation(&e) => {
+                let _ = tx.rollback().await;
+                return Err(StorageError::Constraint {
+                    code: "WB2007",
+                    message: format!("重复关系边（并发竞态）{source_id}-{edge_type}->{target_id}"),
+                });
+            }
+            Err(e) => return Err(StorageError::Db(e)),
+        };
+        if affected == 0 {
+            let _ = tx.rollback().await;
+            return Err(StorageError::Constraint {
+                code: "WB2007",
+                message: format!("重复关系边（未插入）{source_id}-{edge_type}->{target_id}"),
+            });
+        }
         tx.commit().await?;
         Ok(RelationRecord {
             id,
