@@ -33,7 +33,8 @@
 3. **Phase 5–8 投影体系（projection-v1.md）**：P1 纯函数（Event Log→Kernel 同态）/ P2 幂等（applied 水位）/ P4 确定性（normalize_ts 微秒→秒轴）/ P5 写入路径同事务 / P6 沟通黑匣子入世界 / P7 裸写不可追溯；`Projection` 模块 + `project_from_storage`
 4. **T1 Agent Fabric 审批接入（已合 master）**：Bridge 挂起态 + `fabric_resolve` 复用 `/run/:run_id/approval`；HTTP `facade_fabric_submit` 返回挂起态、pending 走审批流。bridge（`b6087fc`）+ UI GovernancePanel 人工裁决台（`07430da`）均已 fast-forward 合入 master。
 5. **T2a Agent Fabric Cancel MVP（已合 master `a03f4ca`）**：`Bridge.cancel` + 取消标记集 + `ProcessAdapter` 子进程 kill + `POST /facade/fabric/:id/cancel` 端点 + `tc_f9` 端到端契约（含 submit/cancel 死锁修复）。
-6. **T2b 异步契约**（已实现，待合入 master：`feat/t2b-realtime`）：`Bridge::submit` 立即返 `running` + `correlation_id`，子进程 `spawn_blocking` 后台执行（fire-and-forget）；CLI 轮询审计事件拿终局。
+6. **T2b-1 实时广播**（已合入 master `2ec5259`）：`StorageWorldSink` 加 `with_broadcast(event_tx)` ——落库成功后旁路扇出到 WS `/stream`，修复 `event_tx` 零发布者之洞（此前 WS 只有历史回放、无实时）；契约测试 `tc_storage_world_sink_broadcasts_to_event_tx` 钉绿；GovernancePanel 免轮询。
+7. **T2b-2 异步契约**（已实现，待合入 master：`feat/t2b-realtime` `9a0c6a9`，依赖已废弃 cancelled 字段须手工移植）：`Bridge::submit` 立即返 `running` + `correlation_id`，子进程 `spawn_blocking` 后台执行（fire-and-forget）；CLI 轮询审计事件拿终局。
 7. **P3 增量投影（watermark）**：世界关系 + watermark 持久化于 `wb_meta`（JSON blob，零 schema 迁移）；`after_id` 只应用新事件，跨 run 不再全量重放；`tc_pj9` 钉增量终局==全量重放
 
 ### 已知缺口（已修复，见 tech-debt-reduction-plan.md 与 fix/survivor-gaps）
