@@ -245,7 +245,11 @@ async fn tc_sf4_fabric_submit_auto_session_and_correlation() {
         })),
     )
     .await;
-    // 无提供方（测试环境无 codex/dsh）→ 均失败且为同一错误（fail-closed 一致语义）
+    // 无审批/无提供方 → 均不得成功执行（fail-closed 一致语义）。
+    // T1：high-risk 意图进入挂起（code=0, status=pending）而非执行，故改判"不成功执行"。
     assert_eq!(b1["code"], b2["code"], "同一意图两次提交语义一致");
-    assert_ne!(b1["code"], 0);
+    assert_ne!(
+        b1["data"]["result"]["status"], "completed",
+        "fail-closed：run_shell 无审批/无提供方不得执行成功"
+    );
 }

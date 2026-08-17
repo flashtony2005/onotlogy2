@@ -93,6 +93,34 @@ pub(crate) async fn resolve_approval(
             by: user.id.clone(),
         }
     };
+    // T1：fabric 挂起——裁决时同步续跑（不经 tx/resolver；fabric submit 无阻塞等待方）
+    if let super::ResumeTarget::FabricRun { session_id, run_id } = &p.resume {
+        let session_id = session_id.clone();
+        let run_id = run_id.clone();
+        let out =
+            tokio::task::block_in_place(|| st.facade.fabric_resolve(&session_id, &run_id, approve));
+        return match out {
+            Ok(msg) => ApiResponse::ok(json!({
+                "reqId": req_id,
+                "decision": if approve { "Approved" } else { "Rejected" },
+                "status": msg.payload["status"],
+                "sender": msg.sender,
+            }))
+            .into_response(),
+            Err(e) => {
+                // 拒绝本身是预期（fabric_resolve 对 reject 返回 Denied 错误）
+                if !approve {
+                    return ApiResponse::ok(json!({
+                        "reqId": req_id,
+                        "decision": "Rejected",
+                        "status": "rejected",
+                    }))
+                    .into_response();
+                }
+                ApiResponse::error(5000, format!("fabric 续跑失败: {e}")).into_response()
+            }
+        };
+    }
     if p.tx.send(decision).is_err() {
         return ApiResponse::error(404, "审批请求已终止").into_response();
     }

@@ -72,11 +72,22 @@ struct RunRecord {
 
 /// M1c 挂起审批条目：请求展示信息 + 裁决通道（run 的 resolver 阻塞等待）。
 /// 裁决后从注册表移除；超时看门狗经同通道发 Expire。
+/// 挂起审批的续跑目标（T1：compose Fiber 由 resolver 唤醒；fabric 由裁决时同步续跑）。
+#[derive(Debug, Clone)]
+pub enum ResumeTarget {
+    /// compose 认知闭环：resolver 阻塞等 tx 裁决。
+    ComposeFiber(crate::kernel::FiberId),
+    /// fabric 提交：裁决时同步调 facade.fabric_resolve（无阻塞 resolver）。
+    FabricRun { session_id: String, run_id: String },
+}
+
 pub struct PendingApproval {
     pub run_id: String,
     pub request: ApprovalRequest,
     pub tx: std::sync::mpsc::Sender<ApprovalDecision>,
     pub created_at: std::time::Instant,
+    /// T1：裁决后如何续跑（compose=fiber 唤醒；fabric=同步 resume）。
+    pub resume: ResumeTarget,
 }
 
 /// 共享应用状态。
@@ -312,6 +323,37 @@ pub async fn serve_with_timeout(
     enforce_auth: bool,
     approval_timeout: Option<Duration>,
 ) -> std::io::Result<()> {
+    serve_with_facade(
+        storage,
+        services,
+        effect_defs,
+        engine,
+        listener,
+        static_dir,
+        auto_approve,
+        auto_approve_evolution,
+        enforce_auth,
+        approval_timeout,
+        None,
+    )
+    .await
+}
+
+/// 带 Facade 注入的服务启动（T1 测试用：注入自定义 facade 装配）；None = 默认装配。
+#[allow(clippy::too_many_arguments)]
+pub async fn serve_with_facade(
+    storage: Arc<LibSQLStorage>,
+    services: Vec<Service>,
+    effect_defs: Vec<crate::compose::defs::RuntimeDefinition>,
+    engine: Arc<dyn crate::cognitive::CognitiveEngine>,
+    listener: TcpListener,
+    static_dir: impl Into<String>,
+    auto_approve: bool,
+    auto_approve_evolution: bool,
+    enforce_auth: bool,
+    approval_timeout: Option<Duration>,
+    facade_override: Option<std::sync::Arc<crate::facade::Facade>>,
+) -> std::io::Result<()> {
     // 认证/会话提供方复用同一存储句柄（LibSQLStorage 内部 Arc，单连接共享库）。
     let idp: Arc<dyn IdentityProvider> =
         Arc::new(LocalIdentityProvider::new(storage.as_ref().clone()));
@@ -322,20 +364,23 @@ pub async fn serve_with_timeout(
     // Facade::new 会触发 agent_connected 事件（同步 sink block_on）→ 阻塞上下文
     // 装配（multi_thread runtime 下 block_in_place 合法；current_thread 测试环境
     // 用空 Facade——world/audit 查询不受影响，fabric 路由 fail-closed）。
-    let facade = match handle.runtime_flavor() {
-        tokio::runtime::RuntimeFlavor::MultiThread => {
-            tokio::task::block_in_place(|| build_facade(&storage_f, handle))
-        }
-        _ => std::sync::Arc::new(
-            crate::facade::Facade::new(
-                storage_f,
-                handle,
-                crate::fabric::router::FabricRouter::new(),
-                vec![],
-                &[],
-            )
-            .expect("Facade 基础装配（空 router/adapters 恒成功）"),
-        ),
+    let facade = match facade_override {
+        Some(f) => f,
+        None => match handle.runtime_flavor() {
+            tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(|| build_facade(&storage_f, handle))
+            }
+            _ => std::sync::Arc::new(
+                crate::facade::Facade::new(
+                    storage_f,
+                    handle,
+                    crate::fabric::router::FabricRouter::new(),
+                    vec![],
+                    &[],
+                )
+                .expect("Facade 基础装配（空 router/adapters 恒成功）"),
+            ),
+        },
     };
     let state = Arc::new(AppState {
         v2: Arc::new(v2::V2State::default()),

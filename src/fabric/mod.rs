@@ -180,32 +180,12 @@ impl Bridge {
     ) -> Result<AgentMessage, FabricError> {
         // 1) 路由：意图 → 能力 → 策略 → 选择（fail-closed）
         let plan = self.router.route(intent)?;
-        match &plan.verdict {
-            router::RouteVerdict::RequiresApproval => {
-                self.event(
-                    "fabric.approval_requested",
-                    vec![plan.agent_id.clone()],
-                    json!({ "capability": plan.capability, "intent": intent }),
-                    project_id.clone(),
-                );
-                return Err(FabricError::RequiresApproval(plan.capability.clone()));
-            }
-            router::RouteVerdict::Denied(reason) => {
-                return Err(FabricError::Denied(reason.clone()));
-            }
-            router::RouteVerdict::Allow => {}
+        // T1：RequiresApproval = 挂起（请求照常入会话；裁决后续跑），Denied = 拒绝
+        let needs_approval = matches!(&plan.verdict, router::RouteVerdict::RequiresApproval);
+        if let router::RouteVerdict::Denied(reason) = &plan.verdict {
+            return Err(FabricError::Denied(reason.clone()));
         }
-        let adapter = self
-            .adapters
-            .get(&plan.agent_id)
-            .ok_or_else(|| FabricError::NoAdapter(plan.agent_id.clone()))?;
-
         // 2) 规范化 task.request（统一消息语义）。
-        // 对象引用（payload.object）提前取：终局事件 refs 的世界语义由请求方持有。
-        let obj_ref: Option<String> = payload
-            .get("object")
-            .and_then(|v| v.as_str())
-            .map(String::from);
         let correlation = crate::trace::new_trace_id();
         let req = AgentMessage {
             id: crate::trace::new_trace_id(),
@@ -242,19 +222,110 @@ impl Bridge {
             project_id.clone(),
         );
 
-        // 4) Session 记录请求（会话是消息真相源）
+        // 4) Session 记录请求（会话是消息真相源——挂起也入会话，resume 据此找回）
         let session = sessions
             .get_mut(session_id)
             .ok_or_else(|| FabricError::SessionNotFound(session_id.to_string()))?;
         session.append(req.clone())?;
 
-        // 5) Adapter 执行（协议差异止于此）
+        // T1：需审批 → 发 approval_requested + 返回挂起态（请求已入会话，裁决后续跑）
+        if needs_approval {
+            self.event(
+                "fabric.approval_requested",
+                vec![plan.agent_id.clone()],
+                json!({ "capability": plan.capability, "intent": intent, "run_id": correlation }),
+                project_id,
+            );
+            return Ok(pending_message(
+                session_id,
+                from,
+                &plan.agent_id,
+                intent,
+                &plan.capability,
+                &correlation,
+            ));
+        }
+
+        // 5/6/7) Adapter 执行 + 终局事件 + Session 记录（resume 复用同一后半段）
+        self.finish(sessions, session_id, req, project_id)
+    }
+
+    /// T1：裁决后续跑——按 run_id(correlation) 找回挂起的 task.request，执行后半段。
+    pub fn resume(
+        &self,
+        sessions: &mut session::SessionManager,
+        session_id: &str,
+        run_id: &str,
+    ) -> Result<AgentMessage, FabricError> {
+        // 从会话消息找回对应 task.request（correlation_id == run_id）
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| FabricError::SessionNotFound(session_id.to_string()))?;
+        let req = session
+            .messages()
+            .iter()
+            .rev()
+            .find(|m| {
+                m.kind == MessageKind::TaskRequest && m.correlation_id.as_deref() == Some(run_id)
+            })
+            .cloned()
+            .ok_or_else(|| FabricError::SessionNotFound(format!("{session_id}#{run_id}")))?;
+        // 裁决通过 = 续跑执行（后半段从 req 提取上下文，与 submit 一致）
+        self.finish(sessions, session_id, req, None)
+    }
+
+    /// T1：审批拒绝——发 fabric.approval_rejected 审计事件（run_id 回指挂起）。
+    pub fn reject_event(
+        &self,
+        sessions: &mut session::SessionManager,
+        session_id: &str,
+        run_id: &str,
+    ) -> Result<(), FabricError> {
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| FabricError::SessionNotFound(session_id.to_string()))?;
+        let req = session
+            .messages()
+            .iter()
+            .rev()
+            .find(|m| {
+                m.kind == MessageKind::TaskRequest && m.correlation_id.as_deref() == Some(run_id)
+            })
+            .ok_or_else(|| FabricError::SessionNotFound(format!("{session_id}#{run_id}")))?;
+        self.event(
+            "fabric.approval_rejected",
+            vec![req.receiver.clone()],
+            json!({ "run_id": run_id, "capability": req.capability }),
+            None,
+        );
+        Ok(())
+    }
+
+    /// 提交/续跑的公共后半段：adapter.send → 终局事件（completed/failed）→ Session 记录。
+    /// 上下文（correlation / agent / obj_ref）从 `req` 提取，调用点只传 `project_id`，
+    /// 以压低参数数量（clippy too_many_arguments）。
+    fn finish(
+        &self,
+        sessions: &mut session::SessionManager,
+        session_id: &str,
+        req: AgentMessage,
+        project_id: Option<String>,
+    ) -> Result<AgentMessage, FabricError> {
+        let correlation = req.correlation_id.clone().unwrap_or_default();
+        let agent_id = &req.receiver;
+        let obj_ref = req
+            .payload
+            .get("object")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let adapter = self
+            .adapters
+            .get(agent_id)
+            .ok_or_else(|| FabricError::NoAdapter(agent_id.to_string()))?;
         let result = adapter
             .send(&req)
             .map_err(|e| FabricError::Adapter(e.to_string()))?;
 
-        // 6) 终局事件：task_completed / task_failed（refs=[payload.object]，
-        //    投影领域规则 (refs[0], fabric.status, input.to) → World State）
         let status = result
             .payload
             .get("status")
@@ -272,16 +343,14 @@ impl Bridge {
         self.event(
             ty,
             vec![obj.to_string()],
-            json!({ "to": status, "correlation_id": correlation, "agent": plan.agent_id }),
+            json!({ "to": status, "correlation_id": correlation, "agent": agent_id }),
             project_id,
         );
 
-        // 7) Session 记录结果
         let session = sessions
             .get_mut(session_id)
             .ok_or_else(|| FabricError::SessionNotFound(session_id.to_string()))?;
         session.append(result.clone())?;
-
         Ok(result)
     }
 
@@ -304,5 +373,34 @@ impl Bridge {
             };
             let _ = sink.append(&ev);
         }
+    }
+}
+
+/// 挂起态消息（T1：RequiresApproval 时返回；run_id 供审批查询/裁决续跑）。
+fn pending_message(
+    session_id: &str,
+    from: &str,
+    agent_id: &str,
+    intent: &str,
+    capability: &str,
+    run_id: &str,
+) -> AgentMessage {
+    AgentMessage {
+        id: crate::trace::new_trace_id(),
+        session_id: session_id.to_string(),
+        sender: from.to_string(),
+        receiver: agent_id.to_string(),
+        kind: MessageKind::TaskResult,
+        intent: Some(intent.to_string()),
+        payload: json!({
+            "status": "pending",
+            "run_id": run_id,
+            "capability": capability,
+        }),
+        context: Value::Null,
+        capability: Some(capability.to_string()),
+        correlation_id: Some(run_id.to_string()),
+        causation_id: None,
+        timestamp: crate::kernel::now_secs(),
     }
 }

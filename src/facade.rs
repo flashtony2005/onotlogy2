@@ -216,6 +216,17 @@ impl Facade {
             storage,
         })
     }
+
+    /// T1：裁决 fabric 挂起——approve 续跑执行 / reject 发审计事件。
+    /// （facade 是唯一语义入口：CLI/HTTP/Plugin 裁决都走这里）
+    pub fn fabric_resolve(
+        &self,
+        session_id: &str,
+        run_id: &str,
+        approve: bool,
+    ) -> Result<AgentMessage, FacadeError> {
+        self.fabric.resolve(session_id, run_id, approve)
+    }
 }
 
 impl OpenAipFacade for Facade {
@@ -449,5 +460,36 @@ impl FabricService {
             )
             .map_err(|e| FacadeError::Fabric(e.to_string()))?;
         Ok(FabricSubmission { result })
+    }
+
+    /// T1：裁决 fabric 挂起——approve 续跑执行（resume → adapter.send → 终局事件）；
+    /// reject 只发 fabric.approval_rejected 审计事件，不执行。
+    pub fn resolve(
+        &self,
+        session_id: &str,
+        run_id: &str,
+        approve: bool,
+    ) -> Result<AgentMessage, FacadeError> {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| FacadeError::Fabric("会话表锁中毒".into()))?;
+        if approve {
+            self.bridge
+                .resume(&mut sessions, session_id, run_id)
+                .map_err(|e| FacadeError::Fabric(e.to_string()))
+        } else {
+            // 拒绝：审计事件（fabric.approval_rejected；run_id 回指挂起）
+            self.bridge
+                .reject_event(&mut sessions, session_id, run_id)
+                .map_err(|e| FacadeError::Fabric(e.to_string()))?;
+            Err(crate::fabric::FabricError::Denied(format!("审批拒绝: {run_id}")).into())
+        }
+    }
+}
+
+impl From<crate::fabric::FabricError> for FacadeError {
+    fn from(e: crate::fabric::FabricError) -> Self {
+        FacadeError::Fabric(e.to_string())
     }
 }

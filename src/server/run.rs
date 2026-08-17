@@ -176,6 +176,7 @@ pub(crate) async fn run_start(
                         request: req.clone(),
                         tx: tx.clone(),
                         created_at: Instant::now(),
+                        resume: ResumeTarget::ComposeFiber(req.fiber),
                     },
                 );
             }

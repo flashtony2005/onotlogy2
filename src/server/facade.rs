@@ -60,7 +60,44 @@ pub(crate) async fn facade_fabric_submit(
         return forbidden("当前角色无权提交任务（需 Operator 及以上）").into_response();
     }
     match tokio::task::block_in_place(|| st.facade.fabric_submit(body)) {
-        Ok(v) => ApiResponse::ok(v).into_response(),
+        Ok(v) => {
+            // T1：挂起态（status=pending）→ 注册审批（复用 /run/:run_id/approval 端点）
+            if v.result.payload.get("status").and_then(|s| s.as_str()) == Some("pending")
+                && let Some(run_id) = v.result.correlation_id.clone()
+            {
+                let capability = v
+                    .result
+                    .payload
+                    .get("capability")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let (tx, _rx) = std::sync::mpsc::channel();
+                lock_mutex(&st.pending).insert(
+                    run_id.clone(),
+                    super::PendingApproval {
+                        run_id: run_id.clone(),
+                        request: crate::cognitive::approval::ApprovalRequest {
+                            id: run_id.clone(),
+                            run_id: run_id.clone(),
+                            context: crate::kernel::ContextId(0),
+                            fiber: crate::kernel::FiberId(0),
+                            capability: capability.clone(),
+                            action: v.result.intent.clone().unwrap_or_default(),
+                            args: v.result.payload.clone(),
+                            created_at: crate::trace::now_ts().parse::<i64>().unwrap_or(0),
+                        },
+                        tx,
+                        created_at: std::time::Instant::now(),
+                        resume: super::ResumeTarget::FabricRun {
+                            session_id: v.result.session_id.clone(),
+                            run_id: run_id.clone(),
+                        },
+                    },
+                );
+            }
+            ApiResponse::ok(v).into_response()
+        }
         Err(e) => {
             ApiResponse::error(wb_code("WB2005"), format!("fabric 提交失败: {e}")).into_response()
         }
