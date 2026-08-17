@@ -133,7 +133,12 @@ pub(crate) async fn run_start(
         // 投影失败 = run 失败（观察缺失 Storage 世界时不允许继续决策）。
         let ctx = agent_state.context;
         let mut projection = crate::Projection::new(ctx);
-        let projected = handle.block_on(projection.project_from_storage(&mut kernel, &st2.storage));
+        let projected = handle.block_on(projection.project_incremental(
+            &mut kernel,
+            &st2.storage,
+            crate::projection::WORLD_PROJECTION_KEY,
+            None,
+        ));
         match projected {
             Ok(n) => eprintln!("run {rid}: P5.4 世界投影完成（{n} 事件）"),
             Err(e) => {

@@ -89,6 +89,29 @@ pub struct RelationRecord {
     pub data: Option<Value>,
 }
 
+/// 持久化世界状态快照（P3 增量投影：当前关系 + watermark，存于 `wb_meta` JSON blob）。
+///
+/// 设计取舍：世界关系规模小（百级），用 KV blob 持久化、避免新增表与 schema 迁移；
+/// 投影（事件→Kernel）才是真正增量（只应用 watermark 之后的事件），这是文档 P3
+/// 要解决的「每次 run 全量重放」性能问题（非正确性问题）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PersistedWorld {
+    /// 最后已应用事件 id（after_id 游标）；None = 从未投影。
+    pub watermark: Option<String>,
+    /// 当前世界关系（valid_until 恒 None；过期关系不持久化，属历史）。
+    pub relations: Vec<WorldRelation>,
+}
+
+/// 一条持久化世界关系（镜像 Kernel Relation 的当前态）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorldRelation {
+    pub source: String,
+    pub predicate: String,
+    pub target: String,
+    pub valid_from: i64,
+    pub valid_until: Option<i64>,
+}
+
 /// 一条记忆记录（对应 `wb_memory`，V0.5 记忆沉淀 / BL-008）。
 /// 经验按 `label` 去重，重复沉淀累加 `hits`，作为自学习指标。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -471,6 +494,47 @@ impl LibSQLStorage {
     /// 从已有连接构造（测试可用）。
     pub fn from_connection(conn: Connection) -> Self {
         Self { conn }
+    }
+
+    /// 读 KV 元数据（复用 `wb_meta`；P3 watermark / 世界投影状态载体）。
+    pub async fn get_meta(&self, key: &str) -> Result<Option<String>, StorageError> {
+        let mut rows = self
+            .conn
+            .query("SELECT value FROM wb_meta WHERE key = ?1", params![key])
+            .await?;
+        match rows.next().await? {
+            Some(r) => Ok(Some(r.get::<String>(0)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// 写 KV 元数据（幂等覆盖；`wb_meta` 以 key 为主键）。
+    pub async fn set_meta(&self, key: &str, value: &str) -> Result<(), StorageError> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO wb_meta (key, value) VALUES (?1, ?2)",
+                params![key, value],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// 读持久化世界状态（P3）：watermark + 当前关系。无记录返回空（首轮全量）。
+    pub async fn load_projection(&self, world_key: &str) -> Result<PersistedWorld, StorageError> {
+        match self.get_meta(&format!("projection:{world_key}")).await? {
+            Some(s) => Ok(serde_json::from_str(&s)?),
+            None => Ok(PersistedWorld::default()),
+        }
+    }
+
+    /// 写持久化世界状态（P3）：覆盖式保存当前关系 + watermark。
+    pub async fn save_projection(
+        &self,
+        world_key: &str,
+        world: &PersistedWorld,
+    ) -> Result<(), StorageError> {
+        let s = serde_json::to_string(world)?;
+        self.set_meta(&format!("projection:{world_key}"), &s).await
     }
 }
 

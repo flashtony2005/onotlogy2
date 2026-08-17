@@ -17,8 +17,11 @@ use std::collections::{HashMap, HashSet};
 
 use crate::kernel::relation::Relation;
 use crate::kernel::{ContextId, Kernel, KernelError};
-use crate::storage::{LibSQLStorage, TraceQuery};
+use crate::storage::{LibSQLStorage, PersistedWorld, TraceQuery, WorldRelation};
 use crate::trace::{TraceEvent, TraceKind};
+
+/// 全局世界投影键（Phase 8 项目范围世界时改为 `world:<project_id>`）。
+pub const WORLD_PROJECTION_KEY: &str = "world:global";
 
 /// 投影错误（Kernel 规则错误 + 存储读取错误）。
 #[derive(Debug, thiserror::Error)]
@@ -189,6 +192,92 @@ impl Projection {
             (a.timestamp.clone(), a.id.clone()).cmp(&(b.timestamp.clone(), b.id.clone()))
         });
         self.project_events(kernel, &world)
+    }
+
+    /// P3：把持久化世界关系灌入 Kernel（跨 run 保留历史关系，避免从零重建）。
+    /// 过期关系（valid_until 有值）不持久化，此处只还原当前关系。
+    pub fn hydrate(&mut self, kernel: &mut Kernel, world: &PersistedWorld) {
+        for r in &world.relations {
+            let mut rel = Relation::new(
+                self.ctx,
+                r.source.clone(),
+                r.predicate.clone(),
+                r.target.clone(),
+                r.valid_from,
+            );
+            rel.valid_until = r.valid_until;
+            let _ = kernel.relate(rel);
+        }
+    }
+
+    /// P3 增量投影（watermark）：读持久化状态 → 灌历史关系 → `after_id` 只取
+    /// 增量事件 → 应用 → 回写当前关系 + 新 watermark。
+    ///
+    /// 首轮 `watermark=None` → 全量应用并保存；此后每轮只应用 watermark 之后的
+    /// 新事件（文档 P3：「project() 只应用 id 之后的事件」）。正确性不退化：
+    /// 历史关系由 `hydrate` 从持久化状态重建，无需重放全量事件。
+    pub async fn project_incremental(
+        &mut self,
+        kernel: &mut Kernel,
+        storage: &LibSQLStorage,
+        world_key: &str,
+        project_id: Option<String>,
+    ) -> Result<usize, ProjectionError> {
+        let world = storage
+            .load_projection(world_key)
+            .await
+            .map_err(|e| ProjectionError::Storage(e.to_string()))?;
+        // 灌历史关系（跨 run 保留）
+        self.hydrate(kernel, &world);
+
+        // 只取 watermark 之后的事件（after_id 游标；None = 全量）
+        let mut q = TraceQuery {
+            project_id,
+            limit: 1000,
+            ..Default::default()
+        };
+        if let Some(wm) = &world.watermark {
+            q = q.with_after(wm.clone());
+        }
+        let mut events = storage
+            .list_events(q)
+            .await
+            .map_err(|e| ProjectionError::Storage(e.to_string()))?;
+        // 新 watermark = 本批最新事件（按 timestamp,id 排序后末位；未超 1000 上限即全局最新）
+        events.sort_by(|a, b| {
+            (a.timestamp.clone(), a.id.clone()).cmp(&(b.timestamp.clone(), b.id.clone()))
+        });
+        let new_wm = events.last().map(|e| e.id.clone());
+        let world_events: Vec<TraceEvent> = events
+            .into_iter()
+            .filter(|e| {
+                e.kind == TraceKind::World
+                    || (e.kind == TraceKind::Cognitive && e.event_type.starts_with("fabric."))
+            })
+            .collect();
+        let applied = self.project_events(kernel, &world_events)?;
+
+        // 回写：当前世界关系（valid_until=None）+ 新 watermark
+        let relations: Vec<WorldRelation> = kernel
+            .relations()
+            .filter(|r| r.context == self.ctx && r.valid_until.is_none())
+            .map(|r| WorldRelation {
+                source: r.source.clone(),
+                predicate: r.predicate.clone(),
+                target: r.target.clone(),
+                valid_from: r.valid_from,
+                valid_until: None,
+            })
+            .collect();
+        let next = PersistedWorld {
+            watermark: new_wm.or(world.watermark.clone()),
+            relations,
+        };
+        storage
+            .save_projection(world_key, &next)
+            .await
+            .map_err(|e| ProjectionError::Storage(e.to_string()))?;
+        Ok(applied)
     }
 
     // ── 规则实现（P5 契约第 3 节）──────────────────────────────────────

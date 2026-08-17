@@ -176,6 +176,65 @@ async fn tc_pj3_replay_equals_normal_projection() {
     assert!(!s1.is_empty());
 }
 
+// ── P3：增量投影（watermark）—— 只应用 watermark 之后的事件 ────────────
+#[tokio::test]
+async fn tc_pj9_incremental_projection_watermark() {
+    let storage = LibSQLStorage::open(":memory:").await.unwrap();
+    let events = demo_events();
+    append_all(&storage, &events).await;
+
+    // 第一轮（模拟一次 run）：watermark=None → 全量应用 + 持久化
+    let mut k1 = Kernel::new();
+    let ctx1 = k1.create_context(None, Scope::World, "world").unwrap();
+    let mut p1 = Projection::new(ctx1);
+    let n1 = p1
+        .project_incremental(&mut k1, &storage, "world:global", None)
+        .await
+        .unwrap();
+    assert_eq!(n1, events.len(), "首轮 watermark=None → 全量应用");
+
+    // run 间世界变化：注入 1 条新事件
+    let e7 = world_ev(
+        "e7",
+        "ObjectCreated",
+        vec!["u2"],
+        Some(json!({ "type": "User", "data": {} })),
+        700,
+    );
+    storage.append_trace(&e7).await.unwrap();
+
+    // 第二轮（模拟新 run，全新 Kernel）：只应用 e7（P3 增量）
+    let mut k2 = Kernel::new();
+    let ctx2 = k2.create_context(None, Scope::World, "world").unwrap();
+    let mut p2 = Projection::new(ctx2);
+    let n2 = p2
+        .project_incremental(&mut k2, &storage, "world:global", None)
+        .await
+        .unwrap();
+    assert_eq!(n2, 1, "第二轮只应用新事件（P3 增量）");
+
+    // 增量终局 == 全量重放（含 e7）终局（P1/P3 一致）
+    let mut kf = Kernel::new();
+    let ctxf = kf.create_context(None, Scope::World, "world").unwrap();
+    let mut pf = Projection::new(ctxf);
+    pf.project_from_storage(&mut kf, &storage).await.unwrap();
+    assert_eq!(
+        p2.state_snapshot(&k2),
+        pf.state_snapshot(&kf),
+        "增量投影终局 == 全量重放（P1/P3）"
+    );
+
+    // watermark 续跑：再开一轮无新事件 → 0 应用（持久化 watermark 生效）
+    let mut k3 = Kernel::new();
+    let ctx3 = k3.create_context(None, Scope::World, "world").unwrap();
+    let mut p3 = Projection::new(ctx3);
+    let n3 = p3
+        .project_incremental(&mut k3, &storage, "world:global", None)
+        .await
+        .unwrap();
+    assert_eq!(n3, 0, "watermark 续跑：无新事件则 0 应用");
+}
+
 // ── 领域规则注册：OrderPlaced → (order, "status", "placed") ────────────
 #[test]
 fn tc_pj4_domain_rule_maps_event_to_relation() {

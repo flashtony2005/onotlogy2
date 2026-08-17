@@ -153,7 +153,12 @@ pub async fn cmd_agent_run(
     // 投影与 Agent 共享同一世界 Context；契约 P5：事件是世界唯一入口（无裸写）。
     let mut projection = openaip_os::Projection::new(ctx);
     let projected = projection
-        .project_from_storage(&mut kernel, &storage)
+        .project_incremental(
+            &mut kernel,
+            &storage,
+            openaip_os::projection::WORLD_PROJECTION_KEY,
+            None,
+        )
         .await?;
     println!("🌍 P5.4 世界投影：{} 事件 → Kernel（观察就绪）", projected);
     let mut trace: Vec<openaip_os::trace::TraceEvent> = Vec::new();
