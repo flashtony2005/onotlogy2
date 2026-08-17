@@ -27,6 +27,9 @@ use crate::trace::{TraceEvent, TraceKind};
 pub struct StorageWorldSink {
     storage: std::sync::Arc<crate::storage::LibSQLStorage>,
     handle: tokio::runtime::Handle,
+    /// T2b-1：事件发布（WS 实时流）。落库成功后旁路扇出到 broadcast；
+    /// CLI 等无 WS 的路径传 None（零订阅者时发送安全忽略，不阻断落库）。
+    tx: Option<tokio::sync::broadcast::Sender<TraceEvent>>,
 }
 
 impl StorageWorldSink {
@@ -34,15 +37,31 @@ impl StorageWorldSink {
         storage: std::sync::Arc<crate::storage::LibSQLStorage>,
         handle: tokio::runtime::Handle,
     ) -> Self {
-        Self { storage, handle }
+        Self {
+            storage,
+            handle,
+            tx: None,
+        }
+    }
+
+    /// T2b-1：接入 WS 实时流广播（server 路径传入 `AppState.event_tx`）。
+    pub fn with_broadcast(mut self, tx: tokio::sync::broadcast::Sender<TraceEvent>) -> Self {
+        self.tx = Some(tx);
+        self
     }
 }
 
 impl WorldEventSink for StorageWorldSink {
     fn append(&self, ev: &TraceEvent) -> Result<(), String> {
+        // 落库为真相源：先持久化，失败则不广播（事件未 durable 发生）
         self.handle
             .block_on(self.storage.append_trace(ev))
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        // 落库成功后旁路扇出到 WS 广播（零订阅者 / 通道关闭均安全忽略）
+        if let Some(tx) = &self.tx {
+            let _ = tx.send(ev.clone());
+        }
+        Ok(())
     }
 }
 
@@ -203,5 +222,54 @@ pub fn run_agent<'k>(
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// T2b-1 契约：StorageWorldSink 落库后必须向 `event_tx` 实时扇出，
+    /// 否则 WS `/stream` 只有历史回放、无实时（event_tx 零发布者之洞）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tc_storage_world_sink_broadcasts_to_event_tx() {
+        use tokio::sync::broadcast;
+
+        let storage = std::sync::Arc::new(
+            crate::storage::LibSQLStorage::open(":memory:")
+                .await
+                .unwrap(),
+        );
+        let handle = tokio::runtime::Handle::current();
+        let (tx, mut rx) = broadcast::channel::<TraceEvent>(16);
+        let sink = StorageWorldSink::new(storage, handle).with_broadcast(tx);
+
+        let ev = TraceEvent {
+            id: "ev-t2b1".into(),
+            kind: TraceKind::Cognitive,
+            event_type: "fabric.task_completed".into(),
+            object_refs: vec!["order-001".into()],
+            project_id: None,
+            run_id: Some("run-t2b1".into()),
+            agent_id: Some("sh-agent".into()),
+            reasoning: None,
+            input: Some(json!({ "to": "completed" })),
+            output: None,
+            confidence: None,
+            timestamp: "0".into(),
+        };
+        // StorageWorldSink::append 必须在阻塞上下文调用（server=spawn_blocking、
+        // CLI=block_in_place）；async 上下文内 block_on 会 panic。
+        tokio::task::block_in_place(|| {
+            sink.append(&ev).unwrap();
+        });
+
+        let got = rx
+            .recv()
+            .await
+            .expect("StorageWorldSink 必须向 event_tx 发布事件");
+        assert_eq!(got.id, "ev-t2b1");
+        assert_eq!(got.event_type, "fabric.task_completed");
+        assert_eq!(got.run_id.as_deref(), Some("run-t2b1"));
     }
 }
