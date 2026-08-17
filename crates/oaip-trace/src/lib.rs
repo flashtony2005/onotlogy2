@@ -85,6 +85,12 @@ impl TraceEvent {
     /// 构造 world 事件（支持多对象绑定，如 Relation 的 [src, dst]）。
     /// [强制] object_refs 非空，否则落库被 WB2006 拦截（TC-007-b）。
     pub fn world_with_refs(event_type: &str, refs: &[String]) -> Self {
+        // P5 契约：ObjectCreated 必须带 input={type,data}（投影依赖；手动 emit 也安全）
+        let input = if event_type == "ObjectCreated" {
+            Some(serde_json::json!({ "type": "Object", "data": {} }))
+        } else {
+            None
+        };
         Self {
             id: new_trace_id(),
             kind: TraceKind::World,
@@ -94,7 +100,7 @@ impl TraceEvent {
             run_id: None,
             agent_id: None,
             reasoning: None,
-            input: None,
+            input,
             output: None,
             confidence: None,
             timestamp: now_ts(),

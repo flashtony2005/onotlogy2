@@ -203,10 +203,11 @@ impl Projection {
         let Some(id) = ev.object_refs.first().cloned() else {
             return Ok(());
         };
-        let input = ev
-            .input
-            .as_ref()
-            .ok_or_else(|| ProjectionError::Storage("ObjectCreated 缺 input".into()))?;
+        // 兼容：手动 emit / 历史坏事件可能缺 input——无法还原对象，跳过
+        //（计入水位，世界不含该实体；新事件由契约保证带 input）
+        let Some(input) = ev.input.as_ref() else {
+            return Ok(());
+        };
         let ty = input
             .get("type")
             .and_then(|v| v.as_str())

@@ -822,3 +822,48 @@ async fn tc_p6d_audit_events_persisted_at_production_time() {
         "customer.refund"
     );
 }
+
+// ── tc_p7c：手动 emit ObjectCreated 无 input → 世界查询不报错且不含该实体 ──
+// 契约：ObjectCreated 必须带 input；历史坏事件投影跳过（水位照记，世界不崩）。
+#[tokio::test]
+async fn tc_p7c_bare_object_created_without_input_is_skipped() {
+    let storage = LibSQLStorage::open(":memory:").await.unwrap();
+    // 手动 emit 一个无 input 的 ObjectCreated（旧形态；TraceEvent::world 现已补默认，
+    // 这里直接构造裸事件模拟历史坏数据）
+    storage
+        .append_trace(&TraceEvent {
+            id: "bad_ev".into(),
+            kind: TraceKind::World,
+            event_type: "ObjectCreated".into(),
+            object_refs: vec!["ghost-1".into()],
+            project_id: None,
+            run_id: None,
+            agent_id: None,
+            reasoning: None,
+            input: None,
+            output: None,
+            confidence: None,
+            timestamp: "100".into(),
+        })
+        .await
+        .unwrap();
+    // 正常事件仍在
+    storage
+        .apply_world(WorldCommand::CreateObject {
+            object_type: "User".into(),
+            id: "u1".into(),
+            data: json!({ "name": "Apple" }),
+            project_id: None,
+        })
+        .await
+        .unwrap();
+
+    let mut k = Kernel::new();
+    let ctx = k.create_context(None, Scope::World, "world").unwrap();
+    let mut p = Projection::new(ctx);
+    let n = p.project_from_storage(&mut k, &storage).await.unwrap();
+    assert_eq!(n, 2, "两条事件都计入水位（坏事件跳过但被计数）");
+    // 世界：正常实体在，坏事件实体不在（无 input 无法还原，不污染世界）
+    assert!(k.relations().any(|r| r.source == "u1"));
+    assert!(!k.relations().any(|r| r.source == "ghost-1"));
+}
