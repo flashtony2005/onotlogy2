@@ -219,20 +219,36 @@ async fn tc_approve_4_second_decision_404() {
         .unwrap()
         .to_string();
 
-    // 第一次裁决
+    let approve_url = format!("/api/v1/wb/agent/run/{run_id}/approval/{run_id}");
+
+    // 第一次裁决：必须成功执行（续跑 sh → completed）。
+    // 本测试只查二次裁决会漏掉「第一次就 404」的回归——若第一次 404，entry 从未
+    // 移除/从未执行，第二次照样 404，测试会假绿。故此处先锁死第一次成功。
     let (c1, b1) = common::http_call(
         addr,
         "POST",
-        &format!("/api/v1/wb/agent/run/{run_id}/approval/{run_id}"),
+        &approve_url,
         Some(r#"{"decision":"approve"}"#),
     )
     .await;
-    eprintln!("DIAG first resolve: {c1} {b1}");
+    assert_eq!(c1, 200, "第一次裁决 HTTP 必须 200");
+    let v1: Value = serde_json::from_str(&b1).unwrap();
+    assert_eq!(
+        v1["code"].as_i64().unwrap(),
+        0,
+        "第一次裁决必须成功（code=0），不得 404/5000（entry 应在 resolve 前被消费）"
+    );
+    assert_eq!(v1["data"]["decision"], "Approved");
+    assert_eq!(
+        v1["data"]["status"], "completed",
+        "第一次裁决应续跑执行 adapter.send（entry 已消费/移除）"
+    );
+
     // 二次裁决 → 业务码 404（已从注册表移除；项目约定所有响应 HTTP 200，错误码在 body.code）
     let (_, body) = common::http_call(
         addr,
         "POST",
-        &format!("/api/v1/wb/agent/run/{run_id}/approval/{run_id}"),
+        &approve_url,
         Some(r#"{"decision":"approve"}"#),
     )
     .await;
