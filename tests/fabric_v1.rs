@@ -219,11 +219,14 @@ async fn tc_f4_all_communication_events_land_in_event_log() {
     let mut b = Bridge::new(r, Some(sink.clone()));
     b.connect_agent(Arc::new(FakeCodex)).unwrap();
 
-    let mut sm = SessionManager::new();
-    let s = sm.create(vec!["dsh".into(), "codex".into()]);
-    let result = b
+    let sm = Arc::new(Mutex::new(SessionManager::new()));
+    let s = sm
+        .lock()
+        .unwrap()
+        .create(vec!["dsh".into(), "codex".into()]);
+    let (msg, job) = b
         .submit(
-            &mut sm,
+            sm.clone(),
             &s.id,
             "dsh",
             "modify_code",
@@ -231,10 +234,13 @@ async fn tc_f4_all_communication_events_land_in_event_log() {
             None,
         )
         .unwrap();
+    // T2b-2 异步契约：submit 立即返 running（执行经 execute）；correlation 必须贯通
+    assert_eq!(msg.payload["status"], "running");
+    assert!(msg.correlation_id.is_some(), "correlation 必须贯通");
+    let result = b.execute(sm.clone(), job.unwrap()).unwrap();
     assert_eq!(result.kind, MessageKind::TaskResult);
     assert_eq!(result.payload["status"], "completed");
     assert_eq!(result.payload["files_changed"], 4);
-    assert!(result.correlation_id.is_some(), "correlation 必须贯通");
 
     // 通信黑匣子：全量事件在场（Event Log 是单一扇出源）
     let evs = sink.0.lock().unwrap();
@@ -251,7 +257,8 @@ async fn tc_f4_all_communication_events_land_in_event_log() {
     // 事实不依赖 Run（P5 约定：run_id=None）
     assert!(evs.iter().all(|e| e.run_id.is_none()));
     // 会话消息与事件一一对应（Session 是消息的真相源，事件是其投影）
-    let session = sm.get(&s.id).unwrap();
+    let guard = sm.lock().unwrap();
+    let session = guard.get(&s.id).unwrap();
     assert_eq!(session.messages().len(), 2, "request + result");
 }
 
@@ -265,11 +272,14 @@ async fn tc_f5_full_demo_chain_to_world_state() {
     let mut b = Bridge::new(r, Some(sink.clone()));
     b.connect_agent(Arc::new(FakeCodex)).unwrap();
 
-    let mut sm = SessionManager::new();
-    let s = sm.create(vec!["dsh".into(), "codex".into()]);
-    let result = b
+    let sm = Arc::new(Mutex::new(SessionManager::new()));
+    let s = sm
+        .lock()
+        .unwrap()
+        .create(vec!["dsh".into(), "codex".into()]);
+    let (_msg, job) = b
         .submit(
-            &mut sm,
+            sm.clone(),
             &s.id,
             "dsh",
             "modify_code",
@@ -277,6 +287,7 @@ async fn tc_f5_full_demo_chain_to_world_state() {
             None,
         )
         .unwrap();
+    let result = b.execute(sm.clone(), job.unwrap()).unwrap();
     assert_eq!(result.payload["status"], "completed");
 
     // Event Log → Projection（fabric 领域规则：task_completed → (refs[0], fabric.status, to)）
@@ -361,11 +372,14 @@ async fn tc_f7_real_process_send_roundtrip_through_bridge() {
     assert!(sh.connect().is_ok());
     b.connect_agent(Arc::new(sh)).unwrap();
 
-    let mut sm = SessionManager::new();
-    let s = sm.create(vec!["dsh".into(), "sh-agent".into()]);
-    let result = b
+    let sm = Arc::new(Mutex::new(SessionManager::new()));
+    let s = sm
+        .lock()
+        .unwrap()
+        .create(vec!["dsh".into(), "sh-agent".into()]);
+    let (_m1, job1) = b
         .submit(
-            &mut sm,
+            sm.clone(),
             &s.id,
             "dsh",
             "run_check",
@@ -373,6 +387,7 @@ async fn tc_f7_real_process_send_roundtrip_through_bridge() {
             None,
         )
         .unwrap();
+    let result = b.execute(sm.clone(), job1.unwrap()).unwrap();
     assert_eq!(result.kind, MessageKind::TaskResult);
     assert_eq!(result.payload["status"], "completed");
     assert_eq!(result.payload["exit_code"], 0);
@@ -388,9 +403,9 @@ async fn tc_f7_real_process_send_roundtrip_through_bridge() {
     assert!(result.correlation_id.is_some());
 
     // 失败路径：非零退出 → status=failed
-    let result2 = b
+    let (_m2, job2) = b
         .submit(
-            &mut sm,
+            sm.clone(),
             &s.id,
             "dsh",
             "run_check",
@@ -398,6 +413,7 @@ async fn tc_f7_real_process_send_roundtrip_through_bridge() {
             None,
         )
         .unwrap();
+    let result2 = b.execute(sm.clone(), job2.unwrap()).unwrap();
     assert_eq!(result2.payload["status"], "failed");
     assert_eq!(result2.payload["exit_code"], 3);
     // 事件黑匣子：真实进程路径也全量入日志
@@ -618,19 +634,20 @@ impl AgentAdapter for CancelProbe {
     }
 }
 
-// ── tc_f9：编排层 cancel——kill 子进程 + 取消标记集 → fabric.task_cancelled ──
-// 证 T2 新增逻辑：Bridge::cancel 写标记集，finish 据此把终局事件选为
-// `fabric.task_cancelled`（而非 failed），且子进程确被 kill（exit≠0）。
-#[test]
-fn tc_f9_cancel_kills_subprocess_and_emits_cancelled_event() {
+// ── tc_f9：编排层 cancel——kill 子进程（adapter killed 互斥）→ fabric.task_cancelled ──
+// 证 T2 新增逻辑：execute（后台 spawn_blocking）按 adapter 反馈的 killed 终态把终局事件
+// 选为 `fabric.task_cancelled`（而非 failed），且子进程确被 kill。
+// T2b-2 异步契约：submit 立即返 running + correlation_id，子进程在后台执行。
+#[tokio::test(flavor = "multi_thread")]
+async fn tc_f9_cancel_kills_subprocess_and_emits_cancelled_event() {
     let sink = Arc::new(VecSink::default());
     let corr: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let running: Arc<Mutex<HashMap<String, Child>>> = Arc::new(Mutex::new(HashMap::new()));
     let killed: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
     let probe = CancelProbe {
-        corr: corr.clone(),
+        corr,
         running: running.clone(),
-        killed: killed.clone(),
+        killed,
     };
     let mut r = FabricRouter::new();
     r.register_intent("run_slow", "shell.execute");
@@ -638,65 +655,67 @@ fn tc_f9_cancel_kills_subprocess_and_emits_cancelled_event() {
     let mut b = Bridge::new(r, Some(sink.clone()));
     b.connect_agent(Arc::new(probe)).unwrap();
 
-    let fs = Arc::new(FabricService::new(b));
-    let fs2 = fs.clone();
-    // 提交长任务（sleep 30）于后台线程；submit 阻塞到终局（被 cancel 提前结束）
-    let handle = std::thread::spawn(move || {
-        fs2.submit(openaip_os::facade::FabricRequest {
+    // FabricService 持有运行时句柄：submit 立即返 running，子进程后台 spawn_blocking 执行。
+    let fs = Arc::new(FabricService::new(b, tokio::runtime::Handle::current()));
+    let sub = fs
+        .submit(openaip_os::facade::FabricRequest {
             session_id: "sess-9".into(),
             sender: "tester".into(),
             intent: "run_slow".into(),
             payload: serde_json::json!({ "args": ["-c", "sleep 30"] }),
             project_id: None,
         })
-    });
-    // 轮询拿到 correlation_id（stream 启动即捕获）
-    let cid = {
+        .expect("submit 应成功");
+    assert_eq!(
+        sub.result.payload["status"], "running",
+        "异步契约：submit 立即返 running（不再阻塞到终局）"
+    );
+    let cid = sub.result.correlation_id.clone().unwrap();
+
+    // 等子进程真正起来（running map 出现）再 cancel——避免异步竞态（cancel 早于 spawn）
+    {
         let mut waited = 0;
         loop {
-            if let Some(c) = corr.lock().unwrap().clone() {
-                break c;
+            if running.lock().unwrap().contains_key(&cid) {
+                break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            waited += 50;
-            assert!(
-                waited < 5000,
-                "correlation_id 未在 5s 内捕获（stream 未启动）"
-            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            waited += 20;
+            assert!(waited < 5000, "子进程未在 5s 内启动");
         }
-    };
-    // 取消：kill 子进程 + 写取消标记集
+    }
+    // 取消：kill 子进程（adapter 层 killed 互斥——cancel 与 stream 以 running map 判据互斥）
     fs.cancel(&cid).expect("fabric_cancel 应成功");
-    // 等待 submit 线程终局
-    let res = handle
-        .join()
-        .expect("submit 线程应结束")
-        .expect("submit 应成功");
-    // 子进程被 cancel kill → 终态 status=killed（区别于正常 failed）
-    assert_eq!(
-        res.result.payload["status"], "killed",
-        "被取消任务终态应为 killed（子进程被 cancel kill）"
-    );
-    // 关键：终局事件应为 fabric.task_cancelled（标记集命中），而非 fabric.task_failed
-    let evs = sink.0.lock().unwrap();
-    let types: Vec<&str> = evs.iter().map(|e| e.event_type.as_str()).collect();
-    assert!(
-        types.contains(&"fabric.task_cancelled"),
-        "应发出 fabric.task_cancelled，实际: {types:?}"
-    );
-    assert!(
-        !types.contains(&"fabric.task_failed"),
-        "取消不应发 fabric.task_failed，实际: {types:?}"
-    );
+
+    // 等待后台终局事件 fabric.task_cancelled（killed 终态）；且不得发 fabric.task_failed
+    let mut cancelled = false;
+    for _ in 0..200 {
+        let (got_cancel, got_failed) = {
+            let evs = sink.0.lock().unwrap();
+            let types: Vec<&str> = evs.iter().map(|e| e.event_type.as_str()).collect();
+            (
+                types.contains(&"fabric.task_cancelled"),
+                types.contains(&"fabric.task_failed"),
+            )
+        };
+        if got_cancel {
+            assert!(!got_failed, "取消不应发 fabric.task_failed");
+            cancelled = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(cancelled, "应发出 fabric.task_cancelled（killed 终态）");
 }
 
 // ── tc_f10：P0 回归——stderr-heavy 子进程不得令 stream 死锁 ──────────────
 // 子进程大量写 stderr（远超 OS 管道缓冲）时，若 stderr 管道被 piped 却无人读取，
-// 子进程写满缓冲即阻塞 → 父进程读 stdout 等不到 EOF → 双向死锁，submit 永久挂起。
+// 子进程写满缓冲即阻塞 → 父进程读 stdout 等不到 EOF → 双向死锁，execute 永久挂起。
 // 修复：stream 路径 stderr → Stdio::null（stream 语义本不捕获 stderr）。
 // 修复前本测试会超时挂死（仅手动 cancel 能 unblock）。
-#[test]
-fn tc_f10_stream_does_not_deadlock_on_stderr_heavy_process() {
+// T2b-2：submit 立即返 running；执行语义（死锁面）在 execute——直接驱动 execute。
+#[tokio::test(flavor = "multi_thread")]
+async fn tc_f10_stream_does_not_deadlock_on_stderr_heavy_process() {
     let sink = Arc::new(VecSink::default());
     let mut r = FabricRouter::new();
     r.register_intent("run_loud", "shell.execute");
@@ -705,30 +724,35 @@ fn tc_f10_stream_does_not_deadlock_on_stderr_heavy_process() {
     let sh = sh_adapter(&["shell.execute"]);
     b.connect_agent(Arc::new(sh)).unwrap();
 
-    let fs = Arc::new(FabricService::new(b));
-    let fs2 = fs.clone();
-    // submit 阻塞到终局；后台线程跑，主线程用 recv_timeout 防死锁挂死 CI
+    let sm = Arc::new(Mutex::new(SessionManager::new()));
+    let s = sm
+        .lock()
+        .unwrap()
+        .create(vec!["tester".into(), "sh-agent".into()]);
+    let (_msg, job) = b
+        .submit(
+            sm.clone(),
+            &s.id,
+            "tester",
+            "run_loud",
+            // 写 ~1 万行 stderr（远超 macOS ~64KiB 管道缓冲），随后正常退出并打印 stdout
+            serde_json::json!({ "args": ["-c", "for i in $(seq 1 10000); do echo err-line-$i >&2; done; echo stdout-done"] }),
+            None,
+        )
+        .unwrap();
+    // execute 同步阻塞到终局；后台线程跑，主线程用 recv_timeout 防死锁挂死 CI
+    let job = job.expect("submit 应返回执行任务包");
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let res = fs2.submit(openaip_os::facade::FabricRequest {
-            session_id: "sess-stderr".into(),
-            sender: "tester".into(),
-            intent: "run_loud".into(),
-            // 写 ~1 万行 stderr（远超 macOS ~64KiB 管道缓冲），随后正常退出并打印 stdout
-            payload: serde_json::json!({ "args": ["-c", "for i in $(seq 1 10000); do echo err-line-$i >&2; done; echo stdout-done"] }),
-            project_id: None,
-        });
-        let _ = tx.send(res.map(|r| {
-            r.result.payload["status"]
-                .as_str()
-                .unwrap_or("?")
-                .to_string()
-        }));
+        let res = b
+            .execute(sm, job)
+            .map(|r| r.payload["status"].as_str().unwrap_or("?").to_string());
+        let _ = tx.send(res);
     });
     // 30s 内必须终局；否则即 stderr 管道死锁（P0 未修）
     let status = rx
         .recv_timeout(std::time::Duration::from_secs(30))
         .expect("stream 因 stderr 管道死锁挂死（P0 未修）")
-        .expect("submit 应成功");
+        .expect("execute 应成功");
     assert_eq!(status, "completed", "stderr-heavy 任务应正常完成");
 }

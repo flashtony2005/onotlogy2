@@ -119,7 +119,7 @@ pub fn cmd_fabric_submit(
         payload,
         project_id: None,
     })?;
-    println!("🚀 Fabric 提交完成：");
+    println!("🚀 Fabric 提交：");
     println!(
         "   sender={} → receiver={} correlation={:?}",
         sub.result.sender, sub.result.receiver, sub.result.correlation_id
@@ -128,6 +128,41 @@ pub fn cmd_fabric_submit(
         "   status={} payload={}",
         sub.result.payload["status"], sub.result.payload
     );
+    // T2b-2 异步契约：running = 子进程已在后台执行（spawn_blocking）。CLI 需阻塞到终局，
+    // 否则进程退出会杀掉后台任务。轮询审计域 fabric.* 的 correlation_id 对应事件。
+    if sub.result.payload["status"] == "running" {
+        let cid = sub.result.correlation_id.clone().unwrap_or_default();
+        // 已在 block_in_place 内：audit_query 是同步 API（内部 block_on storage），直接调用。
+        let mut final_status: Option<String> = None;
+        for _ in 0..300 {
+            let view = match facade.audit_query(AuditQuery {
+                event_type: Some("fabric.".into()),
+                ..Default::default()
+            }) {
+                Ok(v) => v,
+                Err(_) => {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    continue;
+                }
+            };
+            for e in &view.events {
+                if e.payload.get("correlation_id").and_then(|c| c.as_str()) == Some(cid.as_str())
+                    && let Some(s) = e.payload.get("to").and_then(|s| s.as_str())
+                {
+                    final_status = Some(s.to_string());
+                    break;
+                }
+            }
+            if final_status.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        match final_status {
+            Some(s) => println!("   🏁 后台执行终局: status={}", s),
+            None => println!("   ⏳ 后台执行超时未终局（correlation={}）", cid),
+        }
+    }
     Ok(())
 }
 

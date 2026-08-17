@@ -24,6 +24,34 @@ fn sh_adapter(capabilities: &[&str]) -> ProcessAdapter {
 }
 
 /// multi_thread runtime + block_in_place：Facade 同步 API 内部 block_on storage。
+/// T2b-2 异步契约轮询：等后台 spawn_blocking 任务终局（fabric.task_{completed,failed,cancelled}）。
+/// 按 correlation_id 在事件 input 中匹配；超时 panic。返回终局事件类型。
+async fn wait_fabric_done(storage: &Arc<LibSQLStorage>, cid: &str) -> String {
+    for _ in 0..300 {
+        let evs = storage
+            .list_events(openaip_os::storage::TraceQuery {
+                limit: 100,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        for e in &evs {
+            if let Some(input) = &e.input
+                && input.get("correlation_id").and_then(|c| c.as_str()) == Some(cid)
+                && matches!(
+                    e.event_type.as_str(),
+                    "fabric.task_completed" | "fabric.task_failed" | "fabric.task_cancelled"
+                )
+            {
+                return e.event_type.clone();
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("fabric 后台任务未在超时内终局（cid={cid}）");
+}
+
+/// multi_thread runtime + block_in_place：Facade 同步 API 内部 block_on storage。
 #[tokio::test(flavor = "multi_thread")]
 async fn tc_g1_world_query_projects_events_to_view() {
     let storage = Arc::new(LibSQLStorage::open(":memory:").await.unwrap());
@@ -208,7 +236,7 @@ async fn tc_g3_fabric_submit_closed_loop_world_visible() {
             &[("fabric.task_completed", "fabric.status")],
         )
         .unwrap();
-        // fabric.submit：经 Router → Adapter（/bin/sh 真实进程）→ task.result
+        // fabric.submit：T2b-2 异步契约——立即返 running + correlation_id（子进程后台执行）
         let sub = facade
             .fabric_submit(FabricRequest {
                 session_id: "sess_g3".into(),
@@ -221,12 +249,19 @@ async fn tc_g3_fabric_submit_closed_loop_world_visible() {
                 project_id: None,
             })
             .unwrap();
-        assert_eq!(sub.result.payload["status"], "completed");
-        assert_eq!(sub.result.sender, "sh-agent");
+        assert_eq!(
+            sub.result.payload["status"], "running",
+            "异步契约：立即返 running"
+        );
+        assert_eq!(sub.result.sender, "dsh", "running 消息来自请求方");
         assert!(sub.result.correlation_id.is_some());
         sub
     });
-    assert_eq!(submission.result.payload["status"], "completed");
+
+    // T2b-2 异步契约：轮询后台任务终局（spawn_blocking 执行 /bin/sh → fabric.task_completed）
+    let cid = submission.result.correlation_id.clone().unwrap();
+    let done = wait_fabric_done(&storage, &cid).await;
+    assert_eq!(done, "fabric.task_completed", "后台任务应终局为完成");
 
     // 提交即世界：事件已落库 → 再 world_query 可见（领域规则投影）
     let view = tokio::task::block_in_place(|| {
@@ -444,7 +479,7 @@ async fn tc_p3_fabric_submit_lands_in_project_world() {
             &[("fabric.task_completed", "fabric.status")],
         )
         .unwrap();
-        facade
+        let s = facade
             .fabric_submit(FabricRequest {
                 session_id: "sess_p3".into(),
                 sender: "dsh".into(),
@@ -455,9 +490,19 @@ async fn tc_p3_fabric_submit_lands_in_project_world() {
                 }),
                 project_id: Some("openaip-os".into()),
             })
-            .unwrap()
+            .unwrap();
+        assert_eq!(
+            s.result.payload["status"], "running",
+            "异步契约：立即返 running"
+        );
+        assert!(s.result.correlation_id.is_some());
+        s
     });
-    assert_eq!(sub.result.payload["status"], "completed");
+
+    // T2b-2 异步契约：轮询后台任务终局
+    let cid = sub.result.correlation_id.clone().unwrap();
+    let done = wait_fabric_done(&storage, &cid).await;
+    assert_eq!(done, "fabric.task_completed", "后台任务应终局为完成");
 
     // 事件带项目归属
     let evs = storage

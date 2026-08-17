@@ -19,7 +19,7 @@ pub mod session;
 
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -191,21 +191,20 @@ impl Bridge {
         self.adapters.keys().cloned().collect()
     }
 
-    /// 提交任务（OAB v0.1 主链路）：
-    /// `Intent → Router（Capability → Policy → Selection）→ Adapter.send →
-    /// task.result → 事件 → Session 记录`。
-    ///
-    /// Policy 在 Router 前面：RequiresApproval → fabric.approval_requested 事件 +
-    /// 返回错误（复用现有 Approval/Gate/Audit 机制裁决；v0.1 只留判定接口）。
+    /// 提交任务（OAB v0.1 主链路，T2b-2 异步契约）：
+    /// 路由 + 事件 + 会话记录（同步、立即返回），执行部分（adapter.stream 子进程）
+    /// 交给后台 spawn_blocking——立即返回 running 态 + correlation_id，不再阻塞到
+    /// 子进程结束。返回 `(立即回复, Option<RunJob>)`；RunJob=None 表示挂起/错误，
+    /// 不后台执行（审批挂起由调用方注册、HTTP 层据此返回 pending）。
     pub fn submit(
         &self,
-        sessions: &mut session::SessionManager,
+        sessions: Arc<Mutex<session::SessionManager>>,
         session_id: &str,
         from: &str,
         intent: &str,
         payload: Value,
         project_id: Option<String>,
-    ) -> Result<AgentMessage, FabricError> {
+    ) -> Result<(AgentMessage, Option<RunJob>), FabricError> {
         // 1) 路由：意图 → 能力 → 策略 → 选择（fail-closed）
         let plan = self.router.route(intent)?;
         // T1：RequiresApproval = 挂起（请求照常入会话；裁决后续跑），Denied = 拒绝
@@ -251,12 +250,17 @@ impl Bridge {
         );
 
         // 4) Session 记录请求（会话是消息真相源——挂起也入会话，resume 据此找回）
-        let session = sessions
-            .get_mut(session_id)
-            .ok_or_else(|| FabricError::SessionNotFound(session_id.to_string()))?;
-        session.append(req.clone())?;
+        {
+            let mut g = sessions
+                .lock()
+                .map_err(|_| FabricError::Adapter("会话表锁中毒".into()))?;
+            let session = g
+                .get_mut(session_id)
+                .ok_or_else(|| FabricError::SessionNotFound(session_id.to_string()))?;
+            session.append(req.clone())?;
+        }
 
-        // T1：需审批 → 发 approval_requested + 返回挂起态（请求已入会话，裁决后续跑）
+        // T1：需审批 → 发 approval_requested + 返回挂起态（RunJob=None，不后台执行）
         if needs_approval {
             self.event(
                 "fabric.approval_requested",
@@ -264,62 +268,101 @@ impl Bridge {
                 json!({ "capability": plan.capability, "intent": intent, "run_id": correlation }),
                 project_id,
             );
-            return Ok(pending_message(
-                session_id,
-                from,
-                &plan.agent_id,
-                intent,
-                &plan.capability,
-                &correlation,
+            return Ok((
+                pending_message(
+                    session_id,
+                    from,
+                    &plan.agent_id,
+                    intent,
+                    &plan.capability,
+                    &correlation,
+                ),
+                None,
             ));
         }
 
-        // 5/6/7) Adapter 执行 + 终局事件 + Session 记录（resume 复用同一后半段）
-        self.finish(sessions, session_id, req, project_id)
+        // 5) 执行：返回 running 态 + RunJob（由调用方 spawn 后台执行）
+        let running = running_message(
+            session_id,
+            from,
+            &plan.agent_id,
+            intent,
+            &plan.capability,
+            &correlation,
+        );
+        Ok((
+            running,
+            Some(RunJob {
+                req,
+                correlation,
+                project_id,
+            }),
+        ))
     }
 
     /// T1：裁决后续跑——按 run_id(correlation) 找回挂起的 task.request，执行后半段。
     pub fn resume(
         &self,
-        sessions: &mut session::SessionManager,
+        sessions: Arc<Mutex<session::SessionManager>>,
         session_id: &str,
         run_id: &str,
     ) -> Result<AgentMessage, FabricError> {
         // 从会话消息找回对应 task.request（correlation_id == run_id）
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| FabricError::SessionNotFound(session_id.to_string()))?;
-        let req = session
-            .messages()
-            .iter()
-            .rev()
-            .find(|m| {
-                m.kind == MessageKind::TaskRequest && m.correlation_id.as_deref() == Some(run_id)
-            })
-            .cloned()
-            .ok_or_else(|| FabricError::SessionNotFound(format!("{session_id}#{run_id}")))?;
+        let req = {
+            let g = sessions
+                .lock()
+                .map_err(|_| FabricError::Adapter("会话表锁中毒".into()))?;
+            let session = g
+                .get(session_id)
+                .ok_or_else(|| FabricError::SessionNotFound(session_id.to_string()))?;
+            session
+                .messages()
+                .iter()
+                .rev()
+                .find(|m| {
+                    m.kind == MessageKind::TaskRequest
+                        && m.correlation_id.as_deref() == Some(run_id)
+                })
+                .cloned()
+                .ok_or_else(|| FabricError::SessionNotFound(format!("{session_id}#{run_id}")))?
+        };
         // 裁决通过 = 续跑执行（后半段从 req 提取上下文，与 submit 一致）
-        self.finish(sessions, session_id, req, None)
+        let correlation = req.correlation_id.clone().unwrap_or_default();
+        self.execute(
+            sessions,
+            RunJob {
+                req,
+                correlation,
+                project_id: None,
+            },
+        )
     }
 
     /// T1：审批拒绝——发 fabric.approval_rejected 审计事件（run_id 回指挂起）。
     pub fn reject_event(
         &self,
-        sessions: &mut session::SessionManager,
+        sessions: Arc<Mutex<session::SessionManager>>,
         session_id: &str,
         run_id: &str,
     ) -> Result<(), FabricError> {
-        let session = sessions
-            .get(session_id)
-            .ok_or_else(|| FabricError::SessionNotFound(session_id.to_string()))?;
-        let req = session
-            .messages()
-            .iter()
-            .rev()
-            .find(|m| {
-                m.kind == MessageKind::TaskRequest && m.correlation_id.as_deref() == Some(run_id)
-            })
-            .ok_or_else(|| FabricError::SessionNotFound(format!("{session_id}#{run_id}")))?;
+        let req = {
+            let g = sessions
+                .lock()
+                .map_err(|_| FabricError::Adapter("会话表锁中毒".into()))?;
+            let session = g
+                .get(session_id)
+                .ok_or_else(|| FabricError::SessionNotFound(session_id.to_string()))?;
+            session
+                .messages()
+                .iter()
+                .rev()
+                .find(|m| {
+                    m.kind == MessageKind::TaskRequest
+                        && m.correlation_id.as_deref() == Some(run_id)
+                })
+                .cloned()
+                .ok_or_else(|| FabricError::SessionNotFound(format!("{session_id}#{run_id}")))?
+        };
         self.event(
             "fabric.approval_rejected",
             vec![req.receiver.clone()],
@@ -329,16 +372,30 @@ impl Bridge {
         Ok(())
     }
 
-    /// 提交/续跑的公共后半段：adapter.send → 终局事件（completed/failed）→ Session 记录。
-    /// 上下文（correlation / agent / obj_ref）从 `req` 提取，调用点只传 `project_id`，
-    /// 以压低参数数量（clippy too_many_arguments）。
-    fn finish(
+    /// 后台执行入口（T2b-2）：由 FabricService 在 spawn_blocking 中调用。
+    /// 执行 adapter.stream → 终局事件 → 会话记录；失败仅记录（旁路扇出，不 panic）。
+    pub(crate) fn run_in_background(
         &self,
-        sessions: &mut session::SessionManager,
-        session_id: &str,
-        req: AgentMessage,
-        project_id: Option<String>,
+        sessions: Arc<Mutex<session::SessionManager>>,
+        job: RunJob,
+    ) {
+        if let Err(e) = self.execute(sessions, job) {
+            // 执行失败：终局事件已由 execute 选 failed 发出；此处仅吞错，不阻断。
+            let _ = e;
+        }
+    }
+
+    /// 同步执行任务包（T2b-2）：adapter.stream → 终局事件（completed/failed/cancelled）
+    /// → Session 记录。返回终局 result 消息（含 status/files_changed/exit_code 等）。
+    /// 调用方：`run_in_background`（spawn_blocking 后台侧）、resume（审批续跑）、测试。
+    /// 上下文（correlation / agent / obj_ref）从 `job.req` 提取。
+    pub fn execute(
+        &self,
+        sessions: Arc<Mutex<session::SessionManager>>,
+        job: RunJob,
     ) -> Result<AgentMessage, FabricError> {
+        let req = job.req;
+        let project_id = job.project_id;
         let correlation = req.correlation_id.clone().unwrap_or_default();
         let agent_id = &req.receiver;
         let obj_ref = req
@@ -385,14 +442,19 @@ impl Bridge {
             project_id,
         );
 
-        let session = sessions
-            .get_mut(session_id)
-            .ok_or_else(|| FabricError::SessionNotFound(session_id.to_string()))?;
-        // 先 append（会话仍活跃，append 拒绝终态会话）；终态为 killed 再同源标记终态，
-        // 与 fabric.task_cancelled 审计事件一致。
-        session.append(result.clone())?;
-        if status == "killed" {
-            session.cancel();
+        {
+            let mut g = sessions
+                .lock()
+                .map_err(|_| FabricError::Adapter("会话表锁中毒".into()))?;
+            let session = g
+                .get_mut(&req.session_id)
+                .ok_or_else(|| FabricError::SessionNotFound(req.session_id.clone()))?;
+            // 先 append（会话仍活跃，append 拒绝终态会话）；终态为 killed 再同源标记终态，
+            // 与 fabric.task_cancelled 审计事件一致。
+            session.append(result.clone())?;
+            if status == "killed" {
+                session.cancel();
+            }
         }
         Ok(result)
     }
@@ -437,6 +499,43 @@ fn pending_message(
         intent: Some(intent.to_string()),
         payload: json!({
             "status": "pending",
+            "run_id": run_id,
+            "capability": capability,
+        }),
+        context: Value::Null,
+        capability: Some(capability.to_string()),
+        correlation_id: Some(run_id.to_string()),
+        causation_id: None,
+        timestamp: crate::kernel::now_secs(),
+    }
+}
+
+/// 后台执行任务包（T2b-2）：submit 同步返回后立即由调用方 spawn 后台执行。
+pub struct RunJob {
+    pub req: AgentMessage,
+    pub correlation: String,
+    pub project_id: Option<String>,
+}
+
+/// 运行中消息（T2b-2 异步契约：submit 立即返回 running 态 + correlation_id，
+/// 子进程在后台执行；HTTP/CLI 据此轮询终局事件）。
+fn running_message(
+    session_id: &str,
+    from: &str,
+    agent_id: &str,
+    intent: &str,
+    capability: &str,
+    run_id: &str,
+) -> AgentMessage {
+    AgentMessage {
+        id: crate::trace::new_trace_id(),
+        session_id: session_id.to_string(),
+        sender: from.to_string(),
+        receiver: agent_id.to_string(),
+        kind: MessageKind::TaskResult,
+        intent: Some(intent.to_string()),
+        payload: json!({
+            "status": "running",
             "run_id": run_id,
             "capability": capability,
         }),

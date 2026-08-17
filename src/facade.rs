@@ -211,8 +211,8 @@ impl Facade {
         }
         Ok(Self {
             world: WorldService::new(storage.clone(), handle.clone(), domain_rules),
-            audit: AuditService::new(storage.clone(), handle),
-            fabric: FabricService::new(bridge),
+            audit: AuditService::new(storage.clone(), handle.clone()),
+            fabric: FabricService::new(bridge, handle),
             storage,
         })
     }
@@ -446,33 +446,39 @@ impl AuditService {
 // ── FabricService ─────────────────────────────────────────────────────
 
 /// Fabric 提交服务：Bridge.submit（Router → Adapter → 事件落库）+ Session 管理。
-/// `submit` 全 &self：session 经 Mutex；Bridge 提交只读自身。
+/// `submit` 全 &self：session 经 Arc<Mutex>；Bridge 经 Arc 可跨 spawn_blocking 共享。
+/// 执行（子进程 stream）在后台 spawn_blocking，提交立即返 running（T2b-2 异步契约）。
 pub struct FabricService {
-    bridge: Bridge,
-    sessions: Mutex<SessionManager>,
+    bridge: Arc<Bridge>,
+    sessions: Arc<Mutex<SessionManager>>,
+    handle: tokio::runtime::Handle,
 }
 
 impl FabricService {
-    pub fn new(bridge: Bridge) -> Self {
+    pub fn new(bridge: Bridge, handle: tokio::runtime::Handle) -> Self {
         Self {
-            bridge,
-            sessions: Mutex::new(SessionManager::new()),
+            bridge: Arc::new(bridge),
+            sessions: Arc::new(Mutex::new(SessionManager::new())),
+            handle,
         }
     }
 
     pub fn submit(&self, req: FabricRequest) -> Result<FabricSubmission, FacadeError> {
-        let mut sessions = self
-            .sessions
-            .lock()
-            .map_err(|_| FacadeError::Fabric("会话表锁中毒".into()))?;
-        if sessions.get(&req.session_id).is_none() {
-            // 契约：session 不存在自动创建（participants=[sender]；id=请求方 session_id）
-            sessions.create_with_id(req.session_id.clone(), vec![req.sender.clone()]);
+        // 契约：session 不存在自动创建（participants=[sender]；id=请求方 session_id）
+        {
+            let mut sessions = self
+                .sessions
+                .lock()
+                .map_err(|_| FacadeError::Fabric("会话表锁中毒".into()))?;
+            if sessions.get(&req.session_id).is_none() {
+                sessions.create_with_id(req.session_id.clone(), vec![req.sender.clone()]);
+            }
         }
-        let result = self
+        // 同步：路由 + 事件 + 会话记录 → 立即返 running（或 pending）
+        let (msg, job) = self
             .bridge
             .submit(
-                &mut sessions,
+                self.sessions.clone(),
                 &req.session_id,
                 &req.sender,
                 &req.intent,
@@ -480,10 +486,19 @@ impl FabricService {
                 req.project_id.clone(),
             )
             .map_err(|e| FacadeError::Fabric(e.to_string()))?;
-        Ok(FabricSubmission { result })
+        // T2b-2 异步契约：子进程在后台执行（spawn_blocking），不阻塞提交返回
+        if let Some(job) = job {
+            let b = self.bridge.clone();
+            let s = self.sessions.clone();
+            // drop JoinHandle → 任务 detach 后在后台继续跑（fire-and-forget）
+            drop(self.handle.spawn_blocking(move || {
+                b.run_in_background(s, job);
+            }));
+        }
+        Ok(FabricSubmission { result: msg })
     }
 
-    /// T1：裁决 fabric 挂起——approve 续跑执行（resume → adapter.send → 终局事件）；
+    /// T1：裁决 fabric 挂起——approve 续跑执行（resume → adapter.stream → 终局事件）；
     /// reject 只发 fabric.approval_rejected 审计事件，不执行。
     pub fn resolve(
         &self,
@@ -491,18 +506,14 @@ impl FabricService {
         run_id: &str,
         approve: bool,
     ) -> Result<AgentMessage, FacadeError> {
-        let mut sessions = self
-            .sessions
-            .lock()
-            .map_err(|_| FacadeError::Fabric("会话表锁中毒".into()))?;
         if approve {
             self.bridge
-                .resume(&mut sessions, session_id, run_id)
+                .resume(self.sessions.clone(), session_id, run_id)
                 .map_err(|e| FacadeError::Fabric(e.to_string()))
         } else {
             // 拒绝：审计事件（fabric.approval_rejected；run_id 回指挂起）
             self.bridge
-                .reject_event(&mut sessions, session_id, run_id)
+                .reject_event(self.sessions.clone(), session_id, run_id)
                 .map_err(|e| FacadeError::Fabric(e.to_string()))?;
             Err(crate::fabric::FabricError::Denied(format!("审批拒绝: {run_id}")).into())
         }
@@ -562,23 +573,27 @@ mod tests {
     use crate::fabric::{Bridge, router::FabricRouter};
 
     /// 无适配器 / 无 sink 的空 FabricService：验证四个契约方法编译通过且错误路径正确。
+    /// FabricService 现持有 tokio Handle（T2b-2 异步契约）→ 测试须在 runtime 内构造。
     fn empty_service() -> super::FabricService {
-        FabricService::new(Bridge::new(FabricRouter::new(), None))
+        FabricService::new(
+            Bridge::new(FabricRouter::new(), None),
+            tokio::runtime::Handle::current(),
+        )
     }
 
-    #[test]
-    fn capability_discover_empty_without_adapters() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn capability_discover_empty_without_adapters() {
         assert!(empty_service().discover().is_empty());
     }
 
-    #[test]
-    fn fabric_cancel_is_best_effort_ok() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn fabric_cancel_is_best_effort_ok() {
         // 无 session / 无 adapter：取消是 best-effort，不应报错（返回命中数 0）。
         assert!(matches!(empty_service().cancel("corr_missing"), Ok(0)));
     }
 
-    #[test]
-    fn fabric_stream_get_unknown_session_errors() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn fabric_stream_get_unknown_session_errors() {
         let svc = empty_service();
         assert!(svc.stream("nope").is_err());
         assert!(svc.get("nope").is_err());
