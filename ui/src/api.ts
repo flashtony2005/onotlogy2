@@ -15,6 +15,7 @@ import type {
   FabricSubmissionDto,
   ProjectCreateDto,
   ProjectDto,
+  ProjectEventDto,
   SessionDto,
   SessionSummaryDto,
   SkillDto,
@@ -249,6 +250,30 @@ export async function postProjectCreate(req: ProjectCreateDto): Promise<ProjectD
   })
   const json: ApiResponse<ProjectDto> = await r.json()
   if (json.code !== 0 || !json.data) throw new Error(json.msg || '项目创建失败')
+  return json.data
+}
+
+/** `POST /api/v1/facade/project/event`：给项目世界加对象（CreateObject + 可选 root --edge）。 */
+export async function postProjectEvent(req: ProjectEventDto): Promise<{ ok: boolean }> {
+  const r = await authFetch('/api/v1/facade/project/event', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  })
+  const json: ApiResponse<{ ok: boolean }> = await r.json()
+  if (json.code !== 0 || !json.data) throw new Error(json.msg || '添加项目对象失败')
+  return json.data
+}
+
+/** `POST /api/v1/facade/project/deps`：依赖图 seed（crates 依赖 → depends_on 关系入项目世界）。 */
+export async function postProjectDeps(): Promise<{ relations: number }> {
+  const r = await authFetch('/api/v1/facade/project/deps', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  })
+  const json: ApiResponse<{ relations: number }> = await r.json()
+  if (json.code !== 0 || !json.data) throw new Error(json.msg || '依赖图 seed 失败')
   return json.data
 }
 

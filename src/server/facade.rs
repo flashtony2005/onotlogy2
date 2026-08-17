@@ -12,9 +12,11 @@ use std::sync::Arc;
 
 use crate::auth::AuthUser;
 use crate::facade::{AuditQuery, FabricRequest, OpenAipFacade, ProjectCreate, WorldQuery};
+use crate::project_seed::{project_add_object, seed_dependencies};
 use axum::Json;
 use axum::extract::{Extension, State};
 use axum::response::Response;
+use serde::Deserialize;
 
 use super::*;
 
@@ -113,5 +115,68 @@ pub(crate) async fn facade_project_seed(
     match n {
         Ok(n) => ApiResponse::ok(serde_json::json!({ "events": n })).into_response(),
         Err(e) => ApiResponse::error(5000, format!("seed 失败: {e}")).into_response(),
+    }
+}
+
+/// project.event 请求体（与 CLI `oaip facade project event` 同语义；HTTP 用 JSON 对象而非字符串）。
+#[derive(Deserialize)]
+pub(crate) struct ProjectEventReq {
+    object_type: String,
+    id: String,
+    project: String,
+    /// 对象载荷（JSON 对象，直接落库）。
+    input: serde_json::Value,
+    /// 可选：root --edge--> 此对象（如 contains）。
+    #[serde(default)]
+    edge: Option<String>,
+}
+
+/// project.event：给项目世界加对象（CreateObject(project) + 可选 root --edge--> 关系）。
+/// 与 CLI `cmd_project_event` 同源（都调 `project_add_object`），Server 是另一 Transport。
+pub(crate) async fn facade_project_event(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<ProjectEventReq>,
+) -> Response {
+    if !user.can_trigger_run() {
+        return forbidden("当前角色无权添加项目对象（需 Operator 及以上）").into_response();
+    }
+    let res = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(project_add_object(
+            &st.storage,
+            &body.object_type,
+            &body.id,
+            &body.project,
+            &body.input,
+            body.edge.as_deref(),
+        ))
+    });
+    match res {
+        Ok(()) => ApiResponse::ok(serde_json::json!({ "ok": true })).into_response(),
+        Err(e) => ApiResponse::error(5000, format!("添加项目对象失败: {e}")).into_response(),
+    }
+}
+
+/// project.deps：依赖图 seed（crates 依赖 → depends_on 关系入项目世界）。
+/// 与 CLI `cmd_project_deps` 同源（都调 `seed_dependencies`）；先确保工程结构在（幂等）。
+pub(crate) async fn facade_project_deps(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+) -> Response {
+    if !user.can_trigger_run() {
+        return forbidden("当前角色无权 seed 依赖图（需 Operator 及以上）").into_response();
+    }
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| ".".to_string());
+    let n = tokio::task::block_in_place(|| {
+        let h = tokio::runtime::Handle::current();
+        // 确保项目与工程结构在（幂等：已存在则跳过）
+        let _ = h.block_on(crate::project_seed::seed_openaip_os(&st.storage, &cwd));
+        h.block_on(seed_dependencies(&st.storage, &cwd))
+    });
+    match n {
+        Ok(n) => ApiResponse::ok(serde_json::json!({ "relations": n })).into_response(),
+        Err(e) => ApiResponse::error(5000, format!("依赖图 seed 失败: {e}")).into_response(),
     }
 }

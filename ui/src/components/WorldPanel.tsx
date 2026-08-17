@@ -2,42 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Activity, Boxes, Globe2, Network, RefreshCw } from 'lucide-react'
 import { getGraph, postProjectList, postWorldQuery } from '../api'
 import { fmtJson } from '../format'
-import type { ProjectDto, WorldGraphDto, WorldNodeDto, WorldViewDto } from '../types'
-
-const TYPE_COLORS = [
-  '#4c9ee6',
-  '#3fae7f',
-  '#e8a04c',
-  '#9f8fd6',
-  '#39d0d8',
-  '#e06a63',
-]
-
-function colorForType(type: string): string {
-  let h = 0
-  for (const ch of type) h = (h * 31 + ch.charCodeAt(0)) >>> 0
-  return TYPE_COLORS[h % TYPE_COLORS.length]
-}
-
-/** 简单确定性布局：每种类型一列，节点纵向均分；返回 id → 坐标。 */
-function layoutGraph(nodes: WorldNodeDto[]): Map<string, { x: number; y: number }> {
-  const types = [...new Set(nodes.map((n) => n.type))].sort()
-  const byType = new Map<string, WorldNodeDto[]>()
-  for (const t of types) byType.set(t, nodes.filter((n) => n.type === t))
-  const W = 900
-  const H = 520
-  const colGap = types.length > 1 ? W / types.length : W
-  const pos = new Map<string, { x: number; y: number }>()
-  types.forEach((t, i) => {
-    const list = byType.get(t) ?? []
-    const step = Math.min(64, (H - 80) / Math.max(list.length, 1))
-    list.forEach((n, j) => {
-      const y = list.length === 1 ? H / 2 : 50 + step * j + step / 2
-      pos.set(n.id, { x: colGap * (i + 0.5), y })
-    })
-  })
-  return pos
-}
+import { colorForType, layoutGraph } from '../graph'
+import type { ProjectDto, WorldGraphDto, WorldViewDto } from '../types'
 
 export function WorldPanel() {
   const [graph, setGraph] = useState<WorldGraphDto | null>(null)

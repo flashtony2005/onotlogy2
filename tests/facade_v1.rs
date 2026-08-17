@@ -505,7 +505,9 @@ async fn tc_p3_fabric_submit_lands_in_project_world() {
 // tc_p4 record_check_run：make check 结果 → CheckRun 对象 + root contains 关系
 //     → 项目世界可查（状态时间线，幂等重跑不爆错）
 // tc_p5 record_commit：git 提交 → Commit 对象 → 项目世界可查
-use openaip_os::project_seed::{record_check_run, record_commit, seed_openaip_os};
+use openaip_os::project_seed::{
+    project_add_object, record_check_run, record_commit, seed_dependencies, seed_openaip_os,
+};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn tc_p4_check_run_lands_in_project_world() {
@@ -630,6 +632,130 @@ async fn tc_p5_commit_lands_in_project_world() {
                 .iter()
                 .any(|r| r.target == "feat(x): 示例提交"),
             "Commit message 应在世界"
+        );
+    });
+}
+
+// ── Phase 8：项目世界对象写入（facade project event 语义）────────
+// tc_p6 project_add_object：给项目世界加对象（Task）+ 可选 root contains →
+//     项目世界可查（对象 + 关系都带 project 归属）；重复 id 幂等不爆错
+#[tokio::test(flavor = "multi_thread")]
+async fn tc_p6_project_event_lands_in_project_world() {
+    let storage = Arc::new(LibSQLStorage::open(":memory:").await.unwrap());
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current()
+            .block_on(seed_openaip_os(&storage, "."))
+            .unwrap();
+    });
+    // 给项目世界加一个 Task 对象 + root contains 关系
+    project_add_object(
+        &storage,
+        "Task",
+        "task-1",
+        "openaip-os",
+        &serde_json::json!({ "title": "demo task", "status": "open" }),
+        Some("contains"),
+    )
+    .await
+    .unwrap();
+    // 二次添加同 id：幂等（跳过已存在，不爆错）
+    project_add_object(
+        &storage,
+        "Task",
+        "task-1",
+        "openaip-os",
+        &serde_json::json!({ "title": "demo task", "status": "open" }),
+        Some("contains"),
+    )
+    .await
+    .unwrap();
+
+    tokio::task::block_in_place(|| {
+        let facade = Facade::new(
+            storage.clone(),
+            tokio::runtime::Handle::current(),
+            FabricRouter::new(),
+            vec![],
+            &[],
+        )
+        .unwrap();
+        // Task 对象进入项目世界（type 关系）
+        let w = facade
+            .world_query(WorldQuery {
+                project_id: Some("openaip-os".into()),
+                predicate: Some("type".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            w.relations
+                .iter()
+                .any(|r| r.source == "task-1" && r.target == "Task"),
+            "Task 对象应进入 openaip-os 项目世界: {:?}",
+            w.relations
+        );
+        // root --contains--> task-1（--edge 关系）
+        let c = facade
+            .world_query(WorldQuery {
+                project_id: Some("openaip-os".into()),
+                predicate: Some("contains".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            c.relations
+                .iter()
+                .any(|r| r.source == "module:root" && r.target == "task-1"),
+            "root --contains--> task-1 应存在: {:?}",
+            c.relations
+        );
+    });
+}
+
+// ── Phase 8：依赖图 seed（crates 依赖 → depends_on 关系）────────
+// tc_p7 seed_dependencies：扫描 crates/*/Cargo.toml 的 oaip-* 依赖 →
+//      module --depends_on--> module 进入项目世界（幂等：重复边 WB2007 跳过）
+#[tokio::test(flavor = "multi_thread")]
+async fn tc_p7_dependency_graph_relations() {
+    let storage = Arc::new(LibSQLStorage::open(":memory:").await.unwrap());
+    let (n1, n2) = tokio::task::block_in_place(|| {
+        let h = tokio::runtime::Handle::current();
+        h.block_on(seed_openaip_os(&storage, ".")).unwrap();
+        // 幂等：连续两次 seed 计数一致（重复边被跳过）
+        let n1 = h.block_on(seed_dependencies(&storage, ".")).unwrap();
+        let n2 = h.block_on(seed_dependencies(&storage, ".")).unwrap();
+        (n1, n2)
+    });
+    assert_eq!(n1, n2, "依赖 seed 幂等：重复边被跳过，计数一致");
+    assert!(n1 >= 1, "crates 内存在 oaip-* 依赖: {n1}");
+
+    tokio::task::block_in_place(|| {
+        let facade = Facade::new(
+            storage.clone(),
+            tokio::runtime::Handle::current(),
+            FabricRouter::new(),
+            vec![],
+            &[],
+        )
+        .unwrap();
+        let w = facade
+            .world_query(WorldQuery {
+                project_id: Some("openaip-os".into()),
+                predicate: Some("depends_on".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            !w.relations.is_empty(),
+            "depends_on 边进入项目世界: {:?}",
+            w.relations
+        );
+        assert!(
+            w.relations
+                .iter()
+                .all(|r| r.source.starts_with("module:") && r.target.starts_with("module:")),
+            "depends_on 两端必须是模块: {:?}",
+            w.relations
         );
     });
 }

@@ -237,3 +237,14 @@ export interface ProjectCreateDto {
   description?: string
   ontology?: string
 }
+
+/// 给项目世界加对象（`oaip facade project event` 的 HTTP 等价）。
+export interface ProjectEventDto {
+  objectType: string
+  id: string
+  project: string
+  /// 对象载荷（任意 JSON）。
+  input: unknown
+  /// 可选：root --edge--> 此对象（如 contains）。
+  edge?: string
+}
