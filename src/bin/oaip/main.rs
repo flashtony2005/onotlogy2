@@ -227,6 +227,8 @@ enum WorldCmd {
     /// world.query：世界视图（Event Log → Projection → Kernel 只读）
     Query {
         #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
         object_ref: Option<String>,
         #[arg(long)]
         predicate: Option<String>,
@@ -319,12 +321,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Facade 是同步 API（内部 block_on storage）→ 阻塞上下文约定
             FacadeCmd::World { cmd } => match cmd {
                 WorldCmd::Query {
+                    project,
                     object_ref,
                     predicate,
                     limit,
                 } => tokio::task::block_in_place(|| {
                     facade::cmd_world_query(
                         &cli.db,
+                        project.as_deref(),
                         object_ref.as_deref(),
                         predicate.as_deref(),
                         limit,

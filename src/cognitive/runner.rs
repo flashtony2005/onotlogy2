@@ -77,6 +77,15 @@ impl StorageAuditSink {
 
 impl crate::kernel::AuditSink for StorageAuditSink {
     fn append(&self, ev: &crate::kernel::KernelEvent) -> Result<(), String> {
+        // 只落审计语义域（与 Facade AuditService 同域）：审批/演化闸门/策略拒绝。
+        // 投影等派生路径产生的 relation.created 等 Kernel 事实不入审计日志——
+        // 既避免审计噪声，也避免投影（async 上下文）误触发 block_on。
+        let in_domain = ev.ty.starts_with("approval.")
+            || ev.ty == "evolution.gate_approved"
+            || ev.ty == "policy.denied";
+        if !in_domain {
+            return Ok(());
+        }
         let tev = TraceEvent {
             id: crate::trace::new_trace_id(),
             kind: TraceKind::Cognitive,

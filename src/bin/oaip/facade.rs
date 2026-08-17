@@ -44,6 +44,7 @@ pub fn cli_facade(
 
 pub fn cmd_world_query(
     db: &str,
+    project: Option<&str>,
     object_ref: Option<&str>,
     predicate: Option<&str>,
     limit: usize,
@@ -51,12 +52,18 @@ pub fn cmd_world_query(
     let handle = tokio::runtime::Handle::current();
     let facade = cli_facade(db, handle)?;
     let view = facade.world_query(WorldQuery {
-        project_id: None,
+        project_id: project.map(String::from),
         object_ref: object_ref.map(String::from),
         predicate: predicate.map(String::from),
         limit,
     })?;
-    println!("🌍 World View（at={}, total={}）：", view.at, view.total);
+    match project {
+        Some(p) => println!(
+            "🌍 World View（project={p}, at={}, total={}）：",
+            view.at, view.total
+        ),
+        None => println!("🌍 World View（at={}, total={}）：", view.at, view.total),
+    }
     for r in &view.relations {
         let until = r
             .valid_until
