@@ -115,10 +115,17 @@ pub(crate) async fn facade_fabric_cancel(
         return forbidden("当前角色无权取消任务（需 Operator 及以上）").into_response();
     }
     match tokio::task::block_in_place(|| st.facade.fabric_cancel(&id)) {
-        Ok(()) => {
-            ApiResponse::ok(serde_json::json!({ "correlationId": id, "status": "cancelled" }))
-                .into_response()
-        }
+        Ok(hits) if hits > 0 => ApiResponse::ok(serde_json::json!({
+            "correlationId": id,
+            "status": "cancelled"
+        }))
+        .into_response(),
+        // P1#6 返回语义失真修复：未命中（correlation 未在运行）据实反映，不再谎报 cancelled。
+        Ok(_) => ApiResponse::ok(serde_json::json!({
+            "correlationId": id,
+            "status": "not_found"
+        }))
+        .into_response(),
         Err(e) => {
             ApiResponse::error(wb_code("WB2005"), format!("fabric 取消失败: {e}")).into_response()
         }

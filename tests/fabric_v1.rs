@@ -17,7 +17,7 @@ use openaip_os::kernel::{Kernel, Scope};
 use openaip_os::projection::Projection;
 use openaip_os::trace::TraceEvent;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -76,8 +76,8 @@ impl AgentAdapter for FakeCodex {
             timestamp: msg.timestamp + 1,
         })
     }
-    fn cancel(&self, _correlation_id: &str) -> Result<(), FabricError> {
-        Ok(())
+    fn cancel(&self, _correlation_id: &str) -> Result<bool, FabricError> {
+        Ok(true) // fake：无真实子进程，总是「已处理」
     }
 }
 
@@ -498,6 +498,8 @@ fn tc_f8_stream_emits_progress_lines_and_cancel_kills() {
 struct CancelProbe {
     corr: Arc<Mutex<Option<String>>>,
     running: Arc<Mutex<HashMap<String, Child>>>,
+    /// 复刻 ProcessAdapter 的 killed 互斥设计（见 adapters.rs）。
+    killed: Arc<Mutex<HashSet<String>>>,
 }
 
 impl AgentAdapter for CancelProbe {
@@ -565,8 +567,8 @@ impl AgentAdapter for CancelProbe {
         for line in reader.lines() {
             let _ = line; // sleep 无输出；管道随进程结束/被 kill 关闭
         }
-        // 管道关闭 → 移除并 wait（cancel 已 kill → exit≠0）。若 cancel 已先 remove+kill，
-        // 此处 remove 为空 → exit=None → status=failed（与 ProcessAdapter 同语义）。
+        // 管道关闭 → 移除并 wait。若 cancel 已先 remove+kill，此处 remove 为空 → exit=None；
+        // killed 标记由 cancel 写入（与 running map 移除互斥），据以确定终态（复刻 ProcessAdapter）。
         let status = self
             .running
             .lock()
@@ -574,6 +576,14 @@ impl AgentAdapter for CancelProbe {
             .remove(&cid)
             .and_then(|mut c| c.wait().ok())
             .and_then(|s| s.code());
+        let killed = self.killed.lock().unwrap().remove(&cid);
+        let final_status = if killed {
+            "killed"
+        } else if status == Some(0) {
+            "completed"
+        } else {
+            "failed"
+        };
         Ok(vec![AgentMessage {
             id: format!("m_{}", msg.id),
             session_id: msg.session_id.clone(),
@@ -582,7 +592,7 @@ impl AgentAdapter for CancelProbe {
             kind: MessageKind::TaskResult,
             intent: msg.intent.clone(),
             payload: serde_json::json!({
-                "status": if status == Some(0) { "completed" } else { "failed" },
+                "status": final_status,
                 "exit_code": status,
             }),
             context: Value::Null,
@@ -592,13 +602,19 @@ impl AgentAdapter for CancelProbe {
             timestamp: msg.timestamp + 1,
         }])
     }
-    fn cancel(&self, correlation_id: &str) -> Result<(), FabricError> {
+    fn cancel(&self, correlation_id: &str) -> Result<bool, FabricError> {
         if let Some(mut c) = self.running.lock().unwrap().remove(correlation_id) {
+            self.killed
+                .lock()
+                .unwrap()
+                .insert(correlation_id.to_string());
             c.kill()
                 .map_err(|e| FabricError::Adapter(format!("kill 失败: {e}")))?;
             let _ = c.wait();
+            Ok(true)
+        } else {
+            Ok(false) // 未在跑 = 幂等 no-op
         }
-        Ok(()) // 未在跑 = 幂等 Ok
     }
 }
 
@@ -610,9 +626,11 @@ fn tc_f9_cancel_kills_subprocess_and_emits_cancelled_event() {
     let sink = Arc::new(VecSink::default());
     let corr: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let running: Arc<Mutex<HashMap<String, Child>>> = Arc::new(Mutex::new(HashMap::new()));
+    let killed: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
     let probe = CancelProbe {
         corr: corr.clone(),
         running: running.clone(),
+        killed: killed.clone(),
     };
     let mut r = FabricRouter::new();
     r.register_intent("run_slow", "shell.execute");
@@ -654,10 +672,10 @@ fn tc_f9_cancel_kills_subprocess_and_emits_cancelled_event() {
         .join()
         .expect("submit 线程应结束")
         .expect("submit 应成功");
-    // 子进程被 kill（exit≠0）→ 原始 status=failed
+    // 子进程被 cancel kill → 终态 status=killed（区别于正常 failed）
     assert_eq!(
-        res.result.payload["status"], "failed",
-        "被取消任务原始 status 应为 failed（exit≠0）"
+        res.result.payload["status"], "killed",
+        "被取消任务终态应为 killed（子进程被 cancel kill）"
     );
     // 关键：终局事件应为 fabric.task_cancelled（标记集命中），而非 fabric.task_failed
     let evs = sink.0.lock().unwrap();
@@ -670,4 +688,47 @@ fn tc_f9_cancel_kills_subprocess_and_emits_cancelled_event() {
         !types.contains(&"fabric.task_failed"),
         "取消不应发 fabric.task_failed，实际: {types:?}"
     );
+}
+
+// ── tc_f10：P0 回归——stderr-heavy 子进程不得令 stream 死锁 ──────────────
+// 子进程大量写 stderr（远超 OS 管道缓冲）时，若 stderr 管道被 piped 却无人读取，
+// 子进程写满缓冲即阻塞 → 父进程读 stdout 等不到 EOF → 双向死锁，submit 永久挂起。
+// 修复：stream 路径 stderr → Stdio::null（stream 语义本不捕获 stderr）。
+// 修复前本测试会超时挂死（仅手动 cancel 能 unblock）。
+#[test]
+fn tc_f10_stream_does_not_deadlock_on_stderr_heavy_process() {
+    let sink = Arc::new(VecSink::default());
+    let mut r = FabricRouter::new();
+    r.register_intent("run_loud", "shell.execute");
+    r.register_agent("shell.execute", "sh-agent", 1);
+    let mut b = Bridge::new(r, Some(sink.clone()));
+    let sh = sh_adapter(&["shell.execute"]);
+    b.connect_agent(Arc::new(sh)).unwrap();
+
+    let fs = Arc::new(FabricService::new(b));
+    let fs2 = fs.clone();
+    // submit 阻塞到终局；后台线程跑，主线程用 recv_timeout 防死锁挂死 CI
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let res = fs2.submit(openaip_os::facade::FabricRequest {
+            session_id: "sess-stderr".into(),
+            sender: "tester".into(),
+            intent: "run_loud".into(),
+            // 写 ~1 万行 stderr（远超 macOS ~64KiB 管道缓冲），随后正常退出并打印 stdout
+            payload: serde_json::json!({ "args": ["-c", "for i in $(seq 1 10000); do echo err-line-$i >&2; done; echo stdout-done"] }),
+            project_id: None,
+        });
+        let _ = tx.send(res.map(|r| {
+            r.result.payload["status"]
+                .as_str()
+                .unwrap_or("?")
+                .to_string()
+        }));
+    });
+    // 30s 内必须终局；否则即 stderr 管道死锁（P0 未修）
+    let status = rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("stream 因 stderr 管道死锁挂死（P0 未修）")
+        .expect("submit 应成功");
+    assert_eq!(status, "completed", "stderr-heavy 任务应正常完成");
 }

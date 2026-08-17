@@ -228,8 +228,9 @@ impl Facade {
         self.fabric.resolve(session_id, run_id, approve)
     }
 
-    /// fabric.cancel()：按 correlation_id 取消运行（反查 session + 通知 adapter）。
-    pub fn fabric_cancel(&self, correlation_id: &str) -> Result<(), FacadeError> {
+    /// fabric.cancel()：按 correlation_id 取消运行，返回命中并 kill 的 adapter 数
+    ///（0 = 该 correlation 未在运行；>0 = 已取消）。
+    pub fn fabric_cancel(&self, correlation_id: &str) -> Result<usize, FacadeError> {
         self.fabric.cancel(correlation_id)
     }
 
@@ -507,12 +508,12 @@ impl FabricService {
         }
     }
 
-    /// fabric.cancel()（契约未来扩展 → 本次落地）：按 correlation_id 取消运行。
-    /// 只走 bridge.cancel（kill 子进程 + 写取消标记集），**不持 sessions 锁**——
+    /// fabric.cancel()：按 correlation_id 取消运行，返回命中并 kill 的 adapter 数。
+    /// 只走 bridge.cancel（kill 子进程 + 发取消审计事件），**不持 sessions 锁**——
     /// submit 执行期间持锁阻塞子进程，cancel 必须能并发抢占 kill，否则死锁
     /// （cancel 等锁、submit 等子进程结束才放锁）。会话终态由 bridge.finish 在
-    /// 命中取消标记集时同源标记（与 fabric.task_cancelled 审计事件一致）。
-    pub fn cancel(&self, correlation_id: &str) -> Result<(), FacadeError> {
+    /// 终态为 killed 时同源标记（与 fabric.task_cancelled 审计事件一致）。
+    pub fn cancel(&self, correlation_id: &str) -> Result<usize, FacadeError> {
         self.bridge
             .cancel(correlation_id)
             .map_err(|e| FacadeError::Fabric(e.to_string()))
@@ -572,8 +573,8 @@ mod tests {
 
     #[test]
     fn fabric_cancel_is_best_effort_ok() {
-        // 无 session / 无 adapter：取消是 best-effort，不应报错。
-        assert!(empty_service().cancel("corr_missing").is_ok());
+        // 无 session / 无 adapter：取消是 best-effort，不应报错（返回命中数 0）。
+        assert!(matches!(empty_service().cancel("corr_missing"), Ok(0)));
     }
 
     #[test]

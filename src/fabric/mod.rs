@@ -17,9 +17,9 @@ pub mod adapters;
 pub mod router;
 pub mod session;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -124,10 +124,6 @@ pub struct Bridge {
     router: router::FabricRouter,
     adapters: HashMap<String, Arc<dyn adapter::AgentAdapter>>,
     sink: Option<Arc<dyn WorldEventSink>>,
-    /// 取消标记集：cancel(correlation_id) 写入，finish 据此把终局事件选为
-    /// `fabric.task_cancelled`（而非 failed）。Bridge 内 Mutex<HashSet>，
-    /// 无需新增 correlation→adapter 注册表（cancel 遍历所有 adapter 调 cancel，幂等）。
-    cancelled: Mutex<HashSet<String>>,
 }
 
 impl Bridge {
@@ -136,24 +132,30 @@ impl Bridge {
             router,
             adapters: HashMap::new(),
             sink,
-            cancelled: Mutex::new(HashSet::new()),
         }
     }
 
     /// T2：取消任务——按 correlation_id kill 运行中的子进程（遍历所有 adapter，
-    /// 幂等：未在跑的 adapter 返回 Ok）。同时写入取消标记集，供 finish 选择
-    /// `fabric.task_cancelled` 终局事件类型（区分正常 failed）。
-    pub fn cancel(&self, correlation_id: &str) -> Result<(), FabricError> {
-        self.cancelled
-            .lock()
-            .map_err(|_| FabricError::Adapter("取消标记锁中毒".into()))?
-            .insert(correlation_id.to_string());
+    /// 幂等：未在跑的 adapter 返回 false）。返回命中并 kill 的 adapter 数。
+    /// 同时发 `fabric.task_cancel_requested` 审计事件（含 correlation_id），与 finish
+    /// 发出的 `fabric.task_cancelled` 终局事件形成完整审计链（治理闭环可追：谁/何时取消）。
+    pub fn cancel(&self, correlation_id: &str) -> Result<usize, FabricError> {
+        self.event(
+            "fabric.task_cancel_requested",
+            vec![correlation_id.to_string()],
+            json!({}),
+            None,
+        );
+        let mut hits = 0usize;
         for adapter in self.adapters.values() {
-            adapter
+            if adapter
                 .cancel(correlation_id)
-                .map_err(|e| FabricError::Adapter(e.to_string()))?;
+                .map_err(|e| FabricError::Adapter(e.to_string()))?
+            {
+                hits += 1;
+            }
         }
-        Ok(())
+        Ok(hits)
     }
 
     /// 接入 Agent（Adapter）：connect + discover（能力市场身份证由调用方注册进
@@ -362,13 +364,10 @@ impl Bridge {
             .get("status")
             .and_then(|v| v.as_str())
             .unwrap_or("failed");
-        // T2：取消标记集命中 → 终局事件选 fabric.task_cancelled（区分正常 failed）
-        let cancelled = self
-            .cancelled
-            .lock()
-            .map_err(|_| FabricError::Adapter("取消标记锁中毒".into()))?
-            .remove(&correlation);
-        let ty = if cancelled {
+        // T2：终态由 adapter 反馈（killed=被 cancel kill / completed / failed），
+        // 不再依赖 Bridge 全局标记集——见 adapters.rs 的 killed 互斥设计，复用 running
+        // map 存在性判据，消除「延迟 cancel 误标已完成任务」竞态。
+        let ty = if status == "killed" {
             "fabric.task_cancelled"
         } else if status == "completed" {
             "fabric.task_completed"
@@ -389,10 +388,10 @@ impl Bridge {
         let session = sessions
             .get_mut(session_id)
             .ok_or_else(|| FabricError::SessionNotFound(session_id.to_string()))?;
-        // 先 append（会话仍活跃，append 拒绝终态会话）；命中取消标记集再同源标记终态，
+        // 先 append（会话仍活跃，append 拒绝终态会话）；终态为 killed 再同源标记终态，
         // 与 fabric.task_cancelled 审计事件一致。
         session.append(result.clone())?;
-        if cancelled {
+        if status == "killed" {
             session.cancel();
         }
         Ok(result)

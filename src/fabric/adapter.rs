@@ -38,6 +38,7 @@ pub trait AgentAdapter: Send + Sync {
         Ok(vec![self.send(msg)?])
     }
 
-    /// 取消任务（按 correlation_id）。
-    fn cancel(&self, correlation_id: &str) -> Result<(), FabricError>;
+    /// 取消任务（按 correlation_id）。返回 `true` 表示该 correlation 确在运行并被 kill，
+    /// `false` 表示未在运行（幂等 no-op）。Bridge 据命中数发审计事件 / 决定 HTTP 语义。
+    fn cancel(&self, correlation_id: &str) -> Result<bool, FabricError>;
 }

@@ -12,7 +12,7 @@
 //! Codex / DSH 都是 **Capability Provider**（discover 来自 WorkerManifest），
 //! 不是特殊公民——新 Agent 接入 = 一个 adapter 工厂函数。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
@@ -31,6 +31,11 @@ pub struct ProcessAdapter {
     worker: ProcessWorker,
     /// 运行中的流式任务（correlation_id → 子进程句柄；cancel 依据）。
     running: Mutex<HashMap<String, Child>>,
+    /// 已被 cancel kill 的 correlation：cancel 在 kill 子进程时写入，stream 在子进程
+    /// 结束后读取以确定终态 `killed` vs `failed`/`completed`。以 `running` map 的存在性
+    /// 为互斥判据——cancel 与 stream 都先操作 `running`，谁先 remove 谁赢，故「已结束
+    /// 任务被延迟 cancel 误标」竞态消除（见 mod.rs `finish` 注释）。
+    killed: Mutex<HashSet<String>>,
 }
 
 impl ProcessAdapter {
@@ -39,6 +44,7 @@ impl ProcessAdapter {
             id: id.into(),
             worker,
             running: Mutex::new(HashMap::new()),
+            killed: Mutex::new(HashSet::new()),
         }
     }
 
@@ -101,11 +107,12 @@ impl ProcessAdapter {
         stderr: Option<String>,
         exit_code: Option<i32>,
         progress_count: usize,
+        status_override: Option<&str>,
     ) -> AgentMessage {
-        let status = if exit_code == Some(0) {
-            "completed"
-        } else {
-            "failed"
+        let status = match status_override {
+            Some(s) => s,
+            None if exit_code == Some(0) => "completed",
+            None => "failed",
         };
         AgentMessage {
             id: crate::trace::new_trace_id(),
@@ -162,7 +169,7 @@ impl AgentAdapter for ProcessAdapter {
     fn send(&self, msg: &AgentMessage) -> Result<AgentMessage, FabricError> {
         let args = Self::args_of(&msg.payload);
         let (stdout, stderr, exit) = self.run(&args)?;
-        Ok(self.result_of(msg, stdout, stderr, exit, 0))
+        Ok(self.result_of(msg, stdout, stderr, exit, 0, None))
     }
 
     /// 真实流式：逐行 stdout → TaskProgress；进程结束 → 终局 TaskResult。
@@ -174,7 +181,10 @@ impl AgentAdapter for ProcessAdapter {
         let mut child = Command::new(self.worker.command())
             .args(Self::args_of(&msg.payload))
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            // P0 修复：stderr 若 piped 且子进程大量写 stderr 会双向死锁（OS 管道缓冲满 →
+            // 子进程阻塞 → 父进程读 stdout 等不到 EOF）。stream 语义本不捕获 stderr
+            // （result_of 已传 None），直接丢弃即可。
+            .stderr(Stdio::null())
             .spawn()
             .map_err(|e| {
                 FabricError::Adapter(format!("进程启动失败 {}: {e}", self.worker.command()))
@@ -218,19 +228,42 @@ impl AgentAdapter for ProcessAdapter {
             .remove(&corr)
             .and_then(|mut c| c.wait().ok())
             .and_then(|s| s.code());
-        out.push(self.result_of(msg, captured, None, exit, out.len()));
+        // 终态判定：被 cancel kill → killed（与 Bridge 选 fabric.task_cancelled 一致）；
+        // 否则按退出码（0=completed / 非0=failed）。killed 标记由 cancel 写入，与 running
+        // map 移除互斥——stream 已先 remove 则 cancel 不标记，消除「延迟 cancel 误标」竞态。
+        let killed = self
+            .killed
+            .lock()
+            .map_err(|_| FabricError::Adapter("killed 锁中毒".into()))?
+            .remove(&corr);
+        let status = if killed {
+            "killed"
+        } else if exit == Some(0) {
+            "completed"
+        } else {
+            "failed"
+        };
+        out.push(self.result_of(msg, captured, None, exit, out.len(), Some(status)));
         Ok(out)
     }
 
     /// 取消：按 correlation_id kill 运行中的子进程（未在跑 = 幂等 Ok）。
-    fn cancel(&self, correlation_id: &str) -> Result<(), FabricError> {
+    fn cancel(&self, correlation_id: &str) -> Result<bool, FabricError> {
         if let Some(mut child) = self.running()?.remove(correlation_id) {
+            // 先标记 killed（供 stream 终态判定），再 kill——二者通过 running map 移除互斥：
+            // 若 stream 已先 remove（任务正常结束），此处 running 为空 → 不标记、返回 false（幂等）。
+            self.killed
+                .lock()
+                .map_err(|_| FabricError::Adapter("killed 锁中毒".into()))?
+                .insert(correlation_id.to_string());
             child
                 .kill()
                 .map_err(|e| FabricError::Adapter(format!("kill 失败: {e}")))?;
             let _ = child.wait();
+            Ok(true)
+        } else {
+            Ok(false)
         }
-        Ok(())
     }
 }
 
