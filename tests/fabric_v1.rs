@@ -12,10 +12,14 @@ use openaip_os::fabric::adapter::{AgentAdapter, AgentCapability};
 use openaip_os::fabric::router::{FabricRouter, RouteVerdict};
 use openaip_os::fabric::session::{SessionManager, SessionState};
 use openaip_os::fabric::{AgentMessage, Bridge, FabricError, MessageKind};
+use openaip_os::facade::FabricService;
 use openaip_os::kernel::{Kernel, Scope};
 use openaip_os::projection::Projection;
 use openaip_os::trace::TraceEvent;
 use serde_json::Value;
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
@@ -484,5 +488,185 @@ fn tc_f8_stream_emits_progress_lines_and_cancel_kills() {
     assert_ne!(
         final_msg.payload["status"], "completed",
         "被取消的进程不得报 completed（kill 语义）"
+    );
+}
+
+// ── CancelProbe：测试专用适配器 ───────────────────────────────────────────
+// stream 启动时把 correlation_id 写入共享槽（供测试在 cancel 前拿到），并把子进程
+// 句柄放入 running map（cancel 据此 kill）。cancel 按 correlation_id 移除并 kill。
+// 复刻 ProcessAdapter 的真实 kill 语义，让 tc_f9 能在「执行中途」触发 cancel。
+struct CancelProbe {
+    corr: Arc<Mutex<Option<String>>>,
+    running: Arc<Mutex<HashMap<String, Child>>>,
+}
+
+impl AgentAdapter for CancelProbe {
+    fn id(&self) -> &str {
+        "probe"
+    }
+    fn connect(&self) -> Result<(), FabricError> {
+        Ok(())
+    }
+    fn discover(&self) -> Vec<AgentCapability> {
+        vec![AgentCapability {
+            name: "shell.execute".into(),
+            agent_id: "probe".into(),
+            quality: 0.9,
+            risk: 2,
+        }]
+    }
+    fn send(&self, msg: &AgentMessage) -> Result<AgentMessage, FabricError> {
+        // finish 走 stream，send 不被执行路径调用；返回固定完成结果以满足 trait
+        Ok(AgentMessage {
+            id: format!("m_{}", msg.id),
+            session_id: msg.session_id.clone(),
+            sender: "probe".into(),
+            receiver: msg.sender.clone(),
+            kind: MessageKind::TaskResult,
+            intent: msg.intent.clone(),
+            payload: serde_json::json!({ "status": "completed" }),
+            context: Value::Null,
+            capability: msg.capability.clone(),
+            correlation_id: msg.correlation_id.clone(),
+            causation_id: Some(msg.id.clone()),
+            timestamp: msg.timestamp + 1,
+        })
+    }
+    fn stream(&self, msg: &AgentMessage) -> Result<Vec<AgentMessage>, FabricError> {
+        // 捕获 correlation_id（供测试在 cancel 前拿到）
+        if let Some(c) = &msg.correlation_id {
+            *self.corr.lock().unwrap() = Some(c.clone());
+        }
+        let args: Vec<String> = msg
+            .payload
+            .get("args")
+            .and_then(|a| a.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut child = Command::new("/bin/sh")
+            .args(&args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| FabricError::Adapter(format!("进程启动失败: {e}")))?;
+        let cid = msg.correlation_id.clone().unwrap_or_default();
+        // 子进程句柄入 map（cancel 据此 kill）；stream 阻塞在 stdout 管道上
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| FabricError::Adapter("stdout 管道不可用".into()))?;
+        self.running.lock().unwrap().insert(cid.clone(), child);
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            let _ = line; // sleep 无输出；管道随进程结束/被 kill 关闭
+        }
+        // 管道关闭 → 移除并 wait（cancel 已 kill → exit≠0）。若 cancel 已先 remove+kill，
+        // 此处 remove 为空 → exit=None → status=failed（与 ProcessAdapter 同语义）。
+        let status = self
+            .running
+            .lock()
+            .unwrap()
+            .remove(&cid)
+            .and_then(|mut c| c.wait().ok())
+            .and_then(|s| s.code());
+        Ok(vec![AgentMessage {
+            id: format!("m_{}", msg.id),
+            session_id: msg.session_id.clone(),
+            sender: "probe".into(),
+            receiver: msg.sender.clone(),
+            kind: MessageKind::TaskResult,
+            intent: msg.intent.clone(),
+            payload: serde_json::json!({
+                "status": if status == Some(0) { "completed" } else { "failed" },
+                "exit_code": status,
+            }),
+            context: Value::Null,
+            capability: msg.capability.clone(),
+            correlation_id: msg.correlation_id.clone(),
+            causation_id: Some(msg.id.clone()),
+            timestamp: msg.timestamp + 1,
+        }])
+    }
+    fn cancel(&self, correlation_id: &str) -> Result<(), FabricError> {
+        if let Some(mut c) = self.running.lock().unwrap().remove(correlation_id) {
+            c.kill()
+                .map_err(|e| FabricError::Adapter(format!("kill 失败: {e}")))?;
+            let _ = c.wait();
+        }
+        Ok(()) // 未在跑 = 幂等 Ok
+    }
+}
+
+// ── tc_f9：编排层 cancel——kill 子进程 + 取消标记集 → fabric.task_cancelled ──
+// 证 T2 新增逻辑：Bridge::cancel 写标记集，finish 据此把终局事件选为
+// `fabric.task_cancelled`（而非 failed），且子进程确被 kill（exit≠0）。
+#[test]
+fn tc_f9_cancel_kills_subprocess_and_emits_cancelled_event() {
+    let sink = Arc::new(VecSink::default());
+    let corr: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let running: Arc<Mutex<HashMap<String, Child>>> = Arc::new(Mutex::new(HashMap::new()));
+    let probe = CancelProbe {
+        corr: corr.clone(),
+        running: running.clone(),
+    };
+    let mut r = FabricRouter::new();
+    r.register_intent("run_slow", "shell.execute");
+    r.register_agent("shell.execute", "probe", 1);
+    let mut b = Bridge::new(r, Some(sink.clone()));
+    b.connect_agent(Arc::new(probe)).unwrap();
+
+    let fs = Arc::new(FabricService::new(b));
+    let fs2 = fs.clone();
+    // 提交长任务（sleep 30）于后台线程；submit 阻塞到终局（被 cancel 提前结束）
+    let handle = std::thread::spawn(move || {
+        fs2.submit(openaip_os::facade::FabricRequest {
+            session_id: "sess-9".into(),
+            sender: "tester".into(),
+            intent: "run_slow".into(),
+            payload: serde_json::json!({ "args": ["-c", "sleep 30"] }),
+            project_id: None,
+        })
+    });
+    // 轮询拿到 correlation_id（stream 启动即捕获）
+    let cid = {
+        let mut waited = 0;
+        loop {
+            if let Some(c) = corr.lock().unwrap().clone() {
+                break c;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            waited += 50;
+            assert!(
+                waited < 5000,
+                "correlation_id 未在 5s 内捕获（stream 未启动）"
+            );
+        }
+    };
+    // 取消：kill 子进程 + 写取消标记集
+    fs.cancel(&cid).expect("fabric_cancel 应成功");
+    // 等待 submit 线程终局
+    let res = handle
+        .join()
+        .expect("submit 线程应结束")
+        .expect("submit 应成功");
+    // 子进程被 kill（exit≠0）→ 原始 status=failed
+    assert_eq!(
+        res.result.payload["status"], "failed",
+        "被取消任务原始 status 应为 failed（exit≠0）"
+    );
+    // 关键：终局事件应为 fabric.task_cancelled（标记集命中），而非 fabric.task_failed
+    let evs = sink.0.lock().unwrap();
+    let types: Vec<&str> = evs.iter().map(|e| e.event_type.as_str()).collect();
+    assert!(
+        types.contains(&"fabric.task_cancelled"),
+        "应发出 fabric.task_cancelled，实际: {types:?}"
+    );
+    assert!(
+        !types.contains(&"fabric.task_failed"),
+        "取消不应发 fabric.task_failed，实际: {types:?}"
     );
 }

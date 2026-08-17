@@ -14,7 +14,7 @@ use crate::auth::AuthUser;
 use crate::facade::{AuditQuery, FabricRequest, OpenAipFacade, ProjectCreate, WorldQuery};
 use crate::project_seed::{project_add_object, seed_dependencies};
 use axum::Json;
-use axum::extract::{Extension, State};
+use axum::extract::{Extension, Path, State};
 use axum::response::Response;
 use serde::Deserialize;
 
@@ -100,6 +100,27 @@ pub(crate) async fn facade_fabric_submit(
         }
         Err(e) => {
             ApiResponse::error(wb_code("WB2005"), format!("fabric 提交失败: {e}")).into_response()
+        }
+    }
+}
+
+/// fabric.cancel：取消运行中的 fabric 任务（按 correlation_id kill 子进程 + 取消标记）。
+/// 触发权限与 submit 同档（Operator 及以上）。
+pub(crate) async fn facade_fabric_cancel(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(id): Path<String>,
+) -> Response {
+    if !user.can_trigger_run() {
+        return forbidden("当前角色无权取消任务（需 Operator 及以上）").into_response();
+    }
+    match tokio::task::block_in_place(|| st.facade.fabric_cancel(&id)) {
+        Ok(()) => {
+            ApiResponse::ok(serde_json::json!({ "correlationId": id, "status": "cancelled" }))
+                .into_response()
+        }
+        Err(e) => {
+            ApiResponse::error(wb_code("WB2005"), format!("fabric 取消失败: {e}")).into_response()
         }
     }
 }

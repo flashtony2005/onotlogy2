@@ -186,12 +186,17 @@ impl AgentAdapter for ProcessAdapter {
         self.running()?.insert(corr.clone(), child);
 
         let mut out: Vec<AgentMessage> = Vec::new();
+        // 聚合 stdout：逐行进度行的同时也要让终局结果携带完整 stdout（契约：
+        // 下游按 result.stdout 读取执行输出；stream 不丢该字段）。
+        let mut captured = String::new();
         let reader = BufReader::new(stdout);
         for line in reader.lines() {
             let line = line.map_err(|e| FabricError::Adapter(format!("读取 stdout: {e}")))?;
             if line.trim().is_empty() {
                 continue;
             }
+            captured.push_str(&line);
+            captured.push('\n');
             out.push(AgentMessage {
                 id: crate::trace::new_trace_id(),
                 session_id: msg.session_id.clone(),
@@ -213,7 +218,7 @@ impl AgentAdapter for ProcessAdapter {
             .remove(&corr)
             .and_then(|mut c| c.wait().ok())
             .and_then(|s| s.code());
-        out.push(self.result_of(msg, String::new(), None, exit, out.len()));
+        out.push(self.result_of(msg, captured, None, exit, out.len()));
         Ok(out)
     }
 
