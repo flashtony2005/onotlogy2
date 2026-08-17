@@ -31,9 +31,10 @@
 1. **M1 退役 V1 planner**：删 `src/planner/`（747 行）、`action.rs`、`RuntimeKernel` 门面、V1 三表（wb_run/wb_memory/wb_approval）；CLI `agent run` 与 server `/run` 改走 V2 cognitive loop；v0_3_* 测试退役，由 `tests/v2_parity/` 契约测试覆盖（G1–G10 钉绿）
 2. **M2 演化引擎归一**：`evolution2`（Success/Failure 双通道 + Gate）= 经验层；`rule/evolution.rs` = 行为规则层；`skill` mutation = 资产层；删旧 `evolution.rs` + 三表 + `/evolution` 端点
 3. **Phase 5–8 投影体系（projection-v1.md）**：P1 纯函数（Event Log→Kernel 同态）/ P2 幂等（applied 水位）/ P4 确定性（normalize_ts 微秒→秒轴）/ P5 写入路径同事务 / P6 沟通黑匣子入世界 / P7 裸写不可追溯；`Projection` 模块 + `project_from_storage`
-4. **T1 Agent Fabric 审批接入**：Bridge 挂起态 + `fabric_resolve` 复用 `/run/:run_id/approval`；HTTP `facade_fabric_submit` 返回挂起态、pending 走审批流
-5. **T2b 异步契约**（已实现，待合入 master：`feat/t2b-realtime`）：`Bridge::submit` 立即返 `running` + `correlation_id`，子进程 `spawn_blocking` 后台执行（fire-and-forget）；CLI 轮询审计事件拿终局；tc_f9 端到端 live cancel
-6. **P3 增量投影（watermark）**：世界关系 + watermark 持久化于 `wb_meta`（JSON blob，零 schema 迁移）；`after_id` 只应用新事件，跨 run 不再全量重放；`tc_pj9` 钉增量终局==全量重放
+4. **T1 Agent Fabric 审批接入（已合 master）**：Bridge 挂起态 + `fabric_resolve` 复用 `/run/:run_id/approval`；HTTP `facade_fabric_submit` 返回挂起态、pending 走审批流。bridge（`b6087fc`）+ UI GovernancePanel 人工裁决台（`07430da`）均已 fast-forward 合入 master。
+5. **T2a Agent Fabric Cancel MVP（已合 master `a03f4ca`）**：`Bridge.cancel` + 取消标记集 + `ProcessAdapter` 子进程 kill + `POST /facade/fabric/:id/cancel` 端点 + `tc_f9` 端到端契约（含 submit/cancel 死锁修复）。
+6. **T2b 异步契约**（已实现，待合入 master：`feat/t2b-realtime`）：`Bridge::submit` 立即返 `running` + `correlation_id`，子进程 `spawn_blocking` 后台执行（fire-and-forget）；CLI 轮询审计事件拿终局。
+7. **P3 增量投影（watermark）**：世界关系 + watermark 持久化于 `wb_meta`（JSON blob，零 schema 迁移）；`after_id` 只应用新事件，跨 run 不再全量重放；`tc_pj9` 钉增量终局==全量重放
 
 ### 已知缺口（已修复，见 tech-debt-reduction-plan.md 与 fix/survivor-gaps）
 
@@ -42,6 +43,18 @@
 1. ~~存储正确性~~ → 已修复：`link()` 加 `uq_edge_active` 部分唯一索引（活跃边不重复，并发双插归 WB2007）；`update()` 加 `WHERE version=?` 乐观锁 + `StorageError::Conflict`（并发后写覆盖前写归 Conflict，重试最新版本成功）。
 2. ~~投影类型丢失~~ → 已修复：投影写 `Relation.metadata` 保留类型化值（数值不文本化），`EntityView` 出边优先取 `metadata`，`tc_o4` 钉 `amount=100 → Number(100)`。
 3. ~~Facade 契约方法未暴露~~ → 已修复：`fabric.cancel`/`fabric.stream`/`capability.discover`/`session.get` 落地为 `FabricService` + `Facade` 固有方法（facade-v1.md V1.4）。
+
+## V0.11.0（治理闭环 + 实时可观察 · M0–M8 关闭，2026-08-18）
+> 本周三件事落地：① T1 合入 master；② T2a Cancel MVP 端到端垂直切片；③ 文档收口宣布技术债 M0–M8 正式关闭。
+> 至此项目进入「治理闭环 + 实时可观察」完整状态。
+
+### 新增
+1. **T1 Agent Fabric 审批接入（完整闭环，已合 master）**：T1 bridge（`b6087fc`）与 T1 UI GovernancePanel 人工裁决台（`07430da`）均已 fast-forward 合入 master；HTTP 挂起态审批端到端跑通（`facade_fabric_submit` 返回挂起态、pending 走 `/run/:run_id/approval` 审批流）。
+2. **T2a Agent Fabric Cancel MVP（已合 master `a03f4ca`）**：`Bridge.cancel` + 取消标记集（`cancelled: Mutex<HashSet>`）+ `ProcessAdapter` 子进程 kill + `POST /api/v1/facade/fabric/:id/cancel` 端点 + `tc_f9` 端到端契约（提交→取消→杀子进程→发 `fabric.task_cancelled` 事件，无 `fabric.task_failed`）；含死锁修复：`submit` 持 `sessions` 锁阻塞子进程期间，`cancel` 不再持 `sessions` 锁、改经 `bridge.cancel` 并发抢占 kill，否则 cancel 永不抢占。
+
+### 收口
+3. **技术债 M0–M8 全部正式关闭**（`tech-debt-reduction-plan.md`）：M0 基线冻结 / M1 退役 V1 planner / M2 演化引擎归一 / **M3 概念收敛**（world_exec 改名 + ontology→compose 并入 + 三 registry 按重叠度保留独立，均经代码核查）/ M4 workspace crates 拆分 / M5 巨文件拆分 / M6 unwrap 清零 / M7 文档重建 / M8 流程文档激活。
+4. 项目状态：进入「治理闭环 + 实时可观察」完整状态（Agent Fabric 审批 + 取消闭环、V2 内核 + 投影体系、技术债清零）。
 
 ## V0.10.0（模块化重构 + 认证收口 + 测试基建，2026-08-14）
 ### 优化
@@ -162,4 +175,5 @@
 | V1.2 | lushaohui | 2026-08-13 | 同步 V0.1~V0.6 已实现状态；记录 V0.6.1 工程化清理 |
 | V1.3 | lushaohui | 2026-08-18 | 补 V2 架构落地条目（M1/M2 退役 V1 planner + 演化归一、Phase 5–8 投影、T1/T2b/P3），并诚实声明存储/投影/Facade 三项仍存缺口 |
 | V1.4 | lushaohui | 2026-08-18 | 修复 V1.3 声明三项缺口（fix/survivor-gaps）：① `link()` 加 `uq_edge_active` 部分唯一索引杜绝并发双插、`update()` 加 `WHERE version` 乐观锁 + `Conflict`；② 投影写 `Relation.metadata` 保留数值类型、`EntityView` 出边优先取 metadata；③ Facade 暴露 `fabric.cancel/stream`/`capability.discover`/`session.get`（facade-v1.md V1.4）；全部钉测试（storage 并发 link/update、tc_o4、facade/session 单测） |
+| V1.5 | lushaohui | 2026-08-18 | 新增 V0.11.0 条目：宣布技术债 M0–M8 正式关闭 + 项目进入「治理闭环 + 实时可观察」；T1（bridge+UI）与 T2a Cancel MVP 已合 master 收口记录；V2 架构落地章节补 T1 合入标记、新增 T2a、修正 T2b 误挂 tc_f9 |
 

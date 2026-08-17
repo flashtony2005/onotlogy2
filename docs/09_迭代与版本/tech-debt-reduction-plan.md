@@ -75,7 +75,7 @@
   + server `/evolution` 端点；REQ-017/018 语义并入 evolution2 Gate。
 - 出口：全绿 + 三套 Learn → 一套口径。
 
-### M3 · 概念收敛（#3，先查证再动）
+### M3 · 概念收敛（#3，先查证再动）✅ 完成
 - 已查证：`runtime_exec` 不是重复实现，是 kernel 之上的世界执行层（D4 分离）——问题在命名撞车。
   方案：改名 `world_exec/` 或并入 kernel 为 exec 子层 + 模块文档写明「kernel 补偿引擎 vs 世界补偿执行器」层次。
 - `ontology/`（V2 ABI：RuntimeDefinition → compose）并入 `compose/defs.rs`，
@@ -83,7 +83,12 @@
 - worker/plugin/skill 三套 registry 属三个概念：先做重叠度评估，公共部分（manifest 解析 /
   health 探测）重复 >50% 则抽公共工具，否则保持三个（不强行统一）。
 - 测试先行：每个移动前跑既有契约测试作 characterization，移动后全绿。
-- 出口：src/ 内不再有同名异义文件。
+- 出口（2026-08-18 代码核查达成）：src/ 内不再有同名异义文件——
+  - `runtime_exec` 已改名为 `world_exec/`（`src/world_exec/mod.rs` + `compensation.rs` + `effect.rs`），
+    层次分明：kernel 补偿引擎 vs 世界补偿执行器。
+  - `ontology/` 已并入 `compose/defs.rs`（V2 ABI RuntimeDefinition → compose），「ontology」仅留 V1 编译器（ir/odl/codegen）。
+  - 三套 registry 经重叠度评估，公共部分 <50%，按 M3 标准**保留独立**（不强行统一）：
+    `src/worker/exec.rs` / `src/plugin/registry.rs` / `src/skill/registry.rs`。
 
 ### M4 · workspace crates 拆分（#7）✅ 完成
 - 8 crates：oaip-abi（语言前端）→ oaip-kernel（L0 四 Primitive，零上层依赖）→
@@ -132,3 +137,4 @@
 | 版本 | 修改人 | 修改日期 | 修改内容 |
 |------|--------|----------|----------|
 | V1.0 | lushaohui | 2026-08-16 | 初稿完成 |
+| V1.1 | lushaohui | 2026-08-18 | M3 概念收敛补标 ✅（world_exec 改名 / ontology→compose 并入 / 三 registry 按重叠度保留独立，均经代码核查）；M0–M8 全部正式关闭 |
