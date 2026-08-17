@@ -6,7 +6,9 @@
 
 use std::sync::Arc;
 
-use openaip_os::project_seed::{record_check_run, record_commit, seed_openaip_os};
+use openaip_os::project_seed::{
+    project_add_object, record_check_run, record_commit, seed_dependencies, seed_openaip_os,
+};
 use openaip_os::storage::LibSQLStorage;
 
 fn open(
@@ -116,4 +118,41 @@ fn run_git(args: &[&str]) -> Result<String, Box<dyn std::error::Error>> {
         .output()
         .map_err(|e| format!("git 执行失败: {e}"))?;
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// 给项目世界加对象（事情/Issue/任意类型）：CreateObject + 可选 contains。
+pub fn cmd_project_event(
+    db: &str,
+    object_type: &str,
+    id: &str,
+    project: &str,
+    input: &str,
+    edge: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let handle = tokio::runtime::Handle::current();
+    let storage = open(db, &handle)?;
+    let data: serde_json::Value = serde_json::from_str(input)?;
+    handle.block_on(project_add_object(
+        &storage,
+        object_type,
+        id,
+        project,
+        &data,
+        edge,
+    ))?;
+    match edge {
+        Some(e) => println!("🌱 对象入世界：{id}（{object_type}@{project}） + root --{e}--> {id}"),
+        None => println!("🌱 对象入世界：{id}（{object_type}@{project}）"),
+    }
+    Ok(())
+}
+
+/// 依赖图 seed：crates 依赖 → depends_on 关系入项目世界。
+pub fn cmd_project_deps(db: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let handle = tokio::runtime::Handle::current();
+    let storage = open(db, &handle)?;
+    handle.block_on(seed_openaip_os(&storage, "."))?;
+    let n = handle.block_on(seed_dependencies(&storage, "."))?;
+    println!("🔗 依赖图 seed 完成：{n} 条 depends_on 关系 → project=openaip-os");
+    Ok(())
 }

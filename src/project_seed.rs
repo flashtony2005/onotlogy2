@@ -241,3 +241,84 @@ pub async fn record_commit(
     ];
     apply_idempotent(storage, &cmds).await
 }
+
+/// 依赖图 seed：扫描 crates/*/Cargo.toml 的 workspace 内依赖（oaip-*）
+/// → `module:xxx --depends_on--> module:yyy` 事件（project=openaip-os）。
+/// 幂等：重复边（WB2007）跳过。
+pub async fn seed_dependencies(storage: &LibSQLStorage, root: &str) -> Result<usize, String> {
+    let crates_dir = std::path::Path::new(root).join("crates");
+    if !crates_dir.is_dir() {
+        return Ok(0);
+    }
+    let mut cmds: Vec<WorldCommand> = Vec::new();
+    let mut dirs: Vec<String> = std::fs::read_dir(&crates_dir)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().to_str().map(String::from))
+        .collect();
+    dirs.sort();
+    for name in &dirs {
+        let cargo = crates_dir.join(name).join("Cargo.toml");
+        let Ok(text) = std::fs::read_to_string(&cargo) else {
+            continue;
+        };
+        // [dependencies] 段内的 oaip-* 引用（workspace 内部 crate）
+        let in_deps = text
+            .lines()
+            .skip_while(|l| l.trim() != "[dependencies]")
+            .skip(1)
+            .take_while(|l| !l.trim_start().starts_with('['))
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            );
+        for dep in in_deps
+            .lines()
+            .filter_map(|l| l.split_whitespace().next())
+            .filter(|t| t.starts_with("oaip-"))
+            .map(|t| t.trim_matches(|c| c == '"' || c == ','))
+        {
+            if !dirs.iter().any(|d| d == dep) {
+                continue; // 只连 workspace 内模块
+            }
+            cmds.push(WorldCommand::LinkRelation {
+                source: format!("module:{name}"),
+                edge: "depends_on".into(),
+                target: format!("module:{dep}"),
+                project_id: Some(OPENAI_OS_PROJECT.into()),
+            });
+        }
+    }
+    apply_idempotent(storage, &cmds).await?;
+    Ok(cmds.len())
+}
+
+/// 给项目世界加一个对象（事情/Issue/任意本体类型）：
+/// CreateObject(project) + 可选 root --contains--> 关系（--edge 给定时）。
+/// 幂等：同 id 已存在则跳过（世界收敛）。
+pub async fn project_add_object(
+    storage: &LibSQLStorage,
+    object_type: &str,
+    id: &str,
+    project_id: &str,
+    data: &serde_json::Value,
+    edge: Option<&str>,
+) -> Result<(), String> {
+    let mut cmds = vec![WorldCommand::CreateObject {
+        object_type: object_type.to_string(),
+        id: id.to_string(),
+        data: data.clone(),
+        project_id: Some(project_id.to_string()),
+    }];
+    if let Some(e) = edge {
+        cmds.push(WorldCommand::LinkRelation {
+            source: "module:root".to_string(),
+            edge: e.to_string(),
+            target: id.to_string(),
+            project_id: Some(project_id.to_string()),
+        });
+    }
+    apply_idempotent(storage, &cmds).await
+}

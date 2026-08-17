@@ -166,6 +166,8 @@ enum RelationCmd {
         source: String,
         edge: String,
         target: String,
+        #[arg(long)]
+        project: Option<String>,
     },
     List {
         #[arg(long)]
@@ -220,6 +222,21 @@ enum ProjectCmd {
     Check,
     /// 最近 git 提交 → Commit 对象入项目世界
     Commit,
+    /// 给项目世界加对象（--type/--id/--project/--input [--edge]）
+    Event {
+        #[arg(long)]
+        object_type: String,
+        #[arg(long)]
+        id: String,
+        #[arg(long, default_value = "openaip-os")]
+        project: String,
+        #[arg(long)]
+        input: String,
+        #[arg(long)]
+        edge: Option<String>,
+    },
+    /// 依赖图 seed：crates 依赖 → depends_on 关系入项目世界
+    Deps,
 }
 
 #[derive(Subcommand)]
@@ -306,7 +323,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 source,
                 edge,
                 target,
-            } => commands::cmd_relation_link(&cli.db, &source, &edge, &target).await?,
+                project,
+            } => {
+                commands::cmd_relation_link(&cli.db, &source, &edge, &target, project.as_deref())
+                    .await?
+            }
             RelationCmd::List { from, edge } => {
                 commands::cmd_relation_list(&cli.db, from, edge).await?
             }
@@ -371,6 +392,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 ProjectCmd::Commit => {
                     tokio::task::block_in_place(|| project_cmd::cmd_project_commit(&cli.db))?
+                }
+                ProjectCmd::Event {
+                    object_type,
+                    id,
+                    project,
+                    input,
+                    edge,
+                } => tokio::task::block_in_place(|| {
+                    project_cmd::cmd_project_event(
+                        &cli.db,
+                        &object_type,
+                        &id,
+                        &project,
+                        &input,
+                        edge.as_deref(),
+                    )
+                })?,
+                ProjectCmd::Deps => {
+                    tokio::task::block_in_place(|| project_cmd::cmd_project_deps(&cli.db))?
                 }
             },
         },

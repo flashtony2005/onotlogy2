@@ -81,6 +81,7 @@ pub async fn cmd_relation_link(
     source: &str,
     edge: &str,
     target: &str,
+    project: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let storage = LibSQLStorage::open(db).await?;
     match storage
@@ -88,7 +89,7 @@ pub async fn cmd_relation_link(
             source: source.to_string(),
             edge: edge.to_string(),
             target: target.to_string(),
-            project_id: None,
+            project_id: project.map(String::from),
         })
         .await
     {
