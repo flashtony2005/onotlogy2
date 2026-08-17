@@ -23,6 +23,23 @@
 ## 4. 详细设计/内容
 > 产品版本采用 V0.1~V0.6 路线（见 sprint-plan.md），以下按产品里程碑记录，固定三级分类：新增功能 / Bug 修复 / 优化调整。
 
+## V2 架构落地（可执行本体内核 + V2 认知闭环 + 投影体系，2026-08-15 ~ 08-17）
+> 架构版本 V2（区别于产品版本号 V0.x）。本周期完成 V1 planner 退役、演化引擎归一，
+> 并落地 World Model 投影体系（Phase 5–8）与 Agent Fabric 审批 / 异步 / 增量三阶段。
+
+### 新增
+1. **M1 退役 V1 planner**：删 `src/planner/`（747 行）、`action.rs`、`RuntimeKernel` 门面、V1 三表（wb_run/wb_memory/wb_approval）；CLI `agent run` 与 server `/run` 改走 V2 cognitive loop；v0_3_* 测试退役，由 `tests/v2_parity/` 契约测试覆盖（G1–G10 钉绿）
+2. **M2 演化引擎归一**：`evolution2`（Success/Failure 双通道 + Gate）= 经验层；`rule/evolution.rs` = 行为规则层；`skill` mutation = 资产层；删旧 `evolution.rs` + 三表 + `/evolution` 端点
+3. **Phase 5–8 投影体系（projection-v1.md）**：P1 纯函数（Event Log→Kernel 同态）/ P2 幂等（applied 水位）/ P4 确定性（normalize_ts 微秒→秒轴）/ P5 写入路径同事务 / P6 沟通黑匣子入世界 / P7 裸写不可追溯；`Projection` 模块 + `project_from_storage`
+4. **T1 Agent Fabric 审批接入**：Bridge 挂起态 + `fabric_resolve` 复用 `/run/:run_id/approval`；HTTP `facade_fabric_submit` 返回挂起态、pending 走审批流
+5. **T2b 异步契约**（已实现，待合入 master：`feat/t2b-realtime`）：`Bridge::submit` 立即返 `running` + `correlation_id`，子进程 `spawn_blocking` 后台执行（fire-and-forget）；CLI 轮询审计事件拿终局；tc_f9 端到端 live cancel
+6. **P3 增量投影（watermark）**：世界关系 + watermark 持久化于 `wb_meta`（JSON blob，零 schema 迁移）；`after_id` 只应用新事件，跨 run 不再全量重放；`tc_pj9` 钉增量终局==全量重放
+
+### 已知缺口（诚实声明，修复见 tech-debt-reduction-plan.md）
+1. 存储正确性：`link()` 无 UNIQUE 约束（事务内 SELECT+INSERT 非并发安全，TOCTOU 未真杜绝）；`update()` 无 `WHERE version` 乐观锁（`version=version+1` 盲目自增，两并发更新后写覆盖前写）
+2. 投影类型丢失：`stringify()` 把标量文本化（`5`→`"5"`），数值语义本应由 EntityView 还原但当前未接线
+3. Facade 契约方法未暴露：`fabric.cancel()` / `fabric.stream()` / `capability.discover()` / `session.get()` 列于 facade-v1.md 但未实现为 Facade API（cancel 仅 HTTP 端点功能可用）
+
 ## V0.10.0（模块化重构 + 认证收口 + 测试基建，2026-08-14）
 ### 优化
 1. 长文件模块化：planner(1855行)/storage(1662)/server(1371) 拆目录模块共 22 文件；odl 去重；App.tsx 拆 4 组件
@@ -140,4 +157,5 @@
 | V1.0 | lushaohui | 2026-08-11 | 初稿完成 |
 | V1.1 | lushaohui | 2026-08-11 | 重写 changelog 为 OpenAIP-OS V0.1~V0.5 产品路线 |
 | V1.2 | lushaohui | 2026-08-13 | 同步 V0.1~V0.6 已实现状态；记录 V0.6.1 工程化清理 |
+| V1.3 | lushaohui | 2026-08-18 | 补 V2 架构落地条目（M1/M2 退役 V1 planner + 演化归一、Phase 5–8 投影、T1/T2b/P3），并诚实声明存储/投影/Facade 三项仍存缺口 |
 

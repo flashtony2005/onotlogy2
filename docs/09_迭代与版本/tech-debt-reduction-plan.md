@@ -46,7 +46,7 @@
 - 本计划落盘（本文档）。
 - 出口：基线绿 + 基线数字存档。
 
-### M1 · 退役 V1 planner（#1，最大里程碑，4 步）
+### M1 · 退役 V1 planner（#1，最大里程碑，4 步）✅ 完成
 消费面已查清：`run_goal` 只被 CLI `agent run`、`server/run.rs`、4 个 v0_3_* 测试使用；
 `action.rs` 只被 V1 planner + server 门面使用；`RuntimeKernel`（旧 runtime.rs）是 server 门面入口。
 
@@ -55,19 +55,19 @@
   幂等均已由 V2 等价实现）；差集 G1–G10（认知 Trace 事件流、审批适配器、Pi 引擎迁移、
   审计落库、失败数据源、run 状态映射、health 数据源、via_workers 桥、测试迁移、UI 面板）；
   M1d 删除范围清单（planner/action/agent/runtime 门面 + wb_run/wb_memory/wb_approval 三表）。
-- **M1b 契约测试（测试先行，不动产品代码）** 🔄 进行中 → [`m1-gap-analysis.md`](./m1-gap-analysis.md)：
+- **M1b 契约测试（测试先行，不动产品代码）** ✅ 已完成 → [`m1-gap-analysis.md`](./m1-gap-analysis.md)：
   按差集把 v0_3_agent/policy/evolution 与 v0_9_ws_clamp 的行为改写为 V2 契约测试
   （`tests/v2_parity/`）；先跑红，逐个补齐 V2 实现到绿。
   - ✅ G1 认知 Trace 事件流：4 例契约测试 + `AgentLoop::with_trace` 实现（commit cecc44f），360 passed。
-  - ⬜ G2 审批适配器 / G3 Pi 引擎 / G4 审计 / G5 失败数据源 / G6 状态映射 / G7 health /
-    G8 via_workers / G9 v0_3 迁移 / G10 UI 面板。
+  - ✅ G2–G10（审批适配器 / Pi 引擎 / 审计 / 失败数据源 / 状态映射 / health / via_workers /
+    v0_3 迁移 / UI 面板）已由 `tests/v2_parity/` 契约测试覆盖并钉绿（M1c 切换 + M1d 删除后全量确认无回归）。
 - **M1c 切换入口**：CLI `agent run` 与 server `/run` 改走 cognitive loop；
   v0_3_* 测试退役（行为已被 v2_parity 覆盖）；全量确认 UI/WS 事件流不回归。
 - **M1d 物理删除**：删 `planner/`、`action.rs`、`RuntimeKernel` 门面（server 直连 V2 Kernel）、
   相关 V1 表（wb_run / wb_memory / wb_approval 等，按差集清单）；codegen schema 同步减表。
 - 出口：全绿 + 源码头寸收缩（planner 747 行消失）。
 
-### M2 · 演化引擎归一（#2）
+### M2 · 演化引擎归一（#2）✅ 完成
 - canonical 定案：`evolution2`（Success/Failure 双通道 + Gate）= 经验层；
   `rule/evolution.rs` = 行为规则层；`skill` mutation = 资产层。三层边界写入文档。
 - 测试先行：为三层各写契约测试（钉 Gate 5 闸门、rule Adoption 校验路径、skill mutation 不可原地改）。
