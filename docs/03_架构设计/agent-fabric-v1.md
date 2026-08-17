@@ -208,4 +208,5 @@ tc_f5 闭环 demo（Router→Adapter→result→事件→投影→World State）
 | 版本 | 修改人 | 修改日期 | 修改内容 |
 |------|--------|----------|----------|
 | V1.0 | lushaohui | 2026-08-16 | 契约定稿：四 ABI（AgentMessage/Session/Adapter/Router）+ Event Log 集成 + OAB v0.1 边界 |
+| V1.2 | lushaohui | 2026-08-17 | T1 审批接入：fabric 挂起态（RequiresApproval → approval_requested + pending，不再 Err）；`fabric.resume`（裁决后续跑 adapter.send + 终局事件）/ `reject_event`；复用 /run/:run_id/approval 端点（ResumeTarget::FabricRun）；tc_approve_1–4 全链路（挂起→列表→approve 续跑→世界状态 / reject 终止 / 二次裁决 404） |
 | V1.1 | lushaohui | 2026-08-16 | 真实适配器落地：ProcessAdapter 桥接 ProcessWorker（codex/dsh 工厂 + PATH 探测 + payload 约定）；stream 逐行进度/cancel kill 语义（tc_f6–f8 钉死） |
