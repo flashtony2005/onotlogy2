@@ -389,7 +389,12 @@ impl Bridge {
         let session = sessions
             .get_mut(session_id)
             .ok_or_else(|| FabricError::SessionNotFound(session_id.to_string()))?;
+        // 先 append（会话仍活跃，append 拒绝终态会话）；命中取消标记集再同源标记终态，
+        // 与 fabric.task_cancelled 审计事件一致。
         session.append(result.clone())?;
+        if cancelled {
+            session.cancel();
+        }
         Ok(result)
     }
 

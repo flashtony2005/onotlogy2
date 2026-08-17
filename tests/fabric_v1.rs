@@ -533,10 +533,6 @@ impl AgentAdapter for CancelProbe {
         })
     }
     fn stream(&self, msg: &AgentMessage) -> Result<Vec<AgentMessage>, FabricError> {
-        // 捕获 correlation_id（供测试在 cancel 前拿到）
-        if let Some(c) = &msg.correlation_id {
-            *self.corr.lock().unwrap() = Some(c.clone());
-        }
         let args: Vec<String> = msg
             .payload
             .get("args")
@@ -560,6 +556,11 @@ impl AgentAdapter for CancelProbe {
             .take()
             .ok_or_else(|| FabricError::Adapter("stdout 管道不可用".into()))?;
         self.running.lock().unwrap().insert(cid.clone(), child);
+        // 子进程已 spawn 入 running map 后才暴露 correlation_id：
+        // 测试拿到即代表可被 cancel 按 cid kill（消除「拿到 cid 但子进程尚未 spawn」竞态）
+        if let Some(c) = &msg.correlation_id {
+            *self.corr.lock().unwrap() = Some(c.clone());
+        }
         let reader = BufReader::new(stdout);
         for line in reader.lines() {
             let _ = line; // sleep 无输出；管道随进程结束/被 kill 关闭

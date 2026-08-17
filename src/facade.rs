@@ -508,22 +508,14 @@ impl FabricService {
     }
 
     /// fabric.cancel()（契约未来扩展 → 本次落地）：按 correlation_id 取消运行。
-    /// 反查所属 session → 标记 Cancelled；并通知各 adapter 尽力取消（best-effort / idempotent）。
+    /// 只走 bridge.cancel（kill 子进程 + 写取消标记集），**不持 sessions 锁**——
+    /// submit 执行期间持锁阻塞子进程，cancel 必须能并发抢占 kill，否则死锁
+    /// （cancel 等锁、submit 等子进程结束才放锁）。会话终态由 bridge.finish 在
+    /// 命中取消标记集时同源标记（与 fabric.task_cancelled 审计事件一致）。
     pub fn cancel(&self, correlation_id: &str) -> Result<(), FacadeError> {
-        let mut sessions = self
-            .sessions
-            .lock()
-            .map_err(|_| FacadeError::Fabric("会话表锁中毒".into()))?;
-        if let Some(sid) = sessions.find_session_id_by_correlation(correlation_id)
-            && let Some(s) = sessions.get_mut(&sid)
-        {
-            s.cancel();
-        }
-        // 通知各 adapter 取消（best-effort：个别 adapter 失败不影响整体取消语义）
         self.bridge
             .cancel(correlation_id)
-            .map_err(|e| FacadeError::Fabric(e.to_string()))?;
-        Ok(())
+            .map_err(|e| FacadeError::Fabric(e.to_string()))
     }
 
     /// fabric.stream()（契约未来扩展 → 本次落地）：返回会话累积的消息快照（通信真相源）。
