@@ -253,3 +253,66 @@ async fn tc_sf4_fabric_submit_auto_session_and_correlation() {
         "fail-closed：run_shell 无审批/无提供方不得执行成功"
     );
 }
+
+// ── tc_sf5：fabric.* 事件实时达 WS（C1 完整性——过滤层放行双 None 世界级事实）──
+// C1 修复把 Bridge sink 接上 event_tx 广播、AppState 复用同一频道后，WS 过滤层
+// （run_id/agent_id 精确匹配）仍会丢弃 fabric 事件（P5 约定 run_id=None, agent_id=None）
+// ——广播到了也到不了 /stream。本测试钉死过滤层放行：订阅任意 id 即应收 fabric 事件。
+#[tokio::test(flavor = "multi_thread")]
+async fn tc_sf5_fabric_events_reach_ws_realtime() {
+    use futures_util::StreamExt;
+    use std::time::Duration;
+    use tokio_tungstenite::tungstenite::Message;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let kernel = std::sync::Arc::new(
+        openaip_os::storage::LibSQLStorage::open(":memory:")
+            .await
+            .unwrap(),
+    );
+    let addr = common::spawn_server(kernel).await;
+
+    // 订阅 WS（id 任意——fabric 世界级事实应放行到所有订阅者）
+    let url = format!("ws://{addr}/api/v1/wb/agent/observer/stream");
+    let (mut ws, _resp) = tokio_tungstenite::connect_async(url.into_client_request().unwrap())
+        .await
+        .expect("WS 连接应成功");
+
+    // 提交 fabric 任务（run_shell 高风险管理 → 一串 fabric.* 事件：capability_invoked /
+    // task_requested / message_sent / approval_requested，同步落库 + 广播）
+    let (code, body) = call(
+        addr,
+        "POST",
+        "/api/v1/facade/fabric/submit",
+        Some(json!({
+            "sessionId": "sess_ws",
+            "sender": "dsh",
+            "intent": "run_shell",
+            "payload": { "args": ["-c", "echo ws-ok"], "object": "order-ws" }
+        })),
+    )
+    .await;
+    assert_eq!(code, 200);
+    assert_eq!(body["data"]["result"]["payload"]["status"], "pending");
+
+    // 收集 WS 事件直到看到 fabric.approval_requested（5s 超时）
+    let mut got: Vec<String> = Vec::new();
+    for _ in 0..100 {
+        if let Ok(Some(Ok(Message::Text(t)))) =
+            tokio::time::timeout(Duration::from_millis(50), ws.next()).await
+        {
+            let v: Value = serde_json::from_str(&t).unwrap();
+            let ty = v["eventType"].as_str().unwrap_or("").to_string();
+            if ty.starts_with("fabric.") {
+                got.push(ty.clone());
+                if ty == "fabric.approval_requested" {
+                    break;
+                }
+            }
+        }
+    }
+    assert!(
+        got.iter().any(|t| t == "fabric.approval_requested"),
+        "fabric 事件必须实时达 WS（C1 完整性：过滤层放行双 None 世界级事实），实际收到: {got:?}"
+    );
+}

@@ -148,6 +148,15 @@ pub(crate) async fn ws_handler(
     ws.on_upgrade(move |socket| handle_ws(socket, st, id, params.after, view))
 }
 
+/// WS 事件匹配：run/agent 精确命中，**或双 None 的世界级事实**（fabric.* 通信事件——
+/// P5 约定 run_id=None/agent_id=None）。C1 完整性：广播接上 event_tx 后，若过滤层
+/// 不放行双 None 事件，fabric.* 仍到不了 /stream（订阅者收不到审批/任务审计流）。
+fn ws_event_matches(e: &crate::trace::TraceEvent, id: &str) -> bool {
+    e.run_id.as_deref() == Some(id)
+        || e.agent_id.as_deref() == Some(id)
+        || (e.run_id.is_none() && e.agent_id.is_none() && e.event_type.starts_with("fabric."))
+}
+
 /// WS 主体：先订阅缓冲（订阅与补历史之间的增量不丢），再补历史，最后增量推送匹配事件。
 pub(crate) async fn handle_ws(
     socket: WebSocket,
@@ -168,8 +177,7 @@ pub(crate) async fn handle_ws(
             h = &mut history_fut => break h,
             ev = rx.recv() => {
                 if let Ok(e) = ev
-                    && (e.run_id.as_deref() == Some(id.as_str())
-                        || e.agent_id.as_deref() == Some(id.as_str()))
+                    && ws_event_matches(&e, &id)
                 {
                     buffered.push(e);
                 }
@@ -209,9 +217,7 @@ pub(crate) async fn handle_ws(
             ev = rx.recv() => {
                 match ev {
                     Ok(e) => {
-                        if e.run_id.as_deref() == Some(id.as_str())
-                            || e.agent_id.as_deref() == Some(id.as_str())
-                        {
+                        if ws_event_matches(&e, &id) {
                             // 服务端视图钳制：越权细节字段剥除（Executive 仅 Goal/Action）
                             let Some(dto) = TraceEventDto::from_view(&e, view) else {
                                 continue;

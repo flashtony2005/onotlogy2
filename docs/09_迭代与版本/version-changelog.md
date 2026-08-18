@@ -58,6 +58,7 @@
 
 ### 测试
 5. 补三处回归契约（均合入）：`tc_f11`（H1 stream 失败发 `fabric.task_failed`）、`tc_f12`（H2 不等 running map 即 cancel 生效）、`list_events_newest_first_exposes_terminal_event_over_limit`（C2 倒序取到终局）。
+6. **C1 完整性补刀（第 5 处洞，E2E 实证 + 契约钉死）**：C1 广播接上后 WS 过滤层（run_id/agent_id 精确匹配）仍丢弃双 None 的 fabric.* 事件——真实 E2E（服务 + WS 订阅）收到 0 条。修复：`ws_event_matches` 放行「双 None + fabric. 前缀」的世界级事实（`src/server/trace.rs`，缓冲与增量两处同源）；新契约 `tc_sf5_fabric_events_reach_ws_realtime` 红→绿。
 
 ## V0.11.0（治理闭环 + 实时可观察 · M0–M8 关闭，2026-08-18）
 > 本周三件事落地：① T1 合入 master；② T2a Cancel MVP 端到端垂直切片；③ 文档收口宣布技术债 M0–M8 正式关闭。
