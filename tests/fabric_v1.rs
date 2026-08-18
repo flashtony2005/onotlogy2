@@ -756,3 +756,175 @@ async fn tc_f10_stream_does_not_deadlock_on_stderr_heavy_process() {
         .expect("execute 应成功");
     assert_eq!(status, "completed", "stderr-heavy 任务应正常完成");
 }
+
+// ── StreamFailProbe：stream 直接返回 Err 的探针适配器（H1 验证用）────────
+// 复刻「运行时命令不可用」真实失败：adapter.stream 启动子进程即失败 → Err。
+// 验证 H1：run_in_background 不得吞错，必须发 fabric.task_failed + 会话终态，
+// 否则 correlation 永久悬挂、CLI 误导「超时未终局」。
+struct StreamFailProbe;
+
+impl AgentAdapter for StreamFailProbe {
+    fn id(&self) -> &str {
+        "fail-probe"
+    }
+    fn connect(&self) -> Result<(), FabricError> {
+        Ok(())
+    }
+    fn discover(&self) -> Vec<AgentCapability> {
+        vec![AgentCapability {
+            name: "shell.execute".into(),
+            agent_id: "fail-probe".into(),
+            quality: 0.9,
+            risk: 2,
+        }]
+    }
+    fn send(&self, msg: &AgentMessage) -> Result<AgentMessage, FabricError> {
+        Ok(AgentMessage {
+            id: format!("m_{}", msg.id),
+            session_id: msg.session_id.clone(),
+            sender: "fail-probe".into(),
+            receiver: msg.sender.clone(),
+            kind: MessageKind::TaskResult,
+            intent: msg.intent.clone(),
+            payload: serde_json::json!({ "status": "completed" }),
+            context: Value::Null,
+            capability: msg.capability.clone(),
+            correlation_id: msg.correlation_id.clone(),
+            causation_id: Some(msg.id.clone()),
+            timestamp: msg.timestamp + 1,
+        })
+    }
+    fn stream(&self, _msg: &AgentMessage) -> Result<Vec<AgentMessage>, FabricError> {
+        Err(FabricError::Adapter("子进程启动失败：命令不可用".into()))
+    }
+    fn cancel(&self, _correlation_id: &str) -> Result<bool, FabricError> {
+        Ok(false) // 未在跑 = 幂等 no-op
+    }
+}
+
+// ── tc_f11：H1 回归——stream 失败必须发 fabric.task_failed（不再被吞）────
+// 修复前：execute 在 adapter.stream 返回 Err 时先于发终局事件就 return Err，
+// run_in_background 把错误 `let _ = e` 吞掉 → 无 fabric.task_failed、会话无终态、
+// correlation 永久悬挂。修复后：Err 分支先发 fabric.task_failed（带错误文本）+
+// 会话 append，再返 Err。
+#[tokio::test(flavor = "multi_thread")]
+async fn tc_f11_stream_failure_emits_task_failed_not_swallowed() {
+    let sink = Arc::new(VecSink::default());
+    let mut r = FabricRouter::new();
+    r.register_intent("run_fail", "shell.execute");
+    r.register_agent("shell.execute", "fail-probe", 1);
+    let mut b = Bridge::new(r, Some(sink.clone()));
+    b.connect_agent(Arc::new(StreamFailProbe)).unwrap();
+
+    let fs = Arc::new(FabricService::new(b, tokio::runtime::Handle::current()));
+    let sub = fs
+        .submit(openaip_os::facade::FabricRequest {
+            session_id: "sess-11".into(),
+            sender: "tester".into(),
+            intent: "run_fail".into(),
+            payload: serde_json::json!({ "args": ["-c", "nope"] }),
+            project_id: None,
+        })
+        .expect("submit 应成功");
+    assert_eq!(
+        sub.result.payload["status"], "running",
+        "异步契约：submit 立即返 running"
+    );
+
+    // 等后台 execute 跑完：stream 返回 Err → 必须发 fabric.task_failed（H1 修复前被吞噬）
+    let mut failed = false;
+    for _ in 0..250 {
+        {
+            let evs = sink.0.lock().unwrap();
+            let types: Vec<&str> = evs.iter().map(|e| e.event_type.as_str()).collect();
+            if types.contains(&"fabric.task_failed") {
+                // 错误文本随事件传播，便于 CLI 诊断（不再静默悬挂）
+                assert!(
+                    evs.iter().any(|e| e.event_type == "fabric.task_failed"
+                        && e.input
+                            .as_ref()
+                            .map(|i| i.to_string().contains("命令不可用"))
+                            .unwrap_or(false)),
+                    "fabric.task_failed 应携带错误文本"
+                );
+                assert!(
+                    !types.contains(&"fabric.task_completed"),
+                    "失败不得发 fabric.task_completed"
+                );
+                failed = true;
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        failed,
+        "stream 失败必须发 fabric.task_failed（H1：不再被 run_in_background 吞噬）"
+    );
+}
+
+// ── tc_f12：H2 回归——early-cancel 不等 running map 即取消也生效 ─────────
+// 复刻 submit 返 running 与子进程进 running map 之间的窗口：修复前此间到达的
+// cancel 命中 0（adapter 还没 spawn 子进程）却无任何反馈，任务照跑完成 →
+// 「取消无效」。修复后：Bridge::cancel 写 cancel_requested 标记集，execute 在
+// spawn 子进程前检查命中 → 直接发 fabric.task_cancelled。本测试刻意不等待
+// running map（与 tc_f9 相反），专打 early 窗口。
+#[tokio::test(flavor = "multi_thread")]
+async fn tc_f12_early_cancel_without_waiting_running_map_is_effective() {
+    let sink = Arc::new(VecSink::default());
+    let corr: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let running: Arc<Mutex<HashMap<String, Child>>> = Arc::new(Mutex::new(HashMap::new()));
+    let killed: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+    let probe = CancelProbe {
+        corr,
+        running: running.clone(),
+        killed,
+    };
+    let mut r = FabricRouter::new();
+    r.register_intent("run_slow2", "shell.execute");
+    r.register_agent("shell.execute", "probe", 1);
+    let mut b = Bridge::new(r, Some(sink.clone()));
+    b.connect_agent(Arc::new(probe)).unwrap();
+
+    let fs = Arc::new(FabricService::new(b, tokio::runtime::Handle::current()));
+    let sub = fs
+        .submit(openaip_os::facade::FabricRequest {
+            session_id: "sess-12".into(),
+            sender: "tester".into(),
+            intent: "run_slow2".into(),
+            payload: serde_json::json!({ "args": ["-c", "sleep 30"] }),
+            project_id: None,
+        })
+        .expect("submit 应成功");
+    assert_eq!(
+        sub.result.payload["status"], "running",
+        "异步契约：submit 立即返 running"
+    );
+    let cid = sub.result.correlation_id.clone().unwrap();
+
+    // H2：不等 running map 出现即 cancel（early 窗口）。无论走 early（cancel_requested
+    // 命中直接 cancelled）还是 late（adapter killed mutex kill）路径，都必须发出
+    // fabric.task_cancelled；且不得误报 fabric.task_completed。
+    fs.cancel(&cid).expect("fabric_cancel 应成功");
+
+    let mut cancelled = false;
+    for _ in 0..400 {
+        {
+            let evs = sink.0.lock().unwrap();
+            let types: Vec<&str> = evs.iter().map(|e| e.event_type.as_str()).collect();
+            if types.contains(&"fabric.task_cancelled") {
+                assert!(
+                    !types.contains(&"fabric.task_completed"),
+                    "early-cancel 不得误报完成"
+                );
+                cancelled = true;
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        cancelled,
+        "不等 running map 的 early-cancel 必须生效（发 fabric.task_cancelled）"
+    );
+}

@@ -154,6 +154,10 @@ pub struct TraceQuery {
     pub event_type: Option<String>,
     pub after_id: Option<String>,
     pub limit: usize,
+    /// 倒序返回（timestamp DESC）：审计/CLI 轮询取「最新」事件时用，避免
+    /// ASC LIMIT 只取最旧 N 条导致终局事件（最新）被窗口截断（C2 修复）。
+    /// WS 断线重连补齐（after_id 游标）必须 ASC，默认 false。
+    pub newest_first: bool,
 }
 
 impl TraceQuery {
@@ -858,5 +862,85 @@ mod tests {
             StorageError::Constraint { code, .. } => assert_eq!(code, "WB2101"),
             other => panic!("应返回 WB2101，实际: {other:?}"),
         }
+    }
+
+    // ── C2 回归：审计倒序（newest_first）让 CLI 异步轮询取到最新终局事件 ──
+    // 修复前 list_events 固定 ORDER BY timestamp ASC LIMIT 500 → 只返回最旧 500 条，
+    // 终局 fabric 事件（最新）永远不在窗口 → CLI 每 100ms 轮询同一旧窗口 → 30s
+    // 报「超时未终局」→ 进程退出杀掉后台任务。修复：审计域 newest_first=true
+    // 返回最新 500 条（含终局）；WS 断线补齐仍走 after_id 游标（ASC）不受影响。
+    #[tokio::test]
+    async fn list_events_newest_first_exposes_terminal_event_over_limit() {
+        let s = LibSQLStorage::open(":memory:").await.unwrap();
+        // 超过 500 条 fabric.* 事件，时间戳单调递增；最新一条是终局
+        // fabric.task_completed（CLI 异步轮询要等的就是它）。
+        let total = 600usize;
+        for i in 1..=total {
+            let ev = TraceEvent {
+                id: format!("tr_{i:04}"),
+                kind: oaip_trace::TraceKind::Cognitive,
+                event_type: if i == total {
+                    "fabric.task_completed".into()
+                } else {
+                    "fabric.progress".into()
+                },
+                object_refs: vec!["c-1".into()],
+                project_id: None,
+                run_id: Some("run-1".into()),
+                agent_id: None,
+                reasoning: None,
+                input: None,
+                output: None,
+                confidence: None,
+                timestamp: format!("{i:020}"), // 零填充定长 → 字典序=数值序
+            };
+            s.append_trace(&ev).await.unwrap();
+        }
+
+        // 修复前语义（newest_first=false）：窗口是最旧 500 条 → 终局缺失
+        let asc = s
+            .list_events(TraceQuery {
+                limit: 500,
+                newest_first: false,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(asc.len(), 500, "ASC LIMIT 500 返回最旧 500 条");
+        assert!(
+            !asc.iter().any(|e| e.event_type == "fabric.task_completed"),
+            "修复前：终局事件（最新）在最旧 500 窗口之外 → CLI 漏终局"
+        );
+
+        // 修复后语义（newest_first=true）：返回最新 500 条，终局在前
+        let desc = s
+            .list_events(TraceQuery {
+                limit: 500,
+                newest_first: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(desc.len(), 500, "DESC LIMIT 500 返回最新 500 条");
+        assert_eq!(
+            desc[0].event_type, "fabric.task_completed",
+            "修复后：终局事件（最新）必须出现在窗口首位"
+        );
+
+        // WS 断线补齐仍走 after_id 游标（ASC），不被 newest_first 影响
+        let cursor = s
+            .list_events(TraceQuery {
+                after_id: Some("tr_0001".into()),
+                limit: 1000,
+                newest_first: false,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            cursor.len(),
+            total - 1,
+            "after_id 游标仍按 ASC 补齐后续事件（WS 断线重连语义不变）"
+        );
     }
 }

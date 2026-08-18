@@ -63,6 +63,7 @@ pub(crate) async fn list_trace(
         event_type: q.event_type,
         after_id: q.after_id,
         limit: 1000,
+        newest_first: false,
     };
     let events = st.storage.list_events(tq).await.unwrap_or_default();
     let total = events.len();

@@ -397,10 +397,9 @@ pub async fn serve_with_facade(
         auto_approve_evolution,
         approval_timeout,
         pending: Arc::new(Mutex::new(HashMap::new())),
-        event_tx: {
-            let (tx, _rx) = tokio::sync::broadcast::channel(1024);
-            tx
-        },
+        // C1：复用 Facade 自建的广播频道（Bridge sink 已 with_broadcast），
+        // 保证 WS /stream 收到 fabric.* 事件，而非另建一个收不全的频道。
+        event_tx: facade.event_tx(),
         runs: Mutex::new(HashMap::new()),
         static_dir: static_dir.into(),
         idp,

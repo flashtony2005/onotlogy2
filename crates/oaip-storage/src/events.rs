@@ -86,7 +86,11 @@ impl LibSQLStorage {
                 params.push(libsql::Value::Text(id));
             }
         }
-        sql.push_str(" ORDER BY timestamp ASC, id ASC");
+        if q.newest_first {
+            sql.push_str(" ORDER BY timestamp DESC, id DESC");
+        } else {
+            sql.push_str(" ORDER BY timestamp ASC, id ASC");
+        }
         sql.push_str(&format!(" LIMIT {}", q.limit.clamp(1, 1000)));
 
         let mut rows = self

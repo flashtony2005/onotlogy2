@@ -188,6 +188,11 @@ pub struct Facade {
     audit: AuditService,
     fabric: FabricService,
     storage: Arc<LibSQLStorage>,
+    /// 事件实时广播频道（T2b-1/C1）：Bridge 的 StorageWorldSink 落库后扇出到此，
+    /// WS `/stream` 据此实时推送 fabric.* 等事件。Facade 自建频道并暴露 getter，
+    /// 调用方（server AppState）复用同一频道，避免 Bridge sink 与认知 Runner sink
+    /// 各建各的、WS 收不全。
+    event_tx: tokio::sync::broadcast::Sender<TraceEvent>,
 }
 
 impl Facade {
@@ -200,8 +205,12 @@ impl Facade {
         adapters: Vec<Arc<dyn AgentAdapter>>,
         domain_rules: &[(&str, &str)],
     ) -> Result<Self, FacadeError> {
+        // C1：Facade 自建事件广播频道，Bridge 的 StorageWorldSink 落库后扇出到此——
+        // 否则 fabric.* 事件只落库不推 WS（T2b-1 只接上了认知 Runner 路径）。
+        let (event_tx, _rx) = tokio::sync::broadcast::channel(1024);
         let sink: Option<Arc<dyn WorldEventSink>> = Some(Arc::new(
-            crate::cognitive::runner::StorageWorldSink::new(storage.clone(), handle.clone()),
+            crate::cognitive::runner::StorageWorldSink::new(storage.clone(), handle.clone())
+                .with_broadcast(event_tx.clone()),
         ));
         let mut bridge = Bridge::new(fabric_router, sink);
         for a in adapters {
@@ -214,6 +223,7 @@ impl Facade {
             audit: AuditService::new(storage.clone(), handle.clone()),
             fabric: FabricService::new(bridge, handle),
             storage,
+            event_tx,
         })
     }
 
@@ -247,6 +257,12 @@ impl Facade {
     /// session.get()：按 id 取会话副本。
     pub fn session_get(&self, session_id: &str) -> Result<Session, FacadeError> {
         self.fabric.get(session_id)
+    }
+
+    /// 事件实时广播频道（T2b-1/C1）：server 的 AppState.event_tx 复用同一频道，
+    /// 使 WS `/stream` 能收到 fabric.* 事件（Bridge sink 已 with_broadcast）。
+    pub fn event_tx(&self) -> tokio::sync::broadcast::Sender<TraceEvent> {
+        self.event_tx.clone()
     }
 }
 
@@ -413,6 +429,10 @@ impl AuditService {
                 run_id: req.run_id.clone(),
                 agent_id: req.agent_id.clone(),
                 limit,
+                // C2/S3：审计语义域默认倒序（最新在前）——「查最新审计」拿到最旧 500 条
+                // 是反直觉且会让 CLI 异步轮询永远漏掉最新终局事件。WS 断线补齐靠
+                // after_id 游标（仍 ASC），不受影响。
+                newest_first: true,
                 ..Default::default()
             }))
             .map_err(|e| FacadeError::Audit(e.to_string()))?;

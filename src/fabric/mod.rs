@@ -17,7 +17,7 @@ pub mod adapters;
 pub mod router;
 pub mod session;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
@@ -124,6 +124,12 @@ pub struct Bridge {
     router: router::FabricRouter,
     adapters: HashMap<String, Arc<dyn adapter::AgentAdapter>>,
     sink: Option<Arc<dyn WorldEventSink>>,
+    /// 取消请求标记集（H2，异步化新洞修复）：cancel(correlation_id) 写入；
+    /// execute 在 spawn 子进程前检查，命中则直接发 `fabric.task_cancelled` 不执行——
+    /// 消除「submit 返 running 与子进程进 running map 之间的窗口内 cancel 命中 0
+    /// 但任务照跑完成」的 early-cancel 竞态。与 late-cancel（adapter killed mutex）
+    /// 互补：early 在 spawn 前判，late 在 spawn 后判。
+    cancel_requested: Mutex<HashSet<String>>,
 }
 
 impl Bridge {
@@ -132,6 +138,7 @@ impl Bridge {
             router,
             adapters: HashMap::new(),
             sink,
+            cancel_requested: Mutex::new(HashSet::new()),
         }
     }
 
@@ -146,6 +153,12 @@ impl Bridge {
             json!({}),
             None,
         );
+        // H2：写入取消请求标记集，execute 在 spawn 子进程前检查——early-cancel 窗口
+        // （submit 返 running 与子进程进 running map 之间）内到达的 cancel 也能生效。
+        self.cancel_requested
+            .lock()
+            .map_err(|_| FabricError::Adapter("取消请求标记锁中毒".into()))?
+            .insert(correlation_id.to_string());
         let mut hits = 0usize;
         for adapter in self.adapters.values() {
             if adapter
@@ -398,6 +411,36 @@ impl Bridge {
         let project_id = job.project_id;
         let correlation = req.correlation_id.clone().unwrap_or_default();
         let agent_id = &req.receiver;
+
+        // H2：early-cancel 检查（spawn 子进程前）。cancel 在 submit 返 running 与
+        // 子进程进 running map 的窗口内写入 cancel_requested；此处命中则直接发
+        // fabric.task_cancelled，不执行——消除「cancel 命中 0 但任务照跑完成」。
+        // （late-cancel 由 adapter killed mutex 在 spawn 后处理，二者互补。）
+        if self
+            .cancel_requested
+            .lock()
+            .map_err(|_| FabricError::Adapter("取消请求标记锁中毒".into()))?
+            .remove(&correlation)
+        {
+            let msg = terminal_result_message(&req, &correlation, "cancelled", None);
+            self.event(
+                "fabric.task_cancelled",
+                vec![agent_id.to_string()],
+                json!({ "to": "cancelled", "correlation_id": correlation, "agent": agent_id }),
+                project_id,
+            );
+            {
+                let mut g = sessions
+                    .lock()
+                    .map_err(|_| FabricError::Adapter("会话表锁中毒".into()))?;
+                if let Some(session) = g.get_mut(&req.session_id) {
+                    session.append(msg.clone())?;
+                    session.cancel();
+                }
+            }
+            return Ok(msg);
+        }
+
         let obj_ref = req
             .payload
             .get("object")
@@ -407,10 +450,31 @@ impl Bridge {
             .adapters
             .get(agent_id)
             .ok_or_else(|| FabricError::NoAdapter(agent_id.to_string()))?;
-        // T2：执行走 stream（逐行进度 + 子进程进 running 被追踪，cancel 才有目标）
-        let msgs = adapter
-            .stream(&req)
-            .map_err(|e| FabricError::Adapter(e.to_string()))?;
+        // T2：执行走 stream（逐行进度 + 子进程进 running 被追踪，cancel 才有目标）。
+        // H1：stream 失败（如运行时命令不可用）必须发 fabric.task_failed + 会话终态，
+        // 否则 run_in_background 吞错后 correlation 永久悬挂、CLI 误导超时。
+        let msgs = match adapter.stream(&req) {
+            Ok(m) => m,
+            Err(e) => {
+                let err_text = e.to_string();
+                let msg = terminal_result_message(&req, &correlation, "failed", Some(&err_text));
+                self.event(
+                    "fabric.task_failed",
+                    vec![agent_id.to_string()],
+                    json!({ "to": "failed", "correlation_id": correlation, "agent": agent_id, "error": err_text }),
+                    project_id.clone(),
+                );
+                {
+                    let mut g = sessions
+                        .lock()
+                        .map_err(|_| FabricError::Adapter("会话表锁中毒".into()))?;
+                    if let Some(session) = g.get_mut(&req.session_id) {
+                        session.append(msg.clone())?;
+                    }
+                }
+                return Err(FabricError::Adapter(err_text));
+            }
+        };
         let result = msgs
             .into_iter()
             .last()
@@ -543,6 +607,35 @@ fn running_message(
         capability: Some(capability.to_string()),
         correlation_id: Some(run_id.to_string()),
         causation_id: None,
+        timestamp: crate::kernel::now_secs(),
+    }
+}
+
+/// 合成终态 task.result 消息（early-cancel / stream 失败用）：status 固定，
+/// error 可选（failed 时带错误文本；cancelled 为 None）。与 stream 正常终态
+/// 同构（均含 correlation_id），下游（审计/会话/WS）统一消费。
+fn terminal_result_message(
+    req: &AgentMessage,
+    correlation: &str,
+    status: &str,
+    error: Option<&str>,
+) -> AgentMessage {
+    AgentMessage {
+        id: crate::trace::new_trace_id(),
+        session_id: req.session_id.clone(),
+        sender: req.sender.clone(),
+        receiver: req.receiver.clone(),
+        kind: MessageKind::TaskResult,
+        intent: req.intent.clone(),
+        payload: json!({
+            "status": status,
+            "correlation_id": correlation,
+            "error": error,
+        }),
+        context: Value::Null,
+        capability: req.capability.clone(),
+        correlation_id: Some(correlation.to_string()),
+        causation_id: Some(req.id.clone()),
         timestamp: crate::kernel::now_secs(),
     }
 }
