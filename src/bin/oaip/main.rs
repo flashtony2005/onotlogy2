@@ -280,6 +280,9 @@ enum FabricCmd {
         /// JSON 载荷（args/task/object 等）
         #[arg(long)]
         payload: String,
+        /// 轮询后台终局事件的最大等待秒数（默认 30）；0 = 提交后立即返回不等待。
+        #[arg(long, default_value_t = 30)]
+        timeout: u64,
     },
 }
 
@@ -376,8 +379,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     sender,
                     intent,
                     payload,
+                    timeout,
                 } => tokio::task::block_in_place(|| {
-                    facade::cmd_fabric_submit(&cli.db, &session, &sender, &intent, &payload)
+                    facade::cmd_fabric_submit(
+                        &cli.db, &session, &sender, &intent, &payload, timeout,
+                    )
                 })?,
             },
             FacadeCmd::Project { cmd } => match cmd {

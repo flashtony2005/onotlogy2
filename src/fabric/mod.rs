@@ -204,6 +204,14 @@ impl Bridge {
         self.adapters.keys().cloned().collect()
     }
 
+    /// S2：服务关闭时回收所有 adapter 运行中的孤儿后台 job（透传 adapter.shutdown）。
+    /// 由 FabricService::shutdown → Facade::shutdown 在服务 SIGINT/SIGTERM 优雅关闭时调用。
+    pub fn shutdown(&self) {
+        for adapter in self.adapters.values() {
+            adapter.shutdown();
+        }
+    }
+
     /// 提交任务（OAB v0.1 主链路，T2b-2 异步契约）：
     /// 路由 + 事件 + 会话记录（同步、立即返回），执行部分（adapter.stream 子进程）
     /// 交给后台 spawn_blocking——立即返回 running 态 + correlation_id，不再阻塞到

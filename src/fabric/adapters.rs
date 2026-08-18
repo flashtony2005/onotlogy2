@@ -17,6 +17,9 @@ use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
 use serde_json::{Value, json};
 
 use super::adapter::{AgentAdapter, AgentCapability};
@@ -24,6 +27,35 @@ use super::{AgentMessage, FabricError, MessageKind};
 use crate::worker::adapters::{codex_worker, dsh_worker, shell_worker};
 use crate::worker::process::ProcessWorker;
 use crate::worker_core::sdk::Worker;
+
+/// 杀掉进程及其整个进程组（Unix）。
+///
+/// `Child::kill()` 只杀直接子进程；当命令是 `sh -c "..."` 时，shell 派生的孙子进程
+/// （如 `sleep`）会继承 stdout 管道并保持打开——直接子进程被杀后孙子仍存活，管道不会
+/// 关闭 → 父进程 `read_line` 等不到 EOF → `stream` 永久阻塞；且 `shutdown`/`cancel`
+/// 会遗留孤儿后台 job（与 S2 目标相悖）。故 spawn 时以 `process_group(0)` 把子进程设为
+/// 进程组 leader（pgid == pid），此处对整个组发 SIGKILL（`/bin/kill -9 -<pgid>` 即 killpg）。
+/// `/bin/kill` 不可用则退化为 `Child::kill()`。`process_group` 仅 Unix 可用，非 Unix 直接
+/// `Child::kill()`。
+#[cfg(unix)]
+fn kill_child_tree(child: &mut Child) {
+    let pid = child.id();
+    let killed = Command::new("/bin/kill")
+        .args(["-9", &format!("-{}", pid)])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !killed {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+}
+
+#[cfg(not(unix))]
+fn kill_child_tree(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
 
 /// 进程型适配器（Codex / DSH / 任意 CLI Agent 共用执行骨架）。
 pub struct ProcessAdapter {
@@ -220,17 +252,21 @@ impl AgentAdapter for ProcessAdapter {
             .correlation_id
             .clone()
             .unwrap_or_else(crate::trace::new_trace_id);
-        let mut child = Command::new(self.worker.command())
-            .args(self.effective_args(&msg.payload))
+        let mut cmd = Command::new(self.worker.command());
+        cmd.args(self.effective_args(&msg.payload))
             .stdout(Stdio::piped())
             // P0 修复：stderr 若 piped 且子进程大量写 stderr 会双向死锁（OS 管道缓冲满 →
             // 子进程阻塞 → 父进程读 stdout 等不到 EOF）。stream 语义本不捕获 stderr
             // （result_of 已传 None），直接丢弃即可。
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| {
-                FabricError::Adapter(format!("进程启动失败 {}: {e}", self.worker.command()))
-            })?;
+            .stderr(Stdio::null());
+        // 子进程设为独立进程组 leader（pgid == pid）。cancel/shutdown 时对整个组发
+        // SIGKILL，连 `sh -c` 派生的孙子进程（如 `sleep`）一并回收——否则孙子持有
+        // stdout 管道 → EOF 不来 → `stream` 永久阻塞，且留下孤儿后台 job（违背 S2 目标）。
+        #[cfg(unix)]
+        cmd.process_group(0);
+        let mut child = cmd.spawn().map_err(|e| {
+            FabricError::Adapter(format!("进程启动失败 {}: {e}", self.worker.command()))
+        })?;
         let stdout = child
             .stdout
             .take()
@@ -298,13 +334,24 @@ impl AgentAdapter for ProcessAdapter {
                 .lock()
                 .map_err(|_| FabricError::Adapter("killed 锁中毒".into()))?
                 .insert(correlation_id.to_string());
-            child
-                .kill()
-                .map_err(|e| FabricError::Adapter(format!("kill 失败: {e}")))?;
-            let _ = child.wait();
+            // 杀整个进程组（含 shell 派生的孙子），避免孤儿持有 stdout 管道阻塞 stream。
+            kill_child_tree(&mut child);
             Ok(true)
         } else {
             Ok(false)
+        }
+    }
+
+    /// 关闭回收（S2）：遍历运行中的后台子进程并 kill（孤儿后台 job 回收）。
+    /// 与 cancel 同机制（`std::process::Child::kill` → SIGKILL）；服务退出前由
+    /// Facade 优雅关闭透传调用。running map 被 drain 清空（子进程句柄 owned 取出后 kill+wait）。
+    fn shutdown(&self) {
+        let children: Vec<Child> = self
+            .running()
+            .map(|mut g| g.drain().map(|(_, c)| c).collect())
+            .unwrap_or_default();
+        for mut c in children {
+            kill_child_tree(&mut c);
         }
     }
 }

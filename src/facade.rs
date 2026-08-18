@@ -207,6 +207,10 @@ impl Facade {
     ) -> Result<Self, FacadeError> {
         // C1：Facade 自建事件广播频道，Bridge 的 StorageWorldSink 落库后扇出到此——
         // 否则 fabric.* 事件只落库不推 WS（T2b-1 只接上了认知 Runner 路径）。
+        // S4（broadcast lag 声明）：broadcast 缓冲容量 1024，故 WS 实时推送是
+        // best-effort——慢客户端或瞬时生产风暴可能丢弃缓冲外的最近事件（仅实时缺口）。
+        // 但 WS 断线重连走 after_id 游标从存储（权威）补齐，重连不丢数据；实时缺口
+        // 不影响最终一致性。服务重启后新订阅者同样从历史回放起步。
         let (event_tx, _rx) = tokio::sync::broadcast::channel(1024);
         let sink: Option<Arc<dyn WorldEventSink>> = Some(Arc::new(
             crate::cognitive::runner::StorageWorldSink::new(storage.clone(), handle.clone())
@@ -263,6 +267,13 @@ impl Facade {
     /// 使 WS `/stream` 能收到 fabric.* 事件（Bridge sink 已 with_broadcast）。
     pub fn event_tx(&self) -> tokio::sync::broadcast::Sender<TraceEvent> {
         self.event_tx.clone()
+    }
+
+    /// S2：服务关闭时回收孤儿后台 job（透传 fabric.shutdown）。
+    /// 由 server/mod.rs 的 `with_graceful_shutdown` 在 SIGINT/SIGTERM 时调用——
+    /// 避免 spawn_blocking 后台进程泄漏为孤儿。
+    pub fn shutdown(&self) {
+        self.fabric.shutdown();
     }
 }
 
@@ -566,6 +577,11 @@ impl FabricService {
     /// capability.discover()（契约未来扩展 → 本次落地）：返回已接入的能力提供者（adapter）id。
     pub fn discover(&self) -> Vec<String> {
         self.bridge.discover()
+    }
+
+    /// S2：服务关闭时回收孤儿后台 job（透传 bridge.shutdown）。
+    pub fn shutdown(&self) {
+        self.bridge.shutdown();
     }
 
     /// session.get()（契约未来扩展 → 本次落地）：按 id 取会话副本（participants/state/messages）。

@@ -45,6 +45,19 @@
 2. ~~投影类型丢失~~ → 已修复：投影写 `Relation.metadata` 保留类型化值（数值不文本化），`EntityView` 出边优先取 `metadata`，`tc_o4` 钉 `amount=100 → Number(100)`。
 3. ~~Facade 契约方法未暴露~~ → 已修复：`fabric.cancel`/`fabric.stream`/`capability.discover`/`session.get` 落地为 `FabricService` + `Facade` 固有方法（facade-v1.md V1.4）。
 
+## V0.14.0（S1/S2/S4 加固增量 · 超时可配 + 孤儿 job 回收 + 广播 lag 声明，2026-08-18）
+> 在 B1（shell-exec 提供方）门禁已绿基础上叠加的纯加固增量，风险最低、收益直接。
+> 三项均不引入新行为语义，只补边界与收口（测试先行门禁待 Bash 恢复后实跑）。
+
+### 加固
+1. **S1 异步轮询超时上限可配**：CLI `oaip facade fabric submit` 新增 `--timeout <SECS>`（默认 30），轮询窗口从硬编码 `300×100ms` 改为 `timeout×10` 轮；`0` = 提交后立即返回不等待。消除「长任务必 30s 超时退出杀后台」的刚性约束（`src/bin/oaip/main.rs` + `facade.rs`）。
+2. **S2 孤儿后台 job 回收**：服务 SIGINT/SIGTERM 优雅关闭时回收所有 adapter 运行中的后台子进程——`Facade::shutdown → FabricService::shutdown → Bridge::shutdown → AgentAdapter::shutdown`（`ProcessAdapter` 覆写 drain `running` 子进程并 `kill`；与 `cancel` 同机制 `std::process::Child::kill`）。`AgentAdapter` trait 加 `shutdown` 默认 no-op；`serve_with_facade` 经 `axum::serve(...).with_graceful_shutdown` 接线（Cargo.toml 新增 tokio `signal` feature）。
+3. **S4 broadcast lag 声明**：broadcast 缓冲 1024 → WS 实时为 best-effort（慢客户端/生产风暴可能丢缓冲外实时事件，仅实时缺口）；但 WS 断线重连走 `after_id` 游标从存储（权威）补齐，重连不丢数据、最终一致。已在 `src/facade.rs` 频道创建处与本文档声明语义。
+
+### 说明
+4. S2 回收用 SIGKILL（与 `cancel` 一致，零新依赖）；若需严格 SIGTERM 优雅退出需引入 `libc`/`nix` 发信号——可单列增量。
+5. `shutdown` 专项回归 `tc_f13_shutdown_kills_running_child`（`tests/fabric_v1.rs`）：真实 `/bin/sh` 跑长 `sleep` → 进 `running` map → 调 `shutdown` → 子进程被杀、stream 提前 EOF 返回且终态非 `completed`；marker 文件就绪信号 + `mpsc::recv_timeout` fail-fast，确定性且不挂死。
+
 ## V0.13.0（shell.execute 能力诚实 · 专用 shell-exec 提供方，2026-08-18）
 > B1 决策：harness（pi/dsh/deepseek）撤下 `shell.execute` 假广告，执行归专用 `shell-exec` worker——
 > 复用 tests 已验证的 `/bin/sh` 通道。E2E 曾暴露 `run_shell` 经能力路由落到 dsh（LLM harness 不认

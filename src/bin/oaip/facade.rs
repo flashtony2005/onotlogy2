@@ -108,6 +108,7 @@ pub fn cmd_fabric_submit(
     sender: &str,
     intent: &str,
     payload: &str,
+    poll_timeout_secs: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let handle = tokio::runtime::Handle::current();
     let facade = cli_facade(db, handle)?;
@@ -134,7 +135,9 @@ pub fn cmd_fabric_submit(
         let cid = sub.result.correlation_id.clone().unwrap_or_default();
         // 已在 block_in_place 内：audit_query 是同步 API（内部 block_on storage），直接调用。
         let mut final_status: Option<String> = None;
-        for _ in 0..300 {
+        // S1：轮询窗口可配（--timeout 秒，默认 30；每轮 100ms → 轮数 = 秒 × 10）。
+        // 0 = 提交后立即返回不等待（交由外部/服务端追踪终局）。
+        for _ in 0..(poll_timeout_secs * 10) {
             let view = match facade.audit_query(AuditQuery {
                 event_type: Some("fabric.".into()),
                 ..Default::default()
@@ -160,7 +163,10 @@ pub fn cmd_fabric_submit(
         }
         match final_status {
             Some(s) => println!("   🏁 后台执行终局: status={}", s),
-            None => println!("   ⏳ 后台执行超时未终局（correlation={}）", cid),
+            None => println!(
+                "   ⏳ 后台执行 {}s 超时未终局（correlation={}）",
+                poll_timeout_secs, cid
+            ),
         }
     }
     Ok(())

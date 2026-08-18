@@ -309,7 +309,7 @@ async fn tc_f5_full_demo_chain_to_world_state() {
 // ── OAB v1.1：真实适配器（桥接 ProcessWorker）+ stream/cancel 真实语义 ──
 // 契约 §3/§6：Adapter 管协议、Worker 是执行连接器；payload 约定 args/task；
 // stream = 逐行 stdout → TaskProgress；cancel = 按 correlation_id kill。
-use openaip_os::fabric::adapters::{ProcessAdapter, codex_adapter, dsh_adapter};
+use openaip_os::fabric::adapters::{ProcessAdapter, codex_adapter, dsh_adapter, shell_adapter};
 use openaip_os::worker::manifest::WorkerManifest;
 use openaip_os::worker::process::ProcessWorker;
 
@@ -932,4 +932,82 @@ async fn tc_f12_early_cancel_without_waiting_running_map_is_effective() {
         cancelled,
         "不等 running map 的 early-cancel 必须生效（发 fabric.task_cancelled）"
     );
+}
+
+// ── tc_f13：S2 孤儿后台 job 回收——shutdown 杀掉运行中的子进程 ──────────
+//
+// 覆盖 S2 的核心逻辑：`ProcessAdapter::shutdown` 在调用时 drain `running` 中
+// 所有子进程并 kill（孤儿后台 job 回收），使服务优雅关闭时不会遗留仍在跑的
+// 后台任务。与 `cancel`（按 correlation_id 精准 kill）不同，`shutdown` 是
+// 无差别回收全部运行中子进程——这是优雅关闭路径的末端动作。
+//
+// 确定性处理：用 marker 文件作为「子进程已 spawn 且正在运行」的就绪信号，
+// 消除「shutdown 早于子进程进 running map」的竞态（比纯定时 sleep 更稳）；
+// 用 `mpsc::recv_timeout` 做 fail-fast 兜底——若 shutdown 未生效，stream 会
+// 阻塞满 30s，测试应在 5s 内判定失败而非挂死。
+#[test]
+fn tc_f13_shutdown_kills_running_child() {
+    let marker = "/tmp/oaip_tc_f13_marker";
+    let _ = std::fs::remove_file(marker);
+
+    // 真实 /bin/sh（shell 模式）适配器；跑一个长 sleep 子进程，进入 running map。
+    let sh = Arc::new(shell_adapter(None));
+    let req = AgentMessage {
+        id: "req_shutdown".into(),
+        session_id: "sess_sh".into(),
+        sender: "dsh".into(),
+        receiver: "shell".into(),
+        kind: MessageKind::TaskRequest,
+        intent: Some("run_shell".into()),
+        payload: serde_json::json!({ "args": ["-c", format!("touch {marker}; sleep 30")] }),
+        context: Value::Null,
+        capability: Some("shell.execute".into()),
+        correlation_id: Some("c_shutdown".into()),
+        causation_id: None,
+        timestamp: 1,
+    };
+    // stream 同步阻塞（真实流式读 stdout），另起 OS 线程跑，避免阻塞测试线程。
+    let sh_clone = sh.clone();
+    let stream_handle = std::thread::spawn(move || sh_clone.stream(&req).unwrap());
+
+    // 轮询 marker 最多 5s，确认子进程已启动并在 running map 中（就绪后再 shutdown）。
+    let start = std::time::Instant::now();
+    while !std::path::Path::new(marker).exists()
+        && start.elapsed() < std::time::Duration::from_secs(5)
+    {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        std::path::Path::new(marker).exists(),
+        "子进程应在 5s 内启动（touch marker）；否则 shutdown 测试前提不成立"
+    );
+
+    // S2 核心：shutdown 无差别 drain running 子进程并 kill —— 孤儿 sleep 必须被回收，
+    // 而非跑满 30s 自然结束（否则服务关闭会遗留孤儿后台进程）。
+    sh.shutdown();
+
+    // shutdown 生效 → 子进程被 kill → stdout 管道关闭 → stream 读到 EOF 提前返回。
+    // 用 mpsc + recv_timeout 做 fail-fast：若未生效，stream 阻塞满 30s，测试 5s 判失败。
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let r = stream_handle.join().expect("stream 线程应结束");
+        let _ = tx.send(r);
+    });
+    let msgs = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("shutdown 应在 5s 内杀掉运行中的子进程（孤儿回收），而非等满 30s");
+
+    // 被 kill 的进程退出码非 0（或 None）→ status 不是 completed（与 cancel 同语义）；
+    // 关键回归信号：shutdown 必须阻止子进程跑满 30s 自然完成。
+    let final_msg = msgs
+        .iter()
+        .rev()
+        .find(|m| m.kind == MessageKind::TaskResult)
+        .expect("shutdown 杀掉子进程后应有终局结果");
+    assert_ne!(
+        final_msg.payload["status"], "completed",
+        "shutdown 必须杀掉运行中的子进程（不得让它跑满 30s 报 completed）"
+    );
+
+    let _ = std::fs::remove_file(marker);
 }

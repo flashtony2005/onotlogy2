@@ -24,7 +24,7 @@ oaip-session = { path = "crates/oaip-session" }
 oaip-trace = { path = "crates/oaip-trace" }
 oaip-worker-core = { path = "crates/oaip-worker-core" }
 thiserror = "2.0.20"
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util", "process"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util", "process", "signal"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
 # V0.7 认证与授权（P0 风险「无认证」）：argon2id 口令哈希 + 不透明会话令牌。

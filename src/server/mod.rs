@@ -418,7 +418,36 @@ pub async fn serve_with_facade(
     // V10.1：预置 Worker（echo / git / codex / claude 壳）。
     bootstrap_v2_workers(&state);
 
-    axum::serve(listener, app).await
+    // S2：优雅关闭——收到 SIGINT / SIGTERM 后先回收孤儿后台 job 再退出，
+    // 避免 spawn_blocking 后台进程泄漏为孤儿（facade.shutdown 透传 bridge）。
+    let facade = state.facade.clone();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            facade.shutdown();
+        })
+        .await
+}
+
+/// S2：优雅关闭信号——等待 SIGINT（Ctrl-C）或 Unix SIGTERM，触发后由调用方回收
+/// 孤儿后台 job 再退出。`tokio::signal` 需 signal feature（已在 Cargo.toml 启用）。
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{SignalKind, signal};
+        if let Ok(mut sig) = signal(SignalKind::terminate()) {
+            let _ = sig.recv().await;
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
 }
 
 /// 预置 Worker（V10.1）：echo / git / codex / claude 壳注册进 V2 Worker Registry。
