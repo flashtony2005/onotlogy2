@@ -45,6 +45,20 @@
 2. ~~投影类型丢失~~ → 已修复：投影写 `Relation.metadata` 保留类型化值（数值不文本化），`EntityView` 出边优先取 `metadata`，`tc_o4` 钉 `amount=100 → Number(100)`。
 3. ~~Facade 契约方法未暴露~~ → 已修复：`fabric.cancel`/`fabric.stream`/`capability.discover`/`session.get` 落地为 `FabricService` + `Facade` 固有方法（facade-v1.md V1.4）。
 
+## V0.12.0（T2b 异步契约 review 收口 · fabric 实时 + CLI 轮询 + 取消全窗口，2026-08-18）
+> T2b（异步契约：submit 立即返 running + RunJob 后台 spawn_blocking）已在 master（`1d91c38`）。
+> 经独立深度 review 发现 2 Critical + 2 High 接线/语义缺口，本版本一次性收口（commit `0b8f7ba`），
+> 全量门禁（fmt/clippy/test/unwrap-budget）通过，T2「异步 + 实时」交付承诺在真实运行下成立。
+
+### Bug 修复（review 4 处洞）
+1. **C1 fabric 事件未接 WS 实时广播**：Facade 自建 `event_tx` 广播频道，`StorageWorldSink` 落库后 `with_broadcast` 扇出，server `AppState` 复用同一频道（不再另建收不全的频道）。GovernancePanel 免轮询承诺成立（原仅认知 Runner 路径接上）。
+2. **C2 CLI 轮询必然漏终局**：`AuditService::query` 审计域默认 `newest_first=true`（DESC LIMIT 500 取最新 500 条）；`list_events` 据此条件式排序。`TraceQuery` 新增 `newest_first` 字段；WS 断线补齐游标仍 ASC（`after_id`）不受影响。终局 fabric 事件（最新）不再被 ASC 窗口截断。
+3. **H1 run_in_background 吞错**：`execute` 中 `adapter.stream` 失败时先发 `fabric.task_failed`（带错误文本）+ 会话终态，再返 Err；`run_in_background` 的 `let _ = e` 不再导致 correlation 永久悬挂、CLI 误导「超时未终局」。
+4. **H2 early-cancel 竞态**：`Bridge` 新增 `cancel_requested: Mutex<HashSet>` 标记集，`cancel` 写入、`execute` 在 spawn 子进程前检查命中即发 `fabric.task_cancelled` 不执行；与 late-cancel（adapter `killed` mutex）互补，覆盖 submit 返 running 与子进程进 running map 之间的窗口。
+
+### 测试
+5. 补三处回归契约（均合入）：`tc_f11`（H1 stream 失败发 `fabric.task_failed`）、`tc_f12`（H2 不等 running map 即 cancel 生效）、`list_events_newest_first_exposes_terminal_event_over_limit`（C2 倒序取到终局）。
+
 ## V0.11.0（治理闭环 + 实时可观察 · M0–M8 关闭，2026-08-18）
 > 本周三件事落地：① T1 合入 master；② T2a Cancel MVP 端到端垂直切片；③ 文档收口宣布技术债 M0–M8 正式关闭。
 > 至此项目进入「治理闭环 + 实时可观察」完整状态。
