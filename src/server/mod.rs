@@ -433,7 +433,7 @@ fn build_facade(
     handle: tokio::runtime::Handle,
 ) -> std::sync::Arc<crate::facade::Facade> {
     use crate::fabric::adapter::AgentAdapter;
-    use crate::fabric::adapters::{codex_adapter, dsh_adapter};
+    use crate::fabric::adapters::{codex_adapter, dsh_adapter, shell_adapter};
     use crate::fabric::router::FabricRouter;
 
     let mut router = FabricRouter::new();
@@ -443,7 +443,7 @@ fn build_facade(
     router.mark_high_risk("shell.execute");
 
     let mut adapters: Vec<std::sync::Arc<dyn AgentAdapter>> = Vec::new();
-    for a in [codex_adapter(None), dsh_adapter(None)] {
+    for a in [codex_adapter(None), dsh_adapter(None), shell_adapter(None)] {
         if a.connect().is_ok() {
             let id = a.id().to_string();
             for c in a.discover() {

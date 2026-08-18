@@ -335,7 +335,12 @@ fn tc_f6_real_adapters_discover_from_worker_manifest() {
     assert_eq!(dsh.id(), "dsh");
     let dsh_caps: Vec<String> = dsh.discover().into_iter().map(|c| c.name).collect();
     assert!(
-        dsh_caps.iter().any(|c| c == "agent.task") && dsh_caps.iter().any(|c| c == "shell.execute")
+        dsh_caps.iter().any(|c| c == "agent.task"),
+        "dsh 通用 agent 任务入口应在: {dsh_caps:?}"
+    );
+    assert!(
+        !dsh_caps.iter().any(|c| c == "shell.execute"),
+        "B1：dsh 已撤下 shell.execute（执行归专用 shell-exec，不得假广告）: {dsh_caps:?}"
     );
     // 风险/质量来自 manifest（Policy 判定依据；codex_worker 声明 quality=0.95）
     let first = codex.discover().into_iter().next().unwrap();

@@ -45,6 +45,20 @@
 2. ~~投影类型丢失~~ → 已修复：投影写 `Relation.metadata` 保留类型化值（数值不文本化），`EntityView` 出边优先取 `metadata`，`tc_o4` 钉 `amount=100 → Number(100)`。
 3. ~~Facade 契约方法未暴露~~ → 已修复：`fabric.cancel`/`fabric.stream`/`capability.discover`/`session.get` 落地为 `FabricService` + `Facade` 固有方法（facade-v1.md V1.4）。
 
+## V0.13.0（shell.execute 能力诚实 · 专用 shell-exec 提供方，2026-08-18）
+> B1 决策：harness（pi/dsh/deepseek）撤下 `shell.execute` 假广告，执行归专用 `shell-exec` worker——
+> 复用 tests 已验证的 `/bin/sh` 通道。E2E 曾暴露 `run_shell` 经能力路由落到 dsh（LLM harness 不认
+> `-c`）→ 真实执行链必 failed 的死穴；本版本根治，agent「执行」半边首次真能跑命令。
+
+### Bug 修复（能力市场诚实 + 执行链死穴）
+1. **harness 假广告撤下**：`pi_worker` / `dsh_worker` / `deepseek_worker` 的 manifest 移除 `shell.execute`——它们不真提供 shell，「用自身工具链做任务」是误用。路由确定性随之提升（消除同优先级 HashMap 插入序竞态）。
+2. **专用 shell-exec 提供方**：新增 `shell_worker`（manifest 只声明 `shell.execute`，命令默认 `/bin/sh`）；`ProcessAdapter` 加 `shell: bool` 字段与 `shell_args_of`（把 payload 收敛成 `sh -c "<cmd>"`：兼容 harness 透传的 `-c "<cmd>"` 形态与裸 args 形态）；新增 `shell_adapter` 工厂。
+3. **接线（两处对称）**：`src/server/mod.rs::build_facade` 与 `src/bin/oaip/facade.rs::cli_facade` 的适配器数组均加 `shell_adapter(None)`。`run_shell` → `shell.execute` → 真 `/bin/sh` 执行（仍 `mark_high_risk` → 人工审批闸门 + 审计 + 可取消兜底）。
+
+### 测试
+4. 新契约 `tc_sf6_run_shell_executes_via_shell_exec_provider`（server_facade_v1）：submit run_shell → 高风险管理挂起 → approve → 真跑 /bin/sh → 终态 `completed` + `sender=="shell"`（B1 判别器，修复前落 dsh 必 failed）+ 世界投影 `fabric.status=completed`。
+5. 同步修正假广告断言：`tc_f6`（fabric_v1）改为「dsh 含 agent.task 且**不含** shell.execute」；`dsh_worker_manifest_*` / `pi_worker_manifest_*` 两处 manifest 测试去除 `supports("shell.execute")` 断言。
+
 ## V0.12.0（T2b 异步契约 review 收口 · fabric 实时 + CLI 轮询 + 取消全窗口，2026-08-18）
 > T2b（异步契约：submit 立即返 running + RunJob 后台 spawn_blocking）已在 master（`1d91c38`）。
 > 经独立深度 review 发现 2 Critical + 2 High 接线/语义缺口，本版本一次性收口（commit `0b8f7ba`），

@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use openaip_os::fabric::adapter::AgentAdapter;
-use openaip_os::fabric::adapters::{codex_adapter, dsh_adapter};
+use openaip_os::fabric::adapters::{codex_adapter, dsh_adapter, shell_adapter};
 use openaip_os::fabric::router::FabricRouter;
 use openaip_os::facade::{AuditQuery, FabricRequest, Facade, OpenAipFacade, WorldQuery};
 use openaip_os::storage::LibSQLStorage;
@@ -27,7 +27,7 @@ pub fn cli_facade(
     router.mark_high_risk("shell.execute");
 
     let mut adapters: Vec<Arc<dyn AgentAdapter>> = Vec::new();
-    for a in [codex_adapter(None), dsh_adapter(None)] {
+    for a in [codex_adapter(None), dsh_adapter(None), shell_adapter(None)] {
         if a.connect().is_ok() {
             let id = a.id().to_string();
             for c in a.discover() {

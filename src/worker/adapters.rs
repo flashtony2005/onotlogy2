@@ -32,16 +32,11 @@ pub fn claude_worker(command: Option<&str>) -> ProcessWorker {
 /// - **Worker 形态**（本适配器）：`--mode text --print --no-session` 放开 read/bash/edit/write 工具，
 ///   经 Process 协议被 Router 调度去执行任务
 ///
-/// 已验证真实可执行（非交互单次任务模式）。能力对应 pi 的工具面（code.* / shell.execute）。
+/// 已验证真实可执行（非交互单次任务模式）。能力对应 pi 的工具面（code.*）；
+/// shell.execute 已撤下（B1——shell 执行归专用 shell-exec，harness 不假广告）。
 pub fn pi_worker(command: Option<&str>) -> ProcessWorker {
     let mut m = super::manifest::WorkerManifest::new("pi-agent", "agent")
-        .with_capabilities(&[
-            "code.read",
-            "code.write",
-            "code.test",
-            "code.search",
-            "shell.execute",
-        ])
+        .with_capabilities(&["code.read", "code.write", "code.test", "code.search"])
         .with_quality(0.88)
         .with_risk(3)
         .with_trust(0.85)
@@ -63,7 +58,6 @@ pub fn dsh_worker(command: Option<&str>) -> ProcessWorker {
             "code.write",
             "code.test",
             "code.search",
-            "shell.execute",
         ])
         .with_quality(0.9)
         .with_risk(3)
@@ -78,19 +72,29 @@ pub fn dsh_worker(command: Option<&str>) -> ProcessWorker {
 /// deepseek-harness CLI / 包装脚本；未安装时由调用方提供替代命令。
 pub fn deepseek_worker(command: Option<&str>) -> ProcessWorker {
     let mut m = super::manifest::WorkerManifest::new("deepseek-harness", "agent")
-        .with_capabilities(&[
-            "code.read",
-            "code.write",
-            "code.test",
-            "code.search",
-            "shell.execute",
-        ])
+        .with_capabilities(&["code.read", "code.write", "code.test", "code.search"])
         .with_quality(0.9)
         .with_risk(3)
         .with_trust(0.9)
         .with_availability("local");
     m.execution = ExecutionProtocol::Process;
     ProcessWorker::new(m, command.unwrap_or("deepseek"))
+}
+
+/// Shell Executor Worker（专用 shell.execute 提供方；B1 决策：harness 撤下 shell.execute，
+/// 执行归专用 shell-exec——复用 tests 已验证的 /bin/sh 通道）。
+///
+/// 只声明 `shell.execute`，不做「用自身工具链做任务」的假广告；命令可配置，
+/// 默认 `/bin/sh`（POSIX 必在）。与 codex/dsh 同为 Capability Provider，由 Router 调度。
+pub fn shell_worker(command: Option<&str>) -> ProcessWorker {
+    let mut m = super::manifest::WorkerManifest::new("shell-exec", "cli")
+        .with_capabilities(&["shell.execute"])
+        .with_quality(0.99)
+        .with_risk(3)
+        .with_trust(0.9)
+        .with_availability("local");
+    m.execution = ExecutionProtocol::Process;
+    ProcessWorker::new(m, command.unwrap_or("/bin/sh"))
 }
 
 /// 便捷断言（防未使用）。
@@ -111,7 +115,10 @@ mod tests {
         assert_eq!(m.id, "dsh-harness");
         assert_eq!(m.worker_type, "agent");
         assert!(m.supports("agent.task"), "通用 agent 任务入口");
-        assert!(m.supports("code.write") && m.supports("shell.execute"));
+        assert!(
+            m.supports("code.write"),
+            "代码能力就位（shell.execute 已撤下）"
+        );
         assert_eq!(m.risk, 3);
         assert!((m.trust - 0.9).abs() < 1e-9);
         assert_eq!(m.availability, "local");
@@ -139,7 +146,10 @@ mod tests {
         let w = pi_worker(None);
         let m = w.manifest();
         assert_eq!(m.id, "pi-agent");
-        assert!(m.supports("code.read") && m.supports("shell.execute"));
+        assert!(
+            m.supports("code.read"),
+            "代码能力就位（shell.execute 已撤下）"
+        );
         assert_eq!(m.risk, 3);
         assert_eq!(m.availability, "local");
         assert_eq!(m.execution, ExecutionProtocol::Process);

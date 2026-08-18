@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 
 use super::adapter::{AgentAdapter, AgentCapability};
 use super::{AgentMessage, FabricError, MessageKind};
-use crate::worker::adapters::{codex_worker, dsh_worker};
+use crate::worker::adapters::{codex_worker, dsh_worker, shell_worker};
 use crate::worker::process::ProcessWorker;
 use crate::worker_core::sdk::Worker;
 
@@ -29,6 +29,8 @@ use crate::worker_core::sdk::Worker;
 pub struct ProcessAdapter {
     id: String,
     worker: ProcessWorker,
+    /// shell 模式：payload 经 shell_args_of 收敛成 `sh -c "<cmd>"`（专用 shell-exec 提供方）。
+    shell: bool,
     /// 运行中的流式任务（correlation_id → 子进程句柄；cancel 依据）。
     running: Mutex<HashMap<String, Child>>,
     /// 已被 cancel kill 的 correlation：cancel 在 kill 子进程时写入，stream 在子进程
@@ -43,6 +45,7 @@ impl ProcessAdapter {
         Self {
             id: id.into(),
             worker,
+            shell: false,
             running: Mutex::new(HashMap::new()),
             killed: Mutex::new(HashSet::new()),
         }
@@ -69,6 +72,45 @@ impl ProcessAdapter {
             args.push(t.to_string());
         }
         args
+    }
+
+    /// payload → shell 命令行（shell 模式）：收敛成 `sh -c "<cmd>"`。
+    /// - payload.command（字符串）→ 直接当 shell 命令（`sh -c "<cmd>"`）
+    /// - args[0] == "-c" → 原样透传（已是 `sh -c` 形态，harness 透传兼容）
+    /// - 否则 → 空格 join args 后包 `-c`（支持裸 args 形态）
+    /// - 退化：无 command/args → task 文本当命令
+    fn shell_args_of(payload: &Value) -> Vec<String> {
+        if let Some(cmd) = payload.get("command").and_then(|v| v.as_str()) {
+            return vec!["-c".into(), cmd.to_string()];
+        }
+        let args: Vec<String> = payload
+            .get("args")
+            .and_then(|a| a.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if args.first().map(|s| s == "-c").unwrap_or(false) {
+            return args; // ["-c", "echo ok"] → sh -c "echo ok"
+        }
+        let joined = args.join(" ");
+        if joined.is_empty()
+            && let Some(t) = payload.get("task").and_then(|v| v.as_str())
+        {
+            return vec!["-c".into(), t.to_string()];
+        }
+        vec!["-c".into(), joined]
+    }
+
+    /// 选择参数构造器：shell 模式走 shell_args_of，否则 args_of（契约透传）。
+    fn effective_args(&self, payload: &Value) -> Vec<String> {
+        if self.shell {
+            Self::shell_args_of(payload)
+        } else {
+            Self::args_of(payload)
+        }
     }
 
     /// 命令是否可解析（PATH 探测；connect 握手用——不启动进程）。
@@ -167,7 +209,7 @@ impl AgentAdapter for ProcessAdapter {
     }
 
     fn send(&self, msg: &AgentMessage) -> Result<AgentMessage, FabricError> {
-        let args = Self::args_of(&msg.payload);
+        let args = self.effective_args(&msg.payload);
         let (stdout, stderr, exit) = self.run(&args)?;
         Ok(self.result_of(msg, stdout, stderr, exit, 0, None))
     }
@@ -179,7 +221,7 @@ impl AgentAdapter for ProcessAdapter {
             .clone()
             .unwrap_or_else(crate::trace::new_trace_id);
         let mut child = Command::new(self.worker.command())
-            .args(Self::args_of(&msg.payload))
+            .args(self.effective_args(&msg.payload))
             .stdout(Stdio::piped())
             // P0 修复：stderr 若 piped 且子进程大量写 stderr 会双向死锁（OS 管道缓冲满 →
             // 子进程阻塞 → 父进程读 stdout 等不到 EOF）。stream 语义本不捕获 stderr
@@ -272,7 +314,21 @@ pub fn codex_adapter(command: Option<&str>) -> ProcessAdapter {
     ProcessAdapter::new("codex", codex_worker(command))
 }
 
-/// DSH 适配器（能力市场与 dsh_worker 同源：agent.task + code.* + shell.execute）。
+/// DSH 适配器（能力市场与 dsh_worker 同源：agent.task + code.*）。
+///
+/// 注：dsh 不再声明 shell.execute（B1 决策——harness 不真提供 shell，执行归专用
+/// shell-exec；避免「用自身工具链做任务」的假广告与路由竞态）。
 pub fn dsh_adapter(command: Option<&str>) -> ProcessAdapter {
     ProcessAdapter::new("dsh", dsh_worker(command))
+}
+
+/// Shell Executor 适配器（专用 shell.execute 提供方；B1 决策：harness 撤下
+/// shell.execute，执行归专用 shell-exec——复用 tests 已验证的 /bin/sh 通道）。
+///
+/// command 默认 `/bin/sh`（POSIX 必在）；payload 经 `shell_args_of` 收敛成
+/// `sh -c "<cmd>"`：兼容 harness 透传的 `-c "<cmd>"` 形态与裸 args 形态。
+pub fn shell_adapter(command: Option<&str>) -> ProcessAdapter {
+    let mut a = ProcessAdapter::new("shell", shell_worker(command));
+    a.shell = true;
+    a
 }
