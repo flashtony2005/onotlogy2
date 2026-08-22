@@ -26,11 +26,12 @@ use crate::compose::task::WorldEventSink;
 use crate::fabric::adapter::AgentAdapter;
 use crate::fabric::router::FabricRouter;
 use crate::fabric::session::{Session, SessionManager};
-use crate::fabric::{AgentMessage, Bridge};
+use crate::fabric::{AgentMessage, Bridge, MessageKind};
 use crate::kernel::{Kernel, KernelError, Scope};
 use crate::projection::{Projection, ProjectionError};
 use crate::storage::{LibSQLStorage, TraceQuery};
 use crate::trace::TraceEvent;
+use crate::worker::process::ExecutionContext;
 
 /// Facade 错误（三个语义域各自包装；内部错误不泄漏实现细节）。
 #[derive(Debug, thiserror::Error)]
@@ -131,7 +132,11 @@ pub struct FabricRequest {
     pub session_id: String,
     pub sender: String,
     pub intent: String,
+    /// 任务参数；执行上下文不再混入此对象。
     pub payload: Value,
+    /// 正式执行上下文。agent_task / modify_code 等文件型能力必须提供 isolated workspace。
+    #[serde(default)]
+    pub execution_context: Option<ExecutionContext>,
     /// Phase 8：项目归属（None = 全局；任务事件进项目世界）。
     #[serde(default)]
     pub project_id: Option<String>,
@@ -240,6 +245,11 @@ impl Facade {
         approve: bool,
     ) -> Result<AgentMessage, FacadeError> {
         self.fabric.resolve(session_id, run_id, approve)
+    }
+
+    /// 重启恢复单条 fabric task.request；仅由 server 启动恢复调用。
+    pub(crate) fn restore_fabric_request(&self, request: AgentMessage) -> Result<(), FacadeError> {
+        self.fabric.restore_request(request)
     }
 
     /// fabric.cancel()：按 correlation_id 取消运行，返回命中并 kill 的 adapter 数
@@ -494,6 +504,31 @@ impl FabricService {
         }
     }
 
+    /// 重启恢复：把持久化的 task.request 重新放回内存会话，供审批裁决后 resume。
+    pub fn restore_request(&self, request: AgentMessage) -> Result<(), FacadeError> {
+        if request.kind != MessageKind::TaskRequest {
+            return Err(FacadeError::Fabric("恢复请求不是 task.request".into()));
+        }
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| FacadeError::Fabric("会话表锁中毒".into()))?;
+        if sessions.get(&request.session_id).is_none() {
+            sessions.create_with_id(request.session_id.clone(), vec![request.sender.clone()]);
+        }
+        let session = sessions
+            .get_mut(&request.session_id)
+            .ok_or_else(|| FacadeError::Fabric(format!("会话不存在: {}", request.session_id)))?;
+        if !session.messages().iter().any(|m| {
+            m.kind == MessageKind::TaskRequest && m.correlation_id == request.correlation_id
+        }) {
+            session
+                .append(request)
+                .map_err(|e| FacadeError::Fabric(e.to_string()))?;
+        }
+        Ok(())
+    }
+
     pub fn submit(&self, req: FabricRequest) -> Result<FabricSubmission, FacadeError> {
         // 契约：session 不存在自动创建（participants=[sender]；id=请求方 session_id）
         {
@@ -514,6 +549,7 @@ impl FabricService {
                 &req.sender,
                 &req.intent,
                 req.payload,
+                req.execution_context.clone(),
                 req.project_id.clone(),
             )
             .map_err(|e| FacadeError::Fabric(e.to_string()))?;
@@ -523,7 +559,9 @@ impl FabricService {
             let s = self.sessions.clone();
             // drop JoinHandle → 任务 detach 后在后台继续跑（fire-and-forget）
             drop(self.handle.spawn_blocking(move || {
-                b.run_in_background(s, job);
+                if let Err(err) = b.run_in_background(s, job) {
+                    eprintln!("[fabric] 后台任务失败: {err}");
+                }
             }));
         }
         Ok(FabricSubmission { result: msg })

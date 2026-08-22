@@ -8,8 +8,13 @@
 //! - Compensation：错误恢复语义（Failure → CompensationEngine → CompensationExecutor → World）
 //!
 //! 两者都修改 World，但语义不同，职责必须分开（避免 Executor 知道太多 Compensation）。
+//! 正向路径由 `RelationEffectExecutor` 唯一 apply；`EffectResult` 只作为审计和
+//! 补偿输入返回。错误恢复路径由 `RelationCompensationExecutor` 负责闭合关系时间窗。
 //! Phase 5 MVP：`RelationEffectExecutor` / `RelationCompensationExecutor`（V2-native，
 //! 基于 Kernel relations 表达世界——State = Relation 投影，Effect 真实改变 World）。
+//!
+//! World execution boundary：正向 Effect mutation 与失败补偿的唯一组合入口。
+//! Event replay 位于 `crate::projection`；它不能替代本模块执行 Effect。
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 pub mod compensation;

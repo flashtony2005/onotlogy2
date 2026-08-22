@@ -1,5 +1,5 @@
 //! V2.0 Runtime Kernel Phase 1 集成契约：
-//! - 删除用户闭环（审批等待 → relate 恢复 → 完成）
+//! - 删除用户闭环（审批等待 → explicit approve 恢复 → 完成）
 //! - P1 补偿链（A✓B✓C✗ → 逆序补偿 → Compensated；失败 → Escalated + 事实）
 //! - 持久化往返（save → restore）
 
@@ -47,7 +47,7 @@ fn emit(k: &mut Kernel, f: FiberId, action: &str, inverse: Option<&str>) {
     k.emit(f, e).unwrap();
 }
 
-// ── TC-K1：删除用户闭环 — 审批挂起 → relate(Approval) 恢复 → 完成 ─────────
+// ── TC-K1：删除用户闭环 — 审批挂起 → explicit approve 恢复 → 完成 ────────
 #[tokio::test]
 async fn tc_k1_delete_user_approval_loop() {
     let mut k = Kernel::new();
@@ -58,27 +58,17 @@ async fn tc_k1_delete_user_approval_loop() {
 
     // Task Fiber：删除用户（需人工审批）
     let f = running(&mut k, agent, "DeleteUser");
-    // Policy 门禁：require_approval → 声明等待 Approval 关系，进入 WAITING
-    k.wait_on(
-        f,
-        WaitPattern {
-            source: None,
-            predicate: "Approval".into(),
-            target: None,
-        },
-    )
-    .unwrap();
+    // Policy 门禁：require_approval → 进入 WAITING
     k.advance(f, FiberState::Waiting).unwrap();
     assert_eq!(k.fiber(f).unwrap().state, FiberState::Waiting);
 
-    // 浏览器/外部：POST /approval → relate(Approval --approved_by--> admin)
-    k.relate(Relation::new(agent, "approval", "Approval", "admin", now()))
-        .unwrap();
-    // 等待匹配 → 自动恢复 RUNNING
+    // 浏览器/外部：POST /approval → 显式裁决
+    k.approve(f, "admin").unwrap();
+    // 明确裁决后恢复 RUNNING
     assert_eq!(
         k.fiber(f).unwrap().state,
         FiberState::Running,
-        "relate 应自动恢复 WAITING fiber"
+        "approve 应恢复 WAITING fiber"
     );
 
     // 恢复后提交删除 Effect + 关系投影 → 完成
@@ -90,7 +80,9 @@ async fn tc_k1_delete_user_approval_loop() {
 
     // 事实层：delete 关系存在 + 事件可审计
     assert!(k.relations().any(|r| r.predicate == "deleted"));
-    assert!(k.events().iter().any(|e| e.ty == "fiber.resumed"));
+    assert!(k.events().iter().any(|e| {
+        e.ty == "approval.granted" && e.payload.get("by").and_then(|v| v.as_str()) == Some("admin")
+    }));
     assert!(k.events().iter().any(|e| e.ty == "effect.committed"));
 }
 
@@ -180,7 +172,7 @@ async fn tc_k5_dispose_terminates_waiting_without_compensation() {
         f,
         WaitPattern {
             source: None,
-            predicate: "Approval".into(),
+            predicate: "Signal".into(),
             target: None,
         },
     )
@@ -245,12 +237,12 @@ async fn tc_k7_wait_pattern_wildcard() {
     let f1 = running(&mut k, world, "W1");
     let f2 = running(&mut k, world, "W2");
 
-    // f1 等任意 Approval；f2 等特定 target 的 Approval
+    // f1 等任意 Signal；f2 等特定 target 的 Signal
     k.wait_on(
         f1,
         WaitPattern {
             source: None,
-            predicate: "Approval".into(),
+            predicate: "Signal".into(),
             target: None,
         },
     )
@@ -259,7 +251,7 @@ async fn tc_k7_wait_pattern_wildcard() {
         f2,
         WaitPattern {
             source: None,
-            predicate: "Approval".into(),
+            predicate: "Signal".into(),
             target: Some("boss".into()),
         },
     )
@@ -267,8 +259,8 @@ async fn tc_k7_wait_pattern_wildcard() {
     k.advance(f1, FiberState::Waiting).unwrap();
     k.advance(f2, FiberState::Waiting).unwrap();
 
-    // 一条 Approval（target=admin）→ 只恢复 f1
-    k.relate(Relation::new(world, "approval", "Approval", "admin", now()))
+    // 一条 Signal（target=admin）→ 只恢复 f1
+    k.relate(Relation::new(world, "approval", "Signal", "admin", now()))
         .unwrap();
     assert_eq!(k.fiber(f1).unwrap().state, FiberState::Running);
     assert_eq!(
@@ -277,8 +269,8 @@ async fn tc_k7_wait_pattern_wildcard() {
         "target 不匹配不得恢复"
     );
 
-    // target=boss 的 Approval → 恢复 f2
-    k.relate(Relation::new(world, "approval", "Approval", "boss", now()))
+    // target=boss 的 Signal → 恢复 f2
+    k.relate(Relation::new(world, "approval", "Signal", "boss", now()))
         .unwrap();
     assert_eq!(k.fiber(f2).unwrap().state, FiberState::Running);
 }

@@ -1,0 +1,73 @@
+# 彩票本体分析业务包：彩种、开奖数据、分析策略、推导运行和结果。
+# 统计方法与实验性规则统一建模为 Strategy，结果必须携带 evidence 与 status。
+
+object LotterySystem:
+  properties:
+    name: string
+    description: string
+    data_policy: string
+
+object LotteryGame:
+  properties:
+    code: string
+    name: string
+    category: string
+    red_count: int
+    red_max: int
+    blue_count: int
+    blue_max: int
+    draw_period: string
+
+object LotteryDraw:
+  properties:
+    game: string
+    issue: string
+    draw_date: string
+    red_numbers: string
+    blue_numbers: string
+    source: string
+    imported_at: string
+
+object DataImport:
+  properties:
+    game: string
+    source_file: string
+    format: string
+    row_count: int
+    status: string
+
+object AnalysisStrategy:
+  properties:
+    code: string
+    name: string
+    family: string
+    mode: string
+    description: string
+    enabled: bool
+
+object DerivationRule:
+  properties:
+    code: string
+    name: string
+    trigger: string
+    conclusion: string
+    explainability: string
+    status: string
+
+object AnalysisRun:
+  properties:
+    game: string
+    strategy: string
+    as_of_issue: string
+    status: string
+    result_summary: string
+
+object Prediction:
+  properties:
+    game: string
+    strategy: string
+    draw_issue: string
+    numbers: string
+    confidence: float
+    evidence: string
+    status: string

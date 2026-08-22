@@ -1,0 +1,6 @@
+{
+  "name": "退款超过阈值必须审批",
+  "given": {"customer": "customer:demo-vip", "amount": 1200},
+  "when": "Customer.refund",
+  "then": ["require human approval", "do not update balance before approval"]
+}

@@ -102,12 +102,37 @@ impl LibSQLStorage {
         Ok(())
     }
 
+    /// 更新账号口令哈希，并立即撤销该账号已有的全部会话。
+    ///
+    /// 口令只允许以 Argon2id PHC 哈希形式进入存储层；明文口令由认证层/CLI
+    /// 负责生成哈希，存储层不接触明文。
+    pub async fn update_user_password(
+        &self,
+        username: &str,
+        password_hash: &str,
+    ) -> Result<(), StorageError> {
+        let Some(u) = self.get_user_by_username(username).await? else {
+            return Err(StorageError::NotFound(format!("user:{username}")));
+        };
+        self.conn
+            .execute(
+                "UPDATE wb_user SET password_hash = ?2 WHERE username = ?1",
+                params![username, password_hash],
+            )
+            .await?;
+        self.delete_sessions_for_user(&u.id).await?;
+        Ok(())
+    }
+
     /// 启停账号（禁用时级联清其全部会话，应用层替代外键 ON DELETE CASCADE）。
     pub async fn set_user_disabled(
         &self,
         user_id: &str,
         disabled: bool,
     ) -> Result<(), StorageError> {
+        if self.get_user_by_id(user_id).await?.is_none() {
+            return Err(StorageError::NotFound(format!("user:{user_id}")));
+        }
         self.conn
             .execute(
                 "UPDATE wb_user SET disabled = ?2 WHERE id = ?1",
@@ -117,6 +142,21 @@ impl LibSQLStorage {
         if disabled {
             self.delete_sessions_for_user(user_id).await?;
         }
+        Ok(())
+    }
+
+    /// 更新账号角色，并立即撤销已有会话，让新权限立即生效。
+    pub async fn update_user_role(&self, user_id: &str, role: &str) -> Result<(), StorageError> {
+        if self.get_user_by_id(user_id).await?.is_none() {
+            return Err(StorageError::NotFound(format!("user:{user_id}")));
+        }
+        self.conn
+            .execute(
+                "UPDATE wb_user SET role = ?2 WHERE id = ?1",
+                params![user_id, role],
+            )
+            .await?;
+        self.delete_sessions_for_user(user_id).await?;
         Ok(())
     }
 

@@ -1,5 +1,8 @@
 //! PROJECTION —— Simulation 原语（V2 Kernel Invariant I2 的载体）。
 //!
+//! 注意：这是假设轨 Projection；它不同于宿主 crate 的
+//! `openaip_os::projection::Projection`（后者只负责事实事件重放）。
+//!
 //! 双轨模型的「假设轨」：`Hypothetical Action → Projection → Predicted State`。
 //!
 //! 铁律（I2）：**Projection ∉ EventLog**——投影永不写入事件流、永不参与

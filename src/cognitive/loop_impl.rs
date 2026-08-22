@@ -2,7 +2,7 @@
 //!
 //! 每轮 poll：Observe → Decide → Execute（Policy→审批→Effect→投影）→ Observe Result
 //! 完成判定（D5）：expected_relations 全部满足（Agent 不信任自己的执行）。
-//! Waiting（审批挂起）：返回 LoopOutcome::Waiting，relate(Approval) 恢复后 `resume_until_done` 续跑。
+//! Waiting（审批挂起）：返回 LoopOutcome::Waiting，由显式审批裁决恢复后 `resume_until_done` 续跑。
 
 use serde_json::{Value, json};
 
@@ -22,7 +22,7 @@ pub enum LoopOutcome {
     Continue,
     /// 目标达成（expected_relations 满足或无更多决策）。
     Completed,
-    /// 审批挂起（relate 恢复后 resume_until_done 续跑）。
+    /// 审批挂起（显式裁决恢复后 resume_until_done 续跑）。
     Waiting,
     /// 业务拒绝（Effect 未提交；已走空补偿）。
     Denied(String),
@@ -491,7 +491,7 @@ impl<'k> AgentLoop<'k> {
         self.resume_until_done(fiber, task)
     }
 
-    /// 续跑（审批恢复后调用：relate(Approval) → resume → 再入循环）。
+    /// 续跑（审批显式裁决后调用：resume → 再入循环）。
     pub fn resume_until_done(
         &mut self,
         fiber: FiberId,

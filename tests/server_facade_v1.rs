@@ -229,7 +229,8 @@ async fn tc_sf4_fabric_submit_auto_session_and_correlation() {
             "sessionId": "sess_auto",
             "sender": "dsh",
             "intent": "run_shell",
-            "payload": { "args": ["-c", "true"] }
+            "payload": { "args": ["-c", "true"] },
+            "executionContext": { "workspace": { "root": "/tmp", "mode": "isolated" } }
         })),
     )
     .await;
@@ -241,7 +242,8 @@ async fn tc_sf4_fabric_submit_auto_session_and_correlation() {
             "sessionId": "sess_auto",
             "sender": "dsh",
             "intent": "run_shell",
-            "payload": { "args": ["-c", "true"] }
+            "payload": { "args": ["-c", "true"] },
+            "executionContext": { "workspace": { "root": "/tmp", "mode": "isolated" } }
         })),
     )
     .await;
@@ -288,7 +290,8 @@ async fn tc_sf5_fabric_events_reach_ws_realtime() {
             "sessionId": "sess_ws",
             "sender": "dsh",
             "intent": "run_shell",
-            "payload": { "args": ["-c", "echo ws-ok"], "object": "order-ws" }
+            "payload": { "args": ["-c", "echo ws-ok"], "object": "order-ws" },
+            "executionContext": { "workspace": { "root": "/tmp", "mode": "isolated" } }
         })),
     )
     .await;
@@ -340,7 +343,8 @@ async fn tc_sf6_run_shell_executes_via_shell_exec_provider() {
             "sessionId": "sess_shell",
             "sender": "dsh",
             "intent": "run_shell",
-            "payload": { "args": ["-c", "echo hi-shell"] }
+            "payload": { "args": ["-c", "echo hi-shell"] },
+            "executionContext": { "workspace": { "root": "/tmp", "mode": "isolated" } }
         })),
     )
     .await;

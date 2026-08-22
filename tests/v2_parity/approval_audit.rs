@@ -2,8 +2,8 @@
 //!
 //! 契约（REQ-018 可审计承诺在 V2 的完整形态）：
 //! - 显式 `k.approve` → `approval.granted`（by=审批人）——已存在（tc 覆盖）。
-//! - 原始 `relate(Approval)` 恢复路径（外部事件统一入口）也必须落 `approval.granted`
-//!   审计（by=关系 source），不留「审批发生了但事实层无记录」的洞。
+//! - 原始 `Approval` relation 不得触发审批裁决或落 `approval.granted`；
+//!   只有显式 `approve/reject/expire` 才能改变审批状态并产生对应审计。
 //! - 全链审计种类：approval.requested / approval.granted / approval.rejected /
 //!   approval.expired / evolution.gate_approved 各司其职，可回放。
 
@@ -12,6 +12,7 @@ use openaip_os::cognitive::{Agent, AgentLoop, LoopOutcome};
 use openaip_os::compose::policy::Policy;
 use openaip_os::compose::{Capability, Service, Task};
 use openaip_os::kernel::effect::Reversibility;
+use openaip_os::kernel::fiber::FiberState;
 use openaip_os::kernel::relation::Relation;
 use openaip_os::kernel::{Kernel, Scope};
 use serde_json::json;
@@ -34,9 +35,9 @@ fn spawn_agent(k: &mut Kernel) -> Agent {
     Agent::new("agent", world)
 }
 
-// ── G4a：relate(Approval) 恢复路径落 approval.granted 审计 ─────────────
+// ── G4a：Approval relation 不再作为审批裁决入口 ─────────────────────────
 #[test]
-fn g4a_raw_relate_approval_audits_grant() {
+fn g4a_raw_relate_does_not_grant_approval() {
     let mut k = Kernel::new();
     let mut agent = spawn_agent(&mut k);
     let services = [approval_service()];
@@ -58,13 +59,18 @@ fn g4a_raw_relate_approval_audits_grant() {
     // 审批前：requested 已审计
     assert!(k.events().iter().any(|e| e.ty == "approval.requested"));
 
-    // 原始 relate（A2 风格，不经过 k.approve）→ 必须落 granted 审计
+    let fiber = k
+        .all_fibers()
+        .find(|f| f.context == ctx && f.task == task.id)
+        .expect("task fiber")
+        .id;
+    // Approval 是治理裁决，不是普通 World relation；必须走显式 approve。
     k.relate(Relation::new(ctx, "alice", "Approval", "admin", k.now()))
         .unwrap();
+    assert_eq!(k.fiber(fiber).map(|f| f.state), Some(FiberState::Waiting));
     assert!(
-        k.events().iter().any(|e| e.ty == "approval.granted"
-            && e.payload.get("by").and_then(|v| v.as_str()) == Some("alice")),
-        "relate 恢复必须落 approval.granted（by=关系 source）: {:?}",
+        !k.events().iter().any(|e| e.ty == "approval.granted"),
+        "普通关系不得产生 approval.granted: {:?}",
         k.events()
     );
 }

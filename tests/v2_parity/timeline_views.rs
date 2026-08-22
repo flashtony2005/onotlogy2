@@ -1,5 +1,5 @@
 //! M1b · G9 契约测试：三层时间线在 V2 事件流下行为不变
-//! （v0_3 tc009 三层视图 / v0_9_ws_clamp 的 V2 等价——UI buildTimeline 契约）。
+//! （server_views tc009 三层视图 / websocket_views 的等价契约——UI buildTimeline）。
 //!
 //! 用 V2 AgentLoop 的 trace sink 产出真实事件流 → trace::build_timeline / derive_run_state
 //! 断言：状态推导（Completed/Required）、进度 8 步、Executive 只含 Goal+Action、
@@ -10,7 +10,6 @@ use openaip_os::cognitive::{Agent, AgentLoop, LoopOutcome};
 use openaip_os::compose::policy::Policy;
 use openaip_os::compose::{Capability, Service, Task};
 use openaip_os::kernel::effect::Reversibility;
-use openaip_os::kernel::relation::Relation;
 use openaip_os::kernel::{Kernel, Scope};
 use openaip_os::session::run::RunStatus;
 use openaip_os::trace::TraceEvent;
@@ -62,8 +61,7 @@ fn completed_run_with_approval() -> Vec<TraceEvent> {
         .find(|f| f.context == ctx && f.task == task.id)
         .unwrap()
         .id;
-    k.relate(Relation::new(ctx, "admin", "Approval", "x", k.now()))
-        .unwrap();
+    k.approve(fiber, "admin").unwrap();
     let out2 = {
         let mut lp =
             AgentLoop::new(&mut k, &mut agent, &services, &engine).with_trace("run_tl", &mut sink);

@@ -5,6 +5,7 @@ on:
     branches: [master, main, dev]
   pull_request:
     branches: [master, main, dev]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -14,6 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - name: Install nightly toolchain
         uses: dtolnay/rust-toolchain@master
@@ -36,6 +39,59 @@ jobs:
       - name: test
         run: cargo test --workspace --all-targets
 
+      - name: Phase 1 golden scenario
+        run: make golden
+
+      - name: Phase 3 Docker runtime preflight
+        run: |
+          set -o pipefail
+          {
+            docker version
+            docker info
+            docker compose version
+          } 2>&1 | tee target/phase3-docker-preflight.log
+
+      - name: Phase 3 deployment smoke
+        run: |
+          set -o pipefail
+          make ops-smoke 2>&1 | tee target/phase3-ops-smoke.log
+
+      - name: Phase 3 upgrade and rollback rehearsal
+        run: |
+          set -o pipefail
+          OAIP_BASE_REF=HEAD^ \
+          OAIP_CANDIDATE_BIN="$PWD/target/release/oaip" \
+          make ops-rehearsal 2>&1 | tee target/phase3-upgrade-rollback.log
+
+      - name: Phase 3 container smoke
+        run: |
+          set -o pipefail
+          make container-smoke 2>&1 | tee target/phase3-container-smoke.log
+
+      - name: Phase 3 Compose smoke
+        run: |
+          set -o pipefail
+          make compose-smoke 2>&1 | tee target/phase3-compose-smoke.log
+
+      - name: Phase 3 release manifest
+        if: always()
+        run: make release-manifest
+
+      - name: Upload Phase 3 deployment evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase3-deployment-evidence
+          path: |
+            target/release-manifest.json
+            target/phase3-docker-preflight.log
+            target/phase3-ops-smoke.log
+            target/phase3-upgrade-rollback.log
+            target/phase3-container-smoke.log
+            target/phase3-compose-smoke.log
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: coverage (baseline >= 75%)
         run: |
           rustup component add llvm-tools-preview
@@ -46,9 +102,10 @@ jobs:
         # 白名单 = 经 libsql 传递且本地文件库不可达的 advisory（见 docs/07_测试文档/security-baseline.md）
         run: |
           cargo install cargo-audit --locked
-          cargo audit --ignore RUSTSEC-2026-0104 --ignore RUSTSEC-2026-0098 \
-            --ignore RUSTSEC-2026-0099 --ignore RUSTSEC-2026-0049 \
-            --ignore RUSTSEC-2025-0141 --ignore RUSTSEC-2025-0134
+          cargo audit --ignore RUSTSEC-2026-0258 --ignore RUSTSEC-2026-0104 \
+            --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099 \
+            --ignore RUSTSEC-2026-0049 --ignore RUSTSEC-2025-0141 \
+            --ignore RUSTSEC-2025-0134
 
   ui:
     runs-on: ubuntu-latest

@@ -1,7 +1,7 @@
 //! V2.0 认知层（Phase 3）集成契约：Agent Loop 闭环。
 //!
 //! A1 闭环：Observe→Decide→Act→Verify（expected_relations 目标函数）
-//! A2 审批暂停恢复：Waiting → relate(Approval) → resume_until_done
+//! A2 审批暂停恢复：Waiting → explicit approve → resume_until_done
 //! A3 Memory 沉淀/召回（D3）
 //! A4 前置条件 Deny（业务拒绝）
 //! A5 无决策且目标未达成 → Failed（不误判完成）
@@ -13,7 +13,6 @@ use openaip_os::cognitive::{Agent, AgentLoop, LoopOutcome};
 use openaip_os::compose::policy::{Cmp, Policy, Precondition};
 use openaip_os::compose::{Capability, Service, Task};
 use openaip_os::kernel::effect::Reversibility;
-use openaip_os::kernel::relation::Relation;
 use openaip_os::kernel::{Kernel, Scope};
 use serde_json::{Value, json};
 
@@ -97,7 +96,7 @@ async fn tc_a1_agent_closed_loop_verify() {
     assert!(k.events().iter().any(|e| e.ty == "effect.committed"));
 }
 
-// ── A2：审批暂停恢复 — Waiting → relate(Approval) → 续跑完成 ─────────────
+// ── A2：审批暂停恢复 — Waiting → explicit approve → 续跑完成 ────────────
 #[tokio::test]
 async fn tc_a2_approval_pause_and_resume() {
     let services = [crm_service()];
@@ -115,16 +114,9 @@ async fn tc_a2_approval_pause_and_resume() {
     let out = run_task(&mut k, &mut agent, &services, &engine, &task, json!({}));
     assert_eq!(out, LoopOutcome::Waiting, "require_approval 应挂起");
 
-    // 人工审批 → 自动恢复 → 续跑完成（重建 loop 借用）
+    // 人工审批 → 显式恢复 → 续跑完成（重建 loop 借用）
     let fiber = task_fiber_of(&k, &agent, &task);
-    k.relate(Relation::new(
-        agent.context,
-        "approval",
-        "Approval",
-        "admin",
-        k.now(),
-    ))
-    .unwrap();
+    k.approve(fiber, "admin").unwrap();
     let out2 = {
         let mut loop_ = AgentLoop::new(&mut k, &mut agent, &services, &engine);
         loop_.resume_until_done(fiber, &task).unwrap()

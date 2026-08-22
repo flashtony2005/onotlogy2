@@ -88,6 +88,15 @@ CREATE TABLE IF NOT EXISTS wb_meta (
   value  TEXT
 );
 
+-- 迁移历史：version=1 是当前 schema 的基线，后续行记录每个已应用目标版本。
+CREATE TABLE IF NOT EXISTS wb_schema_migration (
+  version    INTEGER PRIMARY KEY,
+  name       TEXT NOT NULL,
+  applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_schema_migration_applied_at
+  ON wb_schema_migration (applied_at);
+
 -- 统一事件轨迹：world 生命周期事件 + cognitive 认知事件（见 agent-observation-design.md 4.3 / 4.7）
 CREATE TABLE IF NOT EXISTS wb_ontology_object (
   id          TEXT PRIMARY KEY,            -- 语义ID（如 customer_001）
@@ -145,6 +154,36 @@ CREATE INDEX IF NOT EXISTS idx_trace_agent  ON wb_trace_event (agent_id);
 CREATE INDEX IF NOT EXISTS idx_trace_type   ON wb_trace_event (event_type);
 CREATE INDEX IF NOT EXISTS idx_trace_time   ON wb_trace_event (timestamp);
 CREATE INDEX IF NOT EXISTS idx_create_time  ON wb_trace_event (create_time);
+
+-- 审计轨迹是事实源：只能 INSERT，修正必须追加新事件，禁止 UPDATE / DELETE。
+CREATE TRIGGER IF NOT EXISTS trg_wb_trace_event_append_only_update
+BEFORE UPDATE ON wb_trace_event
+BEGIN
+  SELECT RAISE(ABORT, 'wb_trace_event is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_wb_trace_event_append_only_delete
+BEFORE DELETE ON wb_trace_event
+BEGIN
+  SELECT RAISE(ABORT, 'wb_trace_event is append-only');
+END;
+
+-- S2d：审计事件与完整性哈希链一一对应；链表同样只允许追加。
+CREATE TABLE IF NOT EXISTS wb_audit_chain (
+  sequence      INTEGER PRIMARY KEY,
+  event_id      TEXT NOT NULL UNIQUE,
+  previous_hash TEXT NOT NULL,
+  hash          TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS trg_wb_audit_chain_append_only_update
+BEFORE UPDATE ON wb_audit_chain
+BEGIN
+  SELECT RAISE(ABORT, 'wb_audit_chain is append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_wb_audit_chain_append_only_delete
+BEFORE DELETE ON wb_audit_chain
+BEGIN
+  SELECT RAISE(ABORT, 'wb_audit_chain is append-only');
+END;
 
 -- V0.5 Agent 自治：记忆沉淀（Memory = Event 的积累；BL-008）。
 -- 经验按 label 去重并累加 hits，下一轮 run 经 recall 复用，形成 Action→Memory→下次 Plan 的闭环。
@@ -233,6 +272,29 @@ CREATE TABLE IF NOT EXISTS wb_worker_stats (
   updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (capability, worker_id)
 );
+
+-- Phase 2.5：业务包自动运行引擎任务队列。
+-- 任务状态是宿主运行时事实，业务结果仍由插件写入本体对象。
+CREATE TABLE IF NOT EXISTS wb_automation_job (
+  id            TEXT PRIMARY KEY,
+  pack_id       TEXT NOT NULL,
+  job_type      TEXT NOT NULL,
+  dedupe_key    TEXT NOT NULL,
+  payload       TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  attempt       INTEGER NOT NULL DEFAULT 0,
+  max_attempts  INTEGER NOT NULL DEFAULT 3,
+  available_at  TEXT NOT NULL,
+  started_at    TEXT,
+  finished_at   TEXT,
+  last_error    TEXT,
+  result        TEXT,
+  created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (pack_id, job_type, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_automation_job_status_available
+  ON wb_automation_job (status, available_at, created_at);
 
 -- V0.7 认证与授权（P0 风险「无认证」）：本地账号 + 不透明会话令牌。
 -- 不依赖外键（libsql 默认 foreign_keys=OFF）；用户禁用时由应用层级联清理会话（delete_sessions_for_user）。

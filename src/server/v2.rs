@@ -27,6 +27,18 @@ pub struct V2State {
 
 pub type SharedV2 = Arc<V2State>;
 
+impl V2State {
+    /// 创建宿主 V2 状态并注册内置业务包操作 Skill。
+    pub fn with_builtins() -> Result<Self, crate::skill::builtin::BuiltinSkillError> {
+        let mut skills = SkillRegistry::default();
+        crate::skill::builtin::register_business_pack_operations(&mut skills)?;
+        Ok(Self {
+            skills: RwLock::new(skills),
+            ..Self::default()
+        })
+    }
+}
+
 // ── DTO ────────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -128,9 +140,10 @@ pub async fn import_skill(
         .compile(&raw, &ir, &resolutions)
         .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e.to_string()))?;
     let mut reg = v2.skills.write().expect("V2 状态 RwLock 不中毒（写）");
-    reg.attach_raw(&raw.id, raw.clone());
     reg.register(asset.clone())
         .map_err(|e| (axum::http::StatusCode::CONFLICT, e.to_string()))?;
+    let raw_id = raw.id.clone();
+    reg.attach_raw(&raw_id, raw);
     Ok(Json(SkillDto {
         id: asset.id.clone(),
         name: asset.name.clone(),
@@ -176,19 +189,32 @@ pub async fn list_plugins(
 ) -> Json<Vec<PluginDto>> {
     let v2 = &state.v2;
     let reg = v2.plugins.read().expect("V2 状态 RwLock 不中毒（读）");
-    let mut out: Vec<PluginDto> = reg
-        .snapshot()
-        .plugins
+    let mut out: Vec<PluginDto> = state
+        .plugin_catalog
+        .list()
         .into_iter()
-        .map(|(m, st)| PluginDto {
-            id: m.id.clone(),
-            name: m.name.clone(),
-            status: format!("{st:?}"),
-            runtime: format!("{:?}", m.runtime),
-            endpoint: m.endpoint.clone(),
-            capabilities: m.capabilities.iter().map(|c| c.id.clone()).collect(),
+        .map(|info| PluginDto {
+            id: info.manifest.id.clone(),
+            name: info.manifest.name.clone(),
+            status: format!("{:?}", info.status),
+            runtime: format!("{:?}", info.manifest.runtime),
+            endpoint: info.manifest.endpoint.clone(),
+            capabilities: info
+                .manifest
+                .capabilities
+                .iter()
+                .map(|capability| capability.id.clone())
+                .collect(),
         })
         .collect();
+    out.extend(reg.snapshot().plugins.into_iter().map(|(m, st)| PluginDto {
+        id: m.id.clone(),
+        name: m.name.clone(),
+        status: format!("{st:?}"),
+        runtime: format!("{:?}", m.runtime),
+        endpoint: m.endpoint.clone(),
+        capabilities: m.capabilities.iter().map(|c| c.id.clone()).collect(),
+    }));
     out.sort_by(|a, b| a.id.cmp(&b.id));
     out.dedup_by(|a, b| a.id == b.id);
     Json(out)

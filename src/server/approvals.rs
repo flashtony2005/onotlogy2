@@ -1,6 +1,6 @@
 //! 挂起审批端点（M1c · V2）：`GET /run/:run_id/approvals` + `POST /run/:run_id/approval/:req_id`。
 //!
-//! V1 读 ApprovalStore（planner 内存 + wb_approval 持久化）；M1c 起读 `AppState.pending`
+//! 当前审批状态只读 `AppState.pending`；裁决统一通过 Kernel 的显式 API 完成。
 //! 注册表（run 路径 Waiting 时注册，裁决经 mpsc 通道唤醒 run 的 resolver）。
 //! 已裁决条目从注册表移除 → 二次裁决 404（V1 tc023 语义）。
 

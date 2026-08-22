@@ -1,8 +1,8 @@
-//! M1c HTTP 审批端点契约（TC-023a~e · V2 Waiting 注册表驱动）。
+//! HTTP 审批端点契约（TC-023a~e · Waiting 注册表驱动）。
 //!
-//! V1 读 ApprovalStore（planner 内存 + wb_approval 表）；M1c 起读 AppState.pending
-//! （run 路径 Waiting 时注册，裁决经 mpsc 通道唤醒 resolver）。行为契约不变：
-//! 挂起列表 / 批准恢复完成 / 拒绝终止 / 超时 Expired / 错 run 与二次裁决拒绝。
+//! run 进入 Waiting 时注册到 `AppState.pending`；裁决经 mpsc 通道唤醒 resolver。
+//! 审批事实只通过显式 approve/reject/expire API 产生：挂起列表、批准恢复完成、
+//! 拒绝终止、超时 Expired、错 run 与二次裁决拒绝。
 
 mod common;
 use common::*;

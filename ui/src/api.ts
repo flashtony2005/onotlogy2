@@ -6,10 +6,22 @@ import { getToken } from './auth'
 import type {
   ApiResponse,
   AuthUserDto,
+  UserDto,
   PluginDto,
   RawSkillDto,
   RunStartDto,
   AuditQueryDto,
+  DomainPackDto,
+  DomainPackInstallDto,
+  DomainPackOperationsDto,
+  AutomationJobDto,
+  TraceEventDto,
+  AutomationStatusDto,
+  AutomationPackStatusDto,
+  DomainPackOperation,
+  DomainPackRuntimeDto,
+  DomainPackRuntimeUpdateDto,
+  StrategyRegistryDto,
   AuditViewDto,
   FabricRequestDto,
   FabricSubmissionDto,
@@ -116,6 +128,54 @@ export async function postLogout(): Promise<void> {
   await unwrap<{ loggedOut: boolean }>(res)
 }
 
+// ── 用户管理（仅 Developer）─────────────────────────────────────────────────
+
+export async function getUsers(): Promise<UserDto[]> {
+  const res = await authFetch('/api/v1/wb/users')
+  return unwrap<UserDto[]>(res)
+}
+
+export async function createUser(req: {
+  username: string
+  password: string
+  role: string
+  displayName?: string
+}): Promise<UserDto> {
+  const res = await authFetch('/api/v1/wb/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  })
+  return unwrap<UserDto>(res)
+}
+
+export async function resetUserPassword(userId: string, password: string): Promise<{ updated: boolean }> {
+  const res = await authFetch(`/api/v1/wb/users/${encodeURIComponent(userId)}/password`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  })
+  return unwrap<{ updated: boolean }>(res)
+}
+
+export async function setUserDisabled(userId: string, disabled: boolean): Promise<{ disabled: boolean }> {
+  const res = await authFetch(`/api/v1/wb/users/${encodeURIComponent(userId)}/disabled`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ disabled }),
+  })
+  return unwrap<{ disabled: boolean }>(res)
+}
+
+export async function setUserRole(userId: string, role: string): Promise<{ role: string }> {
+  const res = await authFetch(`/api/v1/wb/users/${encodeURIComponent(userId)}/role`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role }),
+  })
+  return unwrap<{ role: string }>(res)
+}
+
 // ── Agent 观察 API ──────────────────────────────────────────────────────────
 
 export async function postRun(agentId: string, goal: string): Promise<RunStartDto> {
@@ -185,6 +245,108 @@ export async function getSkills(): Promise<SkillDto[]> {
   const res = await authFetch('/api/v1/v2/skills')
   if (!res.ok) throw new Error(`skills ${res.status}`)
   return await res.json()
+}
+
+/** `GET /api/v1/domain-packs`：发现、校验并汇总本地业务包。 */
+export async function getDomainPacks(): Promise<DomainPackDto[]> {
+  const res = await authFetch('/api/v1/domain-packs')
+  return unwrap<DomainPackDto[]>(res)
+}
+
+/** `POST /api/v1/domain-packs/:id/install`：Developer 安装业务包。 */
+export async function installDomainPack(id: string): Promise<DomainPackInstallDto> {
+  const res = await authFetch(`/api/v1/domain-packs/${encodeURIComponent(id)}/install`, {
+    method: 'POST',
+  })
+  return unwrap<DomainPackInstallDto>(res)
+}
+
+export async function getDomainPackRuntime(id: string): Promise<DomainPackRuntimeDto> {
+  const res = await authFetch(`/api/v1/domain-packs/${encodeURIComponent(id)}/runtime`)
+  return unwrap<DomainPackRuntimeDto>(res)
+}
+
+export async function updateDomainPackRuntime(
+  id: string,
+  runtime: DomainPackRuntimeUpdateDto,
+): Promise<DomainPackRuntimeDto> {
+  const res = await authFetch(`/api/v1/domain-packs/${encodeURIComponent(id)}/runtime`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(runtime),
+  })
+  return unwrap<DomainPackRuntimeDto>(res)
+}
+
+export async function setDomainPackEnabled(id: string, enabled: boolean): Promise<DomainPackRuntimeDto> {
+  const action = enabled ? 'enable' : 'disable'
+  const res = await authFetch(`/api/v1/domain-packs/${encodeURIComponent(id)}/${action}`, {
+    method: 'POST',
+  })
+  return unwrap<DomainPackRuntimeDto>(res)
+}
+
+export async function getDomainPackOperations(id: string): Promise<DomainPackOperationsDto> {
+  const res = await authFetch(`/api/v1/domain-packs/${encodeURIComponent(id)}/operations`)
+  return unwrap<DomainPackOperationsDto>(res)
+}
+
+export async function getDomainPackStrategies(id: string): Promise<StrategyRegistryDto[]> {
+  const res = await authFetch(`/api/v1/domain-packs/${encodeURIComponent(id)}/strategies`)
+  return unwrap<StrategyRegistryDto[]>(res)
+}
+
+/** Phase 2.5：自动运行引擎任务观察与手动触发。 */
+export async function getAutomationJobs(): Promise<AutomationStatusDto> {
+  const res = await authFetch('/api/v1/automation/jobs')
+  return unwrap<AutomationStatusDto>(res)
+}
+
+export async function getDomainPackAutomationStatus(id: string): Promise<AutomationPackStatusDto> {
+  const res = await authFetch(`/api/v1/domain-packs/${encodeURIComponent(id)}/automation-status`)
+  return unwrap<AutomationPackStatusDto>(res)
+}
+
+export async function getTrace(id: string): Promise<TraceEventDto> {
+  const res = await authFetch(`/api/v1/wb/agent/trace/${encodeURIComponent(id)}`)
+  return unwrap<TraceEventDto>(res)
+}
+
+export async function getAutomationJob(id: string): Promise<AutomationJobDto> {
+  const res = await authFetch(`/api/v1/automation/jobs/${encodeURIComponent(id)}`)
+  return unwrap<AutomationJobDto>(res)
+}
+
+export async function cancelAutomationJob(id: string): Promise<AutomationJobDto> {
+  const res = await authFetch(`/api/v1/automation/jobs/${encodeURIComponent(id)}/cancel`, {
+    method: 'POST',
+  })
+  return unwrap<AutomationJobDto>(res)
+}
+
+export async function runDomainPack(id: string): Promise<AutomationJobDto> {
+  const res = await authFetch(`/api/v1/domain-packs/${encodeURIComponent(id)}/run`, {
+    method: 'POST',
+  })
+  return unwrap<AutomationJobDto>(res)
+}
+
+export async function scanDomainPack(id: string): Promise<AutomationJobDto[]> {
+  const res = await authFetch(`/api/v1/domain-packs/${encodeURIComponent(id)}/scan`, {
+    method: 'POST',
+  })
+  return unwrap<AutomationJobDto[]>(res)
+}
+
+export async function runDomainPackOperation(
+  id: string,
+  operation: DomainPackOperation,
+): Promise<AutomationJobDto> {
+  const res = await authFetch(
+    `/api/v1/domain-packs/${encodeURIComponent(id)}/operations/${encodeURIComponent(operation)}/run`,
+    { method: 'POST' },
+  )
+  return unwrap<AutomationJobDto>(res)
 }
 
 export async function getGraph(): Promise<WorldGraphDto> {

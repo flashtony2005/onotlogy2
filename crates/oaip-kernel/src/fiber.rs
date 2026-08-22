@@ -95,9 +95,9 @@ pub struct Fiber {
     /// 已提交 Effect 账本（P1 补偿依据，按提交顺序）。
     pub ledger: EffectLedger,
     pub relations: Vec<super::RelationId>,
-    /// WAITING 时等待的恢复信号（relate 匹配则自动 resume）。
+    /// WAITING 时等待的普通外部事件信号（Relation 匹配则自动 resume；审批不使用该路径）。
     pub wait_for: Option<WaitPattern>,
-    /// 是否已获得人工审批（relate 匹配恢复时置位；组合层 Policy 据此放行一次门禁）。
+    /// 是否已获得显式人工审批（由 approve 设置；组合层 Policy 据此放行当前门禁）。
     pub approved: bool,
     pub created_at: i64,
 }

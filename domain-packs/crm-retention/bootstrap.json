@@ -1,0 +1,54 @@
+{
+  "objects": [
+    {
+      "id": "company:acme",
+      "type": "Company",
+      "data": {"name": "示例企业", "code": "ACME"}
+    },
+    {
+      "id": "department:sales",
+      "type": "Department",
+      "data": {"name": "销售部", "code": "SALES"}
+    },
+    {
+      "id": "employee:manager-001",
+      "type": "Employee",
+      "data": {"name": "客户经理", "role": "account_manager"}
+    },
+    {
+      "id": "customer:demo-vip",
+      "type": "Customer",
+      "data": {
+        "name": "示例 VIP 客户",
+        "level": "VIP",
+        "balance": 0,
+        "days_since_last_contact": 45
+      }
+    },
+    {
+      "id": "customer:demo-normal",
+      "type": "Customer",
+      "data": {
+        "name": "示例普通客户",
+        "level": "NORMAL",
+        "balance": 0,
+        "days_since_last_contact": 7
+      }
+    },
+    {
+      "id": "business-policy:refund",
+      "type": "Approval",
+      "data": {
+        "subject": "退款审批阈值",
+        "status": "active",
+        "amount": 1000
+      }
+    }
+  ],
+  "relations": [
+    {"source": "company:acme", "relation": "contains", "target": "department:sales"},
+    {"source": "employee:manager-001", "relation": "belongs_to", "target": "department:sales"},
+    {"source": "employee:manager-001", "relation": "manages", "target": "customer:demo-vip"},
+    {"source": "employee:manager-001", "relation": "manages", "target": "customer:demo-normal"}
+  ]
+}

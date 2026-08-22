@@ -14,9 +14,11 @@
 //! - `server`：axum REST + WebSocket 流 + 三层观察 UI 静态托管
 
 pub mod auth;
+pub mod automation;
 pub mod cognitive;
 pub mod compose;
 pub mod diagnosis;
+pub mod domain_pack;
 pub mod fabric;
 pub mod facade;
 pub mod evaluation {
@@ -25,6 +27,8 @@ pub mod evaluation {
 }
 pub mod evolution2;
 pub mod health;
+pub mod lottery;
+pub mod lottery_plugin;
 pub use oaip_abi as abi;
 pub use oaip_eval_core as eval_core;
 pub use oaip_kernel as kernel;

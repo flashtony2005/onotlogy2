@@ -10,7 +10,7 @@
 //! - tc_pj7a 裸写无事件 → 投影世界不含该实体（P7 反向判定：事件是唯一世界入口）
 //! - tc_pj7b 事件完备 → 投影世界含全部实体（P7 正向判定）
 
-use openaip_os::kernel::{Kernel, Scope};
+use openaip_os::kernel::{FiberState, Kernel, Scope, WaitPattern};
 use openaip_os::projection::Projection;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine, RelationEngine};
 use openaip_os::trace::{TraceEvent, TraceKind};
@@ -125,6 +125,48 @@ async fn tc_pj1_objects_and_edges_project_to_kernel() {
     assert!(
         k.relations()
             .any(|r| r.source == "u1" && r.predicate == "owns" && r.target == "p1")
+    );
+}
+
+// ── P1b：投影重放只更新派生索引，不伪造事件或触发 Fiber 调度 ─────────────
+#[test]
+fn tc_pj1b_replay_is_side_effect_free() {
+    let mut k = Kernel::new();
+    let ctx = k.create_context(None, Scope::World, "world").unwrap();
+    let fiber = k.spawn(ctx, None, "wait-signal", json!({})).unwrap();
+    k.advance(fiber, FiberState::Starting).unwrap();
+    k.advance(fiber, FiberState::Ready).unwrap();
+    k.advance(fiber, FiberState::Running).unwrap();
+    k.wait_on(
+        fiber,
+        WaitPattern {
+            source: None,
+            predicate: "owns".into(),
+            target: None,
+        },
+    )
+    .unwrap();
+    k.advance(fiber, FiberState::Waiting).unwrap();
+
+    let mut p = Projection::new(ctx);
+    p.apply_event(
+        &mut k,
+        &world_ev(
+            "replay-1",
+            "RelationLinked",
+            vec!["u1", "o1"],
+            Some(json!({ "edge": "owns" })),
+            100,
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(k.fiber(fiber).unwrap().state, FiberState::Waiting);
+    assert!(k.events().iter().all(|e| e.ty != "relation.created"));
+    assert!(k.events().iter().all(|e| e.ty != "fiber.resumed"));
+    assert!(
+        k.relations()
+            .any(|r| r.source == "u1" && r.predicate == "owns" && r.target == "o1")
     );
 }
 

@@ -12,6 +12,7 @@ use openaip_os::fabric::adapters::{codex_adapter, dsh_adapter, shell_adapter};
 use openaip_os::fabric::router::FabricRouter;
 use openaip_os::facade::{AuditQuery, FabricRequest, Facade, OpenAipFacade, WorldQuery};
 use openaip_os::storage::LibSQLStorage;
+use openaip_os::worker::process::ExecutionContext;
 
 /// CLI Facade 装配：意图映射表固定；适配器**动态发现**——connect 成功的
 /// Agent 把 discover 的能力注册进 Router（Codex/DSH 是 Capability Provider）。
@@ -22,12 +23,18 @@ pub fn cli_facade(
     let storage = Arc::new(handle.block_on(LibSQLStorage::open(db))?);
     let mut router = FabricRouter::new();
     router.register_intent("modify_code", "code.write");
+    router.register_intent("agent_task", "agent.task");
     router.register_intent("run_shell", "shell.execute");
     router.register_intent("run_tests", "code.test");
     router.mark_high_risk("shell.execute");
 
     let mut adapters: Vec<Arc<dyn AgentAdapter>> = Vec::new();
-    for a in [codex_adapter(None), dsh_adapter(None), shell_adapter(None)] {
+    let dsh_command = std::env::var("OAIP_DSH_COMMAND").ok();
+    for a in [
+        codex_adapter(None),
+        dsh_adapter(dsh_command.as_deref()),
+        shell_adapter(None),
+    ] {
         if a.connect().is_ok() {
             let id = a.id().to_string();
             for c in a.discover() {
@@ -108,16 +115,20 @@ pub fn cmd_fabric_submit(
     sender: &str,
     intent: &str,
     payload: &str,
+    execution_context: Option<&str>,
     poll_timeout_secs: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let handle = tokio::runtime::Handle::current();
     let facade = cli_facade(db, handle)?;
     let payload: serde_json::Value = serde_json::from_str(payload)?;
+    let execution_context: Option<ExecutionContext> =
+        execution_context.map(serde_json::from_str).transpose()?;
     let sub = facade.fabric_submit(FabricRequest {
         session_id: session.to_string(),
         sender: sender.to_string(),
         intent: intent.to_string(),
         payload,
+        execution_context,
         project_id: None,
     })?;
     println!("🚀 Fabric 提交：");

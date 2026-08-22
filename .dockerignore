@@ -1,0 +1,17 @@
+.git
+.graft
+graft
+.codex
+.claude
+.cursor
+.gemini
+.kiro
+.windsurf
+.workbuddy
+adal
+ui/node_modules
+ui/dist
+target
+gen
+*.db
+*.db-*

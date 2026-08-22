@@ -7,6 +7,7 @@
 
 mod common;
 
+use openaip_os::ObjectEngine;
 use serde_json::{Value, json};
 
 async fn call(
@@ -39,10 +40,12 @@ async fn tc_sv1_import_skill_then_list() {
     );
     let addr = common::spawn_server(kernel).await;
 
-    // 空列表
+    // 宿主启动时注册业务包操作 Skill；用户导入的 Skill 仍需走标准导入流程。
     let (s0, body0) = call(addr, "GET", "/api/v1/v2/skills", None).await;
     assert_eq!(s0, 200);
-    assert_eq!(body0.as_array().unwrap().len(), 0, "初始为空");
+    let initial = body0.as_array().unwrap();
+    assert_eq!(initial.len(), 1, "初始应包含内置业务包操作 Skill");
+    assert_eq!(initial[0]["id"], "business-pack-operations");
 
     // Import
     let md = "# Thumbnail Generator\n\n- goal: 生成缩略图\n## Stage 1: Design\n- capability: image.generate\n- artifact: ThumbnailConcept\n## Stage 2: Render\n- capability: image.render\n- artifact: ThumbnailFile\n";
@@ -61,8 +64,12 @@ async fn tc_sv1_import_skill_then_list() {
     let (s2, body2) = call(addr, "GET", "/api/v1/v2/skills", None).await;
     assert_eq!(s2, 200);
     let arr = body2.as_array().unwrap();
-    assert_eq!(arr.len(), 1);
-    assert_eq!(arr[0]["capabilities"][0], "image.generate");
+    assert_eq!(arr.len(), 2);
+    let imported = arr
+        .iter()
+        .find(|skill| skill["id"] == "thumbnail-gen")
+        .expect("导入的 Skill 应出现在列表");
+    assert_eq!(imported["capabilities"][0], "image.generate");
 
     // 重复导入 → 409
     let (s3, _) = call(
@@ -119,6 +126,112 @@ async fn tc_sv2_plugins_list() {
     let (s, body) = call(addr, "GET", "/api/v1/v2/plugins", None).await;
     assert_eq!(s, 200);
     assert!(body.is_array(), "插件列表（初始为空数组）");
+}
+
+#[tokio::test]
+async fn tc_sv2b_generic_plugin_catalog_and_invoke() {
+    let kernel = std::sync::Arc::new(
+        openaip_os::storage::LibSQLStorage::open(":memory:")
+            .await
+            .unwrap(),
+    );
+    kernel
+        .create_project("lottery-analysis", "彩票", "插件 API 测试", "ontology")
+        .await
+        .unwrap();
+    let path = std::env::temp_dir().join(format!(
+        "oaip_plugin_http_{}_{}.csv",
+        std::process::id(),
+        std::thread::current().name().unwrap_or("test")
+    ));
+    std::fs::write(
+        &path,
+        "期号,前区1,前区2,前区3,前区4,前区5,后区1,后区2,日期\n1,01,02,03,04,05,01,02,2026-01-01\n",
+    )
+    .unwrap();
+    let runtime = openaip_os::domain_pack::DomainPackRuntime {
+        pack_id: "lottery-analysis".into(),
+        enabled: true,
+        source_path: path.to_string_lossy().into_owned(),
+        watch_enabled: false,
+        poll_interval_seconds: 1,
+        auto_sync: false,
+        auto_analyze: false,
+        auto_backtest: false,
+        auto_review: false,
+        strategy_ids: vec![],
+        updated_by: "test".into(),
+        updated_at: openaip_os::trace::now_ts(),
+    };
+    kernel
+        .create(
+            "DomainPackRuntime",
+            "domain-pack-runtime:lottery-analysis",
+            serde_json::to_value(runtime).unwrap(),
+        )
+        .await
+        .unwrap();
+    let addr = common::spawn_server(kernel).await;
+
+    let (s0, body0) = call(addr, "GET", "/api/v1/plugins", None).await;
+    assert_eq!(s0, 200);
+    assert_eq!(body0["code"], 0);
+    assert_eq!(body0["data"][0]["id"], "lottery-analysis");
+    assert_eq!(body0["data"][0]["status"], "Active");
+
+    let (s1, body1) = call(
+        addr,
+        "GET",
+        "/api/v1/plugins/lottery-analysis/manifest",
+        None,
+    )
+    .await;
+    assert_eq!(s1, 200);
+    assert_eq!(body1["data"]["manifest"]["id"], "lottery-analysis");
+    assert_eq!(body1["data"]["status"], "Active");
+
+    let (s2, body2) = call(
+        addr,
+        "POST",
+        "/api/v1/plugins/lottery-analysis/capabilities/lottery.import/invoke",
+        Some(json!({
+            "game": "dlt",
+            "file": path,
+            "project": "lottery-analysis"
+        })),
+    )
+    .await;
+    assert_eq!(s2, 200, "插件执行失败: {body2}");
+    assert_eq!(body2["data"]["imported"], 1);
+
+    let (s3, _) = call(
+        addr,
+        "POST",
+        "/api/v1/plugins/lottery-analysis/capabilities/not.exists/invoke",
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(s3, 404);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn tc_sv2c_v2_plugin_list_includes_builtin_catalog() {
+    let kernel = std::sync::Arc::new(
+        openaip_os::storage::LibSQLStorage::open(":memory:")
+            .await
+            .unwrap(),
+    );
+    let addr = common::spawn_server(kernel).await;
+    let (status, body) = call(addr, "GET", "/api/v1/v2/plugins", None).await;
+    assert_eq!(status, 200);
+    assert!(
+        body.as_array()
+            .unwrap()
+            .iter()
+            .any(|plugin| { plugin["id"] == "lottery-analysis" && plugin["status"] == "Active" })
+    );
 }
 
 #[tokio::test]

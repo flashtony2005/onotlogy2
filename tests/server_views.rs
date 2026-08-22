@@ -1,4 +1,4 @@
-//! V0.5 观察视图端点测试契约（TC-024a + Tasks）
+//! 服务端观察视图端点测试契约（TC-024a + Tasks）。
 mod common;
 use common::*;
 

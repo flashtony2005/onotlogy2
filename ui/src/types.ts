@@ -10,6 +10,9 @@ export type ViewKind =
   | 'fabric'
   | 'projects'
   | 'developer'
+  | 'user-management'
+  | 'business-packs'
+  | 'skills'
   // 旧视图保留给后端 timeline 视图钳制与兼容（新菜单不再直接暴露）。
   | 'executive'
   | 'operator'
@@ -19,6 +22,14 @@ export type ViewKind =
 export interface AuthUserDto {
   username: string
   role: string
+}
+
+export interface UserDto {
+  id: string
+  username: string
+  role: string
+  displayName: string
+  disabled: boolean
 }
 
 export interface TraceEventDto {
@@ -84,6 +95,186 @@ export interface SkillDto {
   status: string
   goal: string
   capabilities: string[]
+}
+
+export interface DomainPackRuntimeDto {
+  pack_id: string
+  enabled: boolean
+  source_path: string
+  watch_enabled: boolean
+  poll_interval_seconds: number
+  auto_sync: boolean
+  auto_analyze: boolean
+  auto_backtest: boolean
+  auto_review: boolean
+  strategy_ids: string[]
+  updated_by: string
+  updated_at: string
+}
+
+export interface DomainPackRuntimeUpdateDto {
+  enabled: boolean
+  source_path: string
+  watch_enabled: boolean
+  poll_interval_seconds: number
+  auto_sync: boolean
+  auto_analyze: boolean
+  auto_backtest: boolean
+  auto_review: boolean
+  strategy_ids: string[]
+}
+
+export interface DomainPackPluginDto {
+  id: string
+  name: string
+  status: string
+  capabilities: string[]
+}
+
+export interface StrategyRegistryDto {
+  id: string
+  code: string
+  name: string
+  family: string
+  mode: string
+  description: string
+  enabled: boolean
+  version: string
+  parameters: Record<string, unknown>
+  training_window?: number | null
+  backtest_count: number
+  mean_red_hits?: number | null
+  mean_blue_hits?: number | null
+  random_baseline_red_hits?: number | null
+  random_baseline_blue_hits?: number | null
+  publishable: boolean
+}
+
+export interface DomainPackOperationsDto {
+  pack_id: string
+  runtime: DomainPackRuntimeDto
+  plugins: DomainPackPluginDto[]
+  strategies: StrategyRegistryDto[]
+}
+
+export type AutomationJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | string
+
+export type DomainPackOperation = 'sync' | 'import' | 'analyze' | 'backtest' | 'review'
+
+export interface AutomationJobDto {
+  id: string
+  pack_id: string
+  job_type: DomainPackOperation | string
+  dedupe_key: string
+  payload: Record<string, unknown>
+  status: AutomationJobStatus
+  attempt: number
+  max_attempts: number
+  available_at: string
+  started_at?: string | null
+  finished_at?: string | null
+  last_error?: string | null
+  result?: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AutomationStatusDto {
+  running: boolean
+  jobs: AutomationJobDto[]
+}
+
+export interface AutomationScanErrorDto {
+  code: string
+  message: string
+  source_path: string
+  timestamp: string
+  trace_id: string
+}
+
+export interface AutomationScanHistoryDto {
+  status: string
+  event_type: string
+  code?: string | null
+  message?: string | null
+  fingerprint?: string | null
+  source_path?: string | null
+  timestamp: string
+  trace_id: string
+  job_id?: string | null
+}
+
+export interface AutomationScanSummaryDto {
+  source_rows?: number | null
+  new_issue_count?: number | null
+  duplicate_issues?: number | null
+  fingerprint?: string | null
+  timestamp: string
+  trace_id?: string | null
+}
+
+export interface AutomationManualRetryDto {
+  actor: string
+  retry_number: number
+  status: string
+  submitted_jobs: number
+  timestamp: string
+  trace_id: string
+}
+
+export interface AutomationQualityDto {
+  total_jobs: number
+  succeeded_jobs: number
+  failed_jobs: number
+  queued_jobs: number
+  running_jobs: number
+  cancelled_jobs: number
+  retry_jobs: number
+  success_rate: number
+  last_review_status?: string | null
+  last_review_at?: string | null
+}
+
+export interface AutomationPackStatusDto {
+  pack_id: string
+  runtime: DomainPackRuntimeDto
+  fingerprint?: string | null
+  last_success_at?: string | null
+  last_scan_error?: AutomationScanErrorDto | null
+  active_scan_error?: AutomationScanErrorDto | null
+  scan_state: 'never' | 'healthy' | 'failed' | 'recovered' | string
+  scan_history: AutomationScanHistoryDto[]
+  last_scan_summary?: AutomationScanSummaryDto | null
+  quality: AutomationQualityDto
+  manual_retry_count: number
+  last_manual_retry?: AutomationManualRetryDto | null
+}
+
+export interface DomainPackDto {
+  id: string
+  name: string
+  version: string
+  minimum_runtime?: string | null
+  skill_ids: string[]
+  status: 'available' | 'installed' | 'invalid' | string
+  valid: boolean
+  installed: boolean
+  ontology_types: number
+  bootstrap_objects: number
+  bootstrap_relations: number
+  enabled: boolean
+  plugin_ids: string[]
+  plugin_capabilities: string[]
+  error?: string | null
+}
+
+export interface DomainPackInstallDto {
+  pack: DomainPackDto
+  project_id: string
+  objects_created: number
+  objects_skipped: number
+  relations_created: number
+  relations_skipped: number
 }
 
 export interface PluginDto {
@@ -195,12 +386,56 @@ export interface AuditQueryDto {
   limit?: number
 }
 
+export interface ExecutionContextDto {
+  workspace: {
+    root: string
+    mode: 'isolated'
+  }
+  cwd?: string
+  env?: Record<string, string>
+  timeout_ms?: number
+}
+
 export interface FabricRequestDto {
   sessionId: string
   sender: string
   intent: string
   payload: unknown
+  executionContext?: ExecutionContextDto
   projectId?: string
+}
+
+export interface WorkspaceDiffDto {
+  available: boolean
+  added: string[]
+  modified: string[]
+  deleted: string[]
+  counts: { added: number; modified: number; deleted: number }
+}
+
+export interface TestSummaryDto {
+  detected: boolean
+  passed?: number
+  failed?: number
+  skipped?: number
+  total?: number
+  status?: string
+}
+
+export interface FabricTaskResultPayload {
+  status?: string
+  stdout?: string
+  stderr?: string | null
+  exit_code?: number | null
+  progress_count?: number
+  duration_ms?: number
+  structured_output?: unknown
+  task_spec?: Record<string, unknown> | null
+  workspace_diff?: WorkspaceDiffDto
+  test_summary?: TestSummaryDto
+  failure_category?: string | null
+  correlation_id?: string
+  error?: string | null
 }
 
 export interface FabricSubmissionDto {
@@ -212,7 +447,7 @@ export interface FabricSubmissionDto {
     receiver: string
     kind: string
     intent: string | null
-    payload: Record<string, unknown>
+    payload: FabricTaskResultPayload
     capability: string | null
     correlation_id: string | null
     causation_id: string | null

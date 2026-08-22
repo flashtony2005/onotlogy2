@@ -1,0 +1,9 @@
+{
+  "id": "crm-retention",
+  "name": "企业客户经营本体",
+  "version": "1.0.0",
+  "ontology": "ontology.odl",
+  "bootstrap": "bootstrap.json",
+  "minimumRuntime": "0.9.0",
+  "skills": ["business-pack-operations"]
+}

@@ -66,3 +66,21 @@ pub async fn cmd_user_delete(db: &str, username: &str) -> Result<(), Box<dyn std
     println!("✅ 用户账号已删除：{username}");
     Ok(())
 }
+
+/// 重设账号口令；旧口令立即失效，已有会话也会立即注销。
+pub async fn cmd_user_reset_password(
+    db: &str,
+    username: &str,
+    password: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if password.is_empty() {
+        return Err("新口令不能为空".into());
+    }
+    let storage = LibSQLStorage::open(db).await?;
+    let password_hash = LocalIdentityProvider::hash_password(password)?;
+    storage
+        .update_user_password(username, &password_hash)
+        .await?;
+    println!("✅ 用户口令已重设：{username}（旧口令和旧会话已失效）");
+    Ok(())
+}

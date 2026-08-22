@@ -21,7 +21,6 @@ use openaip_os::compose::{Capability, Service, Task, TaskExecutor};
 use openaip_os::evolution2::gate::GateVerdict;
 use openaip_os::evolution2::{EvolutionEngine, EvolutionPermissionState, OutcomeKind, Pattern};
 use openaip_os::kernel::effect::Reversibility;
-use openaip_os::kernel::relation::Relation;
 use openaip_os::kernel::{Kernel, Scope};
 use serde_json::json;
 
@@ -386,8 +385,7 @@ async fn tc_e8_end_to_end_learning_then_gate() {
             .find(|f| f.context == ctx && f.task == format!("refund-{i}"))
             .expect("task fiber")
             .id;
-        k.relate(Relation::new(ctx, "approval", "Approval", "admin", k.now()))
-            .unwrap();
+        k.approve(fiber, "admin").unwrap();
         let out2 = {
             let mut loop_ =
                 AgentLoop::new(&mut k, &mut agent, &services, &engine).with_evolution(&mut ev);

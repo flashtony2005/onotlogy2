@@ -1,4 +1,4 @@
-//! Temporal World —— 世界的时间投影（Phase 4；P3 边界：Kernel 只管当前有效，
+//! Temporal World —— 基于持久化事实的只读时间查询（Phase 4；P3 边界：Kernel 只管当前有效，
 //! 时间旅行查询属于 World Model 层）。
 //!
 //! - `as_of(t)`：重建 t 时刻的世界（relations/contexts 的 valid 时间窗）
@@ -7,6 +7,7 @@
 //!
 //! 数据源：kernel/persistence 的 append-only events 表 + relations/contexts 的
 //! valid_from/valid_until 时间窗（save 保留历史行——expire 只闭合窗口不删行）。
+//! 本模块不执行 Effect、不写入 Kernel 关系，也不把查询结果当成新的事实事件。
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 use serde_json::Value;
@@ -52,7 +53,7 @@ pub struct WorldChange {
     pub payload: Value,
 }
 
-/// Temporal World（只读查询；写路径仍在 Kernel）。
+/// Temporal World（只读查询；写路径仍在 Effect Executor / Kernel 事件源）。
 pub struct World<'p> {
     persistence: &'p Persistence,
 }

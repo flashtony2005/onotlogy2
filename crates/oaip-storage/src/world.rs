@@ -8,7 +8,7 @@
 //! RelationLinked `refs=[source,target], input={edge}`；run_id=None（事实不依赖 Run）。
 //! P6：`world_link_event` 是 Effect 提交点回写事件的同源构造器（契约载荷唯一实现）。
 
-use libsql::{Transaction, params};
+use libsql::params;
 use serde_json::json;
 
 use super::*;
@@ -143,35 +143,50 @@ impl LibSQLStorage {
     pub async fn apply_world(&self, cmd: WorldCommand) -> Result<(), StorageError> {
         let tx = self.conn.transaction().await?;
         let ev = cmd.world_event();
-        insert_trace_tx(&tx, &ev).await?;
+        if let Err(error) = super::events::append_trace_tx(&tx, &ev).await {
+            if super::events::is_audit_chain_error(&error) {
+                self.mark_audit_chain_invalid();
+            }
+            return Err(error);
+        }
+        #[cfg(test)]
+        crate::crash_if_requested("world.after_event_insert");
+        #[cfg(test)]
+        crate::io_fault_if_requested("world.after_event_insert")?;
         match cmd {
             WorldCommand::CreateObject {
                 object_type,
                 id,
                 data,
-                ..
+                project_id,
             } => {
                 let data_str = serde_json::to_string(&data)?;
                 tx.execute(
-                    "INSERT INTO wb_ontology_object (id, type, data, version) VALUES (?1,?2,?3,1)",
-                    params![id.as_str(), object_type.as_str(), data_str.as_str()],
+                    "INSERT INTO wb_ontology_object (id, type, data, version, project_id) VALUES (?1,?2,?3,1,?4)",
+                    params![id.as_str(), object_type.as_str(), data_str.as_str(), project_id.as_deref()],
                 )
                 .await?;
             }
-            WorldCommand::UpdateObject { id, data, .. } => {
+            WorldCommand::UpdateObject {
+                id,
+                data,
+                project_id,
+            } => {
                 let data_str = serde_json::to_string(&data)?;
                 tx.execute(
                     "UPDATE wb_ontology_object SET data=?1, version=version+1, \
-                     update_time=CURRENT_TIMESTAMP WHERE id=?2 AND is_delete=0",
-                    params![data_str.as_str(), id.as_str()],
+                     update_time=CURRENT_TIMESTAMP WHERE id=?2 AND is_delete=0 \
+                     AND ((project_id = ?3) OR (project_id IS NULL AND ?3 IS NULL))",
+                    params![data_str.as_str(), id.as_str(), project_id.as_deref()],
                 )
                 .await?;
             }
-            WorldCommand::DeleteObject { id, .. } => {
+            WorldCommand::DeleteObject { id, project_id } => {
                 tx.execute(
                     "UPDATE wb_ontology_object SET is_delete=1, update_time=CURRENT_TIMESTAMP \
-                     WHERE id=?1 AND is_delete=0",
-                    params![id.as_str()],
+                     WHERE id=?1 AND is_delete=0 \
+                     AND ((project_id = ?2) OR (project_id IS NULL AND ?2 IS NULL))",
+                    params![id.as_str(), project_id.as_deref()],
                 )
                 .await?;
             }
@@ -179,13 +194,14 @@ impl LibSQLStorage {
                 source,
                 edge,
                 target,
-                ..
+                project_id,
             } => {
                 // 事务内「检测 + 插入」：杜绝 TOCTOU 双插（与 relations::link 同语义）
                 let mut dup = tx
                     .query(
-                        "SELECT id FROM wb_relation_edge WHERE source=?1 AND relation=?2 AND target=?3 AND is_delete=0",
-                        params![source.as_str(), edge.as_str(), target.as_str()],
+                        "SELECT id FROM wb_relation_edge WHERE source=?1 AND relation=?2 AND target=?3 \
+                         AND is_delete=0 AND ((project_id = ?4) OR (project_id IS NULL AND ?4 IS NULL))",
+                        params![source.as_str(), edge.as_str(), target.as_str(), project_id.as_deref()],
                     )
                     .await?;
                 if dup.next().await?.is_some() {
@@ -201,8 +217,8 @@ impl LibSQLStorage {
                     REL_SEQ.fetch_add(1, Ordering::SeqCst)
                 );
                 tx.execute(
-                    "INSERT INTO wb_relation_edge (id, relation, source, target) VALUES (?1,?2,?3,?4)",
-                    params![id.as_str(), edge.as_str(), source.as_str(), target.as_str()],
+                    "INSERT INTO wb_relation_edge (id, relation, source, target, project_id) VALUES (?1,?2,?3,?4,?5)",
+                    params![id.as_str(), edge.as_str(), source.as_str(), target.as_str(), project_id.as_deref()],
                 )
                 .await?;
             }
@@ -210,17 +226,28 @@ impl LibSQLStorage {
                 source,
                 edge,
                 target,
-                ..
+                project_id,
             } => {
                 tx.execute(
                     "UPDATE wb_relation_edge SET is_delete=1, update_time=CURRENT_TIMESTAMP \
-                     WHERE source=?1 AND relation=?2 AND target=?3 AND is_delete=0",
-                    params![source.as_str(), edge.as_str(), target.as_str()],
+                     WHERE source=?1 AND relation=?2 AND target=?3 AND is_delete=0 \
+                     AND ((project_id = ?4) OR (project_id IS NULL AND ?4 IS NULL))",
+                    params![
+                        source.as_str(),
+                        edge.as_str(),
+                        target.as_str(),
+                        project_id.as_deref()
+                    ],
                 )
                 .await?;
             }
         }
+        #[cfg(test)]
+        crate::crash_if_requested("world.after_state_write");
+        #[cfg(test)]
+        crate::io_fault_if_requested("world.after_state_write")?;
         tx.commit().await?;
+        self.mark_audit_chain_valid();
         Ok(())
     }
 
@@ -231,32 +258,4 @@ impl LibSQLStorage {
         }
         Ok(())
     }
-}
-
-/// 事务内插入 trace 事件（append_trace 的事务版本）。
-async fn insert_trace_tx(tx: &Transaction, ev: &TraceEvent) -> Result<(), StorageError> {
-    let obj_refs = serde_json::to_string(&ev.object_refs)?;
-    let input = ev.input.as_ref().map(serde_json::to_string).transpose()?;
-    let output = ev.output.as_ref().map(serde_json::to_string).transpose()?;
-    tx.execute(
-        "INSERT INTO wb_trace_event \
-         (id, kind, event_type, object_refs, project_id, run_id, agent_id, reasoning, input, output, confidence, timestamp) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
-        params![
-            ev.id.clone(),
-            ev.kind.as_str(),
-            ev.event_type.clone(),
-            obj_refs,
-            ev.project_id.clone(),
-            ev.run_id.clone(),
-            ev.agent_id.clone(),
-            ev.reasoning.clone(),
-            input,
-            output,
-            ev.confidence,
-            ev.timestamp.clone()
-        ],
-    )
-    .await?;
-    Ok(())
 }

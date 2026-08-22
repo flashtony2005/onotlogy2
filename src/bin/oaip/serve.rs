@@ -2,6 +2,7 @@
 
 use openaip_os::abi::odl::parse_odl;
 use openaip_os::auth::{IdentityProvider, LocalIdentityProvider};
+use openaip_os::domain_pack::DomainPack;
 use openaip_os::server;
 use openaip_os::storage::LibSQLStorage;
 use std::net::SocketAddr;
@@ -38,12 +39,14 @@ pub async fn cmd_health(db: &str) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// 启动 Agent 观察服务（HTTP + WebSocket + 三层观察 UI）。
+#[allow(clippy::too_many_arguments)]
 pub async fn cmd_serve(
     db: &str,
     host: &str,
     port: u16,
     static_dir: &str,
     odl: Option<&str>,
+    domain_pack: Option<&str>,
     auto_approve: bool,
     auto_approve_evolution: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -66,9 +69,27 @@ pub async fn cmd_serve(
             }
         }
     }
+    // 公司业务包是服务启动时的业务语义入口：先安装本体和初始事实，再装配运行时。
+    let odl_src = match (odl, domain_pack) {
+        (Some(_), Some(_)) => return Err("--odl 与 --domain-pack 不能同时使用".into()),
+        (None, Some(path)) => {
+            let pack = DomainPack::load(path)?;
+            let report = pack.install(&storage).await?;
+            println!(
+                "📦 已加载业务包 {} v{}：project={}，对象 +{}，关系 +{}",
+                pack.manifest.name,
+                pack.manifest.version,
+                report.project_id,
+                report.objects_created,
+                report.relations_created
+            );
+            pack.ontology_source.clone()
+        }
+        (Some(path), None) => std::fs::read_to_string(path)?,
+        (None, None) => std::fs::read_to_string("examples/crm.odl")?,
+    };
     let storage = Arc::new(storage);
     // M1c V2 run 路径：ODL → compose::Service 集合 + PiEngine（V2 认知引擎）。
-    let odl_src = std::fs::read_to_string(odl.unwrap_or("examples/crm.odl"))?;
     let odl_ir = parse_odl(&odl_src)?;
     let services = openaip_os::compose::defs::ir_to_services(&odl_ir);
     let effect_defs = openaip_os::compose::defs::ir_to_runtime(&odl_ir);

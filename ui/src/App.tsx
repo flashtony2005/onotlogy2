@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   LogOut,
   Network,
+  PackageOpen,
   ShieldCheck,
   Sparkles,
   Users,
@@ -30,6 +31,8 @@ import { V2Panel } from './components/V2Panel'
 import { Dashboard } from './components/Dashboard'
 import { FabricPanel } from './components/FabricPanel'
 import { ProjectPanel } from './components/ProjectPanel'
+import { UserManagementPanel } from './components/UserManagementPanel'
+import { BusinessPackPanel } from './components/BusinessPackPanel'
 import { GovernancePanel } from './components/GovernancePanel'
 import { WorldPanel } from './components/WorldPanel'
 import { fmtJson, fmtTime } from './format'
@@ -41,7 +44,7 @@ import type { AuthUserDto, TraceEventDto, ViewKind } from './types'
 const VIEW_GROUPS: { name: string; en: string; items: ViewKind[] }[] = [
   { name: '运行', en: 'Operations', items: ['overview', 'world', 'runs'] },
   { name: '学习', en: 'Learning', items: ['workers', 'learning'] },
-  { name: '治理', en: 'Governance', items: ['projects', 'governance', 'fabric', 'developer'] },
+  { name: '治理', en: 'Governance', items: ['projects', 'business-packs', 'skills', 'governance', 'fabric', 'developer', 'user-management'] },
 ]
 
 interface ViewMeta {
@@ -125,6 +128,30 @@ const VIEWS: ViewMeta[] = [
     icon: Code2,
     q: '到底发生了什么？',
     desc: '输入、输出、API、Tool 调用、事件、错误、完整技术日志',
+  },
+  {
+    key: 'business-packs',
+    label: 'Packs',
+    cn: '业务包',
+    icon: PackageOpen,
+    q: '管理业务本体与操作 Skill？',
+    desc: '扫描、校验、安装业务包，查看本体与 Skill 关联',
+  },
+  {
+    key: 'skills',
+    label: 'Skills',
+    cn: 'Skill 管理',
+    icon: Sparkles,
+    q: '系统如何完成目标？',
+    desc: '查看、导入和追溯 Skill 原始内容',
+  },
+  {
+    key: 'user-management',
+    label: 'Users',
+    cn: '用户管理',
+    icon: Users,
+    q: '管理谁可以进入系统？',
+    desc: '创建用户、重设密码、启用/禁用账号与角色',
   },
 ]
 
@@ -322,7 +349,7 @@ export default function App() {
                   {collapsed[g.name] ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
                 </span>
               </button>
-              {!collapsed[g.name] && g.items.map((k) => {
+              {!collapsed[g.name] && g.items.filter((k) => k !== 'user-management' || user.role === 'developer').map((k) => {
                 const v = VIEWS.find((x) => x.key === k)!
                 return (
                   <button
@@ -435,6 +462,13 @@ export default function App() {
         {view === 'world' && <WorldPanel />}
         {view === 'fabric' && <FabricPanel />}
         {view === 'projects' && <ProjectPanel />}
+        {view === 'business-packs' && (
+          <BusinessPackPanel currentRole={user.role} onAuthError={handleAuthError} />
+        )}
+        {view === 'skills' && <V2Panel initialTab="skills" />}
+        {view === 'user-management' && user.role === 'developer' && (
+          <UserManagementPanel currentUsername={user.username} onAuthError={handleAuthError} />
+        )}
 
         {view === 'workers' && <V2Panel initialTab="workers" />}
 

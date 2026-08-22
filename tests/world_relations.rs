@@ -1,4 +1,4 @@
-//! V0.2 World Model 测试契约（对应 REQ-012 / REQ-013）
+//! World relation 测试契约（对应 REQ-012 / REQ-013）。
 //! TDD: 本文件先于实现落地（Red），由 WB-TASK-009~011 实现转 Green。
 
 use openaip_os::storage::RelationEngine;

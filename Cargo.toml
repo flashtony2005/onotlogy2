@@ -11,6 +11,7 @@ edition = "2024"
 async-trait = "0.1.92"
 axum = { version = "0.7", features = ["ws", "macros"] }
 clap = { version = "4.6.6", features = ["derive"] }
+csv = "1.3"
 futures-util = "0.3"
 libsql = "0.9.30"
 serde = { version = "1.0.229", features = ["derive"] }

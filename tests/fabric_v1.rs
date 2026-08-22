@@ -20,7 +20,26 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+
+fn isolated_context() -> Value {
+    serde_json::json!({
+        "workspace": { "root": "/tmp", "mode": "isolated" }
+    })
+}
+
+fn isolated_execution_context() -> openaip_os::worker::process::ExecutionContext {
+    openaip_os::worker::process::ExecutionContext {
+        workspace: openaip_os::worker::process::ExecutionWorkspace {
+            root: "/tmp".into(),
+            mode: openaip_os::worker::process::WorkspaceMode::Isolated,
+        },
+        cwd: None,
+        env: std::collections::BTreeMap::new(),
+        timeout_ms: None,
+    }
+}
 
 #[derive(Default)]
 struct VecSink(Mutex<Vec<TraceEvent>>);
@@ -29,6 +48,49 @@ impl WorldEventSink for VecSink {
     fn append(&self, ev: &TraceEvent) -> Result<(), String> {
         self.0.lock().unwrap().push(ev.clone());
         Ok(())
+    }
+}
+
+struct FailOnEventSink {
+    fail_type: &'static str,
+    events: Mutex<Vec<TraceEvent>>,
+}
+
+impl WorldEventSink for FailOnEventSink {
+    fn append(&self, ev: &TraceEvent) -> Result<(), String> {
+        if ev.event_type == self.fail_type {
+            return Err(format!("event sink unavailable for {}", ev.event_type));
+        }
+        self.events.lock().unwrap().push(ev.clone());
+        Ok(())
+    }
+}
+
+struct CountingCodex {
+    sends: Arc<AtomicUsize>,
+}
+
+impl AgentAdapter for CountingCodex {
+    fn id(&self) -> &str {
+        "counting-codex"
+    }
+    fn connect(&self) -> Result<(), FabricError> {
+        Ok(())
+    }
+    fn discover(&self) -> Vec<AgentCapability> {
+        vec![AgentCapability {
+            name: "coding.modify".into(),
+            agent_id: self.id().into(),
+            quality: 1.0,
+            risk: 1,
+        }]
+    }
+    fn send(&self, msg: &AgentMessage) -> Result<AgentMessage, FabricError> {
+        self.sends.fetch_add(1, Ordering::SeqCst);
+        FakeCodex.send(msg)
+    }
+    fn cancel(&self, _correlation_id: &str) -> Result<bool, FabricError> {
+        Ok(false)
     }
 }
 
@@ -231,6 +293,15 @@ async fn tc_f4_all_communication_events_land_in_event_log() {
             "dsh",
             "modify_code",
             serde_json::json!({ "repository": "demo", "task": "修复订单计算错误" }),
+            Some(openaip_os::worker::process::ExecutionContext {
+                workspace: openaip_os::worker::process::ExecutionWorkspace {
+                    root: "/tmp".into(),
+                    mode: openaip_os::worker::process::WorkspaceMode::Isolated,
+                },
+                cwd: None,
+                env: std::collections::BTreeMap::new(),
+                timeout_ms: None,
+            }),
             None,
         )
         .unwrap();
@@ -262,6 +333,64 @@ async fn tc_f4_all_communication_events_land_in_event_log() {
     assert_eq!(session.messages().len(), 2, "request + result");
 }
 
+// ── tc_f4b：关键 EventLog 写入失败必须 fail-closed ─────────────────────
+#[tokio::test]
+async fn tc_f4b_event_log_failure_blocks_adapter_execution() {
+    let sink = Arc::new(FailOnEventSink {
+        fail_type: "fabric.task_started",
+        events: Mutex::new(Vec::new()),
+    });
+    let sends = Arc::new(AtomicUsize::new(0));
+    let mut r = FabricRouter::new();
+    r.register_intent("modify_code", "coding.modify");
+    r.register_agent("coding.modify", "counting-codex", 1);
+    let mut b = Bridge::new(r, Some(sink.clone()));
+    b.connect_agent(Arc::new(CountingCodex {
+        sends: sends.clone(),
+    }))
+    .unwrap();
+
+    let sm = Arc::new(Mutex::new(SessionManager::new()));
+    let s = sm
+        .lock()
+        .unwrap()
+        .create(vec!["tester".into(), "counting-codex".into()]);
+    let (_running, job) = b
+        .submit(
+            sm.clone(),
+            &s.id,
+            "tester",
+            "modify_code",
+            serde_json::json!({ "task": "不会执行" }),
+            Some(openaip_os::worker::process::ExecutionContext {
+                workspace: openaip_os::worker::process::ExecutionWorkspace {
+                    root: "/tmp".into(),
+                    mode: openaip_os::worker::process::WorkspaceMode::Isolated,
+                },
+                cwd: None,
+                env: std::collections::BTreeMap::new(),
+                timeout_ms: None,
+            }),
+            None,
+        )
+        .expect("意图与请求事件写入应成功");
+
+    let err = b
+        .execute(sm.clone(), job.expect("允许执行的请求应返回 RunJob"))
+        .expect_err("task_started 写入失败必须阻断执行");
+    assert!(matches!(err, FabricError::EventLog(_)));
+    assert_eq!(
+        sends.load(Ordering::SeqCst),
+        0,
+        "EventLog 失败后不得调用适配器"
+    );
+    assert_eq!(
+        sm.lock().unwrap().get(&s.id).unwrap().messages().len(),
+        1,
+        "只应保留 task.request，不得伪造 result"
+    );
+}
+
 // ── tc_f5：闭环 demo — Router→Adapter→result→Event→Projection→World State ──
 #[tokio::test]
 async fn tc_f5_full_demo_chain_to_world_state() {
@@ -284,6 +413,7 @@ async fn tc_f5_full_demo_chain_to_world_state() {
             "dsh",
             "modify_code",
             serde_json::json!({ "object": "order-001", "task": "修复金额计算" }),
+            None,
             None,
         )
         .unwrap();
@@ -352,6 +482,58 @@ fn tc_f6_real_adapters_discover_from_worker_manifest() {
     assert!(first.risk >= 1 && first.risk <= 10);
 }
 
+// ── tc_f6c：agent_task → agent.task → DSH provider ─────────────────────
+#[test]
+fn tc_f6c_agent_task_routes_to_dsh_provider() {
+    let dsh = dsh_adapter(Some("/bin/echo"));
+    let dsh_id = dsh.id().to_string();
+    let capabilities = dsh.discover();
+    assert!(capabilities.iter().any(|c| c.name == "agent.task"));
+
+    let mut router = FabricRouter::new();
+    router.register_intent("agent_task", "agent.task");
+    for capability in capabilities {
+        router.register_agent(capability.name, dsh_id.clone(), 1);
+    }
+
+    let plan = router.route("agent_task").expect("agent_task 应可路由");
+    assert_eq!(plan.capability, "agent.task");
+    assert_eq!(plan.agent_id, "dsh");
+    assert_eq!(plan.verdict, RouteVerdict::Allow);
+}
+
+// ── tc_f6b：DSH Adapter 自动注入 headless profile ─────────────────────
+#[test]
+fn tc_f6b_dsh_adapter_injects_headless_profile() {
+    let dsh = dsh_adapter(Some("/bin/echo"));
+    assert!(dsh.connect().is_ok());
+    let result = dsh
+        .send(&AgentMessage {
+            id: "dsh_req_profile".into(),
+            session_id: "sess_dsh".into(),
+            sender: "oaip".into(),
+            receiver: "dsh".into(),
+            kind: MessageKind::TaskRequest,
+            intent: Some("agent_task".into()),
+            payload: serde_json::json!({ "task": "只回答两个字：收到" }),
+            context: isolated_context(),
+            capability: Some("agent.task".into()),
+            correlation_id: Some("corr_dsh_profile".into()),
+            causation_id: None,
+            timestamp: 1,
+        })
+        .unwrap();
+
+    assert_eq!(result.payload["status"], "completed");
+    let stdout = result.payload["stdout"].as_str().unwrap_or("");
+    assert!(stdout.contains("--profile"), "缺少 profile 参数: {stdout}");
+    assert!(stdout.contains("headless"), "缺少 headless 参数: {stdout}");
+    assert!(
+        stdout.contains("只回答两个字：收到"),
+        "缺少任务文本: {stdout}"
+    );
+}
+
 // ── tc_f7：真实进程闭环（send：task.request → 进程 → task.result）────────
 #[tokio::test]
 async fn tc_f7_real_process_send_roundtrip_through_bridge() {
@@ -389,6 +571,7 @@ async fn tc_f7_real_process_send_roundtrip_through_bridge() {
             "dsh",
             "run_check",
             serde_json::json!({ "args": ["-c", "echo done-ok"] }),
+            Some(isolated_execution_context()),
             None,
         )
         .unwrap();
@@ -415,6 +598,7 @@ async fn tc_f7_real_process_send_roundtrip_through_bridge() {
             "dsh",
             "run_check",
             serde_json::json!({ "args": ["-c", "echo boom; exit 3"] }),
+            Some(isolated_execution_context()),
             None,
         )
         .unwrap();
@@ -441,7 +625,7 @@ fn tc_f8_stream_emits_progress_lines_and_cancel_kills() {
         kind: MessageKind::TaskRequest,
         intent: Some("run_check".into()),
         payload: serde_json::json!({ "args": ["-c", "printf 'a\\nb\\nc\\n'"] }),
-        context: Value::Null,
+        context: isolated_context(),
         capability: Some("shell.execute".into()),
         correlation_id: Some("c_stream".into()),
         causation_id: None,
@@ -479,7 +663,7 @@ fn tc_f8_stream_emits_progress_lines_and_cancel_kills() {
         kind: MessageKind::TaskRequest,
         intent: Some("run_check".into()),
         payload: serde_json::json!({ "args": ["-c", "sleep 5; echo never"] }),
-        context: Value::Null,
+        context: isolated_context(),
         capability: Some("shell.execute".into()),
         correlation_id: Some("c_cancel".into()),
         causation_id: None,
@@ -668,6 +852,7 @@ async fn tc_f9_cancel_kills_subprocess_and_emits_cancelled_event() {
             sender: "tester".into(),
             intent: "run_slow".into(),
             payload: serde_json::json!({ "args": ["-c", "sleep 30"] }),
+            execution_context: Some(isolated_execution_context()),
             project_id: None,
         })
         .expect("submit 应成功");
@@ -742,6 +927,7 @@ async fn tc_f10_stream_does_not_deadlock_on_stderr_heavy_process() {
             "run_loud",
             // 写 ~1 万行 stderr（远超 macOS ~64KiB 管道缓冲），随后正常退出并打印 stdout
             serde_json::json!({ "args": ["-c", "for i in $(seq 1 10000); do echo err-line-$i >&2; done; echo stdout-done"] }),
+            Some(isolated_execution_context()),
             None,
         )
         .unwrap();
@@ -828,6 +1014,7 @@ async fn tc_f11_stream_failure_emits_task_failed_not_swallowed() {
             sender: "tester".into(),
             intent: "run_fail".into(),
             payload: serde_json::json!({ "args": ["-c", "nope"] }),
+            execution_context: Some(isolated_execution_context()),
             project_id: None,
         })
         .expect("submit 应成功");
@@ -866,6 +1053,11 @@ async fn tc_f11_stream_failure_emits_task_failed_not_swallowed() {
         failed,
         "stream 失败必须发 fabric.task_failed（H1：不再被 run_in_background 吞噬）"
     );
+    assert_eq!(
+        fs.get("sess-11").unwrap().state,
+        SessionState::Failed,
+        "后台失败必须留下可查询的 Session 失败状态"
+    );
 }
 
 // ── tc_f12：H2 回归——early-cancel 不等 running map 即取消也生效 ─────────
@@ -898,6 +1090,7 @@ async fn tc_f12_early_cancel_without_waiting_running_map_is_effective() {
             sender: "tester".into(),
             intent: "run_slow2".into(),
             payload: serde_json::json!({ "args": ["-c", "sleep 30"] }),
+            execution_context: Some(isolated_execution_context()),
             project_id: None,
         })
         .expect("submit 应成功");
@@ -960,7 +1153,7 @@ fn tc_f13_shutdown_kills_running_child() {
         kind: MessageKind::TaskRequest,
         intent: Some("run_shell".into()),
         payload: serde_json::json!({ "args": ["-c", format!("touch {marker}; sleep 30")] }),
-        context: Value::Null,
+        context: isolated_context(),
         capability: Some("shell.execute".into()),
         correlation_id: Some("c_shutdown".into()),
         causation_id: None,

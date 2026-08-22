@@ -1,6 +1,6 @@
 //! Approval 适配器原语（M1b · G2）—— Human-in-the-loop 的交互层。
 //!
-//! Kernel 只提供挂起机制（WAITING + `Approval` 关系）与裁决原语
+//! Kernel 只提供挂起机制（WAITING）与显式裁决原语
 //! （`approve` / `reject_approval` / `expire_approval`）；本模块是组合层之上的
 //! 交互契约：类型化请求（供 CLI stdin / HTTP 端点查询）、裁决应用、
 //! 已裁决防重（二次裁决拒绝）与 CLI 决策缓存。

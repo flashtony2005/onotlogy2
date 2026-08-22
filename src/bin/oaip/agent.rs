@@ -2,6 +2,7 @@
 
 use super::worker::{default_worker_env, policy_for_capabilities};
 use openaip_os::abi::odl::parse_odl;
+use openaip_os::domain_pack::DomainPack;
 use openaip_os::evaluation::hook::{append_bridged, on_run_end, trace_to_session_events};
 use openaip_os::evaluation::{EvaluationPolicy, TaskDefinition};
 use openaip_os::session::event::{EventType, SessionId};
@@ -15,6 +16,7 @@ pub async fn cmd_agent_run(
     goal: &str,
     agent_id: &str,
     odl: Option<&str>,
+    domain_pack: Option<&str>,
     auto_approve: bool,
     auto_approve_evolution: bool,
     via_workers: bool,
@@ -31,8 +33,27 @@ pub async fn cmd_agent_run(
     use openaip_os::worker::thinker::Thinker;
 
     let storage = LibSQLStorage::open(db).await?;
-    let path = odl.unwrap_or("examples/crm.odl");
-    let src = std::fs::read_to_string(path)?;
+    let (ontology_label, src) = match (odl, domain_pack) {
+        (Some(_), Some(_)) => return Err("--odl 与 --domain-pack 不能同时使用".into()),
+        (None, Some(path)) => {
+            let pack = DomainPack::load(path)?;
+            let report = pack.install(&storage).await?;
+            println!(
+                "📦 已加载业务包 {} v{}：project={}，对象 +{}，关系 +{}",
+                pack.manifest.name,
+                pack.manifest.version,
+                report.project_id,
+                report.objects_created,
+                report.relations_created
+            );
+            (path.to_string(), pack.ontology_source.clone())
+        }
+        (Some(path), None) => (path.to_string(), std::fs::read_to_string(path)?),
+        (None, None) => (
+            "examples/crm.odl".into(),
+            std::fs::read_to_string("examples/crm.odl")?,
+        ),
+    };
     let ir = parse_odl(&src)?;
     let services = ir_to_services(&ir);
     let engine = PiEngine::new(agent_id.to_string());
@@ -55,7 +76,7 @@ pub async fn cmd_agent_run(
             "assets": [
                 { "asset_id": "goal", "selection_reason": goal, "relevance": 1.0 },
                 { "asset_id": "agent", "selection_reason": agent_id, "relevance": 1.0 },
-                { "asset_id": "ontology", "selection_reason": path, "relevance": 1.0 },
+                { "asset_id": "ontology", "selection_reason": ontology_label, "relevance": 1.0 },
             ],
         }),
     );

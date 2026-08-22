@@ -11,6 +11,7 @@
 
 pub mod apply;
 pub mod asset;
+pub mod builtin;
 pub mod compose;
 pub mod export;
 pub mod graph;

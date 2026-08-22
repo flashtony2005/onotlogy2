@@ -1,8 +1,12 @@
-//! Projection（Phase 5）—— World Event → Kernel World State 的确定性投影层。
+//! Projection（Phase 5）—— World Event → Kernel World State 的确定性重放层。
 //!
 //! 契约：docs/03_架构设计/projection-v1.md（P1–P7）。
 //!
 //! 核心命题：
+//! - 本模块的 `Projection` 是**事实事件的确定性重放器**，不是
+//!   `oaip_kernel::projection::Projection` 的假设轨，也不执行假设 Action。
+//! - 它只更新 Kernel 的内存关系索引；不写 Event Log、不触发 Fiber 调度，
+//!   不替代 `RelationEffectExecutor` 的正向 World mutation。
 //! - **Projection 是 Event Log 的纯函数**（P1）：同一事件流 → 同一 Kernel 关系元组集。
 //! - **幂等**（P2）：同 id 事件只应用一次（applied 水位）；重放/重复调用状态不变。
 //! - **确定性**（P4）：expire 时刻 = 事件时间戳，不用墙钟；事件微秒轴经
@@ -111,7 +115,13 @@ impl Projection {
                         .and_then(|v| v.get("edge"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("related");
-                    kernel.relate(Relation::new(self.ctx, s.clone(), edge, t.clone(), ts))?;
+                    kernel.project_relation(Relation::new(
+                        self.ctx,
+                        s.clone(),
+                        edge,
+                        t.clone(),
+                        ts,
+                    ))?;
                 }
             }
             "RelationUnlinked" => self.expire_matching(kernel, ev, ts)?,
@@ -126,7 +136,13 @@ impl Projection {
                         .and_then(|v| v.get("to"))
                         .map(stringify)
                         .unwrap_or_default();
-                    kernel.relate(Relation::new(self.ctx, s.clone(), pred.clone(), to, ts))?;
+                    kernel.project_relation(Relation::new(
+                        self.ctx,
+                        s.clone(),
+                        pred.clone(),
+                        to,
+                        ts,
+                    ))?;
                 }
             }
         }
@@ -207,7 +223,7 @@ impl Projection {
             );
             rel.valid_until = r.valid_until;
             rel.metadata = r.metadata.clone(); // 还原类型化值（跨 run 不丢数值类型）
-            let _ = kernel.relate(rel);
+            let _ = kernel.project_relation(rel);
         }
     }
 
@@ -303,12 +319,12 @@ impl Projection {
             .get("type")
             .and_then(|v| v.as_str())
             .unwrap_or("Object");
-        kernel.relate(Relation::new(self.ctx, id.clone(), "type", ty, ts))?;
+        kernel.project_relation(Relation::new(self.ctx, id.clone(), "type", ty, ts))?;
         if let Some(data) = input.get("data").and_then(|v| v.as_object()) {
             for (k, v) in data {
                 let mut rel = Relation::new(self.ctx, id.clone(), k, stringify(v), ts);
                 rel.metadata = v.clone(); // 保留原始类型（数值语义由 EntityView 还原，不丢类型）
-                kernel.relate(rel)?;
+                kernel.project_relation(rel)?;
             }
         }
         Ok(())
@@ -338,7 +354,7 @@ impl Projection {
             for (k, v) in data {
                 let mut rel = Relation::new(self.ctx, id.clone(), k, stringify(v), ts);
                 rel.metadata = v.clone(); // 保留原始类型（数值语义由 EntityView 还原，不丢类型）
-                kernel.relate(rel)?;
+                kernel.project_relation(rel)?;
             }
         }
         Ok(())

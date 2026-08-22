@@ -8,8 +8,29 @@ impl LibSQLStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, type, data, version FROM wb_ontology_object WHERE is_delete=0 LIMIT 1000",
+                "SELECT id, type, data, version FROM wb_ontology_object WHERE is_delete=0",
                 params![],
+            )
+            .await?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            out.push(row_to_object(&row)?);
+        }
+        Ok(out)
+    }
+
+    /// 按项目和对象类型列出对象。业务包运行配置、策略注册表等
+    /// 复用世界对象与审计链，不新增业务专用表。
+    pub async fn list_objects_for_project(
+        &self,
+        project_id: &str,
+        object_type: &str,
+    ) -> Result<Vec<ObjectRecord>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, type, data, version FROM wb_ontology_object WHERE project_id=?1 AND type=?2 AND is_delete=0 ORDER BY id",
+                params![project_id, object_type],
             )
             .await?;
         let mut out = Vec::new();
@@ -186,4 +207,4 @@ impl LibSQLStorage {
     }
 }
 
-// ── V0.7 运行态持久化（P0 风险「运行态全在内存」）：wb_run / wb_approval ──
+// ── 运行态持久化：wb_run（审批状态由 Kernel/AppState 管理） ──

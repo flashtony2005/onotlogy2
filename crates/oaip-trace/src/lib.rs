@@ -58,13 +58,36 @@ pub struct TraceEvent {
 }
 
 static TRACE_SEQ: AtomicU64 = AtomicU64::new(0);
+static LAST_TS: AtomicU64 = AtomicU64::new(0);
+
+fn monotonic_micros(observed: u64) -> u64 {
+    let mut previous = LAST_TS.load(Ordering::Acquire);
+    loop {
+        let next = observed.max(previous.saturating_add(1));
+        match LAST_TS.compare_exchange_weak(previous, next, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return next,
+            Err(current) => previous = current,
+        }
+    }
+}
+
+/// 将已持久化的最新事件时间戳灌入进程时钟，避免重启后墙上时钟回拨导致新事件倒序。
+pub fn observe_timestamp(timestamp: &str) {
+    if let Ok(observed) = timestamp.parse::<u64>() {
+        let _ = monotonic_micros(observed);
+    }
+}
 
 /// 当前微秒时间戳（Trace 事件时间轴；G1：认知层复用同一时间源）。
+///
+/// 墙上时钟回拨时仍返回严格递增的时间戳；进程重启后的下界由
+/// [`observe_timestamp`] 从持久化事件最大值恢复。
 pub fn now_ts() -> String {
-    let d = SystemTime::now()
+    let observed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("{}", d.as_micros())
+        .map(|d| d.as_micros().min(u64::MAX as u128) as u64)
+        .unwrap_or(0);
+    monotonic_micros(observed).to_string()
 }
 
 /// 新 Trace 事件 ID（全局单调；G1：认知层复用同一 ID 源）。
@@ -414,6 +437,13 @@ impl DecisionText for TraceEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timestamp_stays_monotonic_when_wall_clock_moves_backwards() {
+        let first = monotonic_micros(9_000_000_000_000_000);
+        let second = monotonic_micros(8_000_000_000_000_000);
+        assert!(second > first, "墙上时钟回拨不得让事件时间倒退");
+    }
 
     #[test]
     fn timeline_dto_is_camel_case() {

@@ -16,6 +16,7 @@ pub mod adapter;
 pub mod adapters;
 pub mod router;
 pub mod session;
+pub mod task_protocol;
 
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
@@ -26,6 +27,7 @@ use serde_json::{Value, json};
 
 use crate::compose::task::WorldEventSink;
 use crate::trace::TraceEvent;
+use crate::worker::process::{ExecutionContext, ProcessExecutionContext};
 
 /// 消息类型（OAB v0.1 只实现 4 类；扩展类型在 AsStr/FromStr 处收敛）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,6 +116,10 @@ pub enum FabricError {
     SessionClosed(String),
     #[error("适配器错误: {0}")]
     Adapter(String),
+    #[error("事件日志写入失败: {0}")]
+    EventLog(String),
+    #[error("执行上下文无效: {0}")]
+    InvalidExecutionContext(String),
 }
 
 /// Bridge（语义连接层）：Router 路由 + Adapter 执行 + 事件全量入日志。
@@ -152,7 +158,7 @@ impl Bridge {
             vec![correlation_id.to_string()],
             json!({}),
             None,
-        );
+        )?;
         // H2：写入取消请求标记集，execute 在 spawn 子进程前检查——early-cancel 窗口
         // （submit 返 running 与子进程进 running map 之间）内到达的 cancel 也能生效。
         self.cancel_requested
@@ -182,21 +188,23 @@ impl Bridge {
         adapter
             .connect()
             .map_err(|e| FabricError::Adapter(e.to_string()))?;
-        self.event("fabric.agent_connected", vec![id.clone()], json!({}), None);
+        self.event("fabric.agent_connected", vec![id.clone()], json!({}), None)?;
         self.adapters.insert(id.clone(), adapter);
         Ok(())
     }
 
     /// 断开 Agent（下线）：fabric.agent_disconnected 事件 + 移除。
-    pub fn disconnect_agent(&mut self, agent_id: &str) {
-        if self.adapters.remove(agent_id).is_some() {
+    pub fn disconnect_agent(&mut self, agent_id: &str) -> Result<(), FabricError> {
+        if self.adapters.contains_key(agent_id) {
             self.event(
                 "fabric.agent_disconnected",
                 vec![agent_id.to_string()],
                 json!({}),
                 None,
-            );
+            )?;
+            self.adapters.remove(agent_id);
         }
+        Ok(())
     }
 
     /// 能力发现：返回已接入的 Agent（能力提供者）id 列表。
@@ -217,6 +225,9 @@ impl Bridge {
     /// 交给后台 spawn_blocking——立即返回 running 态 + correlation_id，不再阻塞到
     /// 子进程结束。返回 `(立即回复, Option<RunJob>)`；RunJob=None 表示挂起/错误，
     /// 不后台执行（审批挂起由调用方注册、HTTP 层据此返回 pending）。
+    // Keep the orchestration boundary explicit: session state, routing identity,
+    // payload, execution context, and project scope are independent audit inputs.
+    #[allow(clippy::too_many_arguments)]
     pub fn submit(
         &self,
         sessions: Arc<Mutex<session::SessionManager>>,
@@ -224,10 +235,25 @@ impl Bridge {
         from: &str,
         intent: &str,
         payload: Value,
+        execution_context: Option<ExecutionContext>,
         project_id: Option<String>,
     ) -> Result<(AgentMessage, Option<RunJob>), FabricError> {
         // 1) 路由：意图 → 能力 → 策略 → 选择（fail-closed）
         let plan = self.router.route(intent)?;
+        let requires_workspace = matches!(
+            plan.capability.as_str(),
+            "agent.task" | "code.write" | "shell.execute"
+        );
+        if requires_workspace && execution_context.is_none() {
+            return Err(FabricError::Denied(format!(
+                "能力 {} 必须提供 execution_context.workspace(mode=isolated)",
+                plan.capability
+            )));
+        }
+        if let Some(context) = execution_context.as_ref() {
+            ProcessExecutionContext::from_execution_context(context)
+                .map_err(FabricError::InvalidExecutionContext)?;
+        }
         // T1：RequiresApproval = 挂起（请求照常入会话；裁决后续跑），Denied = 拒绝
         let needs_approval = matches!(&plan.verdict, router::RouteVerdict::RequiresApproval);
         if let router::RouteVerdict::Denied(reason) = &plan.verdict {
@@ -243,7 +269,12 @@ impl Bridge {
             kind: MessageKind::TaskRequest,
             intent: Some(intent.to_string()),
             payload,
-            context: Value::Null,
+            context: execution_context
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|error| FabricError::InvalidExecutionContext(error.to_string()))?
+                .unwrap_or(Value::Null),
             capability: Some(plan.capability.clone()),
             correlation_id: Some(correlation.clone()),
             causation_id: None,
@@ -254,21 +285,30 @@ impl Bridge {
         self.event(
             "fabric.capability_invoked",
             vec![plan.agent_id.clone()],
-            json!({ "capability": plan.capability, "intent": intent }),
+            json!({
+                "capability": plan.capability,
+                "intent": intent,
+                "execution_context": execution_context,
+            }),
             project_id.clone(),
-        );
+        )?;
         self.event(
             "fabric.task_requested",
             vec![from.to_string()],
-            json!({ "capability": plan.capability, "intent": intent, "correlation_id": correlation }),
+            json!({
+                "capability": plan.capability,
+                "intent": intent,
+                "correlation_id": correlation,
+                "request": req,
+            }),
             project_id.clone(),
-        );
+        )?;
         self.event(
             "fabric.message_sent",
             vec![from.to_string(), plan.agent_id.clone()],
             json!({ "kind": "task.request", "correlation_id": correlation }),
             project_id.clone(),
-        );
+        )?;
 
         // 4) Session 记录请求（会话是消息真相源——挂起也入会话，resume 据此找回）
         {
@@ -286,9 +326,14 @@ impl Bridge {
             self.event(
                 "fabric.approval_requested",
                 vec![plan.agent_id.clone()],
-                json!({ "capability": plan.capability, "intent": intent, "run_id": correlation }),
+                json!({
+                    "capability": plan.capability,
+                    "intent": intent,
+                    "run_id": correlation,
+                    "session_id": session_id,
+                }),
                 project_id,
-            );
+            )?;
             return Ok((
                 pending_message(
                     session_id,
@@ -389,7 +434,7 @@ impl Bridge {
             vec![req.receiver.clone()],
             json!({ "run_id": run_id, "capability": req.capability }),
             None,
-        );
+        )?;
         Ok(())
     }
 
@@ -399,11 +444,22 @@ impl Bridge {
         &self,
         sessions: Arc<Mutex<session::SessionManager>>,
         job: RunJob,
-    ) {
-        if let Err(e) = self.execute(sessions, job) {
-            // 执行失败：终局事件已由 execute 选 failed 发出；此处仅吞错，不阻断。
-            let _ = e;
+    ) -> Result<(), FabricError> {
+        let session_id = job.req.session_id.clone();
+        let result = self.execute(sessions.clone(), job);
+        if result.is_err()
+            && let Ok(mut g) = sessions.lock()
+            && let Some(session) = g.get_mut(&session_id)
+            && matches!(
+                session.state,
+                session::SessionState::Created
+                    | session::SessionState::Active
+                    | session::SessionState::Paused
+            )
+        {
+            session.fail();
         }
+        result.map(|_| ())
     }
 
     /// 同步执行任务包（T2b-2）：adapter.stream → 终局事件（completed/failed/cancelled）
@@ -434,9 +490,18 @@ impl Bridge {
             self.event(
                 "fabric.task_cancelled",
                 vec![agent_id.to_string()],
-                json!({ "to": "cancelled", "correlation_id": correlation, "agent": agent_id }),
+                json!({
+                    "to": "cancelled",
+                    "correlation_id": correlation,
+                    "agent": agent_id,
+                    "duration_ms": 0,
+                    "exit_code": null,
+                    "progress_count": 0,
+                    "structured_output": null,
+                    "failure_category": "cancelled",
+                }),
                 project_id,
-            );
+            )?;
             {
                 let mut g = sessions
                     .lock()
@@ -458,9 +523,16 @@ impl Bridge {
             .adapters
             .get(agent_id)
             .ok_or_else(|| FabricError::NoAdapter(agent_id.to_string()))?;
+        self.event(
+            "fabric.task_started",
+            vec![agent_id.to_string()],
+            json!({ "correlation_id": correlation, "agent": agent_id }),
+            project_id.clone(),
+        )?;
         // T2：执行走 stream（逐行进度 + 子进程进 running 被追踪，cancel 才有目标）。
         // H1：stream 失败（如运行时命令不可用）必须发 fabric.task_failed + 会话终态，
         // 否则 run_in_background 吞错后 correlation 永久悬挂、CLI 误导超时。
+        let started = std::time::Instant::now();
         let msgs = match adapter.stream(&req) {
             Ok(m) => m,
             Err(e) => {
@@ -469,9 +541,19 @@ impl Bridge {
                 self.event(
                     "fabric.task_failed",
                     vec![agent_id.to_string()],
-                    json!({ "to": "failed", "correlation_id": correlation, "agent": agent_id, "error": err_text }),
+                    json!({
+                        "to": "failed",
+                        "correlation_id": correlation,
+                        "agent": agent_id,
+                        "error": err_text,
+                        "duration_ms": started.elapsed().as_millis(),
+                        "exit_code": null,
+                        "progress_count": 0,
+                        "structured_output": null,
+                        "failure_category": failure_category(Some(&err_text), "failed"),
+                    }),
                     project_id.clone(),
-                );
+                )?;
                 {
                     let mut g = sessions
                         .lock()
@@ -510,9 +592,9 @@ impl Bridge {
         self.event(
             ty,
             vec![obj.to_string()],
-            json!({ "to": status, "correlation_id": correlation, "agent": agent_id }),
+            terminal_audit_input(&result, status, &correlation, agent_id),
             project_id,
-        );
+        )?;
 
         {
             let mut g = sessions
@@ -531,8 +613,14 @@ impl Bridge {
         Ok(result)
     }
 
-    /// 事件入日志（同步；sink 失败不阻断——旁路扇出，与 P5.6 审计同语义）。
-    fn event(&self, ty: &str, refs: Vec<String>, input: Value, project_id: Option<String>) {
+    /// 关键事件同步入日志；写入失败必须阻断后续副作用（fail-closed）。
+    fn event(
+        &self,
+        ty: &str,
+        refs: Vec<String>,
+        input: Value,
+        project_id: Option<String>,
+    ) -> Result<(), FabricError> {
         if let Some(sink) = &self.sink {
             let ev = TraceEvent {
                 id: crate::trace::new_trace_id(),
@@ -548,8 +636,9 @@ impl Bridge {
                 confidence: None,
                 timestamp: crate::kernel::now_secs().to_string(),
             };
-            let _ = sink.append(&ev);
+            sink.append(&ev).map_err(FabricError::EventLog)?;
         }
+        Ok(())
     }
 }
 
@@ -622,12 +711,65 @@ fn running_message(
 /// 合成终态 task.result 消息（early-cancel / stream 失败用）：status 固定，
 /// error 可选（failed 时带错误文本；cancelled 为 None）。与 stream 正常终态
 /// 同构（均含 correlation_id），下游（审计/会话/WS）统一消费。
+fn terminal_audit_input(
+    result: &AgentMessage,
+    status: &str,
+    correlation: &str,
+    agent: &str,
+) -> Value {
+    let payload = &result.payload;
+    json!({
+        "to": status,
+        "correlation_id": correlation,
+        "agent": agent,
+        "duration_ms": payload.get("duration_ms").cloned().unwrap_or(Value::Null),
+        "exit_code": payload.get("exit_code").cloned().unwrap_or(Value::Null),
+        "progress_count": payload
+            .get("progress_count")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "structured_output": payload
+            .get("structured_output")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "task_spec": payload
+            .get("task_spec")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "workspace_diff": payload
+            .get("workspace_diff")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "test_summary": payload
+            .get("test_summary")
+            .cloned()
+            .unwrap_or_else(|| json!({ "detected": false })),
+        "failure_category": payload
+            .get("failure_category")
+            .cloned()
+            .unwrap_or(Value::Null),
+    })
+}
+
+fn failure_category(error: Option<&str>, status: &str) -> &'static str {
+    if status == "cancelled" {
+        "cancelled"
+    } else if error.is_some_and(|value| value.contains("任务协议无效")) {
+        "protocol_error"
+    } else if error.is_some_and(|value| value.contains("执行上下文")) {
+        "execution_context"
+    } else {
+        "spawn_error"
+    }
+}
+
 fn terminal_result_message(
     req: &AgentMessage,
     correlation: &str,
     status: &str,
     error: Option<&str>,
 ) -> AgentMessage {
+    let task_spec = task_protocol::validate_payload(&req.payload).unwrap_or(Value::Null);
     AgentMessage {
         id: crate::trace::new_trace_id(),
         session_id: req.session_id.clone(),
@@ -639,11 +781,47 @@ fn terminal_result_message(
             "status": status,
             "correlation_id": correlation,
             "error": error,
+            "duration_ms": 0,
+            "exit_code": null,
+            "progress_count": 0,
+            "structured_output": null,
+            "task_spec": task_spec,
+            "workspace_diff": task_protocol::unavailable_workspace_diff(),
+            "test_summary": { "detected": false },
+            "failure_category": failure_category(error, status),
         }),
         context: Value::Null,
         capability: req.capability.clone(),
         correlation_id: Some(correlation.to_string()),
         causation_id: Some(req.id.clone()),
         timestamp: crate::kernel::now_secs(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::failure_category;
+
+    #[test]
+    fn protocol_failures_have_distinct_category() {
+        assert_eq!(
+            failure_category(
+                Some("任务协议无效: task_spec.description 不能为空"),
+                "failed"
+            ),
+            "protocol_error"
+        );
+        assert_eq!(
+            failure_category(Some("执行上下文无效: root"), "failed"),
+            "execution_context"
+        );
+        assert_eq!(
+            failure_category(Some("进程启动失败"), "failed"),
+            "spawn_error"
+        );
+        assert_eq!(
+            failure_category(Some("任务协议无效"), "cancelled"),
+            "cancelled"
+        );
     }
 }

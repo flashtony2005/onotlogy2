@@ -145,7 +145,11 @@ pub(crate) async fn ws_handler(
 ) -> Response {
     // 服务端视图钳制：WS 实时流与 REST timeline 同一套最小权限策略（不信任前端自提）。
     let view = clamp_view(View::Developer, user.role);
-    ws.on_upgrade(move |socket| handle_ws(socket, st, id, params.after, view))
+    let principal = user.id.clone();
+    let Some(lease) = st.rate_limiter.acquire_ws(&principal) else {
+        return super::rate_limited(super::rate_limit::Channel::WebSocket);
+    };
+    ws.on_upgrade(move |socket| handle_ws(socket, st, id, params.after, view, principal, lease))
 }
 
 /// WS 事件匹配：run/agent 精确命中，**或双 None 的世界级事实**（fabric.* 通信事件——
@@ -164,6 +168,8 @@ pub(crate) async fn handle_ws(
     id: String,
     after: Option<String>,
     view: View,
+    principal: String,
+    _lease: super::rate_limit::WsLease,
 ) {
     let (mut sender, mut receiver) = socket.split();
 
@@ -237,7 +243,14 @@ pub(crate) async fn handle_ws(
             client = receiver.next() => {
                 match client {
                     Some(Ok(axum::extract::ws::Message::Close(_))) | None => return,
-                    Some(Ok(_)) => continue,
+                    Some(Ok(_)) => {
+                        if !st
+                            .rate_limiter
+                            .allow(super::rate_limit::Channel::WebSocket, &principal)
+                        {
+                            return;
+                        }
+                    }
                     Some(Err(_)) => return,
                 }
             }

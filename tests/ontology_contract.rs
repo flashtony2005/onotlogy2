@@ -1,4 +1,4 @@
-//! V0.1 全链路测试契约（对应 docs/07_测试文档/test-case.md TC-001~008）
+//! 本体基础契约测试（对应 docs/07_测试文档/test-case.md TC-001~008）。
 //! 一条用例定义一个能力的边界（Red→Green）。
 
 use openaip_os::abi::codegen;

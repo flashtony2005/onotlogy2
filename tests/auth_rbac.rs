@@ -1,4 +1,4 @@
-//! V0.7 认证与 RBAC 测试契约（对应 design-auth.md §3.9 TC-auth-a~g）。
+//! 认证与 RBAC 测试契约（对应 design-auth.md §3.9 TC-auth-a~g）。
 //!
 //! 验证「服务端强制认证 + 角色能力门禁 + 视图钳制」：无令牌/错令牌 401，越权角色 403，
 //! 前端 `?view=` 被钳制到角色上限，登录/登出/禁用生命周期正确。
@@ -8,7 +8,7 @@ use common::*;
 
 use openaip_os::auth::{IdentityProvider, LocalIdentityProvider};
 use openaip_os::server;
-use openaip_os::storage::{LibSQLStorage, ObjectEngine, UserRecord};
+use openaip_os::storage::{LibSQLStorage, ObjectEngine, TraceQuery, UserRecord};
 use serde_json::{Value, json};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -81,6 +81,31 @@ async fn tc_auth_a_no_token_401() {
     assert_eq!(st, 401);
 }
 
+// ── TC-auth-plugin-a：插件目录同样受认证保护 → 401 ─────────────────────
+#[tokio::test]
+async fn tc_auth_plugin_a_no_token_401() {
+    let (addr, _storage) = spawn_auth_server().await;
+    let (status, _) = http_call_auth(addr, "GET", "/api/v1/plugins", None, None).await;
+    assert_eq!(status, 401);
+}
+
+// ── TC-auth-plugin-b：Executive 不能执行插件能力 → 403 ─────────────────
+#[tokio::test]
+async fn tc_auth_plugin_b_executive_invoke_forbidden() {
+    let (addr, _storage) = spawn_auth_server().await;
+    let (_, token) = login(addr, "exec", "execpw").await;
+    let token = token.expect("exec 应登录成功");
+    let (status, _) = http_call_auth(
+        addr,
+        "POST",
+        "/api/v1/plugins/lottery-analysis/capabilities/lottery.analyze/invoke",
+        Some(r#"{"game":"dlt","project":"lottery-analysis"}"#),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(status, 403);
+}
+
 // ── TC-auth-b：错误令牌 → 401 ───────────────────────────────────────────
 #[tokio::test]
 async fn tc_auth_b_wrong_token_401() {
@@ -151,6 +176,48 @@ async fn tc_auth_e_login_ok_and_token_works() {
     assert_eq!(v["data"]["role"], "developer");
 }
 
+// ── TC-auth-f2：运行时轮换认证密钥，立即撤销旧会话并留下审计 ─────────────
+#[tokio::test]
+async fn tc_auth_f2_rotate_key_revokes_old_sessions_and_audits() {
+    let (addr, storage) = spawn_auth_server().await;
+    let (_, token_a) = login(addr, "admin", "adminpw").await;
+    let token_a = token_a.expect("轮换前应拿到令牌");
+
+    let (st_rotate, body) = http_call_auth(
+        addr,
+        "POST",
+        "/api/v1/wb/auth/rotate-key",
+        None,
+        Some(&token_a),
+    )
+    .await;
+    assert_eq!(st_rotate, 200);
+    let result: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(result["data"]["rotated"], true);
+
+    let (st_old, _) = http_call_auth(addr, "GET", "/api/v1/wb/auth/me", None, Some(&token_a)).await;
+    assert_eq!(st_old, 401, "轮换必须立即撤销旧令牌");
+
+    let (st_login_b, token_b) = login(addr, "admin", "adminpw").await;
+    assert_eq!(st_login_b, 200);
+    let token_b = token_b.expect("轮换后应能签发新令牌");
+    let (st_new, _) = http_call_auth(addr, "GET", "/api/v1/wb/auth/me", None, Some(&token_b)).await;
+    assert_eq!(st_new, 200);
+
+    let events = storage
+        .list_events(TraceQuery {
+            event_type: Some("auth.key_rotated".into()),
+            limit: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].object_refs, vec!["auth"]);
+    assert_eq!(events[0].input, Some(json!({ "revokedSessions": 1 })));
+    storage.validate_audit_chain().await.unwrap();
+}
+
 // ── TC-auth-f：登出后复用旧令牌 → 401 ───────────────────────────────────
 #[tokio::test]
 async fn tc_auth_f_logout_invalidates_token() {
@@ -191,8 +258,212 @@ async fn tc_auth_g_disabled_user_token_401() {
     assert_eq!(st_reuse, 401);
 }
 
+// ── TC-auth-h2：重设口令后旧口令/旧令牌失效，新口令可登录 ────────────────
+#[tokio::test]
+async fn tc_auth_h2_reset_password_revokes_sessions() {
+    let (addr, storage) = spawn_auth_server().await;
+    let (_, old_token) = login(addr, "admin", "adminpw").await;
+    let old_token = old_token.expect("重设前应拿到令牌");
+
+    let new_hash = LocalIdentityProvider::hash_password("new-adminpw").unwrap();
+    storage
+        .update_user_password("admin", &new_hash)
+        .await
+        .unwrap();
+
+    let (old_token_status, _) =
+        http_call_auth(addr, "GET", "/api/v1/wb/auth/me", None, Some(&old_token)).await;
+    assert_eq!(old_token_status, 401, "重设口令必须撤销旧令牌");
+
+    let (old_password_status, _) = login(addr, "admin", "adminpw").await;
+    assert_eq!(old_password_status, 401, "旧口令必须立即失效");
+
+    let (new_password_status, new_token) = login(addr, "admin", "new-adminpw").await;
+    assert_eq!(new_password_status, 200, "新口令应能登录");
+    assert!(new_token.is_some());
+}
+
+// ── TC-auth-users：Developer 用户管理闭环（列表/创建/改密/状态/角色） ────
+#[tokio::test]
+async fn tc_auth_users_management_api() {
+    let (addr, _storage) = spawn_auth_server().await;
+    let (_, admin_token) = login(addr, "admin", "adminpw").await;
+    let admin_token = admin_token.expect("admin 应登录成功");
+    let (_, exec_token) = login(addr, "exec", "execpw").await;
+    let exec_token = exec_token.expect("exec 应登录成功");
+
+    let (st_forbidden, _) =
+        http_call_auth(addr, "GET", "/api/v1/wb/users", None, Some(&exec_token)).await;
+    assert_eq!(st_forbidden, 403, "Executive 不得管理用户");
+
+    let (st_list, body_list) =
+        http_call_auth(addr, "GET", "/api/v1/wb/users", None, Some(&admin_token)).await;
+    assert_eq!(st_list, 200);
+    let list: Value = serde_json::from_str(&body_list).unwrap();
+    let users = list["data"].as_array().unwrap();
+    assert!(users.iter().any(|u| u["username"] == "admin"));
+    assert!(users.iter().all(|u| u.get("password_hash").is_none()));
+
+    let create_body = json!({
+        "username": "managed",
+        "displayName": "Managed User",
+        "password": "managedpw",
+        "role": "operator"
+    })
+    .to_string();
+    let (st_create, body_create) = http_call_auth(
+        addr,
+        "POST",
+        "/api/v1/wb/users",
+        Some(&create_body),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(st_create, 200);
+    let created: Value = serde_json::from_str(&body_create).unwrap();
+    assert_eq!(created["data"]["username"], "managed");
+    assert!(created["data"].get("password_hash").is_none());
+
+    let (st_duplicate, _) = http_call_auth(
+        addr,
+        "POST",
+        "/api/v1/wb/users",
+        Some(&create_body),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(st_duplicate, 400, "重复用户名必须被拒绝");
+
+    let (_, managed_token) = login(addr, "managed", "managedpw").await;
+    let managed_token = managed_token.expect("新用户应能登录");
+    let managed_id = created["data"]["id"].as_str().unwrap();
+
+    let role_body = json!({ "role": "developer" }).to_string();
+    let role_path = format!("/api/v1/wb/users/{managed_id}/role");
+    let (st_role, _) = http_call_auth(
+        addr,
+        "PATCH",
+        &role_path,
+        Some(&role_body),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(st_role, 200);
+    let (st_role_old, _) = http_call_auth(
+        addr,
+        "GET",
+        "/api/v1/wb/auth/me",
+        None,
+        Some(&managed_token),
+    )
+    .await;
+    assert_eq!(st_role_old, 401, "角色修改必须撤销旧会话");
+
+    let (_, managed_developer_token) = login(addr, "managed", "managedpw").await;
+    let managed_developer_token = managed_developer_token.expect("角色修改后仍应能登录");
+    let (st_me, body_me) = http_call_auth(
+        addr,
+        "GET",
+        "/api/v1/wb/auth/me",
+        None,
+        Some(&managed_developer_token),
+    )
+    .await;
+    assert_eq!(st_me, 200);
+    assert_eq!(
+        serde_json::from_str::<Value>(&body_me).unwrap()["data"]["role"],
+        "developer"
+    );
+
+    let disabled_body = json!({ "disabled": true }).to_string();
+    let disabled_path = format!("/api/v1/wb/users/{managed_id}/disabled");
+    let (st_disabled, _) = http_call_auth(
+        addr,
+        "PATCH",
+        &disabled_path,
+        Some(&disabled_body),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(st_disabled, 200);
+    let (st_disabled_old, _) = http_call_auth(
+        addr,
+        "GET",
+        "/api/v1/wb/auth/me",
+        None,
+        Some(&managed_developer_token),
+    )
+    .await;
+    assert_eq!(st_disabled_old, 401, "禁用用户必须撤销旧会话");
+    let (st_disabled_login, _) = login(addr, "managed", "managedpw").await;
+    assert_eq!(st_disabled_login, 401, "禁用用户不得登录");
+
+    let enabled_body = json!({ "disabled": false }).to_string();
+    let (st_enabled, _) = http_call_auth(
+        addr,
+        "PATCH",
+        &disabled_path,
+        Some(&enabled_body),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(st_enabled, 200);
+
+    let (_, managed_enabled_token) = login(addr, "managed", "managedpw").await;
+    let managed_enabled_token = managed_enabled_token.expect("启用后应能登录");
+    let password_body = json!({ "password": "managed-newpw" }).to_string();
+    let password_path = format!("/api/v1/wb/users/{managed_id}/password");
+    let (st_password, body_password) = http_call_auth(
+        addr,
+        "PATCH",
+        &password_path,
+        Some(&password_body),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(st_password, 200);
+    assert_eq!(
+        serde_json::from_str::<Value>(&body_password).unwrap()["data"]["updated"],
+        true
+    );
+    let (st_password_old, _) = http_call_auth(
+        addr,
+        "GET",
+        "/api/v1/wb/auth/me",
+        None,
+        Some(&managed_enabled_token),
+    )
+    .await;
+    assert_eq!(st_password_old, 401, "重设密码必须撤销旧会话");
+    let (st_old_login, _) = login(addr, "managed", "managedpw").await;
+    assert_eq!(st_old_login, 401, "旧密码必须立即失效");
+    let (st_new_login, _) = login(addr, "managed", "managed-newpw").await;
+    assert_eq!(st_new_login, 200, "新密码应能登录");
+
+    let self_disabled_path = "/api/v1/wb/users/user.admin/disabled";
+    let (st_self_disabled, _) = http_call_auth(
+        addr,
+        "PATCH",
+        self_disabled_path,
+        Some(&disabled_body),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(st_self_disabled, 400, "不能禁用当前账号");
+    let self_role_path = "/api/v1/wb/users/user.admin/role";
+    let (st_self_role, _) = http_call_auth(
+        addr,
+        "PATCH",
+        self_role_path,
+        Some(&role_body),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(st_self_role, 400, "不能修改当前账号角色");
+}
+
 // ── TC-auth-h：/graph 按角色钳制（Executive 剥 data，Developer 全量） ─────
-// 防止 /graph 成为 V0.7 视图钳制的旁路：Executive 是最低权限角色，不得经图端点读到对象全量字段。
+// 防止 /graph 成为视图钳制的旁路：Executive 是最低权限角色，不得经图端点读到对象全量字段。
 #[tokio::test]
 async fn tc_auth_h_graph_clamped_to_role() {
     let (addr, storage) = spawn_auth_server().await;
@@ -306,6 +577,68 @@ async fn tc_auth_j_login_rate_limited() {
     assert_eq!(st6, 429, "连续失败 5 次后应锁定（429）");
     let (st7, _) = login(addr, "admin", "adminpw").await;
     assert_eq!(st7, 429, "锁定窗口内正确口令也不放行");
+}
+
+// ── TC-auth-k2：审批通道超限返回 429，不能退化为放行 ───────────────────
+#[tokio::test]
+async fn tc_auth_k2_execution_rate_limit_returns_429() {
+    let (addr, _storage) = spawn_auth_server().await;
+    let (_, token) = login(addr, "admin", "adminpw").await;
+    let token = token.expect("admin 应登录成功");
+    let body = r#"{"sessionId":"missing","sender":"test","intent":"agent_task","payload":{}}"#;
+
+    for _ in 0..10 {
+        let (status, _) = http_call_auth(
+            addr,
+            "POST",
+            "/api/v1/facade/fabric/submit",
+            Some(body),
+            Some(&token),
+        )
+        .await;
+        assert_ne!(status, 429, "前 10 个执行请求不应超限");
+    }
+    let (status, response) = http_call_auth(
+        addr,
+        "POST",
+        "/api/v1/facade/fabric/submit",
+        Some(body),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(status, 429);
+    let value: Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(value["code"], 429);
+}
+
+#[tokio::test]
+async fn tc_auth_k2_approval_rate_limit_returns_429() {
+    let (addr, _storage) = spawn_auth_server().await;
+    let (_, token) = login(addr, "admin", "adminpw").await;
+    let token = token.expect("admin 应登录成功");
+
+    for _ in 0..30 {
+        let (status, _) = http_call_auth(
+            addr,
+            "GET",
+            "/api/v1/wb/agent/run/missing/approvals",
+            None,
+            Some(&token),
+        )
+        .await;
+        assert_ne!(status, 429, "前 30 个审批请求不应超限");
+    }
+    let (status, body) = http_call_auth(
+        addr,
+        "GET",
+        "/api/v1/wb/agent/run/missing/approvals",
+        None,
+        Some(&token),
+    )
+    .await;
+    assert_eq!(status, 429);
+    let value: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(value["code"], 429);
 }
 
 // ── TC-auth-k：会话令牌哈希存储 — 库中无明文令牌（M4） ─────────────────

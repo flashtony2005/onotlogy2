@@ -47,7 +47,7 @@ v0_3 系 6 个测试文件（63 例）全部依赖 V1 门面（RuntimeKernel/Pla
 | tc_rest_run_start_gate | run 入口门 | M1c 重写 | g3f + RBAC（v0_7 保留） |
 | tc_ws_run_scoped / tc009_ws_stream_and_reconnect | WS 流 | M1c 重写（V2 事件流） | g9b/g9c + v0_9 重写 |
 
-### tests/v0_3_approval.rs（5 例）→ M1c 重写
+### tests/approval_http.rs（5 例）→ M1c 重写
 
 | v0_3 用例 | 处置 |
 |-----------|------|
@@ -70,22 +70,22 @@ v0_3 系 6 个测试文件（63 例）全部依赖 V1 门面（RuntimeKernel/Pla
 | tc015b/c/d 审批门/前置条件/策略门 | 已覆盖 | compose::policy 单测 + v2_parity g1c |
 | tc021a/b CLI 开关 | M1c 保留（CLI 参数面不变，实现换 V2） | g2 DecisionCache（ConsoleApprover 语义） |
 
-### tests/v0_3_server.rs（4 例）
+### tests/server_views.rs（4 例）
 
 | v0_3 用例 | 处置 |
 |-----------|------|
 | tc024a memory 端点 / tc_server_tasks 端点 | M1d 删除（面板并入 V2Panel，G10） |
 | tc_static_serves_index_and_assets / tc_static_missing_dir | 保留（静态托管与 planner 无关） |
 
-### tests/v0_9_ws_clamp.rs（4 例）→ M1c 重写
+### tests/websocket_views.rs（4 例）→ M1c 重写
 
 WS 钳制行为不变，事件源换 V2 trace sink 落库（g9b/g9c 已钉时间线行为；钳制测试在 M1c server 接线后重写）。
 
 ## 3. 保留文件（不随 M1d 删除）
 
-- tests/v0_1.rs / v0_2.rs：ODL/IR/codegen/对象 CRUD/关系边——V1 编译器与世界存储存活。
-- tests/v0_7_auth.rs：认证 RBAC 存活。
-- tests/v0_8_persistence.rs：wb_run 重定位为 V2 run store（G7），重启恢复语义保留；
+- tests/ontology_contract.rs / world_relations.rs：ODL/IR/codegen/对象 CRUD/关系边——V1 编译器与世界存储存活。
+- tests/auth_rbac.rs：认证 RBAC 存活。
+- tests/runtime_persistence.rs：wb_run 重定位为 V2 run store（G7），重启恢复语义保留；
   其中 orphan pending→expired 依赖 wb_approval，M1d 时该例随 wb_approval 删除改写为
   Waiting fiber 超时契约（g2c 已覆盖内核语义）。
 - tests/bridge_v2.rs：M1c 时改写为 v2_parity/via_workers 风格（g8a 已覆盖链）后删除 V1 版。

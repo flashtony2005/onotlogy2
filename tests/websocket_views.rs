@@ -1,4 +1,4 @@
-//! V0.9 WS 视图钳制测试契约（对应 WS 实时流最小权限，与 REST timeline 同一套 clamp_view）。
+//! WebSocket 视图钳制测试契约（对应实时流最小权限，与 REST timeline 同一套 clamp_view）。
 //!
 //! 验证：Developer 经 WS 看全量（reasoning/input/output）；Executive 经 WS 仅 Goal/Action 且无细节；
 //! 无令牌连接 WS → 被拒（401）。

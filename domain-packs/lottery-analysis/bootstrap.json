@@ -1,0 +1,134 @@
+{
+  "objects": [
+    {
+      "id": "lottery:system",
+      "type": "LotterySystem",
+      "data": {
+        "name": "彩票本体分析系统",
+        "description": "统一管理彩票数据、分析策略、推导过程与可复核结果",
+        "data_policy": "历史数据用于分析验证，不构成中奖承诺"
+      }
+    },
+    {
+      "id": "lottery:game:dlt",
+      "type": "LotteryGame",
+      "data": {
+        "code": "dlt",
+        "name": "中国体育彩票超级大乐透",
+        "category": "前区5/35+后区2/12",
+        "red_count": 5,
+        "red_max": 35,
+        "blue_count": 2,
+        "blue_max": 12,
+        "draw_period": "weekly"
+      }
+    },
+    {
+      "id": "lottery:game:double",
+      "type": "LotteryGame",
+      "data": {
+        "code": "double",
+        "name": "中国福利彩票双色球",
+        "category": "红区6/33+蓝区1/16",
+        "red_count": 6,
+        "red_max": 33,
+        "blue_count": 1,
+        "blue_max": 16,
+        "draw_period": "daily"
+      }
+    },
+    {
+      "id": "lottery:import:dlt-csv",
+      "type": "DataImport",
+      "data": {
+        "game": "lottery:game:dlt",
+        "source_file": "dlt.csv",
+        "format": "csv",
+        "row_count": 0,
+        "status": "待导入"
+      }
+    },
+    {
+      "id": "lottery:import:double-csv",
+      "type": "DataImport",
+      "data": {
+        "game": "lottery:game:double",
+        "source_file": "double.csv",
+        "format": "csv",
+        "row_count": 0,
+        "status": "待导入"
+      }
+    },
+    {
+      "id": "lottery:strategy:statistics",
+      "type": "AnalysisStrategy",
+      "data": {
+        "code": "statistics",
+        "name": "统计学分析",
+        "family": "statistics",
+        "mode": "可验证",
+        "description": "频次、遗漏、分布、区间、连号和回测等统计特征",
+        "enabled": true
+      }
+    },
+    {
+      "id": "lottery:strategy:heuristic",
+      "type": "AnalysisStrategy",
+      "data": {
+        "code": "heuristic",
+        "name": "启发式组合分析",
+        "family": "heuristic",
+        "mode": "实验",
+        "description": "基于规则组合和历史回测的实验性筛选，不宣称预测能力",
+        "enabled": true
+      }
+    },
+    {
+      "id": "lottery:strategy:metaphysics",
+      "type": "AnalysisStrategy",
+      "data": {
+        "code": "metaphysics",
+        "name": "玄学实验方案",
+        "family": "metaphysics",
+        "mode": "实验",
+        "description": "以可配置规则记录玄学假设，必须与统计结果分开评估",
+        "enabled": false
+      }
+    },
+    {
+      "id": "lottery:rule:backtest",
+      "type": "DerivationRule",
+      "data": {
+        "code": "backtest-before-publish",
+        "name": "发布前必须回测",
+        "trigger": "Prediction.status = candidate",
+        "conclusion": "只有完成历史回测并记录证据后才能进入 published",
+        "explainability": "high",
+        "status": "active"
+      }
+    },
+    {
+      "id": "lottery:rule:separate-evidence",
+      "type": "DerivationRule",
+      "data": {
+        "code": "separate-evidence-by-family",
+        "name": "按策略族隔离证据",
+        "trigger": "AnalysisRun.strategy changes",
+        "conclusion": "statistics、heuristic、metaphysics 的证据与评分不可混合",
+        "explainability": "high",
+        "status": "active"
+      }
+    }
+  ],
+  "relations": [
+    {"source": "lottery:system", "relation": "contains", "target": "lottery:game:dlt"},
+    {"source": "lottery:system", "relation": "contains", "target": "lottery:game:double"},
+    {"source": "lottery:system", "relation": "defines", "target": "lottery:strategy:statistics"},
+    {"source": "lottery:system", "relation": "defines", "target": "lottery:strategy:heuristic"},
+    {"source": "lottery:system", "relation": "defines", "target": "lottery:strategy:metaphysics"},
+    {"source": "lottery:game:dlt", "relation": "accepts_import", "target": "lottery:import:dlt-csv"},
+    {"source": "lottery:game:double", "relation": "accepts_import", "target": "lottery:import:double-csv"},
+    {"source": "lottery:strategy:statistics", "relation": "constrained_by", "target": "lottery:rule:backtest"},
+    {"source": "lottery:strategy:metaphysics", "relation": "constrained_by", "target": "lottery:rule:separate-evidence"}
+  ]
+}

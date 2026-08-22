@@ -108,6 +108,18 @@ impl AuthUser {
     pub fn can_read_audit(&self) -> bool {
         self.role.rank() >= Role::Operator.rank()
     }
+    /// 可轮换运行时认证密钥——仅 Developer（管理员）执行。
+    pub fn can_rotate_auth_key(&self) -> bool {
+        self.role == Role::Developer
+    }
+    /// 可管理本地用户、角色与口令——仅 Developer。
+    pub fn can_manage_users(&self) -> bool {
+        self.role == Role::Developer
+    }
+    /// 可安装/管理业务包——仅 Developer，避免普通运行角色修改本体和初始事实。
+    pub fn can_manage_domain_packs(&self) -> bool {
+        self.role == Role::Developer
+    }
     /// 可读取 Evaluation（Phase 11 派生表）—— Operator 及以上；写由 Runtime 钩子独占。
     pub fn can_read_evaluation(&self) -> bool {
         self.role.rank() >= Role::Operator.rank()

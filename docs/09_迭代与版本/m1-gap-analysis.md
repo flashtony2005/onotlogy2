@@ -33,7 +33,7 @@
 - V1：run_goal 全链路 emit 12 种认知事件（Goal / Intent / OntologyQuery / MemoryRecall /
   Reasoning / Planning / PolicyCheck / ToolBackend / ActionFailed / Action / MemoryUpdate /
   Reflection）→ `wb_trace_event(kind=cognitive)` → UI 时间线 + WS 流 + evaluation 桥接。
-- V2 原状：`run_once` 零事件。切换后 UI 时间线空白、`v0_9_ws_clamp` 失效。
+- V2 原状：`run_once` 零事件。切换后 UI 时间线空白、`websocket_views` 失效。
 - 已落地：`AgentLoop::with_trace(run_id, sink)`——调用方持有 sink，事件与 V1 同源
   （Goal/OntologyQuery/Reasoning/Intent/Planning/PolicyCheck/Action/PendingApproval/
   ActionFailed/MemoryUpdate）；resume 续跑扫描去重（Goal 不重复）；空世界 object_refs
@@ -126,9 +126,9 @@
 ### G9 测试迁移（v0_3_* → v2_parity）
 
 - `tests/v0_3_agent.rs`（12+ 用例：闭环/审批/记忆/进化/失败）、`v0_3_policy.rs`、
-  `v0_3_evolution.rs`、`v0_3_approval.rs`（HTTP 审批）、`v0_3_server.rs`、
-  `v0_9_ws_clamp.rs`（WS 视图钳制）、`tests/common/mod.rs`（run_goal 辅助）。
-- 动作：行为逐条改写为 V2 契约测试；v0_7_auth / v0_8_persistence 保留
+  `v0_3_evolution.rs`、`approval_http.rs`（HTTP 审批）、`server_views.rs`、
+  `websocket_views.rs`（WS 视图钳制）、`tests/common/mod.rs`（run_goal 辅助）。
+- 动作：行为逐条改写为 V2 契约测试；auth_rbac / runtime_persistence 保留
   （认证与持久化能力存活，只改其对 run 的依赖面）。
 - 出口：v2_parity 全绿后，v0_3_* 与 common 的 run_goal 依赖整体删除。
 

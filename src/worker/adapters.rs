@@ -7,6 +7,28 @@ use super::manifest::ExecutionProtocol;
 use super::process::ProcessWorker;
 use super::sdk::Worker;
 
+/// Environment variables that may enter an isolated DSH process.
+///
+/// Keep this list intentionally small: DSH may invoke tools and mutate a
+/// workspace, so arbitrary host credentials or runtime state must not cross
+/// the provider boundary.
+pub const DSH_ENV_ALLOWLIST: &[&str] = &[
+    "PATH",
+    "HOME",
+    "DSH_HOME",
+    "DEEPSEEK_API_KEY",
+    "NO_COLOR",
+    "TERM",
+    "LANG",
+    "LC_ALL",
+];
+
+/// Environment variables that may enter the dedicated shell executor.
+///
+/// The shell provider is intentionally narrower than DSH: it does not need
+/// provider credentials and must never inherit arbitrary host state.
+pub const SHELL_ENV_ALLOWLIST: &[&str] = &["PATH", "HOME", "NO_COLOR", "TERM", "LANG", "LC_ALL"];
+
 /// Codex Worker 适配器（code.read / code.write / code.test / code.search）。
 pub fn codex_worker(command: Option<&str>) -> ProcessWorker {
     let mut m = super::manifest::WorkerManifest::new("codex", "agent")
@@ -47,8 +69,9 @@ pub fn pi_worker(command: Option<&str>) -> ProcessWorker {
 
 /// DSH（DeepSeek Harness）Worker 适配器（Phase 11D：Harness 是 Worker，不是内核）。
 ///
-/// 经 Process 协议接入：`dsh --profile headless "<任务>"`（answer one task, print, exit）——
-/// 任务文本经 input.args 传入。已验证真实可执行（headless 单次任务模式）。
+/// 经 Process 协议接入：`dsh --profile headless "<任务>"`（answer one task, print, exit）。
+/// `--profile headless` 是 Provider 自己的调用合同，不由上游 input.args 注入。
+/// 任务文本仍经 input.args 传入。已验证真实可执行（headless 单次任务模式）。
 /// MCP/HTTP 为可选接入协议；command 可配置，不绑定具体二进制。
 pub fn dsh_worker(command: Option<&str>) -> ProcessWorker {
     let mut m = super::manifest::WorkerManifest::new("dsh-harness", "agent")
@@ -64,7 +87,9 @@ pub fn dsh_worker(command: Option<&str>) -> ProcessWorker {
         .with_trust(0.9)
         .with_availability("local");
     m.execution = ExecutionProtocol::Process;
-    ProcessWorker::new(m, command.unwrap_or("dsh"))
+    ProcessWorker::with_fixed_args(m, command.unwrap_or("dsh"), ["--profile", "headless"])
+        .with_env_allowlist(DSH_ENV_ALLOWLIST)
+        .requiring_isolated_context()
 }
 
 /// DeepSeek Harness Worker 适配器壳（Phase 11D：Harness 是 Worker，不是内核）。
@@ -95,6 +120,8 @@ pub fn shell_worker(command: Option<&str>) -> ProcessWorker {
         .with_availability("local");
     m.execution = ExecutionProtocol::Process;
     ProcessWorker::new(m, command.unwrap_or("/bin/sh"))
+        .with_env_allowlist(SHELL_ENV_ALLOWLIST)
+        .requiring_isolated_context()
 }
 
 /// 便捷断言（防未使用）。
@@ -126,6 +153,10 @@ mod tests {
         // 命令可覆盖（不绑定二进制）
         let overridden = dsh_worker(Some("/custom/dsh"));
         assert_eq!(overridden.command(), "/custom/dsh");
+        assert_eq!(
+            overridden.fixed_args(),
+            &["--profile".to_string(), "headless".to_string()]
+        );
     }
 
     /// Codex 适配器声明（能力市场身份证）——纯内存，可进 CI。

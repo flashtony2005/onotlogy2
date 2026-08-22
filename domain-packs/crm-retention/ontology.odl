@@ -1,0 +1,99 @@
+# 企业客户经营业务包：概念、生命周期和可执行动作。
+
+object Company:
+  properties:
+    name: string
+    code: string
+
+object Department:
+  properties:
+    name: string
+    code: string
+
+object Employee:
+  properties:
+    name: string
+    role: string
+
+object Customer:
+  properties:
+    name: string
+    level: string
+    balance: float
+    days_since_last_contact: int
+  actions:
+    retain:
+      creates:
+        - type: RetentionTask
+          data:
+            title: "客户挽留计划"
+            customer: self
+            status: "Pending"
+            priority: "MEDIUM"
+          link: needs_retention
+    refund:
+      params:
+        amount: float
+      updates:
+        - field: balance
+          value: amount
+      policy:
+        require_approval: true
+        precondition:
+          - field: amount
+            op: le
+            value: 1000
+          - field: self.level
+            op: ne
+            value: "BLACKLIST"
+
+object Contract:
+  properties:
+    title: string
+    amount: float
+    status: string
+
+object Interaction:
+  properties:
+    channel: string
+    summary: string
+    occurred_at: string
+
+object RiskSignal:
+  properties:
+    kind: string
+    level: string
+    status: string
+    reason: string
+
+object RetentionTask:
+  properties:
+    title: string
+    customer: string
+    status: string
+    priority: string
+  actions:
+    start:
+      updates:
+        - field: status
+          value: "InProgress"
+      policy:
+        precondition:
+          - field: self.status
+            op: eq
+            value: "Pending"
+    complete:
+      updates:
+        - field: status
+          value: "Completed"
+      policy:
+        precondition:
+          - field: self.status
+            op: eq
+            value: "InProgress"
+
+object Approval:
+  properties:
+    subject: string
+    status: string
+    amount: float

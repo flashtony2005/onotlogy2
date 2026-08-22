@@ -13,8 +13,22 @@ use openaip_os::fabric::router::FabricRouter;
 use openaip_os::facade::{AuditQuery, FabricRequest, Facade, OpenAipFacade, WorldQuery};
 use openaip_os::storage::{LibSQLStorage, WorldCommand};
 use openaip_os::worker::manifest::WorkerManifest;
-use openaip_os::worker::process::ProcessWorker;
+use openaip_os::worker::process::{
+    ExecutionContext, ExecutionWorkspace, ProcessWorker, WorkspaceMode,
+};
 use std::sync::Arc;
+
+fn isolated_context() -> ExecutionContext {
+    ExecutionContext {
+        workspace: ExecutionWorkspace {
+            root: "/tmp".into(),
+            mode: WorkspaceMode::Isolated,
+        },
+        cwd: None,
+        env: Default::default(),
+        timeout_ms: None,
+    }
+}
 
 fn sh_adapter(capabilities: &[&str]) -> ProcessAdapter {
     let mut m = WorkerManifest::new("sh-agent", "agent").with_capabilities(capabilities);
@@ -246,6 +260,7 @@ async fn tc_g3_fabric_submit_closed_loop_world_visible() {
                     "args": ["-c", "echo ok"],
                     "object": "order-001",
                 }),
+                execution_context: Some(isolated_context()),
                 project_id: None,
             })
             .unwrap();
@@ -337,6 +352,7 @@ async fn tc_g4_single_semantic_source_all_queries_through_facade() {
             sender: "dsh".into(),
             intent: "nothing".into(),
             payload: serde_json::json!({}),
+            execution_context: None,
             project_id: None,
         });
         assert!(f.is_err(), "未知意图必须 fail-closed（Facade 语义透出）");
@@ -488,6 +504,7 @@ async fn tc_p3_fabric_submit_lands_in_project_world() {
                     "args": ["-c", "echo ok"],
                     "object": "order-p3",
                 }),
+                execution_context: Some(isolated_context()),
                 project_id: Some("openaip-os".into()),
             })
             .unwrap();

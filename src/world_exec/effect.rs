@@ -1,7 +1,11 @@
 //! EffectExecutor —— 正向世界变化执行器（D4 分离：Effect 语义 ≠ Compensation 语义）。
 //!
-//! Effect 执行 = 真实改变 World（不再是 Phase 2/3 的「投影假装」）；
-//! 执行结果（relations）由调用方落库（TaskExecutor relate）。
+//! `Kernel::emit` 只登记 Effect，不修改 World；本模块是 Agent Task 把 Effect
+//! 应用到 Kernel World relations 的唯一正向执行边界。`EffectResult` 仅返回本次
+//! 已执行的关系变化，供调用方写审计事件和构造补偿清单，调用方不得再次 apply。
+//!
+//! 这里的正向执行不同于 `crate::projection::Projection`：执行器改变当前
+//! Kernel World 状态，投影器只从已存在的 World Event 重建派生索引。
 
 use serde_json::Value;
 
@@ -17,7 +21,9 @@ pub enum EffectError {
     NoEffects(String),
 }
 
-/// 执行结果：真实世界变化（关系集，调用方落库）。
+/// 执行结果：已由执行器应用的真实世界变化（关系集）。
+///
+/// 调用方可用它写审计事件或补偿清单，但不应再次写入 Kernel relations。
 #[derive(Debug, Clone, Default)]
 pub struct EffectResult {
     /// 本次执行产生的世界关系 (source, predicate, target)。

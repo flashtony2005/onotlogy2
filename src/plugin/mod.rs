@@ -4,6 +4,7 @@
 //! Plugin = Tool / AI / API / MCP / 代码执行器 / Agent 的适配与扩展机制。
 
 pub mod capability;
+pub mod catalog;
 pub mod exec;
 pub mod http;
 pub mod manifest;

@@ -10,7 +10,9 @@
 
 mod agent;
 mod commands;
+mod domain_cmd;
 mod facade;
+mod lottery;
 mod project_cmd;
 mod serve;
 mod sim;
@@ -34,6 +36,15 @@ enum Cmd {
     Compile { file: String },
     /// 写入演示数据（Customer 001/002）
     Run,
+    /// 公司业务包（本体 + 初始业务设置/事实）
+    DomainPack {
+        #[command(subcommand)]
+        cmd: DomainPackCmd,
+    },
+    /// 生成一致性本地数据库快照（不覆盖已有目标文件）
+    Backup { output: String },
+    /// 校验并恢复本地数据库快照到 --db
+    Restore { input: String },
     /// 对象操作
     Object {
         #[command(subcommand)]
@@ -58,6 +69,11 @@ enum Cmd {
     Event {
         #[command(subcommand)]
         cmd: EventCmd,
+    },
+    /// 审计操作（导出包含完整性哈希链）
+    Audit {
+        #[command(subcommand)]
+        cmd: AuditCmd,
     },
     /// Public Semantic Facade（world / audit / fabric 三语义域；单一语义源）
     Facade {
@@ -89,9 +105,12 @@ enum Cmd {
         host: String,
         #[arg(long, default_value = "ui/dist")]
         static_dir: String,
-        /// ODL 文件：声明对象自有动作；缺省用 examples/crm.odl。
-        #[arg(long, default_value = "examples/crm.odl")]
+        /// ODL 文件：声明对象自有动作；未指定业务包时缺省用 examples/crm.odl。
+        #[arg(long)]
         odl: Option<String>,
+        /// 公司业务包目录：安装本体与 bootstrap 后作为服务运行时语义。
+        #[arg(long)]
+        domain_pack: Option<String>,
         /// 自动批准所有需审批动作；默认 false → require_approval 动作挂起。
         #[arg(long, default_value_t = false)]
         auto_approve: bool,
@@ -104,6 +123,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: DbCmd,
     },
+    /// 彩票业务包：CSV 导入、统计、回测与 Pi Agent 分析
+    Lottery {
+        #[command(subcommand)]
+        cmd: LotteryCmd,
+    },
     /// 用户与账号管理（V0.7 认证）
     User {
         #[command(subcommand)]
@@ -112,8 +136,72 @@ enum Cmd {
 }
 
 #[derive(Subcommand)]
+enum DomainPackCmd {
+    /// 校验业务包目录，不写入数据库
+    Validate { path: String },
+    /// 安装业务包：注册项目并幂等导入 bootstrap
+    Install { path: String },
+}
+
+#[derive(Subcommand)]
 enum ObjectCmd {
     List { object_type: String },
+}
+
+#[derive(Subcommand)]
+enum LotteryCmd {
+    /// 导入 dlt.csv / double.csv，并幂等写入 LotteryDraw
+    Import {
+        /// dlt 或 double
+        #[arg(long)]
+        game: String,
+        /// CSV 文件路径
+        file: String,
+        #[arg(long, default_value = "lottery-analysis")]
+        project: String,
+    },
+    /// 计算确定性统计特征并保存 AnalysisRun/Prediction
+    Analyze {
+        #[arg(long)]
+        game: String,
+        #[arg(long, default_value_t = 50)]
+        window: usize,
+        #[arg(long, default_value = "lottery-analysis")]
+        project: String,
+    },
+    /// 滚动窗口回测统计候选，并保存回测证据
+    Backtest {
+        #[arg(long)]
+        game: String,
+        #[arg(long, default_value_t = 50)]
+        train_window: usize,
+        #[arg(long, default_value_t = 100)]
+        test_count: usize,
+        #[arg(long, default_value = "lottery-analysis")]
+        project: String,
+    },
+    /// 一次完成统计与回测（不启动 Pi）
+    Run {
+        #[arg(long)]
+        game: String,
+        #[arg(long, default_value_t = 50)]
+        window: usize,
+        #[arg(long, default_value_t = 100)]
+        test_count: usize,
+        #[arg(long, default_value = "lottery-analysis")]
+        project: String,
+    },
+    /// 将统计与回测上下文交给已安装的 Pi Agent 解释
+    Pi {
+        #[arg(long)]
+        game: String,
+        #[arg(long, default_value_t = 50)]
+        window: usize,
+        #[arg(long, default_value_t = 100)]
+        test_count: usize,
+        #[arg(long, default_value = "lottery-analysis")]
+        project: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -125,9 +213,12 @@ enum AgentCmd {
         /// Agent ID
         #[arg(long, default_value = "retention-agent")]
         agent_id: String,
-        /// ODL 文件
-        #[arg(long, default_value = "examples/crm.odl")]
+        /// ODL 文件；未指定业务包时缺省用 examples/crm.odl。
+        #[arg(long)]
         odl: Option<String>,
+        /// 公司业务包目录：安装后使用业务包 ODL 运行 Agent。
+        #[arg(long)]
+        domain_pack: Option<String>,
         /// 自动批准所有需审批动作
         #[arg(long, default_value_t = false)]
         auto_approve: bool,
@@ -265,6 +356,11 @@ enum AuditCmd {
         #[arg(long, default_value_t = 100)]
         limit: usize,
     },
+    /// audit.export：输出稳定 JSON + SHA-256 完整性链。
+    Export {
+        #[arg(short, long)]
+        output: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -277,9 +373,12 @@ enum FabricCmd {
         sender: String,
         #[arg(long)]
         intent: String,
-        /// JSON 载荷（args/task/object 等）
+        /// JSON 任务载荷（args/task/object 等；不包含执行上下文）
         #[arg(long)]
         payload: String,
+        /// JSON execution_context（agent_task/code.write 必填）
+        #[arg(long)]
+        execution_context: Option<String>,
         /// 轮询后台终局事件的最大等待秒数（默认 30）；0 = 提交后立即返回不等待。
         #[arg(long, default_value_t = 30)]
         timeout: u64,
@@ -308,6 +407,12 @@ enum UserCmd {
     Delete {
         username: String,
     },
+    /// 重设用户口令，并注销该用户的全部已有会话
+    ResetPassword {
+        username: String,
+        #[arg(long)]
+        password: String,
+    },
 }
 
 #[tokio::main]
@@ -316,6 +421,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.cmd {
         Cmd::Compile { file } => commands::cmd_compile(&file).await?,
         Cmd::Run => commands::cmd_run(&cli.db).await?,
+        Cmd::DomainPack { cmd } => match cmd {
+            DomainPackCmd::Validate { path } => domain_cmd::cmd_validate(&path).await?,
+            DomainPackCmd::Install { path } => domain_cmd::cmd_install(&cli.db, &path).await?,
+        },
+        Cmd::Lottery { cmd } => match cmd {
+            LotteryCmd::Import {
+                game,
+                file,
+                project,
+            } => lottery::cmd_import(&cli.db, &game, &file, &project).await?,
+            LotteryCmd::Analyze {
+                game,
+                window,
+                project,
+            } => lottery::cmd_analyze(&cli.db, &game, window, &project).await?,
+            LotteryCmd::Backtest {
+                game,
+                train_window,
+                test_count,
+                project,
+            } => lottery::cmd_backtest(&cli.db, &game, train_window, test_count, &project).await?,
+            LotteryCmd::Run {
+                game,
+                window,
+                test_count,
+                project,
+            } => lottery::cmd_run(&cli.db, &game, window, test_count, &project).await?,
+            LotteryCmd::Pi {
+                game,
+                window,
+                test_count,
+                project,
+            } => lottery::cmd_pi(&cli.db, &game, window, test_count, &project).await?,
+        },
+        Cmd::Backup { output } => commands::cmd_backup(&cli.db, &output).await?,
+        Cmd::Restore { input } => commands::cmd_restore(&cli.db, &input).await?,
         Cmd::Object { cmd } => match cmd {
             ObjectCmd::List { object_type } => {
                 commands::cmd_object_list(&cli.db, &object_type).await?
@@ -340,6 +481,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             EventCmd::Emit { event_type, refs } => {
                 commands::cmd_event_emit(&cli.db, &event_type, &refs).await?
             }
+        },
+        Cmd::Audit { cmd } => match cmd {
+            AuditCmd::Query {
+                run_id,
+                event_type,
+                limit,
+            } => tokio::task::block_in_place(|| {
+                facade::cmd_audit_query(&cli.db, run_id.as_deref(), event_type.as_deref(), limit)
+            })?,
+            AuditCmd::Export { output } => commands::cmd_audit_export(&cli.db, &output).await?,
         },
         Cmd::Facade { cmd } => match cmd {
             // Facade 是同步 API（内部 block_on storage）→ 阻塞上下文约定
@@ -372,6 +523,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         limit,
                     )
                 })?,
+                AuditCmd::Export { output } => commands::cmd_audit_export(&cli.db, &output).await?,
             },
             FacadeCmd::Fabric { cmd } => match cmd {
                 FabricCmd::Submit {
@@ -379,10 +531,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     sender,
                     intent,
                     payload,
+                    execution_context,
                     timeout,
                 } => tokio::task::block_in_place(|| {
                     facade::cmd_fabric_submit(
-                        &cli.db, &session, &sender, &intent, &payload, timeout,
+                        &cli.db,
+                        &session,
+                        &sender,
+                        &intent,
+                        &payload,
+                        execution_context.as_deref(),
+                        timeout,
                     )
                 })?,
             },
@@ -425,6 +584,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 goal,
                 agent_id,
                 odl,
+                domain_pack,
                 auto_approve,
                 auto_approve_evolution,
                 via_workers,
@@ -435,6 +595,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &goal,
                     &agent_id,
                     odl.as_deref(),
+                    domain_pack.as_deref(),
                     auto_approve,
                     auto_approve_evolution,
                     via_workers,
@@ -475,6 +636,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             host,
             static_dir,
             odl,
+            domain_pack,
             auto_approve,
             auto_approve_evolution,
         } => {
@@ -484,6 +646,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 port,
                 &static_dir,
                 odl.as_deref(),
+                domain_pack.as_deref(),
                 auto_approve,
                 auto_approve_evolution,
             )
@@ -504,6 +667,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 display_name,
             } => user::cmd_user_create(&cli.db, &username, &password, &role, &display_name).await?,
             UserCmd::Delete { username } => user::cmd_user_delete(&cli.db, &username).await?,
+            UserCmd::ResetPassword { username, password } => {
+                user::cmd_user_reset_password(&cli.db, &username, &password).await?
+            }
         },
     }
     Ok(())

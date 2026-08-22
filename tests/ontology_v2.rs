@@ -232,6 +232,13 @@ async fn tc_o3_compensation_executor_undoes_world() {
             .any(|r| r.predicate == "needs_retention" && r.is_current(k.now())),
         "正向执行后关系应存在"
     );
+    assert_eq!(
+        k.relations()
+            .filter(|r| r.predicate == "needs_retention" && r.is_current(k.now()))
+            .count(),
+        1,
+        "正向 Effect 只能由 RelationEffectExecutor 应用一次"
+    );
 
     // ② 下游失败 → 置 Failed → 逆序补偿（D4：RelationCompensationExecutor 闭合时间窗）
     k.advance(fiber, FiberState::Failed).unwrap();

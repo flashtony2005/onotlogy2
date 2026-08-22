@@ -2,13 +2,13 @@
 //!
 //! Task = goal + allowed capabilities（+ 期望关系属 Phase 3 规划扩展）。
 //! 执行 Task = spawn Fiber，由 TaskExecutor 驱动：
-//! Fiber poll（决策，Phase 3 接 Planner/LLM）→ Policy 校验 → 审批挂起/Effect 提交/Relation 投影。
+//! Fiber poll（决策，Phase 3 接 Planner/LLM）→ Policy 校验 → 审批挂起/Effect 提交/World mutation。
 
 use serde_json::Value;
 
 use super::capability::Capability;
 use super::policy::PolicyVerdict;
-use crate::kernel::fiber::{FiberId, FiberState, WaitPattern};
+use crate::kernel::fiber::{FiberId, FiberState};
 use crate::kernel::relation::Relation;
 use crate::kernel::{CompensationEngine, ContextId, Effect, Kernel, KernelError};
 use crate::trace::TraceEvent;
@@ -84,15 +84,15 @@ impl Task {
 /// 单步执行结果。
 #[derive(Debug, Clone, PartialEq)]
 pub enum StepOutcome {
-    /// 已提交 Effect（+ 可选 Relation 投影）。
+    /// 已提交并执行的 Effect。
     Committed,
-    /// 挂起等待审批（Fiber 已 WAITING；relate(Approval) 后自动恢复）。
+    /// 挂起等待审批（Fiber 已 WAITING；由显式 approval resolver 恢复）。
     Waiting,
     /// 业务拒绝（Effect 未提交；Fiber 已 FAILED，补偿链为空）。
     Denied(String),
 }
 
-/// Task 执行器：驱动 Fiber 沿「Policy → 审批 → Effect → 执行 → 投影」链路推进。
+/// Task 执行器：驱动 Fiber 沿「Policy → 审批 → Effect → 执行 → World」链路推进。
 pub struct TaskExecutor<'k> {
     kernel: &'k mut Kernel,
     /// 世界效应声明（Phase 5：注入后 Effect 真实改变 World；None = 旧 projection 模拟）。
@@ -235,7 +235,7 @@ impl<'k> TaskExecutor<'k> {
                 return Ok(StepOutcome::Denied(reason));
             }
             PolicyVerdict::RequireApproval => {
-                // 已审批（relate 恢复时置位）→ 放行；否则挂起等待 Approval 关系
+                // 显式审批已放行 → 继续；否则挂起并注册 ApprovalRequest
                 let approved = self
                     .kernel
                     .fiber(fiber)
@@ -251,15 +251,9 @@ impl<'k> TaskExecutor<'k> {
                             &capability.action,
                         );
                     } else {
-                        // Gate 失败 = 不能替代审批 → 回退人工（WAIT），不是 DENY（I3）
-                        self.kernel.wait_on(
-                            fiber,
-                            WaitPattern {
-                                source: None,
-                                predicate: "Approval".into(),
-                                target: None,
-                            },
-                        )?;
+                        // Gate 失败 = 不能替代审批 → 回退人工（WAIT），不是 DENY（I3）。
+                        // 审批由 cognitive::approval::resolve 通过显式 approve/reject/expire
+                        // 裁决；不再把 Approval 当作普通 World relation 等待。
                         self.kernel.advance(fiber, FiberState::Waiting)?;
                         // Phase 8 · G2：审批挂起审计（Suspension Point 事件）
                         self.kernel
@@ -302,18 +296,14 @@ impl<'k> TaskExecutor<'k> {
             if let Some(key) = idempotency_key {
                 self.kernel.record_idempotency(ctx, key, eid);
             }
-            // P6：先事件后投影（契约拍板：Commit(WorldChange + WorldEvent) 步骤级
-            // 一致）。落库失败 → step 失败，Kernel 未变（事务一致，无半提交）。
+            // P6：执行器已经完成 Kernel World mutation；这里仅追加世界事件。
+            // 关系不能在此再次写入，否则同一 Effect 会产生重复事实。
             if let Some(sink) = &self.world_sink {
                 for (source, pred, target) in &result.relations {
                     let ev = crate::storage::world::world_link_event(source, pred, target);
                     sink.append(&ev)
                         .map_err(|e| KernelError::Closed(format!("P6 世界事件落库失败: {e}")))?;
                 }
-            }
-            for (source, pred, target) in result.relations {
-                self.kernel
-                    .relate(Relation::new(ctx, source, pred, target, self.kernel.now()))?;
             }
         } else {
             let eid = self.kernel.emit(fiber, effect)?;

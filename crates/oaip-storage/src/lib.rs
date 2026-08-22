@@ -6,6 +6,7 @@
 //!
 //! M4：独立 crate（依赖 abi/trace/eval-core/mutation-core/worker-core——三个类型环已解）。
 
+pub mod automation;
 pub mod evaluation;
 pub mod events;
 pub mod objects;
@@ -16,21 +17,61 @@ pub mod users;
 pub mod worker_registry;
 pub mod worker_stats;
 pub mod world;
+pub use automation::AutomationJob;
+
+mod backup;
+mod schema;
 
 use async_trait::async_trait;
 use libsql::Connection;
 use libsql::params;
-use oaip_abi::codegen;
 pub(crate) use oaip_trace::TraceEvent;
+
+/// 审计事件哈希链中的持久化节点。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuditChainRecord {
+    pub sequence: i64,
+    pub event_id: String,
+    pub previous_hash: String,
+    pub hash: String,
+}
+
 pub use projects::ProjectRecord;
-pub use runs::{ApprovalRecord, RunRecord};
+pub use runs::RunRecord;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 pub use world::WorldCommand;
 
 static REL_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// 审计链健康状态：启动深校验成功后才为 Valid；热路径只在检测到链损坏时降级。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditChainHealth {
+    Unknown,
+    Valid,
+    Invalid,
+}
+
+impl AuditChainHealth {
+    pub(crate) const fn code(self) -> u8 {
+        match self {
+            Self::Unknown => 0,
+            Self::Valid => 1,
+            Self::Invalid => 2,
+        }
+    }
+
+    pub(crate) const fn from_code(code: u8) -> Self {
+        match code {
+            1 => Self::Valid,
+            2 => Self::Invalid,
+            _ => Self::Unknown,
+        }
+    }
+}
 
 /// REQ-018：一条自动放行审计记录（可追溯至 LearnedKnowledge + run）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -68,6 +109,44 @@ fn now_ts() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     format!("{}", d.as_micros())
+}
+
+/// 测试专用故障注入点。
+///
+/// 仅在 storage crate 的单元测试编译时存在；子进程通过环境变量在事务提交前
+/// 确定性终止，用于验证进程崩溃后的原子性与重启恢复，不进入生产二进制。
+#[cfg(test)]
+pub(crate) fn crash_if_requested(point: &str) {
+    if std::env::var("OAIP_STORAGE_CRASH_POINT").ok().as_deref() == Some(point) {
+        std::process::abort();
+    }
+}
+
+/// 测试专用持久化故障注入点。
+///
+/// 格式：`OAIP_STORAGE_IO_FAULT=<point>:<readonly|full>`。只在 storage crate
+/// 单元测试中编译，用 SQLite 原生错误码模拟宿主机只读或磁盘耗尽，验证事务
+/// 回滚与上层错误传播；生产二进制不包含该路径。
+#[cfg(test)]
+pub(crate) fn io_fault_if_requested(point: &str) -> Result<(), StorageError> {
+    let Some(value) = std::env::var("OAIP_STORAGE_IO_FAULT").ok() else {
+        return Ok(());
+    };
+    let Some((requested_point, mode)) = value.split_once(':') else {
+        return Ok(());
+    };
+    if requested_point != point {
+        return Ok(());
+    }
+    let (code, message) = match mode {
+        "readonly" => (8, "attempt to write a readonly database"),
+        "full" => (13, "database or disk is full"),
+        _ => return Ok(()),
+    };
+    Err(StorageError::Db(libsql::Error::SqliteFailure(
+        code,
+        message.into(),
+    )))
 }
 
 /// 一条对象记录（对应 `wb_ontology_object`）。`r#type` 映射 DDL 列 `type`（Rust 关键字需裸标识）。
@@ -137,6 +216,8 @@ pub enum StorageError {
     Json(#[from] serde_json::Error),
     #[error("约束违反 {code}: {message}")]
     Constraint { code: &'static str, message: String },
+    #[error("文件系统错误: {0}")]
+    Io(#[from] std::io::Error),
     /// 乐观锁冲突：传入版本与当前版本不符（对象已被并发修改）。
     #[error("乐观锁冲突（期望版本 {expected}，实际不符）: {id}")]
     Conflict { id: String, expected: i64 },
@@ -239,146 +320,7 @@ pub trait RelationEngine {
 #[derive(Clone)]
 pub struct LibSQLStorage {
     conn: Connection,
-}
-
-/// 当前 schema 版本。每次 schema 变更（加列 / 改列名）递增；
-/// 旧库 open 时按 `MIGRATIONS` 顺序自动迁移（事务化），不再要求 `db reset`。
-const SCHEMA_VERSION: i64 = 10;
-
-/// 版本化迁移注册表：`(from_version, sql)`，按版本升序执行；每步成功后推进
-/// `wb_meta.schema_version`。迁移在事务内执行（失败整体回滚，版本不推进，可安全重试）。
-/// 新库由 `canonical_schema` 直接建到当前版本，不执行迁移。
-const MIGRATIONS: &[(i64, &str)] = &[
-    // V1 → V2：wb_learned 补 auto_approve_enabled（REQ-018）。
-    // 此前该 ALTER 硬编码在「版本匹配」分支且吞错；现为正式迁移项。
-    (
-        1,
-        "ALTER TABLE wb_learned ADD COLUMN auto_approve_enabled INTEGER NOT NULL DEFAULT 1",
-    ),
-    // V2 → V3：Phase 11 Domain Agent Evolution（WB-DOC-03-V11.0）。
-    // 新增 wb_evaluation（Event Log 派生结果，可重建）与 wb_mutation（提案 + Benchmark）。
-    (
-        2,
-        "CREATE TABLE IF NOT EXISTS wb_evaluation (
-  id                 TEXT PRIMARY KEY,
-  run_id             TEXT NOT NULL,
-  task_id            TEXT NOT NULL,
-  skill_version      TEXT,
-  correctness        REAL,
-  completeness       REAL,
-  efficiency         REAL,
-  reliability        REAL,
-  policy_compliance  REAL,
-  output_quality     REAL,
-  aggregate_score    REAL NOT NULL DEFAULT 0.0,
-  failure_modes      TEXT NOT NULL DEFAULT '[]',
-  evaluator_version  TEXT NOT NULL,
-  created_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_eval_run ON wb_evaluation(run_id);
-CREATE INDEX IF NOT EXISTS idx_eval_task ON wb_evaluation(task_id);
-CREATE TABLE IF NOT EXISTS wb_mutation (
-  id                 TEXT PRIMARY KEY,
-  target_asset       TEXT NOT NULL,
-  source_version     TEXT NOT NULL,
-  candidate_version  TEXT NOT NULL,
-  root_cause         TEXT NOT NULL,
-  evidence           TEXT NOT NULL DEFAULT '[]',
-  delta              TEXT NOT NULL,
-  validation_result  TEXT,
-  benchmark_result   TEXT,
-  status             TEXT NOT NULL,
-  promotion_reason   TEXT,
-  created_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_mutation_status ON wb_mutation(status);
-CREATE INDEX IF NOT EXISTS idx_mutation_target ON wb_mutation(target_asset);",
-    ),
-    // V3 → V4：Phase 11 11A 证据系统（WB-DOC-03-V11.0）。
-    // wb_evaluation 加 evidence 列（每维度证据+置信度 JSON；Unknown ≠ Success 语义）。
-    (
-        3,
-        "ALTER TABLE wb_evaluation ADD COLUMN evidence TEXT NOT NULL DEFAULT '{}'",
-    ),
-    // V4 → V5：Phase 11C 离线 Benchmark（WB-DOC-03-V11.0）。
-    // 新增 wb_task（任务定义持久化：历史任务集 = 按 task_id 聚合的 wb_evaluation）。
-    (
-        4,
-        "CREATE TABLE IF NOT EXISTS wb_task (
-  task_id    TEXT PRIMARY KEY,
-  definition TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-)",
-    ),
-    // V5 → V6：V2 Router Selection Learning（Trust 轴）。
-    // wb_worker_stats：(capability, worker) 执行统计（派生层，可回放重建）。
-    (
-        5,
-        "CREATE TABLE IF NOT EXISTS wb_worker_stats (
-  capability       TEXT NOT NULL,
-  worker_id        TEXT NOT NULL,
-  runs             INTEGER NOT NULL DEFAULT 0,
-  success          INTEGER NOT NULL DEFAULT 0,
-  total_duration_ms INTEGER NOT NULL DEFAULT 0,
-  updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (capability, worker_id)
-)",
-    ),
-    // V6 → V7：V2 Router Selection Learning 可回放化。
-    // wb_evaluation 加 worker_outcomes（per-worker 结果；WorkerStats 重建的数据源）。
-    (
-        6,
-        "ALTER TABLE wb_evaluation ADD COLUMN worker_outcomes TEXT NOT NULL DEFAULT '[]'",
-    ),
-    // V7 → V8：S1 Decision Replay 前置——Worker Registry 持久化 + stats.first_seen。
-    (
-        7,
-        "CREATE TABLE IF NOT EXISTS wb_worker (
-  id           TEXT PRIMARY KEY,
-  worker_type  TEXT NOT NULL,
-  capabilities TEXT NOT NULL DEFAULT '[]',
-  quality      REAL NOT NULL DEFAULT 0.0,
-  trust        REAL NOT NULL DEFAULT 0.0,
-  risk         INTEGER NOT NULL DEFAULT 1,
-  cost         INTEGER NOT NULL DEFAULT 1,
-  latency_ms   INTEGER NOT NULL DEFAULT 100,
-  availability TEXT NOT NULL DEFAULT 'local',
-  execution    TEXT NOT NULL DEFAULT 'Process',
-  created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-ALTER TABLE wb_worker_stats ADD COLUMN created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP;",
-    ),
-    // V8 → V9（M1d）：V1 门面删除——wb_memory / wb_approval / wb_pattern·proposal·learned
-    // / wb_approval_audit 随 V1 存储层退役（V2 认知状态归 CognitiveStore / Kernel 事实轨）。
-    (
-        8,
-        "DROP TABLE IF EXISTS wb_memory; DROP TABLE IF EXISTS wb_approval; \
-         DROP TABLE IF EXISTS wb_pattern; DROP TABLE IF EXISTS wb_proposal; \
-         DROP TABLE IF EXISTS wb_learned; DROP TABLE IF EXISTS wb_approval_audit;",
-    ),
-    // V9 → V10（Phase 8）：Project Scope——项目维度世界模型。
-    // wb_project 项目注册表（含本体定义）；对象/关系/事件/run 全部 project 归属
-    //（NULL = 全局/历史，兼容旧库；世界按 project 过滤投影）。
-    (
-        9,
-        "CREATE TABLE IF NOT EXISTS wb_project (
-  id          TEXT PRIMARY KEY,
-  name        TEXT NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  ontology    TEXT NOT NULL DEFAULT '',
-  status      TEXT NOT NULL DEFAULT 'active',
-  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-ALTER TABLE wb_ontology_object ADD COLUMN project_id TEXT;
-ALTER TABLE wb_relation_edge ADD COLUMN project_id TEXT;
-ALTER TABLE wb_trace_event ADD COLUMN project_id TEXT;
-ALTER TABLE wb_run ADD COLUMN project_id TEXT;",
-    ),
-];
-
-/// 判断 libsql 错误是否为 `no such table`（跨创建方稳定，优于 PRAGMA / sqlite_master 文本探测）。
-fn is_no_such_table(e: &libsql::Error) -> bool {
-    e.to_string().contains("no such table")
+    audit_health: Arc<AtomicU8>,
 }
 
 impl LibSQLStorage {
@@ -405,7 +347,13 @@ impl LibSQLStorage {
         let db = libsql::Builder::new_local(path).build().await?;
         let conn = db.connect()?;
         Self::ensure_schema(&conn).await?;
-        Ok(Self { conn })
+        let storage = Self {
+            conn,
+            audit_health: Arc::new(AtomicU8::new(AuditChainHealth::Unknown.code())),
+        };
+        storage.ensure_audit_chain().await?;
+        seed_trace_clock(&storage.conn).await?;
+        Ok(storage)
     }
 
     /// 显式连接 Turso/libSQL server（URL + 可选 auth token）。
@@ -414,101 +362,57 @@ impl LibSQLStorage {
         let db = builder.build().await.map_err(StorageError::Db)?;
         let conn = db.connect()?;
         Self::ensure_schema(&conn).await?;
-        Ok(Self { conn })
+        let storage = Self {
+            conn,
+            audit_health: Arc::new(AtomicU8::new(AuditChainHealth::Unknown.code())),
+        };
+        storage.ensure_audit_chain().await?;
+        seed_trace_clock(&storage.conn).await?;
+        Ok(storage)
     }
 
-    /// 初始化连接：先判定新 / 旧库，再建 / 刷 schema。
-    ///
-    /// 判定策略（规避 libsql 下 PRAGMA / sqlite_master 文本探测跨创建方不稳定的坑）：
-    /// 1. `SELECT id FROM wb_ontology_object LIMIT 0` 探针判断对象表是否存在
-    ///    （`id` 在新旧 schema 均存在，故只回答“表在不在”，不依赖具体列名）。
-    /// 2. 表不存在 → 全新库：建全套核心 schema + 写入 `wb_meta.schema_version`。
-    /// 3. 表存在 → 读 `wb_meta.schema_version`：
-    ///    - 无 `wb_meta` / 无版本行 → 旧 schema，返 WB2101 引导 `oaip db reset`。
-    ///    - 版本 < 当前 → 按 `MIGRATIONS` 顺序事务化迁移（每步更新版本，失败整体回滚）。
-    ///    - 版本 > 当前 → 返 WB2101（未来版本库，拒绝打开）。
-    ///    - 版本匹配 → 幂等刷新 schema。
+    /// 生成一致性本地快照。目标文件必须不存在，避免静默覆盖备份。
+    pub async fn backup_to(
+        &self,
+        destination: impl AsRef<std::path::Path>,
+    ) -> Result<(), StorageError> {
+        backup::backup(&self.conn, destination).await
+    }
+
+    /// 校验快照后，以同目录原子替换安装到本地数据库路径。
+    pub async fn restore_from(
+        source: impl AsRef<std::path::Path>,
+        destination: impl AsRef<std::path::Path>,
+    ) -> Result<(), StorageError> {
+        backup::restore(source, destination).await
+    }
+
+    /// 初始化连接：交给 schema 模块完成版本化迁移与 canonical 校验。
     async fn ensure_schema(conn: &Connection) -> Result<(), StorageError> {
-        let has_obj = match conn
-            .query("SELECT id FROM wb_ontology_object LIMIT 0", params![])
-            .await
-        {
-            Ok(_) => true,
-            Err(e) if is_no_such_table(&e) => false,
-            Err(e) => return Err(StorageError::Db(e)),
-        };
-
-        if !has_obj {
-            // 全新库：建全套核心表（含 wb_meta），写入版本
-            conn.execute_batch(&codegen::canonical_schema()).await?;
-            conn.execute(
-                "INSERT OR REPLACE INTO wb_meta (key, value) VALUES ('schema_version', ?1)",
-                params![SCHEMA_VERSION.to_string()],
-            )
-            .await?;
-            return Ok(());
-        }
-
-        // 已有对象表 → 读版本（无 wb_meta / 无版本行 → 旧 schema）
-        let version = match conn
-            .query(
-                "SELECT value FROM wb_meta WHERE key='schema_version'",
-                params![],
-            )
-            .await
-        {
-            Ok(mut rows) => match rows.next().await? {
-                Some(r) => r.get::<String>(0).unwrap_or_default(),
-                None => String::new(),
-            },
-            Err(e) if is_no_such_table(&e) => String::new(),
-            Err(e) => return Err(StorageError::Db(e)),
-        };
-        let cur: i64 = match version.parse() {
-            Ok(v) => v,
-            Err(_) => {
-                return Err(StorageError::Constraint {
-                    code: "WB2101",
-                    message: "检测到无法识别的 schema 版本（无 wb_meta / 无版本行）。请运行 `oaip db reset` 重建数据库"
-                        .into(),
-                });
-            }
-        };
-        if cur > SCHEMA_VERSION {
-            return Err(StorageError::Constraint {
-                code: "WB2101",
-                message: format!(
-                    "数据库 schema 版本 {cur} 高于程序支持的 {SCHEMA_VERSION}（请升级程序后再打开）"
-                ),
-            });
-        }
-
-        // C1 版本化迁移：按 MIGRATIONS 升序执行，事务保证原子（失败整体回滚，版本不推进）。
-        if cur < SCHEMA_VERSION {
-            let tx = conn.transaction().await?;
-            let mut v = cur;
-            for (from, sql) in MIGRATIONS {
-                if *from >= v {
-                    tx.execute_batch(sql).await?;
-                    v = from + 1;
-                    tx.execute(
-                        "INSERT OR REPLACE INTO wb_meta (key, value) VALUES ('schema_version', ?1)",
-                        params![v.to_string()],
-                    )
-                    .await?;
-                }
-            }
-            tx.commit().await?;
-        }
-
-        // 版本匹配 → 幂等刷新 schema
-        conn.execute_batch(&codegen::canonical_schema()).await?;
-        Ok(())
+        schema::ensure_schema(conn).await
     }
 
     /// 从已有连接构造（测试可用）。
     pub fn from_connection(conn: Connection) -> Self {
-        Self { conn }
+        Self {
+            conn,
+            audit_health: Arc::new(AtomicU8::new(AuditChainHealth::Unknown.code())),
+        }
+    }
+
+    /// 返回最近一次启动/深度校验与热路径校验得到的审计健康状态。
+    pub fn audit_chain_health(&self) -> AuditChainHealth {
+        AuditChainHealth::from_code(self.audit_health.load(Ordering::Acquire))
+    }
+
+    pub(crate) fn mark_audit_chain_valid(&self) {
+        self.audit_health
+            .store(AuditChainHealth::Valid.code(), Ordering::Release);
+    }
+
+    pub(crate) fn mark_audit_chain_invalid(&self) {
+        self.audit_health
+            .store(AuditChainHealth::Invalid.code(), Ordering::Release);
     }
 
     /// 读 KV 元数据（复用 `wb_meta`；P3 watermark / 世界投影状态载体）。
@@ -551,6 +455,20 @@ impl LibSQLStorage {
         let s = serde_json::to_string(world)?;
         self.set_meta(&format!("projection:{world_key}"), &s).await
     }
+}
+
+async fn seed_trace_clock(conn: &Connection) -> Result<(), StorageError> {
+    let mut rows = conn
+        .query(
+            "SELECT timestamp FROM wb_trace_event ORDER BY timestamp DESC, id DESC LIMIT 1",
+            params![],
+        )
+        .await?;
+    if let Some(row) = rows.next().await? {
+        let timestamp: String = row.get(0)?;
+        oaip_trace::observe_timestamp(&timestamp);
+    }
+    Ok(())
 }
 
 fn row_to_object(row: &libsql::Row) -> Result<ObjectRecord, StorageError> {
@@ -666,6 +584,45 @@ mod tests {
     }
 
     // 全新库 → open 成功建表并写入 schema 版本
+    #[tokio::test]
+    async fn restart_seeds_trace_clock_from_persisted_events() {
+        let path = std::env::temp_dir().join(format!(
+            "oaip_clock_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        remove_crash_db(&path);
+        let latest = (oaip_trace::now_ts().parse::<u64>().unwrap() + 10_000).to_string();
+        {
+            let storage = LibSQLStorage::open(path.to_str().unwrap()).await.unwrap();
+            storage
+                .append_trace(&TraceEvent {
+                    id: "clock-seed".into(),
+                    kind: oaip_trace::TraceKind::World,
+                    event_type: "ClockSeed".into(),
+                    object_refs: vec!["clock".into()],
+                    project_id: None,
+                    run_id: None,
+                    agent_id: None,
+                    reasoning: None,
+                    input: None,
+                    output: None,
+                    confidence: None,
+                    timestamp: latest.clone(),
+                })
+                .await
+                .unwrap();
+        }
+
+        let _storage = LibSQLStorage::open(path.to_str().unwrap()).await.unwrap();
+        let next = oaip_trace::now_ts().parse::<u64>().unwrap();
+        assert!(next > latest.parse::<u64>().unwrap());
+        remove_crash_db(&path);
+    }
+
     #[tokio::test]
     async fn open_creates_fresh_db_with_version() {
         let path = std::env::temp_dir().join(format!("oaip_fresh_{}.db", std::process::id()));
@@ -828,7 +785,11 @@ mod tests {
             .await
             .unwrap();
         let v: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
-        assert_eq!(v, SCHEMA_VERSION.to_string(), "迁移后版本应为当前版本");
+        assert_eq!(
+            v,
+            super::schema::SCHEMA_VERSION.to_string(),
+            "迁移后版本应为当前版本"
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -942,5 +903,202 @@ mod tests {
             total - 1,
             "after_id 游标仍按 ASC 补齐后续事件（WS 断线重连语义不变）"
         );
+    }
+
+    /// S1e：用 SQLite 原生 SQLITE_READONLY/SQLITE_FULL 错误码模拟宿主机故障。
+    ///
+    /// 故障点由环境变量确定，子进程只执行一次写入，父进程随后重启数据库验证：
+    /// 事务没有留下孤立 world event、对象或 trace。这样不依赖真实磁盘配额，
+    /// 也不把测试故障注入路径编译进生产二进制。
+    #[tokio::test]
+    async fn io_fault_probe() {
+        let Some(fault) = std::env::var_os("OAIP_STORAGE_IO_FAULT") else {
+            return;
+        };
+        let db = std::env::var("OAIP_STORAGE_IO_FAULT_DB").unwrap();
+        let operation = std::env::var("OAIP_STORAGE_IO_FAULT_OPERATION").unwrap();
+        let fault = fault.to_string_lossy();
+        let (_, mode) = fault.split_once(':').unwrap();
+        let storage = LibSQLStorage::open(&db).await.unwrap();
+        let error = match operation.as_str() {
+            "world" => storage
+                .apply_world(WorldCommand::CreateObject {
+                    object_type: "Customer".into(),
+                    id: "io-fault-object".into(),
+                    data: serde_json::json!({"name": "io-fault"}),
+                    project_id: None,
+                })
+                .await
+                .expect_err("故障注入必须阻断 world 写入"),
+            "trace" => storage
+                .append_trace(&TraceEvent {
+                    id: "io-fault-trace".into(),
+                    kind: oaip_trace::TraceKind::World,
+                    event_type: "ObjectCreated".into(),
+                    object_refs: vec!["io-fault-object".into()],
+                    project_id: None,
+                    run_id: None,
+                    agent_id: None,
+                    reasoning: None,
+                    input: None,
+                    output: None,
+                    confidence: None,
+                    timestamp: "io-fault".into(),
+                })
+                .await
+                .expect_err("故障注入必须阻断 trace 写入"),
+            other => panic!("unknown io fault operation: {other}"),
+        };
+        let expected_code = match mode {
+            "readonly" => 8,
+            "full" => 13,
+            other => panic!("unknown io fault mode: {other}"),
+        };
+        match error {
+            StorageError::Db(libsql::Error::SqliteFailure(code, message)) => {
+                assert_eq!(code, expected_code);
+                assert!(message.contains(mode), "错误信息应保留故障语义: {message}");
+            }
+            other => panic!("故障必须保留 SQLite 错误码，实际: {other:?}"),
+        }
+    }
+
+    fn run_io_fault_probe(path: &std::path::Path, operation: &str, point: &str, mode: &str) {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("tests::io_fault_probe")
+            .arg("--nocapture")
+            .env("OAIP_STORAGE_IO_FAULT_DB", path)
+            .env("OAIP_STORAGE_IO_FAULT_OPERATION", operation)
+            .env("OAIP_STORAGE_IO_FAULT", format!("{point}:{mode}"))
+            .status()
+            .expect("启动 IO fault probe");
+        assert!(status.success(), "IO fault probe 应识别 {point}:{mode}");
+    }
+
+    #[tokio::test]
+    async fn io_faults_preserve_world_and_trace_atomicity() {
+        for mode in ["readonly", "full"] {
+            for point in ["world.after_event_insert", "world.after_state_write"] {
+                let path = crash_db_path(&format!("io_{mode}_{point}"));
+                run_io_fault_probe(&path, "world", point, mode);
+                let storage = LibSQLStorage::open(path.to_str().unwrap()).await.unwrap();
+                assert!(
+                    storage.list_world_events().await.unwrap().is_empty(),
+                    "{point}:{mode}: 不得留下孤立 world event"
+                );
+                assert!(
+                    storage.get("io-fault-object").await.unwrap().is_none(),
+                    "{point}:{mode}: 不得留下孤立对象"
+                );
+                remove_crash_db(&path);
+            }
+
+            let path = crash_db_path(&format!("io_trace_{mode}"));
+            run_io_fault_probe(&path, "trace", "trace.before_insert", mode);
+            let storage = LibSQLStorage::open(path.to_str().unwrap()).await.unwrap();
+            assert!(
+                storage
+                    .list_events(TraceQuery {
+                        object_ref: Some("io-fault-object".into()),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap()
+                    .is_empty(),
+                "trace.before_insert:{mode}: 不得留下 trace"
+            );
+            remove_crash_db(&path);
+        }
+    }
+
+    /// S1c₀：子进程在事务提交前崩溃，重启后验证事件与对象不会半写。
+    ///
+    /// 该测试使用当前测试二进制作为 crash probe，故障点由环境变量精确选择；
+    /// 不依赖 sleep/竞态，也不把测试注入路径编译进生产二进制。
+    #[tokio::test]
+    async fn crash_probe() {
+        let Some(point) = std::env::var_os("OAIP_STORAGE_CRASH_POINT") else {
+            return;
+        };
+        let db = std::env::var("OAIP_STORAGE_CRASH_DB").unwrap();
+        let operation = std::env::var("OAIP_STORAGE_CRASH_OPERATION").unwrap();
+        let storage = LibSQLStorage::open(&db).await.unwrap();
+        match operation.as_str() {
+            "world" => {
+                storage
+                    .apply_world(WorldCommand::CreateObject {
+                        object_type: "Customer".into(),
+                        id: "crash-object".into(),
+                        data: serde_json::json!({"name": "crash-probe"}),
+                        project_id: None,
+                    })
+                    .await
+                    .unwrap();
+            }
+            "run" => storage
+                .insert_run("crash-run", "probe-agent", "probe")
+                .await
+                .unwrap(),
+            other => panic!("unknown crash operation: {other}"),
+        }
+        panic!("fault point {point:?} did not terminate the probe");
+    }
+
+    fn crash_db_path(label: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "oaip_s1c0_{label}_{}_{}.db",
+            std::process::id(),
+            nonce
+        ))
+    }
+
+    fn remove_crash_db(path: &std::path::Path) {
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    fn run_crash_probe(path: &std::path::Path, operation: &str, point: &str) {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("tests::crash_probe")
+            .arg("--nocapture")
+            .env("OAIP_STORAGE_CRASH_DB", path)
+            .env("OAIP_STORAGE_CRASH_OPERATION", operation)
+            .env("OAIP_STORAGE_CRASH_POINT", point)
+            .status()
+            .expect("启动 crash probe");
+        assert!(!status.success(), "crash probe 应在 {point} 处终止");
+    }
+
+    #[tokio::test]
+    async fn crash_injection_preserves_atomic_world_and_recovers_runtime_states() {
+        for point in ["world.after_event_insert", "world.after_state_write"] {
+            let path = crash_db_path("world");
+            run_crash_probe(&path, "world", point);
+            let storage = LibSQLStorage::open(path.to_str().unwrap()).await.unwrap();
+            assert!(
+                storage.list_world_events().await.unwrap().is_empty(),
+                "{point}: 崩溃后不得留下孤立 world event"
+            );
+            assert!(
+                storage.get("crash-object").await.unwrap().is_none(),
+                "{point}: 崩溃后不得留下孤立对象"
+            );
+            remove_crash_db(&path);
+        }
+
+        let path = crash_db_path("run");
+        run_crash_probe(&path, "run", "run.after_insert");
+        let storage = LibSQLStorage::open(path.to_str().unwrap()).await.unwrap();
+        let runs = storage.recover_persisted_state().await.unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].status, "Interrupted");
+        remove_crash_db(&path);
     }
 }

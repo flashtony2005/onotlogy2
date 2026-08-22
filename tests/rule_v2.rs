@@ -237,8 +237,7 @@ async fn tc_f3_same_execution_path() {
         .find(|f| f.context == ctx && f.task == "refund")
         .unwrap()
         .id;
-    k.relate(Relation::new(ctx, "approval", "Approval", "admin", k.now()))
-        .unwrap();
+    k.approve(fiber, "admin").unwrap();
     let out3 = {
         let mut loop_ =
             AgentLoop::new(&mut k, &mut agent, &services, &engine2).with_rule_stats(&mut stats);

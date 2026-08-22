@@ -20,6 +20,31 @@
 - [强制] 按版本倒序，固定三级分类：新增功能 / Bug 修复 / 优化调整。
 - [强制] 版本号规则：Vx.y.z（主版本。功能迭代。Bug 修复）。
 
+## Phase 3：真实部署与运维生产化（2026-08-18）
+
+### 新增功能
+
+1. S3a–S3c：Dockerfile、Compose、`/healthz`、`/readyz`、`/metrics` 和优雅停机顺序。
+2. S3e：真实 release binary 部署冒烟 `make ops-smoke`，并接入 CI；冒烟在停机后继续
+   验证同一数据库的 backup/restore 运维命令和审计读取。
+3. S3d：`make ops-rehearsal` 真实执行旧/新 binary 的 schema 升级、备份恢复、降级拒绝和
+   升级前快照回滚；旧 binary 直读新 schema 明确返回 `WB2101`。
+4. S3d：`make release-manifest` 生成不可误认为正式 release 的候选/正式证据清单，记录
+   binary SHA-256、schema 版本、Git commit 和容器镜像标签。
+5. Phase 3 收尾：`make container-smoke` 与 `make compose-smoke` 真实构建并启动容器，
+   验证运维探针、Compose healthcheck、优雅停止和临时 volume 清理；返回码 `2` 明确表示
+   Docker 环境不可用，不伪造通过。
+6. CI 上传 `phase3-deployment-evidence`，保留 `release-manifest.json` 与四条 Phase 3 smoke
+   日志作为部署证据入口。
+7. CI 使用 `HEAD^` 构建真实旧 binary 并执行 `make ops-rehearsal`，将 schema 升级、备份恢复、
+   降级拒绝和升级前快照回滚纳入发布门禁。
+
+### 优化调整
+
+- 将二进制回滚与数据库回滚拆成两个明确步骤，不保留“旧程序兼容新 schema”的回退路径。
+- 将实测 RTO 与生产目标分开记录，避免把小型临时库的结果宣称为生产 SLA。
+- 将 `/metrics` 的 run/trace 总量改为 SQL 聚合计数，避免高频抓取时加载完整业务与审计正文。
+
 ## 4. 详细设计/内容
 > 产品版本采用 V0.1~V0.6 路线（见 sprint-plan.md），以下按产品里程碑记录，固定三级分类：新增功能 / Bug 修复 / 优化调整。
 
@@ -219,4 +244,3 @@
 | V1.3 | lushaohui | 2026-08-18 | 补 V2 架构落地条目（M1/M2 退役 V1 planner + 演化归一、Phase 5–8 投影、T1/T2b/P3），并诚实声明存储/投影/Facade 三项仍存缺口 |
 | V1.4 | lushaohui | 2026-08-18 | 修复 V1.3 声明三项缺口（fix/survivor-gaps）：① `link()` 加 `uq_edge_active` 部分唯一索引杜绝并发双插、`update()` 加 `WHERE version` 乐观锁 + `Conflict`；② 投影写 `Relation.metadata` 保留数值类型、`EntityView` 出边优先取 metadata；③ Facade 暴露 `fabric.cancel/stream`/`capability.discover`/`session.get`（facade-v1.md V1.4）；全部钉测试（storage 并发 link/update、tc_o4、facade/session 单测） |
 | V1.5 | lushaohui | 2026-08-18 | 新增 V0.11.0 条目：宣布技术债 M0–M8 正式关闭 + 项目进入「治理闭环 + 实时可观察」；T1（bridge+UI）与 T2a Cancel MVP 已合 master 收口记录；V2 架构落地章节补 T1 合入标记、新增 T2a、修正 T2b 误挂 tc_f9 |
-

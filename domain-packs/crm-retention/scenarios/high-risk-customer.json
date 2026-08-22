@@ -1,0 +1,6 @@
+{
+  "name": "VIP 客户超过 30 天未联系",
+  "given": {"customer": "customer:demo-vip", "days_since_last_contact": 45},
+  "when": "derivation.customer.high_churn_risk",
+  "then": ["create RiskSignal", "create RetentionTask", "assign account_manager"]
+}

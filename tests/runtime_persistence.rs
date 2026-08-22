@@ -1,4 +1,4 @@
-//! V0.7 运行态持久化集成测试（TC-persist-a~d）。
+//! 运行态持久化集成测试（TC-persist-a~d）。
 //!
 //! 覆盖 design-persistence.md 测试矩阵：
 //! - a 触发 run → wb_run 先 Running、完成 Completed
@@ -17,7 +17,7 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// 与 v0_3 同源的可用引擎：每步固定返回决策，跑通声明式挽留闭环（无审批闸门）。
+/// 与 approval_http 同源的可用引擎：每步固定返回决策，跑通声明式挽留闭环（无审批闸门）。
 /// 启动一个服务（file db，支持跨重启持久化验证）。复用调用方 kernel 的同一存储连接。
 /// 简易 HTTP 调用（utf8 文本，Content-Length 裁剪），与 v0_3 同款。
 /// 轮询 wb_run 直到终态（Completed/Failed/Interrupted）或超时。
@@ -156,5 +156,5 @@ async fn tc_persist_c_crash_running_to_interrupted() {
     let _ = std::fs::remove_file(&path);
 }
 
-// ── TC-persist-d：M1d 删除——orphan 审批恢复依赖 wb_approval 表（已随 V1 门面退役）；
-//    超时/Expired 语义由 v2_parity g2c + v0_3_approval tc023c/d 覆盖（Waiting 注册表路径）。
+// ── TC-persist-d：审批不再走存储层恢复；超时/Expired 语义由 v2_parity g2c +
+//    approval_http tc023c/d 覆盖（Waiting 注册表路径）。

@@ -2,7 +2,7 @@
 //!
 //! 不是 Kernel Primitive：Policy 是「在什么条件下允许提交 Effect」的约束。
 //! - precondition：args 字段比较（AND）
-//! - require_approval：Effect 提交前挂起等待 `Approval` 关系（Phase 1 的 WAITING + relate 恢复）
+//! - require_approval：Effect 提交前进入 WAITING，由显式 Approval resolver 裁决
 //!
 //! Deny 语义：业务拒绝（Effect 未提交），不是运行失败——不触发补偿。
 
@@ -30,7 +30,7 @@ pub struct Precondition {
 /// 动作级策略。
 #[derive(Debug, Clone, Default)]
 pub struct Policy {
-    /// 提交前需人工审批（Fiber 挂起等待 `Approval` 关系）。
+    /// 提交前需人工审批（Fiber 挂起并注册 `ApprovalRequest`，由显式裁决恢复）。
     pub require_approval: bool,
     /// 前置条件（AND，全部满足才 Allow）。
     pub preconditions: Vec<Precondition>,
@@ -42,7 +42,7 @@ pub enum PolicyVerdict {
     Allow,
     /// 业务拒绝（Effect 未提交；Fiber 走失败路径，无 Effect 故补偿链为空）。
     Deny(String),
-    /// 需人工审批：调用方应 wait_on(Approval) + advance(Waiting)。
+    /// 需人工审批：调用方应 advance(Waiting) 并注册 ApprovalRequest。
     RequireApproval,
 }
 

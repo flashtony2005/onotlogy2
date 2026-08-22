@@ -2,6 +2,7 @@
 //! + Permission Policy（fail-closed）+ Secret Isolation + Session Event 审计。
 
 use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
 
 use super::capability::{CapabilityRegistry, Router};
 use super::manifest::PluginManifest;
@@ -173,7 +174,7 @@ impl<'a> PluginRuntime<'a> {
                 .permissions
                 .filesystem_read
                 .iter()
-                .any(|d| p.starts_with(d))
+                .any(|d| std::path::Path::new(p).starts_with(std::path::Path::new(d)))
         {
             return Err(RuntimeError::PermissionDenied(format!(
                 "filesystem_read {p}"
@@ -184,7 +185,7 @@ impl<'a> PluginRuntime<'a> {
                 .permissions
                 .filesystem_write
                 .iter()
-                .any(|d| p.starts_with(d))
+                .any(|d| std::path::Path::new(p).starts_with(std::path::Path::new(d)))
         {
             return Err(RuntimeError::PermissionDenied(format!(
                 "filesystem_write {p}"
@@ -201,6 +202,45 @@ impl<'a> PluginRuntime<'a> {
             return Err(RuntimeError::PermissionDenied(format!("secret {s}")));
         }
         Ok(())
+    }
+
+    /// 将待读取路径解析为 canonical 普通文件。
+    pub fn canonicalize_filesystem_read(path: &Path) -> Result<PathBuf, RuntimeError> {
+        if !path.is_absolute() {
+            return Err(RuntimeError::PermissionDenied(
+                "filesystem_read 路径必须使用绝对路径".into(),
+            ));
+        }
+        let canonical = path.canonicalize().map_err(|error| {
+            RuntimeError::PermissionDenied(format!("filesystem_read 文件不可用：{error}"))
+        })?;
+        if !canonical.is_file() {
+            return Err(RuntimeError::PermissionDenied(format!(
+                "filesystem_read 路径不是普通文件：{}",
+                canonical.display()
+            )));
+        }
+        Ok(canonical)
+    }
+
+    /// 在插件执行前完成文件读取的统一前置校验。
+    ///
+    /// 调用方只能拿到已经 canonicalize 且通过 manifest 权限声明的普通文件，
+    /// 避免宿主在插件真正执行前绕过同一套权限边界读取数据源。
+    pub fn authorize_filesystem_read(
+        manifest: &PluginManifest,
+        path: &Path,
+    ) -> Result<PathBuf, RuntimeError> {
+        let canonical = Self::canonicalize_filesystem_read(path)?;
+        let canonical_string = canonical.to_string_lossy();
+        Self::check_permission(
+            manifest,
+            &PermissionRequest {
+                filesystem_read: Some(canonical_string.as_ref()),
+                ..PermissionRequest::default()
+            },
+        )?;
+        Ok(canonical)
     }
 }
 

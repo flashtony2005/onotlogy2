@@ -92,8 +92,31 @@ pub trait OpenAipFacade {
 | `WorldView` | `relations: Vec<WorldRelation>`、`total: usize`、`at: i64` | 世界关系（source/predicate/target/valid_from/valid_until）；`at` = 视图时刻（Kernel 秒轴） |
 | `AuditQuery` | `run_id/agent_id/event_type: Option<String>`、`limit: usize` | event_type 前缀匹配（"approval." 匹配全部 approval.*） |
 | `AuditView` | `events: Vec<AuditEvent>`、`total: usize` | 审计事件（id/event_type/refs/payload/timestamp） |
-| `FabricRequest` | `session_id/sender/intent: String`、`payload: Value` | 提交任务；session 不存在自动创建（participants=[sender]） |
+| `FabricRequest` | `session_id/sender/intent: String`、`payload: Value`、`execution_context: Option<ExecutionContext>` | 提交任务；执行上下文与任务参数分离；`agent.task` / `code.write` 必须使用 `workspace.mode=isolated`；session 不存在自动创建（participants=[sender]） |
 | `FabricSubmission` | `result: AgentMessage` | task.result（status=completed/failed + payload） |
+
+`fabric.submit` 的 REST/Facade 请求形态：
+
+```json
+{
+  "sessionId": "sess-1",
+  "sender": "dsh",
+  "intent": "agent_task",
+  "executionContext": {
+    "workspace": { "root": "/abs/project", "mode": "isolated" },
+    "cwd": "nested",
+    "env": { "OAIP_TASK": "value" },
+    "timeout_ms": 30000
+  },
+  "payload": { "task": "运行检查" }
+}
+```
+
+`workspace/cwd/env/timeout_ms` 不得再放在 `payload` 顶层；旧形态直接拒绝。
+
+执行预算：Process Worker 的 `timeout_ms` 必须为 `1..=300000`；省略时采用
+`300000ms` 硬上限。超出上限、为零或执行超时均 fail-closed，不把无限等待交给
+调用方；这条边界同样适用于 DSH 的 headless 进程路径。
 
 **内部服务**：
 

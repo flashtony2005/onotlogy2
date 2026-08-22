@@ -6,6 +6,7 @@
 pub mod codegen;
 pub mod ir;
 pub mod odl;
+pub mod validation;
 
 pub use codegen::{CodegenOutput, ObjectDef, codegen};
 pub use ir::{
@@ -13,3 +14,4 @@ pub use ir::{
     PolicyDef, PropertyDef, ScalarType, ValueExpr,
 };
 pub use odl::parse_odl;
+pub use validation::{DataValidationError, validate_object_data};

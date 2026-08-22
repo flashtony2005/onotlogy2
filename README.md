@@ -50,6 +50,17 @@ export WB_BOOTSTRAP_ADMIN_USER=admin WB_BOOTSTRAP_ADMIN_PWD='change-me'
 - **模拟**：S1–S3 全是假设轨（I2），永不写 EventLog。
 - **不变量**：I1 State=Reduce(EventLog) · I5 Learn≠Permission · I7 EveryRun→Evaluation。
 
+## macOS 本地版
+
+当前提供不依赖 dsh、暂不连接 Turso 云端的本地 `.app`：
+
+```bash
+make mac-app
+open target/mac/Ontology.app
+```
+
+本地数据库默认位于 `~/Library/Application Support/Ontology/ontology.db`，数据库使用 libSQL 的本地文件模式，业务表保持 SQLite 兼容。首次启动生成的管理员凭据位于同目录的 `first-run-credentials.txt`。完整说明见 `docs/08_部署运维/mac-local-app.md`。
+
 ## 测试
 
 ```bash

@@ -3,6 +3,7 @@
 use openaip_os::abi::codegen;
 use openaip_os::abi::odl::parse_odl;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine, RelationEngine};
+use openaip_os::trace::{TraceEvent, TraceKind, new_trace_id, now_ts};
 use serde_json::json;
 
 pub async fn cmd_compile(file: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -17,6 +18,72 @@ pub async fn cmd_compile(file: &str) -> Result<(), Box<dyn std::error::Error>> {
         "✅ 编译完成：{} 个对象类型 → ./gen/ (ontology.rs, schema.sql, ontology.json)",
         ir.object_types.len()
     );
+    Ok(())
+}
+
+pub async fn cmd_backup(db: &str, output: &str) -> Result<(), Box<dyn std::error::Error>> {
+    ensure_local_database_path(db)?;
+    let storage = LibSQLStorage::open(db).await?;
+    storage.backup_to(output).await?;
+    println!("✅ 备份完成：{db} → {output}");
+    Ok(())
+}
+
+pub async fn cmd_restore(db: &str, input: &str) -> Result<(), Box<dyn std::error::Error>> {
+    ensure_local_database_path(db)?;
+    LibSQLStorage::restore_from(input, db).await?;
+    // 安装后再次走正常 open，确保目标库的 schema 与当前代码一致。
+    LibSQLStorage::open(db).await?;
+    println!("✅ 恢复完成：{input} → {db}");
+    Ok(())
+}
+
+pub async fn cmd_audit_export(db: &str, output: &str) -> Result<(), Box<dyn std::error::Error>> {
+    ensure_local_database_path(db)?;
+    let storage = LibSQLStorage::open(db).await?;
+    // 先验链并预构造包含 audit.exported 的内容；文件写入失败时不推进审计链。
+    storage.validate_audit_chain().await?;
+    let event = TraceEvent {
+        id: new_trace_id(),
+        kind: TraceKind::Cognitive,
+        event_type: "audit.exported".into(),
+        object_refs: vec!["audit".into()],
+        project_id: None,
+        run_id: None,
+        agent_id: Some("oaip-cli".into()),
+        reasoning: None,
+        input: Some(json!({ "format": "oaip.audit.export.v1" })),
+        output: None,
+        confidence: None,
+        timestamp: now_ts(),
+    };
+    let payload = storage.audit_export_json_with_event(Some(&event)).await?;
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)?;
+    if let Err(error) = file
+        .write_all(payload.as_bytes())
+        .and_then(|_| file.write_all(b"\n"))
+    {
+        drop(file);
+        let _ = std::fs::remove_file(output);
+        return Err(error.into());
+    }
+    drop(file);
+    if let Err(error) = storage.append_trace(&event).await {
+        let _ = std::fs::remove_file(output);
+        return Err(error.into());
+    }
+    println!("✅ 审计导出完成：{db} → {output}");
+    Ok(())
+}
+
+fn ensure_local_database_path(db: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if LibSQLStorage::is_remote_url(db) || db == ":memory:" {
+        return Err(format!("backup/restore 只支持本地数据库文件，当前路径: {db}").into());
+    }
     Ok(())
 }
 

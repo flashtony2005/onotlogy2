@@ -17,8 +17,41 @@ clippy:
 test:
 	$(CARGO) test --workspace --all-targets
 
+# Phase 1：真实 dsh/process + 审批 + WS + 重启恢复黄金场景。
+golden:
+	$(CARGO) build --bin oaip
+	./scripts/golden-scenario.sh
+
+# Phase 3：release binary + real HTTP probes + SIGTERM graceful shutdown.
+ops-smoke:
+	./scripts/phase3-smoke.sh
+
+# Phase 3：Dockerfile + real container + health/ready/metrics + stop。
+container-smoke:
+	./scripts/container-smoke.sh
+
+# Phase 3：真实 Compose 文件 + volume + healthcheck + stop。
+compose-smoke:
+	./scripts/compose-smoke.sh
+
+# Phase 3：真实旧/新二进制 + schema 升级 + 快照恢复 + 二进制回滚演练。
+# 必须显式提供 OAIP_BASE_BIN 或 OAIP_BASE_REF，避免候选二进制自测冒充回滚。
+ops-rehearsal:
+	./scripts/phase3-upgrade-rollback.sh
+
+# Phase 3：生成 binary / schema / Git / container 的发布证据清单。
+release-manifest:
+	./scripts/release-manifest.sh
+
 ui:
 	cd ui && npm ci && npm run build
+
+# macOS：本地 libSQL/SQLite 数据库 + 浏览器 UI 的可分发 .app，不启用云端同步。
+mac-app:
+	./scripts/build-mac-app.sh
+
+mac-open:
+	open target/mac/Ontology.app
 
 audit:
 	cd ui && npm audit --audit-level=high

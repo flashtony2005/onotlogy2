@@ -8,7 +8,13 @@ import { useEffect, useState } from 'react'
 import { Network, Radio, Rocket, RefreshCw, Send, Users } from 'lucide-react'
 import { postAuditQuery, postFabricSubmit } from '../api'
 import { fabricEventLabel } from '../format'
-import type { AuditEventDto, AuditViewDto, FabricSubmissionDto } from '../types'
+import type {
+  AuditEventDto,
+  AuditViewDto,
+  ExecutionContextDto,
+  FabricSubmissionDto,
+  FabricTaskResultPayload,
+} from '../types'
 
 const FABRIC_INTENTS: Record<string, string> = {
   modify_code: 'code.write',
@@ -28,6 +34,7 @@ export function FabricPanel() {
   const [projectId, setProjectId] = useState('openaip-os')
   const [intent, setIntent] = useState('modify_code')
   const [payload, setPayload] = useState('{ "args": ["exec", "--skip-git-repo-check", "echo hello"], "object": "order-ui-1" }')
+  const [executionContext, setExecutionContext] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [lastSubmit, setLastSubmit] = useState<FabricSubmissionDto | null>(null)
   const [submitErr, setSubmitErr] = useState<string | null>(null)
@@ -59,11 +66,20 @@ export function FabricPanel() {
       } catch (e) {
         throw new Error(`payload 不是合法 JSON: ${String(e)}`)
       }
+      let parsedExecutionContext: ExecutionContextDto | undefined
+      if (executionContext.trim()) {
+        try {
+          parsedExecutionContext = JSON.parse(executionContext) as ExecutionContextDto
+        } catch (e) {
+          throw new Error(`execution_context 不是合法 JSON: ${String(e)}`)
+        }
+      }
       const sub = await postFabricSubmit({
         sessionId,
         sender,
         intent,
         payload: parsed,
+        executionContext: parsedExecutionContext,
         projectId: projectId || undefined,
       })
       setLastSubmit(sub)
@@ -91,6 +107,13 @@ export function FabricPanel() {
   }
   const connectedCount = agents.length
   const fabricEvents = audit?.events ?? []
+
+  const latestTerminalEvent = [...fabricEvents]
+    .reverse()
+    .find((event) => ['fabric.task_completed', 'fabric.task_failed', 'fabric.task_cancelled'].includes(event.eventType))
+  const resultPayload = (latestTerminalEvent?.payload ?? lastSubmit?.result.payload) as FabricTaskResultPayload | undefined
+  const workspaceDiff = resultPayload?.workspace_diff
+  const testSummary = resultPayload?.test_summary
 
   return (
     <div className="world">
@@ -170,7 +193,13 @@ export function FabricPanel() {
                 rows={4}
                 value={payload}
                 onChange={(e) => setPayload(e.target.value)}
-                placeholder='JSON 载荷：{ "args": [...], "object": "..." }'
+                placeholder='JSON 任务载荷：{ "args": [...], "object": "..." }'
+              />
+              <textarea
+                rows={4}
+                value={executionContext}
+                onChange={(e) => setExecutionContext(e.target.value)}
+                placeholder='JSON execution_context（agent_task/code.write 必填）：{ "workspace": { "root": "/绝对路径", "mode": "isolated" } }'
               />
               <button
                 className="reload"
@@ -186,6 +215,28 @@ export function FabricPanel() {
                   {String(lastSubmit.result.payload.status ?? '')} · corr{' '}
                   {lastSubmit.result.correlation_id ?? '-'}
                 </pre>
+              )}
+              {resultPayload && (
+                <div className="world-data">
+                  <strong>终局结果消费</strong>
+                  <div>
+                    status={resultPayload.status ?? '-'} · duration={resultPayload.duration_ms ?? '-'}ms · exit_code={resultPayload.exit_code ?? '-'}
+                    {resultPayload.failure_category ? ' · failure=' + resultPayload.failure_category : ''}
+                  </div>
+                  {workspaceDiff?.available && (
+                    <div>
+                      workspace diff：+{workspaceDiff.counts.added} / ~{workspaceDiff.counts.modified} / -{workspaceDiff.counts.deleted}
+                    </div>
+                  )}
+                  {testSummary?.detected && (
+                    <div>
+                      tests：{testSummary.passed ?? 0} passed · {testSummary.failed ?? 0} failed · {testSummary.skipped ?? 0} skipped / {testSummary.total ?? 0} total
+                    </div>
+                  )}
+                  {resultPayload.structured_output !== undefined && (
+                    <pre className="world-data">{JSON.stringify(resultPayload.structured_output, null, 2)}</pre>
+                  )}
+                </div>
               )}
             </div>
           </section>

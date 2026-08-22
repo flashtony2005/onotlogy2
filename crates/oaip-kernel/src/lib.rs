@@ -242,7 +242,7 @@ impl Kernel {
             ));
         }
         self.resume(fiber)?;
-        // 审批通过 = 门禁放行（与 relate(Approval) 恢复路径一致：approved 置位）
+        // 审批通过 = 显式门禁放行；标记 Fiber 重新执行当前审批步骤
         if let Some(f) = self.fibers.get_mut(&fiber) {
             f.approved = true;
         }
@@ -408,9 +408,10 @@ impl Kernel {
         Ok(id)
     }
 
-    /// 记录一条 Relation（外部世界事件进入点；Effect 的副作用投影在 Phase 1 原子化）。
-    /// 记录一条 Relation（外部世界事件进入点；Effect 的副作用投影在 Phase 1 原子化）。
-    /// 若存在 WAITING 且 `wait_for` 匹配该 Relation 的 Fiber，自动恢复（resume）。
+    /// 记录一条外部世界 Relation，并触发普通 WaitPattern 恢复与审计事件。
+    ///
+    /// Effect 的正向 World mutation 必须经由 World Executor 后调用本入口；
+    /// 审批不使用 Relation 恢复，而是走 `approve/reject/expire`。
     pub fn relate(&mut self, mut relation: Relation) -> Result<RelationId, KernelError> {
         if !self.contexts.contains_key(&relation.context) {
             return Err(KernelError::ContextNotFound(relation.context));
@@ -424,7 +425,9 @@ impl Kernel {
             "relation.created",
             json!({ "relation": format!("{id}") }),
         );
-        // 等待匹配：WAITING fiber 的 wait_for 命中 → 自动恢复（审批/定时器/外部事件统一入口）
+        // 通用外部事件等待：WAITING fiber 的 wait_for 命中 → 自动恢复。
+        // 审批不走关系匹配；审批必须通过 approve/reject/expire 显式裁决，
+        // 以保证审批人、审计和二次裁决语义只有一个入口。
         let waiting: Vec<FiberId> = self
             .fibers
             .iter()
@@ -438,21 +441,24 @@ impl Kernel {
             .map(|(id, _)| *id)
             .collect();
         for f in waiting {
-            if let Some(fb) = self.fibers.get_mut(&f) {
-                fb.approved = true; // 恢复信号 = 审批门禁通过（组合层据此放行）
-            }
             let _ = self.advance(f, FiberState::Running);
             self.record_event(Some(f), "fiber.resumed", json!({ "by": format!("{id}") }));
-            // G4：审批类恢复必须落 granted 审计（外部事件入口与 k.approve 同源可回放；
-            // by = 关系 source，即审批人/外部系统）。
-            if relation.predicate == "Approval" {
-                self.record_event(
-                    Some(f),
-                    "approval.granted",
-                    json!({ "by": relation.source.clone() }),
-                );
-            }
         }
+        Ok(id)
+    }
+
+    /// 将关系写入内存投影索引，不产生 Relation 事件，也不恢复等待中的 Fiber。
+    ///
+    /// 该入口只供 Event Log 重放/世界投影使用：源事件已经存在，重放不能再次
+    /// 伪造事实事件或触发调度。正向 World mutation 仍必须使用 [`Kernel::relate`]。
+    pub fn project_relation(&mut self, mut relation: Relation) -> Result<RelationId, KernelError> {
+        if !self.contexts.contains_key(&relation.context) {
+            return Err(KernelError::ContextNotFound(relation.context));
+        }
+        self.next_relation += 1;
+        let id = RelationId(self.next_relation);
+        relation.id = id;
+        self.relations.insert(id, relation);
         Ok(id)
     }
 

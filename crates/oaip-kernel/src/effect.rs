@@ -1,4 +1,10 @@
-//! Effect —— 可审计副作用 + 补偿（Kernel Algebra ③：它改变了什么）。
+//! Effect —— Kernel 层的副作用代数与审计账本。
+//!
+//! 本模块只描述“发生了什么”以及如何补偿：Effect 保存动作、输入、可逆性、
+//! 反向动作和生命周期状态；EffectLedger 保存 Fiber 内的提交顺序。
+//! Kernel 不执行具体 World mutation，真实世界变化由 `crate::world_exec` 的
+//! `EffectExecutor` 负责，错误恢复由 `CompensationEngine` / `CompensationExecutor`
+//! 负责。这样 Effect 记录与世界执行策略保持独立。
 //!
 //! P1 Failure Compensation：Fiber 失败自动逆序补偿；补偿失败升级人工（ESCALATED）。
 //! 统一叫 Compensation 而非 rollback——现实世界很多操作无法真正回滚。
@@ -107,11 +113,6 @@ impl EffectLedger {
     /// 逆序（补偿顺序：C⁻¹ → B⁻¹ → A⁻¹）。
     pub fn reverse_order(&self) -> impl Iterator<Item = &EffectId> {
         self.committed.iter().rev()
-    }
-
-    /// 需补偿的 Effect（逆序且可补偿）；Irreversible 被排除（仅标记）。
-    pub fn compensatable_reverse(&self) -> Vec<EffectId> {
-        self.committed.iter().rev().copied().collect()
     }
 }
 

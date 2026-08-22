@@ -83,7 +83,7 @@ async fn submit_shell(addr: SocketAddr) -> Value {
         "POST",
         "/api/v1/facade/fabric/submit",
         Some(
-            r#"{"sessionId":"sess_appr","sender":"dsh","intent":"run_shell","payload":{"args":["-c","echo approved-ok"],"object":"order-appr"}}"#,
+            r#"{"sessionId":"sess_appr","sender":"dsh","intent":"run_shell","payload":{"args":["-c","echo approved-ok"],"object":"order-appr"},"executionContext":{"workspace":{"root":"/tmp","mode":"isolated"}}}"#,
         ),
     )
     .await;

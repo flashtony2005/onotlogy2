@@ -1,0 +1,9 @@
+{
+  "id": "lottery-analysis",
+  "name": "彩票本体分析业务包",
+  "version": "1.0.0",
+  "ontology": "ontology.odl",
+  "bootstrap": "bootstrap.json",
+  "minimumRuntime": "0.9.0",
+  "skills": ["business-pack-operations"]
+}

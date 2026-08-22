@@ -56,7 +56,7 @@
   审计落库、失败数据源、run 状态映射、health 数据源、via_workers 桥、测试迁移、UI 面板）；
   M1d 删除范围清单（planner/action/agent/runtime 门面 + wb_run/wb_memory/wb_approval 三表）。
 - **M1b 契约测试（测试先行，不动产品代码）** ✅ 已完成 → [`m1-gap-analysis.md`](./m1-gap-analysis.md)：
-  按差集把 v0_3_agent/policy/evolution 与 v0_9_ws_clamp 的行为改写为 V2 契约测试
+  按差集把 v0_3_agent/policy/evolution 与 websocket_views 的行为改写为 V2 契约测试
   （`tests/v2_parity/`）；先跑红，逐个补齐 V2 实现到绿。
   - ✅ G1 认知 Trace 事件流：4 例契约测试 + `AgentLoop::with_trace` 实现（commit cecc44f），360 passed。
   - ✅ G2–G10（审批适配器 / Pi 引擎 / 审计 / 失败数据源 / 状态映射 / health / via_workers /

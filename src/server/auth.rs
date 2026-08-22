@@ -62,6 +62,36 @@ pub(crate) async fn auth_logout(
     ApiResponse::ok(json!({ "loggedOut": true })).into_response()
 }
 
+/// `POST /api/v1/wb/auth/rotate-key`：运行时轮换认证密钥。
+/// 旧令牌立即失效，服务不中断；操作由审计事件记录。
+pub(crate) async fn auth_rotate_key(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+) -> Response {
+    if !user.can_rotate_auth_key() {
+        return forbidden("当前角色无权轮换认证密钥（需 Developer）").into_response();
+    }
+    let event = crate::trace::TraceEvent {
+        id: crate::trace::new_trace_id(),
+        kind: crate::trace::TraceKind::Cognitive,
+        event_type: "auth.key_rotated".into(),
+        object_refs: vec!["auth".into()],
+        project_id: None,
+        run_id: None,
+        agent_id: Some(user.id),
+        reasoning: None,
+        input: None,
+        output: None,
+        confidence: None,
+        timestamp: crate::trace::now_ts(),
+    };
+    let revoked = match st.storage.rotate_auth_key(&event).await {
+        Ok(n) => n,
+        Err(_) => return ApiResponse::<()>::error(5000, "认证密钥轮换失败").into_response(),
+    };
+    ApiResponse::ok(json!({ "rotated": true, "revokedSessions": revoked })).into_response()
+}
+
 /// `GET /api/v1/wb/auth/me`：返回当前认证用户（供前端初始化角色）。需鉴权。
 pub(crate) async fn auth_me(Extension(user): Extension<AuthUser>) -> Response {
     ApiResponse::ok(json!({

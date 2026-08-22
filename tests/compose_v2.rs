@@ -1,7 +1,7 @@
 //! V2.0 组合层（Phase 2）集成契约：Service / Capability / Policy / Task。
 //!
 //! - C1 删除用户闭环：Service 能力 → Task 声明 → Policy(require_approval) → WAITING
-//!   → relate(Approval) 自动恢复 → Effect 提交 + Relation 投影 → COMPLETED
+//!   → explicit approve 恢复 → Effect 提交 + Relation 投影 → COMPLETED
 //! - C2 前置条件 Deny：业务拒绝（Effect 未提交）→ FAILED → 空补偿 → COMPENSATED + 事件
 //! - C3 失败补偿：能力声明的 inverse 自动接入补偿链（逆序）
 //! - C4 Task 声明约束（allowed capabilities）
@@ -12,7 +12,6 @@ use openaip_os::compose::{Capability, Service, StepOutcome, Task, TaskExecutor};
 use openaip_os::kernel::compensation::RecordingCompensator;
 use openaip_os::kernel::effect::{EffectState, Reversibility};
 use openaip_os::kernel::fiber::FiberState;
-use openaip_os::kernel::relation::Relation;
 use openaip_os::kernel::{Kernel, Scope};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -64,7 +63,7 @@ fn admin_service() -> Service {
         )
 }
 
-// ── C1：删除用户闭环 — 审批挂起 → relate 恢复 → Effect + 投影 → 完成 ─────
+// ── C1：删除用户闭环 — 审批挂起 → explicit approve → Effect + 投影 → 完成 ──
 #[tokio::test]
 async fn tc_c1_delete_user_full_loop() {
     let svc = admin_service();
@@ -91,19 +90,12 @@ async fn tc_c1_delete_user_full_loop() {
     assert_eq!(out, StepOutcome::Waiting);
     assert_eq!(k.fiber(f).unwrap().state, FiberState::Waiting);
 
-    // 人工审批：relate(Approval) → 自动恢复 RUNNING
-    k.relate(Relation::new(
-        world,
-        "approval",
-        "Approval",
-        "admin",
-        k.now(),
-    ))
-    .unwrap();
+    // 人工审批：显式 approve → 恢复 RUNNING
+    k.approve(f, "admin").unwrap();
     assert_eq!(
         k.fiber(f).unwrap().state,
         FiberState::Running,
-        "relate 应自动恢复"
+        "显式 approve 应恢复"
     );
 
     // 恢复后重新执行 → Allow → Effect 提交 + deleted 投影

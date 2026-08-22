@@ -1,6 +1,6 @@
 # OpenAIP-OS 本体定义（源文件）
 # 经 `oaip compile` 生成 ./gen/（ontology.rs / schema.sql / ontology.json）。
-# 对应 tests/v0_1.rs 的 Customer 定义与 `oaip run` 演示数据（001 Apple / 002 Tesla）。
+# 对应 tests/ontology_contract.rs 的 Customer 定义与 `oaip run` 演示数据（001 Apple / 002 Tesla）。
 
 object Customer:
   properties:

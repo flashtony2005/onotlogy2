@@ -29,7 +29,7 @@ impl Relation {
         now: i64,
     ) -> Self {
         Self {
-            id: RelationId(0), // 由 Kernel::relate 分配
+            id: RelationId(0), // 由 Kernel::relate 或 project_relation 分配
             context,
             source: source.into(),
             predicate: predicate.into(),

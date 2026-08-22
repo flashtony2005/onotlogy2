@@ -633,7 +633,15 @@ async fn tc_w10_dsh_adapter_command_shape() {
     let result = orch
         .run_plan(&[WorkerTask {
             capability: "agent.task".into(),
-            input: json!({ "args": ["--profile", "headless", "只回答两个字：收到"] }),
+            input: json!({
+                "execution_context": {
+                    "workspace": {
+                        "root": std::env::temp_dir(),
+                        "mode": "isolated"
+                    }
+                },
+                "args": ["只回答两个字：收到"]
+            }),
             note: "dsh smoke".into(),
         }])
         .await;
@@ -674,6 +682,53 @@ async fn tc_w10_dsh_adapter_command_shape() {
     std::fs::remove_file(&shim).ok();
 }
 
+// ── W10b：Process Worker runtime contract（cwd/env/timeout）────────────
+#[tokio::test]
+async fn tc_w10b_process_worker_runtime_contract() {
+    let cwd = std::env::temp_dir().join("oaip_process_worker_contract");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let mut manifest = WorkerManifest::new("sh-contract", "cli");
+    manifest.execution = ExecutionProtocol::Process;
+    let worker = openaip_os::worker::process::ProcessWorker::new(manifest, "/bin/sh");
+
+    let result = worker
+        .execute(
+            "text.echo",
+            json!({
+                "args": ["-c", "printf '%s|%s' \"$PWD\" \"$OAIP_CONTRACT\""],
+                "execution_context": {
+                    "workspace": { "root": cwd, "mode": "isolated" },
+                    "env": { "OAIP_CONTRACT": "ok" }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+    let stdout = result.output["stdout"].as_str().unwrap_or("");
+    assert!(
+        stdout.contains("oaip_process_worker_contract"),
+        "cwd 未生效: {stdout}"
+    );
+    assert!(stdout.ends_with("|ok"), "env 未生效: {stdout}");
+
+    let timeout = worker
+        .execute(
+            "text.echo",
+            json!({
+                "args": ["-c", "sleep 1"],
+                "execution_context": {
+                    "workspace": { "root": cwd, "mode": "isolated" },
+                    "timeout_ms": 20
+                }
+            }),
+        )
+        .await;
+    let Err(WorkerError::Execution(message)) = timeout else {
+        panic!("超时必须返回 WorkerError::Execution: {timeout:?}");
+    };
+    assert!(message.contains("超时"), "错误应说明超时: {message}");
+}
+
 // ── W11：真实 DSH headless 端到端（#[ignore]：需本机 dsh + ~/.dsh 可写）──
 // 本地复现：cargo test --test worker_v2 tc_w11_dsh_headless_e2e -- --ignored --nocapture
 #[tokio::test]
@@ -697,10 +752,7 @@ async fn tc_w11_dsh_headless_e2e() {
 
     let w = dsh_worker(None);
     let result = w
-        .execute(
-            "agent.task",
-            json!({ "args": ["--profile", "headless", "只回答两个字：收到"] }),
-        )
+        .execute("agent.task", json!({ "args": ["只回答两个字：收到"] }))
         .await;
     match result {
         Ok(r) => {

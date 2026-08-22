@@ -5,7 +5,7 @@
 //! - 序列：Goal 开头 → OntologyQuery → Reasoning → Intent → Planning →
 //!   PolicyCheck → Action → MemoryUpdate 结尾（Completed 时）。
 //! - 审批：Waiting 时 PolicyCheck=RequireApproval + PendingApproval，无 Action/MemoryUpdate；
-//!   relate(Approval) 续跑（同一 sink）后 Action + MemoryUpdate，且 Goal 不重复。
+//!   显式审批裁决续跑（同一 sink）后 Action + MemoryUpdate，且 Goal 不重复。
 //! - 拒绝：PolicyCheck=Deny，无 Action、无 MemoryUpdate（deriveState → Failed）。
 //! - 默认不开 trace（with_trace 是 opt-in，sink 不被触碰）。
 
@@ -14,7 +14,6 @@ use openaip_os::cognitive::{Agent, AgentLoop, LoopOutcome};
 use openaip_os::compose::policy::{Cmp, Policy, Precondition};
 use openaip_os::compose::{Capability, Service, Task};
 use openaip_os::kernel::effect::Reversibility;
-use openaip_os::kernel::relation::Relation;
 use openaip_os::kernel::{Kernel, Scope};
 use openaip_os::trace::{TraceEvent, TraceKind};
 use serde_json::json;
@@ -191,14 +190,7 @@ fn g1b_waiting_emits_pending_approval_then_resume_completes() {
     }
 
     // 人工审批 → 续跑（同一 sink：Goal 不重复、事件追加）
-    k.relate(Relation::new(
-        agent.context,
-        "approval",
-        "Approval",
-        "admin",
-        k.now(),
-    ))
-    .unwrap();
+    k.approve(fiber, "admin").unwrap();
     let goals_before = sink.iter().filter(|e| e.event_type == "Goal").count();
     let out2 = {
         let mut lp =
