@@ -227,8 +227,8 @@ export function buildAutomationTrendModel(jobs: AutomationJobDto[]): AutomationT
     daily,
     dataVersions: Array.from(versions.values()).sort((left, right) => right.timestamp - left.timestamp).slice(0, 8),
     strategies: Array.from(strategyMap.values()).sort((left, right) => {
-      const leftTime = left.points.at(-1)?.timestamp ?? 0
-      const rightTime = right.points.at(-1)?.timestamp ?? 0
+      const leftTime = left.points[left.points.length - 1]?.timestamp ?? 0
+      const rightTime = right.points[right.points.length - 1]?.timestamp ?? 0
       return rightTime - leftTime
     }),
   }
@@ -352,7 +352,7 @@ export function AutomationTrendPanel({ jobs }: AutomationTrendPanelProps) {
         {model.strategies.length === 0 ? <div className="automation-trend-empty">暂无成功的回测任务。</div> : (
           <div className="automation-strategy-grid">
             {model.strategies.map((series) => {
-              const latest = series.points.at(-1)
+              const latest = series.points[series.points.length - 1]
               return (
                 <article className="automation-strategy-card" key={series.key}>
                   <div className="automation-strategy-head">
