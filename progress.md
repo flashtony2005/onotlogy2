@@ -125,3 +125,23 @@ Phase 2.6.1 与 Phase 2.6.2 完成；下一步为 Phase 2.6.3：成功率、失�
 
 ### 当前状态
 Phase 2.6.3 完成；当前趋势为最近任务窗口的本地派生视图。长期趋势如需跨越 100 条任务，应在后续阶段增加后端分页或数据库聚合接口。
+
+## 会话 5(2026-08-22):checkpoint 收口与就绪审计对齐
+
+### 已完成
+1. 修复此前 P0 CI 阻塞:清理 clippy 错误;unwrap 预算改为只统计生产代码并通过 `2 ≤ 10`。
+2. 修复彩票插件 HTTP 集成测试:在 `tests/server_v2.rs` 注册 `DomainPackRuntime`,使 CSV 父目录经既有 fail-closed source-root 机制获得授权。
+3. checkpoint `4569e94`(`checkpoint: green backend and frontend gates`)创建于 `codex/checkpoint-ci-green`,当时工作区干净。
+4. 后端门禁 `make check` 通过;前端 `npm run typecheck && npm run test` 通过(5 files / 32 tests)。
+5. 按 2026-08-22 代码证据对齐 `findings.md` 与 `task_plan.md`:G1-G14 与架构债 D1-D4 区分历史基线和当前结论。
+
+### 当前结论
+- Phase 0-2 完成;Phase 3 mostly complete。
+- 发布工程剩余项:首个 release tag、生产规模真实数据备份/恢复演练、实测 RPO/RTO 记录。
+- 下一优先级:先收口发布工程,再进入 Phase 4 性能/负载基线与 SLA。
+- 工程质量后续项:拆分约 1859 行的 `src/automation.rs`,避免业务包运行时继续膨胀。
+
+### 下一步
+1. 准备首个 release:确定版本号、release notes、构建产物清单和 tag 流程。
+2. 设计生产规模备份/恢复演练脚本,记录备份窗口、恢复耗时和数据一致性校验。
+3. 演练通过后进入性能基准与 SLA 文档。

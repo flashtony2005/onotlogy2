@@ -57,7 +57,7 @@ OpenAIP-OS 从「测试全绿的本地原型」进化到「可对外宣称生产
 5. progress.md 记录结果与错误
 
 ## 当前阶段
-阶段 0(基线审计)→ 完成后进入阶段 1
+阶段 3 mostly complete —— 收口首个 release tag 和生产规模演练,随后进入阶段 4(性能与 SLA)
 
 ## 各阶段
 
@@ -65,7 +65,7 @@ OpenAIP-OS 从「测试全绿的本地原型」进化到「可对外宣称生产
 - [x] 摸清现状:206 文件 / 45 测试文件 / v2 parity 38 用例全绿 / coverage≥75% CI 门禁
 - [x] 确认硬缺口:无 git tag(从未发布)、无 Docker 产物(仅文档)、无性能基准、无 schema 迁移框架
 - [x] 确立 DoD(上表)与第一性原理
-- [ ] 产出 production-readiness 差距清单(每条带证据,入 findings.md)✅ 已完成(G1-G7 入 findings.md)
+- [x] 产出 production-readiness 差距清单(每条带证据,入 findings.md;2026-08-22 已复核为历史基线)
 - **状态:** complete
 
 ### 阶段 1:架构债清理 + 数据平面生产化
@@ -75,52 +75,55 @@ OpenAIP-OS 从「测试全绿的本地原型」进化到「可对外宣称生产
 > 改表;定义变更=行为变更,要验的是旧数据在新 ObjectDef 校验/效果语义下是否仍合法。
 
 #### 1A 架构债清理(DoD D12)
-- [ ] A1 Effect 双实现合并:`src/world_exec/effect.rs`(RelationEffectExecutor,compose/task.rs 活跃使用)
+- [x] A1 Effect 双实现合并:`src/world_exec/effect.rs`(RelationEffectExecutor,compose/task.rs 活跃使用)
       vs `crates/oaip-kernel/src/effect.rs`(仅 Reversibility 被 simulation 用)——合并或裁剪,单一真相源
-- [ ] A2 Approval 双路径移除:`src/server/approvals.rs:3` 自认「V1 读 ApprovalStore(wb_approval 表);
+- [x] A2 Approval 双路径移除:`src/server/approvals.rs:3` 自认「V1 读 ApprovalStore(wb_approval 表);
       M1c 起读 AppState.pending」——确认旧路径无引用后删除,只留 AppState.pending(AGENTS.md 原则 1)
-- [ ] A3 投影职责文档化:`src/projection`(424 行,领域规则)vs kernel projection(80 行,基础)——
+- [x] A3 投影职责文档化:`src/projection`(424 行,领域规则)vs kernel projection(80 行,基础)——
       确认层次关系,职责边界写进模块文档,消除「两个投影」认知分裂
-- [ ] A4 测试命名整理:v0_1~v0_9 钉的是活跃语义(parse_odl 等,非 legacy)——重命名/归类消除「伪 legacy」误导
+- [x] A4 测试命名整理:v0_1~v0_9 钉的是活跃语义(parse_odl 等,非 legacy)——重命名/归类消除「伪 legacy」误导
 - **验收:** D12 勾验;全量回归绿;黄金场景 GS-1~3 首跑通(1A 不动行为,首跑建立基线)
 
 #### 1B 数据平面(第一性原理 1+2)
 > 顺序:S1c₀ 故障注入测试地基先行——迁移「不丢数据」必须靠故障注入验证,不能先写实现后补测试。
-- [ ] S1c₀ F+1 故障注入测试地基:进程任意点 kill → 重启重建(事件日志/投影/挂起运行三态);
+- [x] S1c₀ F+1 故障注入测试地基:进程任意点 kill → 重启重建(事件日志/投影/挂起运行三态);
       核心断言含**事务原子性**:中途 kill 无半写状态(多表写同事务);注入点确定性设计防 flaky
-- [ ] S1b 数据库 schema 版本化迁移(迁移表 + up/down + 自动校验),覆盖全部表族(wb_*/oaip-*/v2 视图);
+- [x] S1b 数据库 schema 版本化迁移(迁移表 + up/down + 自动校验),覆盖全部表族(wb_*/oaip-*/v2 视图);
       迁移后 schema 校验测试(防与代码建表漂移)
-- [ ] S1c `oaip backup` / `oaip restore` CLI;**先探 libsql backup 能力**(VACUUM INTO / SQLite backup API,
+- [x] S1c `oaip backup` / `oaip restore` CLI;**先探 libsql backup 能力**(VACUUM INTO / SQLite backup API,
       能包装不造轮子,原则 5/6);备份策略入档(RPO=快照间隔,对齐 rollback-plan.md)
-- [ ] S1g 本体行为兼容测试:ODL 变更(加属性/改约束)→ 旧数据在新 ObjectDef 下校验/效果语义测试(DoD D4)
-- [ ] S1e 磁盘满/只读故障演练:写失败 → 优雅报错不损坏数据(DoD D9 前半)
-- [ ] S1f 时间语义:事件时间戳来源(墙钟 SystemTime::now 已确认)+ 时钟回拨策略(单调钟兜底/回拨护栏),
+- [x] S1g 本体行为兼容测试:ODL 变更(加属性/改约束)→ 旧数据在新 ObjectDef 下校验/效果语义测试(DoD D4)
+- [x] S1e 磁盘满/只读故障演练:写失败 → 优雅报错不损坏数据(DoD D9 前半)
+- [x] S1f 时间语义:事件时间戳来源(墙钟 SystemTime::now 已确认)+ 时钟回拨策略(单调钟兜底/回拨护栏),
       回拨时 as_of/断线重连补齐不错乱
-- [ ] S1h 审计物理 append-only:审计路径禁 UPDATE/DELETE(存储层保证,为 S2d 哈希链打底——跨阶段依赖显式化)
-- [ ] S1i 黄金场景脚本化:GS-1~5 全链路脚本(真实二进制 + 临时数据目录),入 CI 冒烟位
+- [x] S1h 审计物理 append-only:审计路径禁 UPDATE/DELETE(存储层保证,为 S2d 哈希链打底——跨阶段依赖显式化)
+- [x] S1i 黄金场景脚本化:GS-1~5 全链路脚本(真实二进制 + 临时数据目录),入 CI 冒烟位
 - **验收:** D1 + D4 自动化测试通过;backup/restore 有演练测试;D10 语义入档;S1f/S1h 有测试;
       GS-1~5 脚本化(阶段末 GS-5 恢复步依赖 S1c₀,S1i 在 1B 末闭环)
-- **状态:** pending
+- **状态:** complete(2026-08-22 复核)
+
+> 复核记录(2026-08-22):A1-A4 与 S1b/S1c/S1e/S1f/S1g/S1h/S1i 的当前证据见 `findings.md`
+> 「复核结论」。checkpoint `4569e94` 上 `make check` 全绿。
 
 ### 阶段 2:控制平面生产化(安全与治理)
 > 第一性原理 3:执行者(Agent/LLM/shell)在生产中必须被约束。
-- [ ] S2a 执行预算:超时硬上限 + 速率限制(审批/执行/WS 三通道),超限 fail-closed
-- [ ] S2b shell-exec 沙箱加固:工作目录/环境裁剪/超时 kill(基于 B1 的 shell_adapter)
-- [ ] S2c 密钥轮换:运行时换密钥不中断、旧密钥即时失效
-- [ ] S2d 审计导出:`oaip audit export`(append-only 校验 + 完整性哈希链)
-- [ ] S2e 供应链门禁:cargo audit 进 CI(DoD D9 后半)
+- [x] S2a 执行预算:超时硬上限 + 速率限制(审批/执行/WS 三通道),超限 fail-closed
+- [x] S2b shell-exec 沙箱加固:工作目录/环境裁剪/超时 kill(基于 B1 的 shell_adapter)
+- [x] S2c 密钥轮换:运行时换密钥不中断、旧密钥即时失效
+- [x] S2d 审计导出:`oaip audit export`(append-only 校验 + 完整性哈希链)
+- [x] S2e 供应链门禁:cargo audit 进 CI(DoD D9 后半)
 - **验收:** D2 + D3 扩展测试;密钥轮换演练;cargo audit 门禁生效
-- **状态:** pending
+- **状态:** complete(2026-08-22 复核)
 
 ### 阶段 3:发布工程(部署与运维闭环)
 > 第一性原理 4:可运维 = 命令级可复制。
-- [ ] S3a Dockerfile + docker-compose 产物化(与 docs/08_部署运维 逐条对齐,消灭「有文档无产物」)
-- [ ] S3b 健康/就绪探针 + /metrics 指标端点(monitor-alert.md 落地为代码)
-- [ ] S3c 优雅停机:收到 SIGTERM 后完成在途事务、落盘挂起状态
+- [x] S3a Dockerfile + docker-compose 产物化(与 docs/08_部署运维 逐条对齐,消灭「有文档无产物」)
+- [x] S3b 健康/就绪探针 + /metrics 指标端点(monitor-alert.md 落地为代码)
+- [x] S3c 优雅停机:收到 SIGTERM 后完成在途事务、落盘挂起状态
 - [ ] S3d 首个 release tag + 升级/回滚演练记录(在**真实数据**上演练,对齐 environment-map 预发脱敏镜像语义)(DoD D6/D8)
-- [ ] S3e 真实二进制 smoke test:从零起服务 → 最小闭环(ODL→执行→世界→审计),发布冒烟
+- [x] S3e 真实二进制 smoke test:从零起服务 → 最小闭环(ODL→执行→世界→审计),发布冒烟
 - **验收:** 新机器一条命令起服务;v1→v2→回滚演练通过;smoke test 入 CI
-- **状态:** pending
+- **状态:** mostly complete —— S3d 中首个 release tag 与真实数据生产规模回滚/RPO/RTO 演练仍未完成
 
 ### 阶段 4:性能与 SLA
 > 第一性原理 4:没有数字就没有 SLA。
@@ -142,7 +145,7 @@ OpenAIP-OS 从「测试全绿的本地原型」进化到「可对外宣称生产
 1. ~~生产环境目标形态~~ → **已定:单机 Local-First(libsql 文件 + 单进程)**,迁移框架与备份语义按此设计
 2. ~~故障注入粒度~~ → **已定:进程级 kill 为主线**;磁盘满/只读作为 S1e 补充场景
 3. 性能基线是否要求 CI 门禁(回归即红),还是仅记录趋势?(阶段4 开工前定)
-4. 备份频率/RPO 目标:快照间隔定多少?(阶段1 S1c 定)
+4. ~~备份频率/RPO 目标:快照间隔定多少?~~ → 目标已入档;剩余生产规模真实数据实测演练(S3d)
 
 ## 已做决策
 | 决策 | 理由 |
