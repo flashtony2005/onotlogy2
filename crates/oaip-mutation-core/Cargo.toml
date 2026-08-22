@@ -1,6 +1,6 @@
 [package]
 name = "oaip-mutation-core"
-version = "0.9.0"
+version = "0.14.0"
 edition = "2024"
 description = "OpenAIP-OS 变异核心 —— 提案状态机 / 指标 / 配置 / Delta 白名单校验"
 

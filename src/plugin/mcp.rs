@@ -73,7 +73,10 @@ impl McpClient {
             json!({
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": { "name": "openaip-os", "version": "0.9.0" }
+                "clientInfo": {
+                    "name": "openaip-os",
+                    "version": env!("CARGO_PKG_VERSION")
+                }
             }),
         )
         .await

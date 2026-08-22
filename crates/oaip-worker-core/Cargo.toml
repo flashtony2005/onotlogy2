@@ -1,6 +1,6 @@
 [package]
 name = "oaip-worker-core"
-version = "0.9.0"
+version = "0.14.0"
 edition = "2024"
 description = "OpenAIP-OS Worker 核心类型 —— Manifest / SDK / Registry / 信任统计"
 

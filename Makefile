@@ -56,6 +56,10 @@ mac-open:
 audit:
 	cd ui && npm audit --audit-level=high
 
+# D7：固定数据规模的四条核心路径基准（结果入 docs/03_架构设计/performance-baseline.md）。
+bench:
+	$(CARGO) bench --bench performance
+
 # CI 主门禁
 check: fmt-check clippy test unwrap-budget
 

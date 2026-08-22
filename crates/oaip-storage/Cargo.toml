@@ -1,6 +1,6 @@
 [package]
 name = "oaip-storage"
-version = "0.9.0"
+version = "0.14.0"
 edition = "2024"
 description = "OpenAIP-OS 持久化层 —— 对象/关系/事件/run/评估/用户（libSQL）"
 

@@ -1,6 +1,6 @@
 [package]
 name = "oaip-abi"
-version = "0.9.0"
+version = "0.14.0"
 edition = "2024"
 description = "OpenAIP-OS 语言前端 —— ODL 解析 → IR → codegen（Rust/SQL/JSON）"
 

@@ -83,6 +83,13 @@
 4. S2 回收用 SIGKILL（与 `cancel` 一致，零新依赖）；若需严格 SIGTERM 优雅退出需引入 `libc`/`nix` 发信号——可单列增量。
 5. `shutdown` 专项回归 `tc_f13_shutdown_kills_running_child`（`tests/fabric_v1.rs`）：真实 `/bin/sh -c "touch …; sleep 30"` 跑长 `sleep` → 进 `running` map → 调 `shutdown` → 子进程被杀、stream 提前 EOF 返回且终态非 `completed`；marker 文件就绪信号 + `mpsc::recv_timeout` fail-fast，确定性且不挂死。**该测试首跑即暴露真 bug**：原 `Child::kill()` 只杀直接子进程 `/bin/sh`，孙子 `sleep` 继承 stdout 管道继续持有 → EOF 不来 → `stream` 永久阻塞、且 shutdown 遗留孤儿；已改为进程组回收修复（零新依赖，复用 `/bin/kill`）。
 
+### 性能基线
+6. **D7 核心路径基线**：新增 Criterion 基准 `make bench`，固定 ODL 编译（24 objects）、投影重放
+   （1,000 events）、世界查询（500 objects）和审计链写入四条负载；首轮数字与环境入档
+   `docs/03_架构设计/performance-baseline.md`。这是核心路径微基准，HTTP/WS P99 由后续负载测试补齐。
+7. **版本对齐**：Rust workspace、UI 和 macOS bundle 版本统一为 `0.14.0`；MCP clientInfo 改用编译期
+   Cargo 版本，消除硬编码漂移。
+
 ## V0.13.0（shell.execute 能力诚实 · 专用 shell-exec 提供方，2026-08-18）
 > B1 决策：harness（pi/dsh/deepseek）撤下 `shell.execute` 假广告，执行归专用 `shell-exec` worker——
 > 复用 tests 已验证的 `/bin/sh` 通道。E2E 曾暴露 `run_shell` 经能力路由落到 dsh（LLM harness 不认
