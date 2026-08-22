@@ -26,6 +26,7 @@ use async_trait::async_trait;
 use libsql::Connection;
 use libsql::params;
 pub(crate) use oaip_trace::TraceEvent;
+use tokio::sync::Mutex;
 
 /// 审计事件哈希链中的持久化节点。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -321,6 +322,9 @@ pub trait RelationEngine {
 pub struct LibSQLStorage {
     conn: Connection,
     audit_health: Arc<AtomicU8>,
+    /// libSQL 的一个逻辑连接不能同时持有多个事务。所有进程内写事务共享这把锁，
+    /// 避免并发 API 请求把事务状态写到同一个连接上。
+    write_txn_lock: Arc<Mutex<()>>,
 }
 
 impl LibSQLStorage {
@@ -350,6 +354,7 @@ impl LibSQLStorage {
         let storage = Self {
             conn,
             audit_health: Arc::new(AtomicU8::new(AuditChainHealth::Unknown.code())),
+            write_txn_lock: Arc::new(Mutex::new(())),
         };
         storage.ensure_audit_chain().await?;
         seed_trace_clock(&storage.conn).await?;
@@ -365,6 +370,7 @@ impl LibSQLStorage {
         let storage = Self {
             conn,
             audit_health: Arc::new(AtomicU8::new(AuditChainHealth::Unknown.code())),
+            write_txn_lock: Arc::new(Mutex::new(())),
         };
         storage.ensure_audit_chain().await?;
         seed_trace_clock(&storage.conn).await?;
@@ -397,6 +403,7 @@ impl LibSQLStorage {
         Self {
             conn,
             audit_health: Arc::new(AtomicU8::new(AuditChainHealth::Unknown.code())),
+            write_txn_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -679,6 +686,31 @@ mod tests {
             .await;
         assert!(retried.is_ok(), "基于最新版本重试应成功");
         assert_eq!(retried.unwrap().version, 3);
+    }
+
+    // 同一个 libSQL 连接不能同时开启两个事务。这里用克隆出的同一存储句柄
+    // 并发提交世界变更，锁定事务入口，防止 HTTP 并发触发连接级事务冲突。
+    #[tokio::test]
+    async fn concurrent_world_commands_share_one_transaction_entry() {
+        let s = LibSQLStorage::open(":memory:").await.unwrap();
+        let mut tasks = tokio::task::JoinSet::new();
+        for idx in 0..24 {
+            let s = s.clone();
+            tasks.spawn(async move {
+                s.apply_world(world::WorldCommand::CreateObject {
+                    object_type: "Customer".into(),
+                    id: format!("concurrent-{idx}"),
+                    data: serde_json::json!({"name": idx}),
+                    project_id: None,
+                })
+                .await
+            });
+        }
+        while let Some(result) = tasks.join_next().await {
+            result.unwrap().unwrap();
+        }
+        let objects = s.query("Customer").await.unwrap();
+        assert_eq!(objects.len(), 24);
     }
 
     // 并发 link 同一对边：两条独立连接 → 事务竞争；`uq_edge_active` 部分唯一索引

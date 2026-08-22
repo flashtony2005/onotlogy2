@@ -141,6 +141,7 @@ impl LibSQLStorage {
     /// 事务化应用一条世界变更：world 事件 + 对象/关系写在同一事务（P5）。
     /// 事件先插（事实先行），对象写随后，事务提交保证原子。
     pub async fn apply_world(&self, cmd: WorldCommand) -> Result<(), StorageError> {
+        let _write_txn = self.write_txn_lock.lock().await;
         let tx = self.conn.transaction().await?;
         let ev = cmd.world_event();
         if let Err(error) = super::events::append_trace_tx(&tx, &ev).await {

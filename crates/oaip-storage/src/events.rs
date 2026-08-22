@@ -275,6 +275,7 @@ impl LibSQLStorage {
     /// 确保事件与哈希链一一对应。全新升级的旧库只允许「整条链为空」时确定性补建；
     /// 部分链、顺序错乱或内容不一致直接拒绝，避免静默掩盖篡改。
     pub async fn ensure_audit_chain(&self) -> Result<(), StorageError> {
+        let _write_txn = self.write_txn_lock.lock().await;
         let result = async {
             let events = self.list_all_events().await?;
             let chain = self.list_audit_chain().await?;
@@ -316,6 +317,7 @@ impl LibSQLStorage {
     pub async fn append_trace(&self, ev: &TraceEvent) -> Result<(), StorageError> {
         #[cfg(test)]
         crate::io_fault_if_requested("trace.before_insert")?;
+        let _write_txn = self.write_txn_lock.lock().await;
         let result = async {
             let tx = self.conn.transaction().await?;
             append_trace_tx(&tx, ev).await?;
@@ -342,6 +344,7 @@ impl LibSQLStorage {
     /// 会话撤销与 `auth.key_rotated` 事件必须位于同一事务中：审计事件
     /// 校验或提交失败时，旧会话仍保持有效，避免出现“实际轮换但无审计记录”。
     pub async fn rotate_auth_key(&self, event: &TraceEvent) -> Result<u64, StorageError> {
+        let _write_txn = self.write_txn_lock.lock().await;
         let result = async {
             let tx = self.conn.transaction().await?;
             let revoked = tx.execute("DELETE FROM wb_session", params![]).await?;

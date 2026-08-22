@@ -148,6 +148,7 @@ impl LibSQLStorage {
     /// 恢复上次进程崩溃留下的 running 任务，避免永久卡死。
     pub async fn recover_automation_jobs(&self) -> Result<u64, StorageError> {
         let now = now_ts();
+        let _write_txn = self.write_txn_lock.lock().await;
         let tx = self.conn.transaction().await?;
         let failed = tx
             .execute(
@@ -167,6 +168,7 @@ impl LibSQLStorage {
     /// 在事务内领取最早可执行任务。单 worker 仍使用事务，确保 HTTP 手动触发不会重复领取。
     pub async fn claim_next_automation_job(&self) -> Result<Option<AutomationJob>, StorageError> {
         let now = now_ts();
+        let _write_txn = self.write_txn_lock.lock().await;
         let tx = self.conn.transaction().await?;
         let mut rows = tx
             .query(

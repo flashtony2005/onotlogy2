@@ -24,6 +24,7 @@ impl RelationEngine for LibSQLStorage {
         // 且部分唯一索引也无法被 `ON CONFLICT(列列表)` 匹配；故直接 INSERT，
         // 若竞态下另一事务已插入，部分唯一索引会以 UNIQUE constraint failed 拒绝——
         // 此处捕获并转为 WB2007（而不是把底层约束错误泄漏给调用方）。
+        let _write_txn = self.write_txn_lock.lock().await;
         let tx = self.conn.transaction().await?;
         let mut dup = tx
             .query(
