@@ -57,7 +57,7 @@ OpenAIP-OS 从「测试全绿的本地原型」进化到「可对外宣称生产
 5. progress.md 记录结果与错误
 
 ## 当前阶段
-阶段 4 in progress —— 核心路径 Criterion 基线已落地,剩余 API/WS 负载与 SLA 文档;并行收口 release tag 和生产规模演练
+阶段 4 complete —— 核心路径与真实 HTTP/WS 并发基线、SLA 边界已入档;发布 tag 与生产规模演练进入关键路径
 
 ## 各阶段
 
@@ -128,10 +128,10 @@ OpenAIP-OS 从「测试全绿的本地原型」进化到「可对外宣称生产
 ### 阶段 4:性能与 SLA
 > 第一性原理 4:没有数字就没有 SLA。
 - [x] S4a criterion 基准:ODL 编译 / 投影重放 / 世界查询 / 审计写 四条关键路径
-- [ ] S4b 负载测试脚本(并发 submit/approve/stream)+ 基线数字入档
-- [ ] S4c 文档化 SLA 语义:吞吐/延迟/一致性(事件溯源最终一致窗口)
+- [x] S4b 负载测试脚本(并发 submit/approve/stream)+ 基线数字入档
+- [x] S4c 文档化 SLA 语义:吞吐/延迟/一致性(事件溯源最终一致窗口)
 - **验收:** D7;基线可对比,趋势可追踪
-- **状态:** in_progress —— S4a complete;S4b/S4c pending
+- **状态:** complete(2026-08-22)
 
 ### 阶段 5:对外闭环(生产可用宣言)
 > 第一性原理全链条:宣称之前,先按文档从零走一遍。

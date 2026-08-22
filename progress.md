@@ -153,3 +153,15 @@ Phase 2.6.3 完成；当前趋势为最近任务窗口的本地派生视图。�
 - 首轮 Apple M4 本机基线已入档 `docs/03_架构设计/performance-baseline.md`:ODL 编译约 48.3µs,
   1,000 事件投影约 335.5µs,500 对象查询约 248.0µs,审计链追加约 28.0µs。
 - 边界:这是核心路径微基准,不替代 S4b 的真实 HTTP/WS 并发压测和生产 P99 证据。
+
+## 执行日志(2026-08-22 · D7 第二轮)
+
+- 新增真实二进制负载脚本 `scripts/performance-load.py` 和 `make load-baseline`,固定
+  10 次 submit/approve、并发 5、3 个 WebSocket 客户端。
+- 首轮负载暴露共享 libSQL 连接并发开启事务的 Critical bug;已为所有进程内写事务加
+  共享写锁,并新增 24 路并发 world command 回归测试。
+- 修复后负载 10/10 成功、0 失败;wall time 0.035347s,吞吐 282.911 rps,P50/P95/P99
+  为 16.651/17.986/17.986ms,6 类 fabric 事件各 30 次。
+- `make check`、`make golden`(GS-1~GS-5)、`make ops-smoke` 全部通过。
+- S4b/S4c 收口:负载基线、控制面 token bucket 边界、WS best-effort 与 `after_id`
+  最终一致语义已入档 `docs/03_架构设计/performance-baseline.md`。

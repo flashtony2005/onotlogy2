@@ -60,6 +60,12 @@ audit:
 bench:
 	$(CARGO) bench --bench performance
 
+# D7/S4b：真实二进制并发 submit/approve + WebSocket 流基线。
+load-baseline:
+	$(CARGO) build --release --bin oaip
+	./scripts/performance-load.py --binary target/release/oaip --odl examples/crm.odl \
+		--requests 10 --concurrency 5 --ws-clients 3 --output target/performance-load.json
+
 # CI 主门禁
 check: fmt-check clippy test unwrap-budget
 
