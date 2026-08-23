@@ -7,8 +7,9 @@
 use crate::abi::ir::OntologyIR;
 use crate::abi::validate_object_data;
 use crate::knowledge::{
-    KnowledgeError, Ontology, RelationCardinalityViolation, RuntimeObjectFact, RuntimeRelationFact,
-    declared_cardinality_violations, runtime_world_to_knowledge,
+    DataCardinalityViolation, KnowledgeError, Ontology, RelationCardinalityViolation,
+    RuntimeObjectFact, RuntimeRelationFact, declared_cardinality_violations,
+    declared_data_cardinality_violations, runtime_world_to_knowledge,
 };
 use crate::storage::{LibSQLStorage, ObjectRecord, RelationRecord};
 
@@ -25,9 +26,8 @@ pub enum KnowledgeBridgeError {
 
 /// Validate an evolved ODL/runtime schema against every current world row.
 ///
-/// This is the closed-world data gate for evolution.  Missing properties remain
-/// valid because ODL has no required-property syntax; changed scalar ranges are
-/// rejected when any persisted value cannot be read by the candidate schema.
+/// This is the closed-world data gate for evolution.  Declared scalar
+/// cardinalities and changed ranges are checked against every persisted row.
 pub async fn validate_runtime_ir_against_world(
     ir: &OntologyIR,
     storage: &LibSQLStorage,
@@ -97,6 +97,22 @@ pub fn world_snapshot_cardinality_violations(
         })
         .collect::<Vec<_>>();
     declared_cardinality_violations(schema, &objects, &relations)
+}
+
+/// Evaluate closed-world ODL scalar value bounds against the current snapshot.
+pub fn world_snapshot_data_cardinality_violations(
+    schema: &Ontology,
+    objects: &[ObjectRecord],
+) -> Vec<DataCardinalityViolation> {
+    let objects = objects
+        .iter()
+        .map(|record| RuntimeObjectFact {
+            id: record.id.clone(),
+            object_type: record.r#type.clone(),
+            data: record.data.clone(),
+        })
+        .collect::<Vec<_>>();
+    declared_data_cardinality_violations(schema, &objects)
 }
 
 /// Append live-world ABox assertions to a schema ontology without changing it.

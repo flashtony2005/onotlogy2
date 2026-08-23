@@ -164,11 +164,18 @@ object Customer:
     code: string min_length 2 max_length 8 pattern "[A-Z]{2}[0-9]{4}"
     age: int min_inclusive 18 max_exclusive 65
     balance: decimal total_digits 10 fraction_digits 2
+    nickname: string max_cardinality 0
 ```
 
 解析器会按 declared scalar type 校验 facet 兼容性和 bound；quoted pattern 保留 regex escape。
 Runtime IR 将这些约束物化为 `DataPropertyRangeRestriction`，因此它们参与 live-world 一致性检查、
 推理诊断和不可变本体版本治理。
+
+标量属性可另外声明 `min_cardinality` / `max_cardinality`。runtime JSON 标量字段最多只有一个
+非空值，因此边界只接受 `0` 或 `1`：`min_cardinality 1` 要求 closed snapshot 观察到值，
+`max_cardinality 0` 禁止值。该边界会投影为 `SubClassOf(object, DataMin/MaxCardinality(...))`，
+参与 DL 推理和演化影响分析；executable admission 同时按 live snapshot 检查继承实例的缺失或
+禁止字段，diagnosis 在 `dataCardinalityViolations` 显式报告。
 
 ### 4.6 ODL relation cardinalities
 
@@ -338,7 +345,7 @@ reviewer；系统不会因为 validation 通过而自动授权 evolution。
 | `GET /api/v1/knowledge/ontology/versions` | 版本谱系 |
 | `POST /api/v1/knowledge/ontology/init` | 初始化首个版本 |
 | `POST /api/v1/knowledge/reason` | 单项推理查询 |
-| `GET /api/v1/knowledge/diagnosis` | TBox + live ABox 诊断；closed-world 基数违反在 `cardinalityViolations` 返回 |
+| `GET /api/v1/knowledge/diagnosis` | TBox + live ABox 诊断；relation 基数违反在 `cardinalityViolations`，scalar 基数违反在 `dataCardinalityViolations` |
 | `GET/POST /api/v1/knowledge/proposals` | 列出/创建演化提案 |
 | `POST /api/v1/knowledge/proposals/:id/review` | 具名批准/驳回 |
 | `POST /api/v1/knowledge/proposals/:id/apply` | 应用为新版本 |
@@ -377,7 +384,7 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 
 ## 9. 已知下一步
 
-1. 继续扩展更多 DL 结构到 ODL 直接表达面（如数据基数限制与嵌套 restriction），减少手写 proposal JSON。
+1. 继续扩展更多 DL 结构到 ODL 直接表达面（如嵌套 composable restriction），减少手写 proposal JSON。
 2. 在真实业务需要时继续扩展 XSD 构造（如 complement / 自定义 datatype 定义），保持保守语义。
 3. 为大 ABox 增加 classification/cache、incremental consistency 和有界解释缓存。
 4. 增加长时并发、恢复、内存和推理延迟基准。

@@ -823,6 +823,8 @@ fn parse_property_definition(
     let mut constraints = Vec::new();
     for pair in rest.as_chunks::<2>().0 {
         let facet = match pair[0].as_str() {
+            "min_cardinality" => PropertyFacet::MinCardinality(pair[1].clone()),
+            "max_cardinality" => PropertyFacet::MaxCardinality(pair[1].clone()),
             "min_inclusive" => PropertyFacet::MinInclusive(pair[1].clone()),
             "min_exclusive" => PropertyFacet::MinExclusive(pair[1].clone()),
             "max_inclusive" => PropertyFacet::MaxInclusive(pair[1].clone()),

@@ -82,6 +82,8 @@ impl fmt::Display for ScalarType {
 /// datatype before entering the knowledge kernel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PropertyFacet {
+    MinCardinality(String),
+    MaxCardinality(String),
     MinInclusive(String),
     MinExclusive(String),
     MaxInclusive(String),
@@ -96,6 +98,8 @@ pub enum PropertyFacet {
 impl PropertyFacet {
     pub fn name(&self) -> &'static str {
         match self {
+            Self::MinCardinality(_) => "min_cardinality",
+            Self::MaxCardinality(_) => "max_cardinality",
             Self::MinInclusive(_) => "min_inclusive",
             Self::MinExclusive(_) => "min_exclusive",
             Self::MaxInclusive(_) => "max_inclusive",
@@ -110,7 +114,9 @@ impl PropertyFacet {
 
     pub fn value(&self) -> &str {
         match self {
-            Self::MinInclusive(value)
+            Self::MinCardinality(value)
+            | Self::MaxCardinality(value)
+            | Self::MinInclusive(value)
             | Self::MinExclusive(value)
             | Self::MaxInclusive(value)
             | Self::MaxExclusive(value)

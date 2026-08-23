@@ -147,6 +147,8 @@ pub fn validate_property_constraints(
     constraints: &[PropertyFacet],
 ) -> Result<(), String> {
     let mut seen = std::collections::BTreeSet::new();
+    let mut min_cardinality = None::<u32>;
+    let mut max_cardinality = None::<u32>;
     let allowed = |facet: &PropertyFacet| match ty {
         ScalarType::String => matches!(
             facet,
@@ -175,10 +177,32 @@ pub fn validate_property_constraints(
         if !seen.insert(facet.name()) {
             return Err(format!("duplicate `{}` facet", facet.name()));
         }
-        if !allowed(facet) {
+        let cardinality = matches!(
+            facet,
+            PropertyFacet::MinCardinality(_) | PropertyFacet::MaxCardinality(_)
+        );
+        if !cardinality && !allowed(facet) {
             return Err(format!("`{}` is not valid for `{}`", facet.name(), ty));
         }
         match facet {
+            PropertyFacet::MinCardinality(value) => {
+                let bound = parse_cardinality(value)?;
+                if bound > 1 {
+                    return Err("scalar property cardinality must be 0 or 1".to_owned());
+                }
+                min_cardinality = Some(bound);
+            }
+            PropertyFacet::MaxCardinality(value) => {
+                let bound = parse_cardinality(value)?;
+                if bound > 1 {
+                    return Err("scalar property cardinality must be 0 or 1".to_owned());
+                }
+                max_cardinality = Some(bound);
+            }
+            _ => {}
+        }
+        match facet {
+            PropertyFacet::MinCardinality(_) | PropertyFacet::MaxCardinality(_) => {}
             PropertyFacet::MinInclusive(value)
             | PropertyFacet::MinExclusive(value)
             | PropertyFacet::MaxInclusive(value)
@@ -196,7 +220,39 @@ pub fn validate_property_constraints(
             }
         }
     }
+    if let (Some(min), Some(max)) = (min_cardinality, max_cardinality)
+        && min > max
+    {
+        return Err(format!(
+            "property cardinality has min {min} greater than max {max}"
+        ));
+    }
     Ok(())
+}
+
+fn parse_cardinality(value: &str) -> Result<u32, String> {
+    value
+        .parse::<u32>()
+        .map_err(|_| "cardinality must be an unsigned integer".to_owned())
+}
+
+/// Return validated presence bounds for an executable scalar property.
+pub fn property_cardinality_bounds(constraints: &[PropertyFacet]) -> Result<(u32, u32), String> {
+    let mut bounds = (0, 1);
+    for facet in constraints {
+        match facet {
+            PropertyFacet::MinCardinality(value) => bounds.0 = parse_cardinality(value)?,
+            PropertyFacet::MaxCardinality(value) => bounds.1 = parse_cardinality(value)?,
+            _ => {}
+        }
+    }
+    if bounds.0 > bounds.1 {
+        return Err(format!(
+            "property cardinality has min {} greater than max {}",
+            bounds.0, bounds.1
+        ));
+    }
+    Ok(bounds)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -344,6 +400,7 @@ fn constraint_admits(value: &Value, ty: ScalarType, facet: &PropertyFacet) -> bo
     };
 
     match facet {
+        PropertyFacet::MinCardinality(_) | PropertyFacet::MaxCardinality(_) => true,
         PropertyFacet::MinInclusive(_) => {
             ordering().is_some_and(|ordering| ordering != std::cmp::Ordering::Less)
         }
@@ -419,6 +476,19 @@ pub fn validate_object_data(
 
     for property in &definition.properties {
         let Some(value) = object.get(&property.name) else {
+            let (min, _) =
+                property_cardinality_bounds(&property.constraints).map_err(|message| {
+                    DataValidationError::ConstraintViolation {
+                        field: property.name.clone(),
+                        message,
+                    }
+                })?;
+            if min > 0 {
+                return Err(DataValidationError::ConstraintViolation {
+                    field: property.name.clone(),
+                    message: format!("requires at least {min} value"),
+                });
+            }
             continue;
         };
         if !matches_scalar(value, property.ty) {
@@ -434,6 +504,18 @@ pub fn validate_object_data(
             return Err(DataValidationError::ConstraintViolation {
                 field: property.name.clone(),
                 message,
+            });
+        }
+        let (_, max) = property_cardinality_bounds(&property.constraints).map_err(|message| {
+            DataValidationError::ConstraintViolation {
+                field: property.name.clone(),
+                message,
+            }
+        })?;
+        if max == 0 {
+            return Err(DataValidationError::ConstraintViolation {
+                field: property.name.clone(),
+                message: "forbids a value".to_owned(),
             });
         }
         for facet in &property.constraints {
@@ -618,6 +700,44 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn scalar_cardinality_gates_presence_in_closed_object_data() {
+        let current = object(
+            r#"object Customer:
+  properties:
+    id: string min_cardinality 1 max_cardinality 1
+    nickname: string max_cardinality 0
+"#,
+        );
+        assert!(validate_object_data(&current, &json!({ "id": "c-1" })).is_ok());
+
+        let missing = validate_object_data(&current, &json!({})).unwrap_err();
+        assert!(matches!(
+            missing,
+            DataValidationError::ConstraintViolation { ref field, .. } if field == "id"
+        ));
+        let forbidden =
+            validate_object_data(&current, &json!({ "id": "c-1", "nickname": "Ada" })).unwrap_err();
+        assert!(matches!(
+            forbidden,
+            DataValidationError::ConstraintViolation { ref field, .. } if field == "nickname"
+        ));
+    }
+
+    #[test]
+    fn scalar_cardinality_rejects_invalid_bounds() {
+        for invalid in [
+            "age: int min_cardinality 2",
+            "age: int max_cardinality 2",
+            "age: int min_cardinality 2 max_cardinality 1",
+            "age: int min_cardinality many",
+        ] {
+            let error = parse_odl(&format!("object Customer:\n  properties:\n    {invalid}\n"))
+                .unwrap_err();
+            assert_eq!(1011, error.code);
+        }
     }
 
     #[test]

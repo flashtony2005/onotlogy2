@@ -15,7 +15,7 @@ use chrono::{NaiveDate, SecondsFormat, Utc};
 use oaip_abi::{
     canonical_decimal,
     ir::{OntologyIR, PropertyFacet, ScalarType},
-    validate_property_constraints,
+    property_cardinality_bounds, validate_property_constraints,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -56,6 +56,7 @@ fn data_property_ranges(ontology: &Ontology) -> BTreeMap<Term, Datatype> {
 
 fn property_facet_value(ty: ScalarType, facet: &PropertyFacet) -> Option<FacetValue> {
     let (data_facet, value) = match facet {
+        PropertyFacet::MinCardinality(_) | PropertyFacet::MaxCardinality(_) => return None,
         PropertyFacet::MinInclusive(value) => (DataFacet::MinInclusive, value),
         PropertyFacet::MinExclusive(value) => (DataFacet::MinExclusive, value),
         PropertyFacet::MaxInclusive(value) => (DataFacet::MaxInclusive, value),
@@ -136,9 +137,19 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
                 property: term.clone(),
                 datatype: scalar_datatype(property.ty),
             });
-            if !property.constraints.is_empty() {
+            let value_constraints = property
+                .constraints
+                .iter()
+                .filter(|facet| {
+                    !matches!(
+                        facet,
+                        PropertyFacet::MinCardinality(_) | PropertyFacet::MaxCardinality(_)
+                    )
+                })
+                .collect::<Vec<_>>();
+            if !value_constraints.is_empty() {
                 let mut facets = Vec::with_capacity(property.constraints.len());
-                for constraint in &property.constraints {
+                for constraint in value_constraints {
                     facets.push(
                         property_facet_value(property.ty, constraint).expect(
                             "validated runtime IR contains only declared-compatible facets",
@@ -151,7 +162,30 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
                     facets,
                 });
             }
-            ontology.push(Axiom::FunctionalDataProperty(term));
+            ontology.push(Axiom::FunctionalDataProperty(term.clone()));
+            let (min_cardinality, max_cardinality) =
+                property_cardinality_bounds(&property.constraints)
+                    .expect("validated runtime IR contains valid scalar cardinalities");
+            if min_cardinality > 0 {
+                ontology.push(Axiom::subclass(
+                    source.clone(),
+                    ClassExpression::DataMinCardinality {
+                        cardinality: min_cardinality,
+                        property: term.clone(),
+                        datatype: scalar_datatype(property.ty),
+                    },
+                ));
+            }
+            if max_cardinality < 1 {
+                ontology.push(Axiom::subclass(
+                    source.clone(),
+                    ClassExpression::DataMaxCardinality {
+                        cardinality: max_cardinality,
+                        property: term.clone(),
+                        datatype: scalar_datatype(property.ty),
+                    },
+                ));
+            }
         }
     }
     for group in &ir.disjoint_groups {
@@ -442,6 +476,17 @@ pub struct RelationCardinalityViolation {
     pub actual: u32,
 }
 
+/// A closed-world scalar-value presence violation found in a world snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DataCardinalityViolation {
+    pub individual: String,
+    pub property: String,
+    pub datatype: Datatype,
+    pub min: u32,
+    pub max: u32,
+    pub actual: u32,
+}
+
 /// A storage-independent world object fact awaiting DL materialization.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeObjectFact {
@@ -614,6 +659,62 @@ pub fn validate_canonical_ontology(ontology: &Ontology) -> Result<()> {
 /// Evolution gates must see the same closed set of facts that reasoning APIs
 /// will later read; otherwise a proposal can pass schema review and immediately
 /// make the live knowledge base inconsistent.
+fn named_class_edges(ontology: &Ontology) -> BTreeMap<String, BTreeSet<String>> {
+    let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut link = |from: &str, to: &str| {
+        edges
+            .entry(from.to_owned())
+            .or_default()
+            .insert(to.to_owned());
+    };
+    for axiom in ontology.axioms() {
+        match axiom {
+            Axiom::SubClassOf { sub, sup } => {
+                if let (ClassExpression::Class(from), ClassExpression::Class(to)) = (sub, sup) {
+                    link(&from.0, &to.0);
+                }
+            }
+            Axiom::EquivalentClasses(classes) => {
+                for left in classes {
+                    let ClassExpression::Class(left) = left else {
+                        continue;
+                    };
+                    for right in classes {
+                        let ClassExpression::Class(right) = right else {
+                            continue;
+                        };
+                        if left != right {
+                            link(&left.0, &right.0);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    edges
+}
+
+fn instance_of_named_class(
+    object_type: &str,
+    declared: &str,
+    class_edges: &BTreeMap<String, BTreeSet<String>>,
+) -> bool {
+    let mut visited = BTreeSet::from([object_type.to_owned()]);
+    let mut pending = vec![object_type];
+    while let Some(current) = pending.pop() {
+        if current == declared {
+            return true;
+        }
+        for next in class_edges.get(current).into_iter().flatten() {
+            if visited.insert(next.clone()) {
+                pending.push(next);
+            }
+        }
+    }
+    false
+}
+
 pub fn declared_cardinality_violations(
     ontology: &Ontology,
     objects: &[RuntimeObjectFact],
@@ -660,52 +761,9 @@ pub fn declared_cardinality_violations(
         }
     }
 
-    let mut class_edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut link = |from: &str, to: &str| {
-        class_edges
-            .entry(from.to_owned())
-            .or_default()
-            .insert(to.to_owned());
-    };
-    for axiom in ontology.axioms() {
-        match axiom {
-            Axiom::SubClassOf { sub, sup } => {
-                if let (ClassExpression::Class(from), ClassExpression::Class(to)) = (sub, sup) {
-                    link(&from.0, &to.0);
-                }
-            }
-            Axiom::EquivalentClasses(classes) => {
-                for left in classes {
-                    let ClassExpression::Class(left) = left else {
-                        continue;
-                    };
-                    for right in classes {
-                        let ClassExpression::Class(right) = right else {
-                            continue;
-                        };
-                        if left != right {
-                            link(&left.0, &right.0);
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
+    let class_edges = named_class_edges(ontology);
     let instance_of = |object_type: &str, declared: &str| {
-        let mut visited = BTreeSet::from([object_type.to_owned()]);
-        let mut pending = vec![object_type];
-        while let Some(current) = pending.pop() {
-            if current == declared {
-                return true;
-            }
-            for next in class_edges.get(current).into_iter().flatten() {
-                if visited.insert(next.clone()) {
-                    pending.push(next);
-                }
-            }
-        }
-        false
+        instance_of_named_class(object_type, declared, &class_edges)
     };
     let types_by_id = objects
         .iter()
@@ -743,12 +801,79 @@ pub fn declared_cardinality_violations(
     violations
 }
 
+/// Check exact ODL scalar cardinalities against a closed world snapshot.
+///
+/// OWL correctly treats missing values as open-world unknowns; executable
+/// admission needs the stricter snapshot-local answer for required/forbidden
+/// fields.
+pub fn declared_data_cardinality_violations(
+    ontology: &Ontology,
+    objects: &[RuntimeObjectFact],
+) -> Vec<DataCardinalityViolation> {
+    let mut violations = Vec::new();
+    let mut bounds: BTreeMap<(String, String, Datatype), (u32, u32)> = BTreeMap::new();
+    for axiom in ontology.axioms() {
+        let Axiom::SubClassOf { sub, sup } = axiom else {
+            continue;
+        };
+        let ClassExpression::Class(source) = sub else {
+            continue;
+        };
+        let (property, datatype, bound) = match sup {
+            ClassExpression::DataMinCardinality {
+                cardinality,
+                property,
+                datatype,
+            } => (property, datatype, (*cardinality, u32::MAX)),
+            ClassExpression::DataMaxCardinality {
+                cardinality,
+                property,
+                datatype,
+            } => (property, datatype, (0, *cardinality)),
+            _ => continue,
+        };
+        let key = (source.0.clone(), property.0.clone(), *datatype);
+        if let Some(previous) = bounds.get_mut(&key) {
+            previous.0 = previous.0.max(bound.0);
+            previous.1 = previous.1.min(bound.1);
+        } else {
+            bounds.insert(key, bound);
+        }
+    }
+
+    let class_edges = named_class_edges(ontology);
+    for ((source, property, datatype), (min, max)) in bounds {
+        for object in objects
+            .iter()
+            .filter(|object| instance_of_named_class(&object.object_type, &source, &class_edges))
+        {
+            let actual = u32::from(
+                object
+                    .data
+                    .get(&property)
+                    .is_some_and(|value| !value.is_null()),
+            );
+            if actual < min || actual > max {
+                violations.push(DataCardinalityViolation {
+                    individual: object.id.clone(),
+                    property: property.clone(),
+                    datatype,
+                    min,
+                    max,
+                    actual,
+                });
+            }
+        }
+    }
+    violations
+}
+
 fn validate_declared_cardinality_facts(
     ontology: &Ontology,
     objects: &[RuntimeObjectFact],
     relations: &[RuntimeRelationFact],
 ) -> Result<()> {
-    let violation = declared_cardinality_violations(ontology, objects, relations)
+    let relation_violation = declared_cardinality_violations(ontology, objects, relations)
         .into_iter()
         .next()
         .map(|violation| {
@@ -762,7 +887,21 @@ fn validate_declared_cardinality_facts(
                 violation.actual
             ))
         });
-    match violation {
+    let data_violation = declared_data_cardinality_violations(ontology, objects)
+        .into_iter()
+        .next()
+        .map(|violation| {
+            KnowledgeError::Invalid(format!(
+                "individual `{}` requires {}..={} values for `{}` ({:?}), found {}",
+                violation.individual,
+                violation.min,
+                violation.max,
+                violation.property,
+                violation.datatype,
+                violation.actual
+            ))
+        });
+    match relation_violation.or(data_violation) {
         Some(error) => Err(error),
         None => Ok(()),
     }
@@ -1334,6 +1473,64 @@ relation companion_of:
         let missing =
             validate_canonical_ontology_with_world(&schema, &[dog, other], &[edge]).unwrap_err();
         assert!(missing.to_string().contains("individual `dog-2`"));
+    }
+
+    #[test]
+    fn declared_scalar_cardinalities_project_and_gate_inherited_instances() {
+        let ir = oaip_abi::parse_odl(
+            r#"
+object Animal:
+  properties:
+    name: string min_cardinality 1
+object Dog extends Animal:
+  properties:
+    breed: string max_cardinality 0
+"#,
+        )
+        .unwrap();
+        assert!(validate_runtime_ir(&ir).is_ok());
+        let schema = runtime_ir_to_knowledge(&ir);
+        let source = class("Animal");
+        assert!(schema.axioms().contains(&Axiom::subclass(
+            source,
+            ClassExpression::DataMinCardinality {
+                cardinality: 1,
+                property: Term::new("name"),
+                datatype: Datatype::String,
+            }
+        )));
+
+        let dog = RuntimeObjectFact {
+            id: "dog-1".to_owned(),
+            object_type: "Dog".to_owned(),
+            data: serde_json::json!({ "name": "Ada" }),
+        };
+        // Open-world DL consistency does not turn an absent observation into a
+        // contradiction; executable admission does.
+        let missing_name = RuntimeObjectFact {
+            id: "dog-2".to_owned(),
+            object_type: "Dog".to_owned(),
+            data: serde_json::json!({}),
+        };
+        let open_world =
+            runtime_world_to_knowledge(&schema, std::slice::from_ref(&missing_name), &[]).unwrap();
+        assert!(Reasoner::new(&open_world).unwrap().is_consistent().unwrap());
+        assert!(validate_canonical_ontology_with_world(&schema, &[missing_name], &[]).is_err());
+
+        let violations = declared_data_cardinality_violations(&schema, std::slice::from_ref(&dog));
+        assert!(violations.is_empty());
+        let forbidden_breed = RuntimeObjectFact {
+            id: "dog-1".to_owned(),
+            object_type: "Dog".to_owned(),
+            data: serde_json::json!({ "name": "Ada", "breed": "lab" }),
+        };
+        let violations =
+            declared_data_cardinality_violations(&schema, std::slice::from_ref(&forbidden_breed));
+        assert_eq!(1, violations.len());
+        assert_eq!("breed", violations[0].property);
+        assert_eq!(Datatype::String, violations[0].datatype);
+        assert_eq!(0, violations[0].max);
+        assert_eq!(1, violations[0].actual);
     }
 
     #[test]

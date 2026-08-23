@@ -514,6 +514,7 @@ async fn knowledge_diagnosis_reports_closed_world_cardinality_violations() {
     assert_eq!(status, 200, "初始化后的诊断失败: {body}");
     assert_eq!(body["data"]["consistent"], true);
     assert_eq!(body["data"]["cardinalityViolations"], json!([]));
+    assert_eq!(body["data"]["dataCardinalityViolations"], json!([]));
 
     // World evolution after approval must remain diagnosable. A missing minimum
     // edge is a closed-world executable-schema violation, not an OWL inconsistency.

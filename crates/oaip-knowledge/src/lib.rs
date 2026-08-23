@@ -22,9 +22,10 @@ pub use model::{
 };
 pub use reasoner::{ReasonedClassification, ReasonedRealization, Reasoner};
 pub use runtime::{
-    RelationCardinalityViolation, RuntimeObjectFact, RuntimeRelationFact,
-    canonical_runtime_ontology, declared_cardinality_violations, relation_endpoints,
-    runtime_ir_to_knowledge, runtime_world_to_knowledge, strip_runtime_ir_from_knowledge,
-    validate_canonical_ontology, validate_canonical_ontology_with_world, validate_runtime_ir,
+    DataCardinalityViolation, RelationCardinalityViolation, RuntimeObjectFact, RuntimeRelationFact,
+    canonical_runtime_ontology, declared_cardinality_violations,
+    declared_data_cardinality_violations, relation_endpoints, runtime_ir_to_knowledge,
+    runtime_world_to_knowledge, strip_runtime_ir_from_knowledge, validate_canonical_ontology,
+    validate_canonical_ontology_with_world, validate_runtime_ir,
 };
 pub use tbox::{Classification, TBox};

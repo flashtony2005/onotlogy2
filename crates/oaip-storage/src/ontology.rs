@@ -1511,6 +1511,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn odl_scalar_cardinality_gates_initialization_and_evolution() {
+        let storage = LibSQLStorage::open(":memory:").await.unwrap();
+        let root = Ontology::new().with_axiom(Axiom::subclass(class("Dog"), class("Animal")));
+        let customer = |constraints: &str| {
+            oaip_abi::parse_odl(&format!(
+                r#"object Customer:
+  properties:
+    name: string {constraints}
+"#
+            ))
+            .unwrap()
+        };
+        storage
+            .create("Customer", "customer-1", serde_json::json!({}))
+            .await
+            .unwrap();
+
+        // Required fields are executable narrowing decisions, so initialization
+        // cannot bless a schema that already excludes a live row.
+        let required = customer("min_cardinality 1");
+        assert!(
+            storage
+                .initialize_knowledge_version("root", &root, Some(&required))
+                .await
+                .is_err()
+        );
+
+        // An optional schema initializes, and a later required-field narrowing
+        // is rejected by the same live-world governance gate.
+        storage
+            .initialize_knowledge_version("root", &root, Some(&customer("")))
+            .await
+            .unwrap();
+        let proposal = OntologyProposal::new("require-name");
+        assert!(
+            storage
+                .propose_knowledge_change("root", &proposal, Some(&required))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
     async fn odl_extends_gates_and_replaces_taxonomy_projection() {
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
         let source = r#"

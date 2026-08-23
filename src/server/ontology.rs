@@ -18,7 +18,8 @@ use crate::knowledge::{
 };
 use crate::knowledge_bridge::{
     storage_world_snapshot, storage_world_snapshot_to_knowledge,
-    world_snapshot_cardinality_violations, world_snapshot_to_knowledge,
+    world_snapshot_cardinality_violations, world_snapshot_data_cardinality_violations,
+    world_snapshot_to_knowledge,
 };
 use crate::storage::StorageError;
 use axum::extract::{Path, State};
@@ -332,6 +333,7 @@ pub(crate) async fn diagnose_current_knowledge(
     };
     let cardinality_violations =
         world_snapshot_cardinality_violations(&schema, &objects, &relations);
+    let data_cardinality_violations = world_snapshot_data_cardinality_violations(&schema, &objects);
     let knowledge_base = match world_snapshot_to_knowledge(&schema, &objects, &relations) {
         Ok(knowledge_base) => knowledge_base,
         Err(error) => return reasoning_error(error),
@@ -362,17 +364,19 @@ pub(crate) async fn diagnose_current_knowledge(
             "unsatisfiable": [],
             "inconsistency": inconsistency,
             "cardinalityViolations": cardinality_violations,
+            "dataCardinalityViolations": data_cardinality_violations,
         });
         return ApiResponse::ok(result).into_response();
     }
 
-    if !cardinality_violations.is_empty() {
+    if !cardinality_violations.is_empty() || !data_cardinality_violations.is_empty() {
         let result = json!({
             "consistent": true,
             "unsatisfiableClasses": [],
             "unsatisfiable": [],
             "inconsistency": Option::<ReasonedJustification>::None,
             "cardinalityViolations": cardinality_violations,
+            "dataCardinalityViolations": data_cardinality_violations,
         });
         return ApiResponse::ok(result).into_response();
     }
@@ -408,6 +412,7 @@ pub(crate) async fn diagnose_current_knowledge(
         "unsatisfiable": unsatisfiable,
         "inconsistency": Option::<ReasonedJustification>::None,
         "cardinalityViolations": Vec::<crate::knowledge::RelationCardinalityViolation>::new(),
+        "dataCardinalityViolations": Vec::<crate::knowledge::DataCardinalityViolation>::new(),
     });
     ApiResponse::ok(result).into_response()
 }
