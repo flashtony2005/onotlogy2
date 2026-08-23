@@ -376,11 +376,15 @@ append-only 之外，成功缓存的 snapshot 还可作为 **assertion patch bas
 折叠后隐藏断言差异；删除一个 property 时也会保留同 individual 的其他 property 索引，使 disjoint
 检查继续完整。这里的“absence”只是移除旧 positive assertion，不会转换成 OWL negative assertion。
 schema 不相等或 removal 无法应用时仍退回全量重建，patch 复用计入 prefix-hit 指标。
+Criterion 的 bounded replace-chain 每次替换 1,000 条 functional ABox 中的一条断言，当前本机
+patch path 约 780 µs；该路径需要 schema equality、multiset delta、cached-state clone 和局部重索引，
+因此不是 O(1)。
 
 这条缓存已经接入存储治理执行路径。`initialize_knowledge_version`、
 `propose_knowledge_change` 和 `apply_knowledge_proposal` 统一通过
 `validate_canonical_ontology_with_world` 调用 data consistency，因此长生命知识版本会自动复用
 exact result、data-relevant prefix 和 append-only delta，而不需要 storage 维护第二套索引。
+治理中的事实替换/删除会继续落入同一入口的 assertion patch 路径。
 prefix 复用前只比较 `data_consistency_relevant(axiom)` 投影，避免 live-world snapshot 尾部的
 `DifferentIndividuals` 重写错误地阻断可安全复用的前缀。`DataConsistencyCacheStats` 暴露
 exact hits、prefix hits、rebuilds 和 delta assertions，用于验证治理流程确实命中缓存。
@@ -487,5 +491,5 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 2. 在真实业务需要时继续扩展 XSD 构造（如自定义 datatype 定义），保持保守语义。
 3. 在 update/delete 已通过 assertion patch 复用后，将 delta consistency 继续扩展到
    SameIndividuals 增量和 TBox 变更。长生命快照已接入存储执行路径并具备缓存命中率可观测性。
-4. 在已有短并发缓存基线之上，继续增加长时并发、恢复、内存和推理延迟基准。
+4. 在已有短并发、append-only 和 replace-chain 缓存基线之上，继续增加长时并发、恢复、内存和推理延迟基准。
 5. 在能力矩阵继续扩展时同步刷新本文档。

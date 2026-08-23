@@ -77,6 +77,35 @@ fn benchmark_data_ontology() -> Ontology {
     })
 }
 
+/// Replace exactly one asserted fact while retaining the fixed 1,000-fact ABox
+/// shape used by the other data-consistency baselines.
+fn replace_status_fact(ontology: Ontology, sequence: u64) -> Ontology {
+    let selected = Term::new(format!("individual-{}", sequence % DATA_FACTS as u64));
+    let replacement = Axiom::DataPropertyAssertion {
+        property: Term::new("status"),
+        individual: selected.clone(),
+        value: Literal::String(format!("value-{sequence}")),
+    };
+
+    Ontology::from_iter(
+        ontology
+            .axioms()
+            .iter()
+            .filter(|axiom| {
+                !matches!(
+                    axiom,
+                    Axiom::DataPropertyAssertion {
+                        property,
+                        individual,
+                        ..
+                    } if *property == Term::new("status") && *individual == selected
+                )
+            })
+            .cloned()
+            .chain(std::iter::once(replacement)),
+    )
+}
+
 fn projection_events() -> Vec<TraceEvent> {
     (0..PROJECTION_EVENTS)
         .map(|index| {
@@ -251,6 +280,8 @@ fn knowledge_abox_performance(c: &mut Criterion) {
     let cold_iteration = AtomicU64::new(0);
     let delta_iteration = AtomicU64::new(0);
     let delta_snapshot = RefCell::new(ontology.clone());
+    let patch_iteration = AtomicU64::new(0);
+    let patch_snapshot = RefCell::new(ontology.clone());
 
     let mut group = c.benchmark_group("knowledge_abox");
     group.sample_size(10);
@@ -307,6 +338,25 @@ fn knowledge_abox_performance(c: &mut Criterion) {
                 delta_snapshot.replace(next.clone())
             },
             |extended| black_box(validate_data_consistency(black_box(&extended)).is_ok()),
+            BatchSize::PerIteration,
+        )
+    });
+
+    // Measure a bounded replacement chain: each iteration removes one old
+    // assertion and inserts its replacement.  Unlike append-only deltas, these
+    // snapshots are siblings rather than prefixes, so this isolates the exact
+    // assertion-patch reuse path.
+    group.bench_function("data_consistency_patch_replace_chain", |b| {
+        b.iter_batched(
+            || {
+                let sequence = patch_iteration.fetch_add(1, Ordering::Relaxed);
+                if sequence.is_multiple_of(DATA_FACTS as u64) {
+                    patch_snapshot.replace(ontology.clone());
+                }
+                let replaced = replace_status_fact(patch_snapshot.borrow().clone(), sequence);
+                patch_snapshot.replace(replaced.clone())
+            },
+            |replaced| black_box(validate_data_consistency(black_box(&replaced)).is_ok()),
             BatchSize::PerIteration,
         )
     });

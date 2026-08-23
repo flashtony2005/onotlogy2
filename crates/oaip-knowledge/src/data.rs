@@ -1780,6 +1780,46 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_replacements_preserve_distinct_snapshots() {
+        const WORKERS: usize = 4;
+        const ROUNDS: usize = 48;
+
+        let results = std::thread::scope(|scope| {
+            (0..WORKERS)
+                .map(|worker| {
+                    scope.spawn(move || {
+                        let schema = Ontology::new().with_axiom(Axiom::FunctionalDataProperty(
+                            term("concurrent-replace-status"),
+                        ));
+                        let first = schema.clone().with_axiom(fact(
+                            &format!("concurrent-replace-{worker}"),
+                            "concurrent-replace-status",
+                            Literal::Integer(worker as i64),
+                        ));
+                        let second = schema.clone().with_axiom(fact(
+                            &format!("concurrent-replace-{worker}"),
+                            "concurrent-replace-status",
+                            Literal::Integer(worker as i64 + 100),
+                        ));
+
+                        for _ in 0..ROUNDS {
+                            assert!(validate_data_consistency(&first).is_ok());
+                            assert!(validate_data_consistency(&second).is_ok());
+                        }
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(std::thread::ScopedJoinHandle::join)
+                .collect::<Vec<_>>()
+        });
+
+        for result in results {
+            result.unwrap();
+        }
+    }
+
+    #[test]
     fn appended_abox_facts_reuse_the_cached_data_prefix() {
         let base = (0..32).fold(
             Ontology::new().with_axiom(Axiom::FunctionalDataProperty(term("status"))),
@@ -1868,6 +1908,115 @@ mod tests {
             validate_data_consistency(&next).is_err(),
             "removing patch-temp must not forget the retained patch-age property"
         );
+    }
+
+    #[test]
+    fn replacement_uses_an_assertion_patch_and_avoids_stale_conflicts() {
+        let schema =
+            Ontology::new().with_axiom(Axiom::FunctionalDataProperty(term("patch-replace-status")));
+        let base = schema.clone().with_axiom(fact(
+            "patch-replace-a",
+            "patch-replace-status",
+            Literal::Integer(30),
+        ));
+        let next = schema.clone().with_axiom(fact(
+            "patch-replace-a",
+            "patch-replace-status",
+            Literal::Integer(31),
+        ));
+
+        let state = DataConsistencyState::from_ontology(&base).unwrap();
+        data_consistency_cache().lock().expect("cache mutex").put(
+            ontology_fingerprint(&base),
+            &base,
+            state,
+            Ok(()),
+        );
+
+        let candidate = data_consistency_cache()
+            .lock()
+            .expect("cache mutex")
+            .find_patch_base(&next);
+        let Some((entry, patch)) = candidate else {
+            panic!("same-schema fact replacement should reuse a patch base");
+        };
+        assert_eq!(1, patch.remove_positive.len());
+        assert_eq!(1, patch.add_positive.len());
+        assert!(patch.remove_negative.is_empty());
+        assert!(patch.add_negative.is_empty());
+        data_consistency_cache()
+            .lock()
+            .expect("cache mutex")
+            .restore(entry);
+
+        assert!(validate_data_consistency(&next).is_ok());
+    }
+
+    #[test]
+    fn deleting_a_positive_assertion_does_not_create_a_negative() {
+        let schema = Ontology::new();
+        let base = schema
+            .clone()
+            .with_axiom(fact("patch-delete-a", "patch-age", Literal::Integer(30)))
+            .with_axiom(fact("patch-delete-a", "patch-temp", Literal::Integer(80)));
+        let next = schema.with_axiom(fact("patch-delete-a", "patch-age", Literal::Integer(30)));
+
+        let patch = assertion_delta(&base, &next).unwrap();
+        assert_eq!(1, patch.remove_positive.len());
+        assert!(patch.add_positive.is_empty());
+        assert!(patch.remove_negative.is_empty());
+        assert!(patch.add_negative.is_empty());
+        assert!(validate_data_consistency(&next).is_ok());
+    }
+
+    #[test]
+    fn assertion_delta_preserves_duplicate_multiplicity() {
+        let one = Ontology::from_iter([fact(
+            "patch-multi-a",
+            "patch-tag",
+            Literal::String("x".into()),
+        )]);
+        let two = Ontology::from_iter([
+            fact("patch-multi-a", "patch-tag", Literal::String("x".into())),
+            fact("patch-multi-a", "patch-tag", Literal::String("x".into())),
+        ]);
+
+        let added = assertion_delta(&one, &two).unwrap();
+        assert_eq!(1, added.add_positive.len());
+        assert!(added.remove_positive.is_empty());
+
+        let removed = assertion_delta(&two, &one).unwrap();
+        assert_eq!(1, removed.remove_positive.len());
+        assert!(removed.add_positive.is_empty());
+
+        let unchanged = assertion_delta(&two, &two).unwrap();
+        assert!(unchanged.add_positive.is_empty());
+        assert!(unchanged.remove_positive.is_empty());
+    }
+
+    #[test]
+    fn same_individual_changes_do_not_reuse_an_assertion_patch() {
+        let base =
+            Ontology::new().with_axiom(fact("patch-identity-a", "patch-age", Literal::Integer(30)));
+        let changed_identity = base.clone().with_axiom(Axiom::SameIndividuals(vec![
+            term("patch-identity-a"),
+            term("patch-identity-b"),
+        ]));
+
+        let state = DataConsistencyState::from_ontology(&base).unwrap();
+        data_consistency_cache().lock().expect("cache mutex").put(
+            ontology_fingerprint(&base),
+            &base,
+            state,
+            Ok(()),
+        );
+
+        let candidate = data_consistency_cache()
+            .lock()
+            .expect("cache mutex")
+            .find_patch_base(&changed_identity);
+        assert!(candidate.is_none());
+        assert!(!same_data_schema(&base, &changed_identity));
     }
 
     #[test]
