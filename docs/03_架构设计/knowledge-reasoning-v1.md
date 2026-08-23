@@ -115,6 +115,7 @@ TBox / property：
 - Data property domain/range/subproperty/disjointness
 - `DataPropertyOneOf`
 - `DataPropertyRangeRestriction`
+- `DataPropertyDataRange`（可组合 datatype / oneOf / restriction / union / intersection）
 - Functional data property
 
 ABox：
@@ -169,7 +170,40 @@ object Customer:
 Runtime IR 将这些约束物化为 `DataPropertyRangeRestriction`，因此它们参与 live-world 一致性检查、
 推理诊断和不可变本体版本治理。
 
-### 4.6 Datatype facet matrix
+### 4.6 Composable data ranges
+
+Governed DL proposal 可以使用通用 `DataPropertyDataRange` 表达属性值域：
+
+```text
+DataPropertyDataRange {
+  property: "contact",
+  range: Union([
+    Restriction {
+      datatype: String,
+      facets: [Pattern("[^@]+@[^@]+")],
+    },
+    Datatype(Integer),
+  ])
+}
+```
+
+支持的组合子：
+
+- `datatype`
+- `oneOf`
+- `restriction`
+- `union`
+- `intersection`
+
+实现边界：
+
+- boolean 组至少两个分支；
+- 嵌套深度上限 8，节点总数上限 64，单个 enumeration 上限 64 个 literal；
+- uncertain 或超界构造 fail-closed；
+- positive ABox 断言由确定性 kernel 精确检查；mature tableau 同时接收对应 OWL 2 语法；
+- 多个普通 range/restriction 公理仍按交集处理。
+
+### 4.7 Datatype facet matrix
 
 | Base datatype | 支持的 facet |
 |---------------|--------------|
@@ -322,7 +356,7 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 ## 9. 已知下一步
 
 1. 继续扩展更多 DL 结构到 ODL 直接表达面（如对象/数据基数限制与嵌套 restriction），减少手写 proposal JSON。
-2. 补充 datatype union/intersection 及真实业务需要的 XSD 构造。
+2. 在真实业务需要时继续扩展 XSD 构造（如 complement / 自定义 datatype 定义），保持保守语义。
 3. 为大 ABox 增加 classification/cache、incremental consistency 和有界解释缓存。
 4. 增加长时并发、恢复、内存和推理延迟基准。
 5. 在能力矩阵继续扩展时同步刷新本文档。

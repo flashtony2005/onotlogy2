@@ -7,7 +7,9 @@
 //! ontology.
 
 use crate::error::{KnowledgeError, Result};
-use crate::model::{Axiom, ClassExpression, DataFacet, Ontology, Term};
+use crate::model::{
+    Axiom, ClassExpression, DataFacet, DataRange as ModelDataRange, Ontology, Term,
+};
 use crate::model::{Datatype, Literal};
 use chrono::{DateTime, Utc};
 use horned_owl::model::{
@@ -633,6 +635,13 @@ fn to_horned_owl(ontology: &Ontology) -> Result<SetOntology<RcStr>> {
                     ),
                 });
             }
+            Axiom::DataPropertyDataRange { property, range } => {
+                crate::data::validate_data_range(range, property)?;
+                declare_data_property(&build, &mut out, property);
+                let dr = owl_data_range(&build, range);
+                let dp = build.data_property(term_iri(property));
+                out.insert(DataPropertyRange { dp, dr });
+            }
             Axiom::FunctionalDataProperty(property) => {
                 declare_data_property(&build, &mut out, property);
                 out.insert(FunctionalDataProperty(
@@ -727,6 +736,40 @@ fn to_horned_owl(ontology: &Ontology) -> Result<SetOntology<RcStr>> {
     }
 
     Ok(out)
+}
+
+fn owl_data_range(build: &Build<RcStr>, range: &ModelDataRange) -> DataRange<RcStr> {
+    match range {
+        ModelDataRange::Datatype(datatype) => DataRange::Datatype(owl_datatype(build, *datatype)),
+        ModelDataRange::OneOf(values) => DataRange::DataOneOf(
+            values
+                .iter()
+                .map(|value| owl_literal(build, value))
+                .collect(),
+        ),
+        ModelDataRange::Restriction { datatype, facets } => DataRange::DatatypeRestriction(
+            owl_datatype(build, *datatype),
+            facets
+                .iter()
+                .map(|value| OwlFacetRestriction {
+                    f: owl_facet(value.facet),
+                    l: owl_literal(build, &value.value),
+                })
+                .collect(),
+        ),
+        ModelDataRange::Union(branches) => DataRange::DataUnionOf(
+            branches
+                .iter()
+                .map(|branch| owl_data_range(build, branch))
+                .collect(),
+        ),
+        ModelDataRange::Intersection(branches) => DataRange::DataIntersectionOf(
+            branches
+                .iter()
+                .map(|branch| owl_data_range(build, branch))
+                .collect(),
+        ),
+    }
 }
 
 fn class_expression(
@@ -980,6 +1023,39 @@ mod tests {
         assert!(
             !reasoner
                 .entails_subclass(&term("Animal"), &term("Person"))
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn composable_data_range_participates_in_mature_consistency() {
+        let range = ModelDataRange::union([
+            ModelDataRange::Datatype(Datatype::String),
+            ModelDataRange::Datatype(Datatype::Integer),
+        ]);
+        let axiom = |property: &str| Axiom::DataPropertyDataRange {
+            property: Term::new(property),
+            range: range.clone(),
+        };
+
+        let consistent = Ontology::new().with_axiom(axiom("identifier")).with_axiom(
+            Axiom::DataPropertyAssertion {
+                property: Term::new("identifier"),
+                individual: Term::new("a"),
+                value: crate::model::Literal::Integer(30),
+            },
+        );
+        assert!(Reasoner::new(&consistent).unwrap().is_consistent().unwrap());
+
+        let inconsistent = consistent.with_axiom(Axiom::DataPropertyAssertion {
+            property: Term::new("identifier"),
+            individual: Term::new("b"),
+            value: crate::model::Literal::Boolean(true),
+        });
+        assert!(
+            !Reasoner::new(&inconsistent)
+                .unwrap()
+                .is_consistent()
                 .unwrap()
         );
     }

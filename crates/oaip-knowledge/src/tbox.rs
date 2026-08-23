@@ -115,6 +115,7 @@ impl TBox {
                 | Axiom::DataPropertyRange { .. }
                 | Axiom::DataPropertyOneOf { .. }
                 | Axiom::DataPropertyRangeRestriction { .. }
+                | Axiom::DataPropertyDataRange { .. }
                 | Axiom::FunctionalDataProperty(_)
                 | Axiom::DataPropertyAssertion { .. }
                 | Axiom::NegativeDataPropertyAssertion { .. } => {}

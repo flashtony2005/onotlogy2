@@ -670,7 +670,9 @@ mod tests {
     use super::*;
     use crate::{LibSQLStorage, ObjectEngine, WorldCommand};
     use oaip_abi::ir::{ObjectType, PropertyDef, RelationDef, ScalarType};
-    use oaip_knowledge::{Axiom, ClassExpression, DataFacet, Datatype, FacetValue, Literal, Term};
+    use oaip_knowledge::{
+        Axiom, ClassExpression, DataFacet, DataRange, Datatype, FacetValue, Literal, Term,
+    };
 
     fn class(name: &str) -> ClassExpression {
         ClassExpression::class(format!("http://example.com/owl#{name}"))
@@ -1097,6 +1099,82 @@ mod tests {
         assert!(
             storage
                 .propose_knowledge_change("v2", &bad, None)
+                .await
+                .is_err()
+        );
+        let version = storage
+            .knowledge_version("v2")
+            .await
+            .unwrap()
+            .expect("applied version exists");
+        assert!(version.ontology.axioms().contains(&admissible));
+    }
+
+    #[tokio::test]
+    async fn composable_data_range_gates_live_world_evolution() {
+        let storage = LibSQLStorage::open(":memory:").await.unwrap();
+        let root =
+            Ontology::new().with_axiom(Axiom::subclass(class("Customer"), ClassExpression::Thing));
+        storage
+            .initialize_knowledge_version("root", &root, None)
+            .await
+            .unwrap();
+        storage
+            .create(
+                "Customer",
+                "customer-1",
+                serde_json::json!({ "contact": "support@example.com" }),
+            )
+            .await
+            .unwrap();
+
+        let admissible = Axiom::DataPropertyDataRange {
+            property: Term::new("contact"),
+            range: DataRange::union([
+                DataRange::restriction(
+                    Datatype::String,
+                    vec![FacetValue {
+                        facet: DataFacet::Pattern,
+                        value: Literal::String("[^@]+@[^@]+".into()),
+                    }],
+                ),
+                DataRange::Datatype(Datatype::Integer),
+            ]),
+        };
+        let proposal = OntologyProposal::new("add-contact-union")
+            .with_change(OntologyChange::Add(admissible.clone()));
+        storage
+            .propose_knowledge_change("root", &proposal, None)
+            .await
+            .unwrap();
+        storage
+            .decide_knowledge_proposal("add-contact-union", true, "alice", None)
+            .await
+            .unwrap();
+        storage
+            .apply_knowledge_proposal("add-contact-union", "v2")
+            .await
+            .unwrap();
+
+        // Intersecting the union branches excludes the persisted string fact.
+        let incompatible = OntologyProposal::new("exclude-live-contact").with_change(
+            OntologyChange::Add(Axiom::DataPropertyDataRange {
+                property: Term::new("contact"),
+                range: DataRange::intersection([
+                    DataRange::Datatype(Datatype::Integer),
+                    DataRange::restriction(
+                        Datatype::Integer,
+                        vec![FacetValue {
+                            facet: DataFacet::MinInclusive,
+                            value: Literal::Integer(1),
+                        }],
+                    ),
+                ]),
+            }),
+        );
+        assert!(
+            storage
+                .propose_knowledge_change("v2", &incompatible, None)
                 .await
                 .is_err()
         );

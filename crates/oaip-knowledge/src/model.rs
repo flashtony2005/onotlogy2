@@ -328,6 +328,45 @@ pub struct FacetValue {
     pub value: Literal,
 }
 
+/// A composable OWL 2 DL data-range expression.
+///
+/// The existing flat property-range axioms remain the canonical executable
+/// projection.  This expression adds governed proposals the ability to state
+/// explicit unions and intersections of datatypes, enumerations and facets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum DataRange {
+    Datatype(Datatype),
+    OneOf(Vec<Literal>),
+    Restriction {
+        datatype: Datatype,
+        facets: Vec<FacetValue>,
+    },
+    Union(Vec<DataRange>),
+    Intersection(Vec<DataRange>),
+}
+
+impl DataRange {
+    pub fn datatype(datatype: Datatype) -> Self {
+        Self::Datatype(datatype)
+    }
+
+    pub fn one_of(values: impl IntoIterator<Item = Literal>) -> Self {
+        Self::OneOf(values.into_iter().collect())
+    }
+
+    pub fn restriction(datatype: Datatype, facets: Vec<FacetValue>) -> Self {
+        Self::Restriction { datatype, facets }
+    }
+
+    pub fn union(ranges: impl IntoIterator<Item = DataRange>) -> Self {
+        Self::Union(ranges.into_iter().collect())
+    }
+
+    pub fn intersection(ranges: impl IntoIterator<Item = DataRange>) -> Self {
+        Self::Intersection(ranges.into_iter().collect())
+    }
+}
+
 /// Asserted TBox/ABox axioms supported by the knowledge kernel.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Axiom {
@@ -389,6 +428,11 @@ pub enum Axiom {
         property: Term,
         datatype: Datatype,
         facets: Vec<FacetValue>,
+    },
+    /// General composable data-property range used by governed proposals.
+    DataPropertyDataRange {
+        property: Term,
+        range: DataRange,
     },
     FunctionalDataProperty(Term),
     ClassAssertion {

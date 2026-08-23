@@ -8,7 +8,7 @@ use crate::error::{KnowledgeError, Result};
 use oaip_abi::{canonical_decimal, compile_xsd_pattern_subset};
 
 use crate::model::{
-    Axiom, ClassExpression, DataFacet, Datatype, FacetValue, Literal, Ontology, Term,
+    Axiom, ClassExpression, DataFacet, DataRange, Datatype, FacetValue, Literal, Ontology, Term,
 };
 use chrono::{DateTime, NaiveDate, Utc};
 use regex::Regex;
@@ -91,6 +91,91 @@ fn validate_pattern(property: &Term, pattern: &str) -> Result<Regex> {
     })
 }
 
+/// Conservative structural and semantic bounds for composable data ranges.
+const MAX_DATA_RANGE_NODES: usize = 64;
+const MAX_DATA_RANGE_DEPTH: usize = 8;
+const MAX_DATA_RANGE_TERMS: usize = 64;
+const MAX_RESTRICTION_FACETS: usize = 64;
+
+/// Validate syntax and declared facet values before admission checking.
+pub(crate) fn validate_data_range(range: &DataRange, property: &Term) -> Result<usize> {
+    validate_data_range_inner(range, property, 0)
+}
+
+fn validate_data_range_inner(range: &DataRange, property: &Term, depth: usize) -> Result<usize> {
+    if depth > MAX_DATA_RANGE_DEPTH {
+        return Err(KnowledgeError::Invalid(format!(
+            "data property `{property}` range exceeds nesting depth {MAX_DATA_RANGE_DEPTH}"
+        )));
+    }
+    let nodes = match range {
+        DataRange::Datatype(_) => 1,
+        DataRange::OneOf(values) => {
+            if values.len() > MAX_DATA_RANGE_TERMS {
+                return Err(KnowledgeError::Invalid(format!(
+                    "data property `{property}` enumeration exceeds {MAX_DATA_RANGE_TERMS} terms"
+                )));
+            }
+            if values.is_empty() {
+                return Err(KnowledgeError::Invalid(format!(
+                    "data property `{property}` has an empty enumeration range"
+                )));
+            }
+            for value in values {
+                validate_literal(property, value)?;
+            }
+            values.len()
+        }
+        DataRange::Restriction { datatype, facets } => {
+            validate_restriction(property, datatype, facets)?;
+            1
+        }
+        DataRange::Union(branches) | DataRange::Intersection(branches) => {
+            if branches.len() < 2 {
+                return Err(KnowledgeError::Invalid(format!(
+                    "data property `{property}` boolean data range needs at least two branches"
+                )));
+            }
+            let mut total = 1;
+            for branch in branches {
+                total += validate_data_range_inner(branch, property, depth + 1)?;
+                if total > MAX_DATA_RANGE_NODES {
+                    break;
+                }
+            }
+            total
+        }
+    };
+    if nodes > MAX_DATA_RANGE_NODES {
+        return Err(KnowledgeError::Invalid(format!(
+            "data property `{property}` range exceeds {MAX_DATA_RANGE_NODES} nodes"
+        )));
+    }
+    Ok(nodes)
+}
+
+fn restriction_admits(value: &Literal, datatype: &Datatype, facets: &[FacetValue]) -> bool {
+    literal_datatype_matches(value, *datatype)
+        && facets
+            .iter()
+            .all(|item| facet_admits(value, item.facet, &item.value))
+}
+
+/// Whether an asserted typed literal belongs to the denoted data range.
+pub(crate) fn data_range_admits(range: &DataRange, value: &Literal) -> bool {
+    match range {
+        DataRange::Datatype(datatype) => literal_datatype_matches(value, *datatype),
+        DataRange::OneOf(values) => values.iter().any(|allowed| literal_equal(value, allowed)),
+        DataRange::Restriction { datatype, facets } => restriction_admits(value, datatype, facets),
+        DataRange::Union(branches) => branches
+            .iter()
+            .any(|branch| data_range_admits(branch, value)),
+        DataRange::Intersection(branches) => branches
+            .iter()
+            .all(|branch| data_range_admits(branch, value)),
+    }
+}
+
 fn validate_restriction(
     property: &Term,
     restriction: &Datatype,
@@ -134,6 +219,11 @@ fn validate_restriction(
     ) {
         return Err(KnowledgeError::Invalid(format!(
             "data property `{property}` restricts unsupported range {restriction:?}"
+        )));
+    }
+    if facets.len() > MAX_RESTRICTION_FACETS {
+        return Err(KnowledgeError::Invalid(format!(
+            "data property `{property}` restriction exceeds {MAX_RESTRICTION_FACETS} facets"
         )));
     }
     let mut seen = BTreeSet::new();
@@ -417,6 +507,7 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
     let mut ranges = BTreeMap::<Term, BTreeSet<Datatype>>::new();
     let mut one_ofs = Vec::<(Term, Vec<Literal>)>::new();
     let mut restrictions = Vec::<(Term, Datatype, Vec<FacetValue>, Option<Regex>)>::new();
+    let mut range_expressions = Vec::<(Term, DataRange)>::new();
     let mut sub_data_properties = BTreeMap::new();
 
     for axiom in ontology.axioms() {
@@ -473,6 +564,10 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
                 let pattern = validate_restriction(property, datatype, facets)?;
                 restrictions.push((property.clone(), *datatype, facets.clone(), pattern));
             }
+            Axiom::DataPropertyDataRange { property, range } => {
+                validate_data_range(range, property)?;
+                range_expressions.push((property.clone(), range.clone()));
+            }
             Axiom::SubDataPropertyOf { sub, sup } => {
                 sub_data_properties.insert(sub.clone(), sup.clone());
             }
@@ -517,6 +612,15 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
 
     for fact in &positive {
         let individual = parents(&mut aliases, fact.individual.clone());
+
+        if range_expressions.iter().any(|(property, range)| {
+            property == &fact.property && !data_range_admits(range, &fact.value)
+        }) {
+            return Err(KnowledgeError::Invalid(format!(
+                "data property `{}` range rejects `{individual}` value {:?}",
+                fact.property, fact.value
+            )));
+        }
 
         let violated_range = ranges
             .get(&fact.property)
@@ -1046,6 +1150,94 @@ mod tests {
 
         let malformed_bound = balance_restriction(DataFacet::TotalDigits, Literal::Integer(-1));
         assert!(validate_data_consistency(&Ontology::new().with_axiom(malformed_bound)).is_err());
+    }
+
+    #[test]
+    fn composable_data_ranges_admit_alternatives_and_intersections() {
+        let id_range = DataRange::union([
+            DataRange::restriction(
+                Datatype::String,
+                vec![FacetValue {
+                    facet: DataFacet::Pattern,
+                    value: Literal::String("USER-[0-9]+".into()),
+                }],
+            ),
+            DataRange::Datatype(Datatype::Integer),
+        ]);
+        let axiom = |range: DataRange| Axiom::DataPropertyDataRange {
+            property: term("id"),
+            range,
+        };
+
+        let string_match = Ontology::new()
+            .with_axiom(axiom(id_range.clone()))
+            .with_axiom(fact("a", "id", Literal::String("USER-42".into())));
+        assert!(validate_data_consistency(&string_match).is_ok());
+
+        let integer_match = Ontology::new()
+            .with_axiom(axiom(id_range.clone()))
+            .with_axiom(fact("a", "id", Literal::Integer(42)));
+        assert!(validate_data_consistency(&integer_match).is_ok());
+
+        let rejected = Ontology::new().with_axiom(axiom(id_range)).with_axiom(fact(
+            "a",
+            "id",
+            Literal::Boolean(true),
+        ));
+        assert!(validate_data_consistency(&rejected).is_err());
+
+        let intersection = DataRange::intersection([
+            DataRange::Datatype(Datatype::Integer),
+            DataRange::restriction(
+                Datatype::Integer,
+                vec![FacetValue {
+                    facet: DataFacet::MinInclusive,
+                    value: Literal::Integer(18),
+                }],
+            ),
+        ]);
+        let adult = Ontology::new()
+            .with_axiom(axiom(intersection.clone()))
+            .with_axiom(fact("a", "id", Literal::Integer(21)));
+        assert!(validate_data_consistency(&adult).is_ok());
+        let child = Ontology::new()
+            .with_axiom(axiom(intersection))
+            .with_axiom(fact("a", "id", Literal::Integer(17)));
+        assert!(validate_data_consistency(&child).is_err());
+    }
+
+    #[test]
+    fn malformed_and_unbounded_composable_ranges_fail_closed() {
+        let singleton = Axiom::DataPropertyDataRange {
+            property: term("value"),
+            range: DataRange::Union(vec![DataRange::Datatype(Datatype::String)]),
+        };
+        assert!(validate_data_consistency(&Ontology::new().with_axiom(singleton)).is_err());
+
+        let mut nested = DataRange::Datatype(Datatype::String);
+        for _ in 0..(MAX_DATA_RANGE_DEPTH + 1) {
+            nested = DataRange::Intersection(vec![nested, DataRange::Datatype(Datatype::String)]);
+        }
+        let too_deep = Axiom::DataPropertyDataRange {
+            property: term("value"),
+            range: nested,
+        };
+        assert!(validate_data_consistency(&Ontology::new().with_axiom(too_deep)).is_err());
+
+        let empty_enumeration = Axiom::DataPropertyDataRange {
+            property: term("value"),
+            range: DataRange::OneOf(Vec::new()),
+        };
+        assert!(validate_data_consistency(&Ontology::new().with_axiom(empty_enumeration)).is_err());
+
+        let oversized = Axiom::DataPropertyDataRange {
+            property: term("value"),
+            range: DataRange::OneOf(
+                std::iter::repeat_n(Literal::String("x".into()), MAX_DATA_RANGE_TERMS + 1)
+                    .collect(),
+            ),
+        };
+        assert!(validate_data_consistency(&Ontology::new().with_axiom(oversized)).is_err());
     }
 
     #[test]

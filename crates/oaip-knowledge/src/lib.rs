@@ -17,7 +17,9 @@ pub use evolution::{
 };
 pub use explanation::{MAX_EXPLANATION_AXIOMS, ReasonedJustification, validate_explanation_limit};
 pub use fact::{Fact, Justification, Rule, Truth, Violation, ViolationKind};
-pub use model::{Axiom, ClassExpression, DataFacet, Datatype, FacetValue, Literal, Ontology, Term};
+pub use model::{
+    Axiom, ClassExpression, DataFacet, DataRange, Datatype, FacetValue, Literal, Ontology, Term,
+};
 pub use reasoner::{ReasonedClassification, ReasonedRealization, Reasoner};
 pub use runtime::{
     RuntimeObjectFact, RuntimeRelationFact, canonical_runtime_ontology, relation_endpoints,
