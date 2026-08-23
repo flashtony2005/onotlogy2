@@ -85,6 +85,45 @@ fn tc001c_parse_typed_relations() {
     assert_eq!(duplicate.code, 1008);
 }
 
+#[test]
+fn tc001d_parse_object_extends() {
+    let odl = [
+        "object Animal:",
+        "  properties:",
+        "    name: string",
+        "object Pet extends Animal:",
+        "  properties:",
+        "    owner_note: string",
+        "object Dog extends Animal, Pet:",
+        "  properties:",
+        "    breed: string",
+    ]
+    .join("\n");
+    let ir = parse_odl(&odl).unwrap();
+    assert_eq!(Vec::<String>::new(), ir.find("Animal").unwrap().extends);
+    assert_eq!(vec!["Animal"], ir.find("Pet").unwrap().extends);
+    assert_eq!(vec!["Animal", "Pet"], ir.find("Dog").unwrap().extends);
+    assert!(codegen::roundtrip_ok(&ir).unwrap());
+
+    let unknown =
+        parse_odl("object Dog extends Animal:\n  properties:\n    name: string\n").unwrap_err();
+    assert_eq!(1012, unknown.code);
+    assert_eq!(1, unknown.line);
+
+    let cyclic = [
+        "object Animal extends Dog:",
+        "  properties:",
+        "    name: string",
+        "object Dog extends Animal:",
+        "  properties:",
+        "    breed: string",
+    ]
+    .join("\n");
+    let cycle = parse_odl(&cyclic).unwrap_err();
+    assert_eq!(1012, cycle.code);
+    assert!(cycle.message.contains("继承关系形成环"));
+}
+
 // ── TC-002：IR 保真（REQ-002） ───────────────────────────────────────────
 #[test]
 fn tc002_ir_fidelity() {

@@ -808,6 +808,7 @@ mod tests {
                 relations: Vec::new(),
                 object_types: vec![ObjectType {
                     name: "Customer".to_owned(),
+                    extends: Vec::new(),
                     properties,
                     actions: Vec::new(),
                 }],
@@ -1184,6 +1185,7 @@ mod tests {
             relations: Vec::new(),
             object_types: vec![ObjectType {
                 name: "Event".to_owned(),
+                extends: Vec::new(),
                 properties: vec![PropertyDef {
                     name: "occurred_at".to_owned(),
                     ty: ScalarType::DateTime,
@@ -1235,6 +1237,7 @@ mod tests {
             relations: Vec::new(),
             object_types: vec![ObjectType {
                 name: "Person".to_owned(),
+                extends: Vec::new(),
                 properties: vec![PropertyDef {
                     name: "birthday".to_owned(),
                     ty: ScalarType::Date,
@@ -1295,6 +1298,7 @@ mod tests {
             relations: Vec::new(),
             object_types: vec![ObjectType {
                 name: "Account".to_owned(),
+                extends: Vec::new(),
                 properties: vec![PropertyDef {
                     name: "balance".to_owned(),
                     ty: ScalarType::Decimal,
@@ -1421,6 +1425,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn odl_extends_gates_and_replaces_taxonomy_projection() {
+        let storage = LibSQLStorage::open(":memory:").await.unwrap();
+        let source = r#"
+object Animal:
+  properties:
+    name: string
+object Pet extends Animal:
+  properties:
+    note: string
+object Dog extends Animal:
+  properties:
+    breed: string
+"#;
+        let initial_ir = oaip_abi::parse_odl(source).unwrap();
+        storage
+            .create(
+                "Dog",
+                "dog-1",
+                serde_json::json!({ "name": "Ada", "note": "friendly", "breed": "lab" }),
+            )
+            .await
+            .unwrap();
+        storage
+            .initialize_knowledge_version("root", &Ontology::new(), Some(&initial_ir))
+            .await
+            .unwrap();
+        let initialized = storage.knowledge_version("root").await.unwrap().unwrap();
+        assert!(initialized.ontology.axioms().contains(&Axiom::subclass(
+            ClassExpression::class(Term::new("Dog")),
+            ClassExpression::class(Term::new("Animal"))
+        )));
+
+        let mut replacement_ir = oaip_abi::parse_odl(source).unwrap();
+        replacement_ir.object_types[2].extends = vec!["Pet".to_owned()];
+        let proposal = OntologyProposal::new("move-dog-under-pet").with_change(
+            OntologyChange::Add(Axiom::subclass(
+                ClassExpression::class(Term::new("Puppy")),
+                ClassExpression::class(Term::new("Dog")),
+            )),
+        );
+        storage
+            .propose_knowledge_change("root", &proposal, Some(&replacement_ir))
+            .await
+            .unwrap();
+        storage
+            .decide_knowledge_proposal("move-dog-under-pet", true, "alice", None)
+            .await
+            .unwrap();
+        let (_, applied) = storage
+            .apply_knowledge_proposal("move-dog-under-pet", "v2")
+            .await
+            .unwrap();
+
+        assert!(applied.ontology.axioms().contains(&Axiom::subclass(
+            ClassExpression::class(Term::new("Dog")),
+            ClassExpression::class(Term::new("Pet"))
+        )));
+        assert!(!applied.ontology.axioms().contains(&Axiom::subclass(
+            ClassExpression::class(Term::new("Dog")),
+            ClassExpression::class(Term::new("Animal"))
+        )));
+        assert_eq!(Some(replacement_ir), applied.runtime_ir);
+    }
+
+    #[tokio::test]
     async fn pure_dl_evolution_validates_the_current_live_world() {
         fn named(name: &str) -> ClassExpression {
             ClassExpression::class(Term::new(name))
@@ -1460,6 +1529,7 @@ mod tests {
         fn relation_ir(target: &str) -> OntologyIR {
             let object = |name: &str| ObjectType {
                 name: name.to_owned(),
+                extends: Vec::new(),
                 properties: vec![PropertyDef {
                     name: "name".to_owned(),
                     ty: ScalarType::String,
@@ -1552,6 +1622,7 @@ mod tests {
         fn object(name: &str) -> ObjectType {
             ObjectType {
                 name: name.to_owned(),
+                extends: Vec::new(),
                 properties: vec![PropertyDef {
                     name: "name".to_owned(),
                     ty: ScalarType::String,
@@ -1618,6 +1689,7 @@ mod tests {
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
         let object = |name: &str| ObjectType {
             name: name.to_owned(),
+            extends: Vec::new(),
             properties: vec![PropertyDef {
                 name: "name".to_owned(),
                 ty: ScalarType::String,

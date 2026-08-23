@@ -65,6 +65,7 @@ const E_DUP_RELATION: u32 = 1008; // 重复 relation 定义或与 action 边冲�
 const E_RELATION_ENDPOINT: u32 = 1009; // relation 端点不是已声明对象类型
 const E_RELATION_CONTRADICTION: u32 = 1010;
 const E_INVALID_PROPERTY_CONSTRAINT: u32 = 1011; // relation 特征互相矛盾或引用无效
+const E_INVALID_OBJECT_HIERARCHY: u32 = 1012; // object extends 引用无效或形成继承环
 
 /// 解析上下文中的块（基于缩进的简易状态机）。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -150,19 +151,49 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             if let Some(relation) = current_relation.take() {
                 declared_relations.push(relation);
             }
-            let name = rest.trim_end_matches(':').trim();
-            if name.is_empty() {
+            let definition = rest.trim_end_matches(':').trim();
+            let mut parts = definition.split_whitespace();
+            let Some(name) = parts.next() else {
                 return Err(OdlError::new(
                     E_OBJECT_NAME,
                     "object 声明缺少名称",
                     line_no,
                     1,
                 ));
-            }
+            };
+            let modifiers: Vec<&str> = parts.collect();
+            let extends = match modifiers.first() {
+                None => Vec::new(),
+                Some(&"extends") => {
+                    let mut parents = Vec::new();
+                    for part in modifiers[1..].join(" ").split(',') {
+                        let parent = part.trim();
+                        if parent.is_empty() {
+                            return Err(OdlError::new(
+                                E_INVALID_OBJECT_HIERARCHY,
+                                format!("object '{name}' 的 extends 列表含有空父类型"),
+                                line_no,
+                                1,
+                            ));
+                        }
+                        parents.push(parent.to_string());
+                    }
+                    parents
+                }
+                Some(modifier) => {
+                    return Err(OdlError::new(
+                        E_INVALID_OBJECT_HIERARCHY,
+                        format!("object '{name}' 含有未知声明修饰符 '{modifier}'"),
+                        line_no,
+                        1,
+                    ));
+                }
+            };
             current = Some((
                 line_no,
                 ObjectType {
                     name: name.to_string(),
+                    extends,
                     properties: Vec::new(),
                     actions: Vec::new(),
                 },
@@ -476,6 +507,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     }
 
     // 每个 object 必须至少含一个 property（TC-001-b：缺 property → 错误码，带回声明行列号）
+    let mut object_lines = std::collections::BTreeMap::new();
     for (ln, obj) in &declared {
         if obj.properties.is_empty() {
             return Err(OdlError::new(
@@ -494,7 +526,20 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                 1,
             ));
         }
+        object_lines.insert(obj.name.as_str(), *ln);
         ir.object_types.push(obj.clone());
+    }
+
+    if let Err(error) = ir.validate_extends() {
+        return Err(OdlError::new(
+            E_INVALID_OBJECT_HIERARCHY,
+            format!("object '{}': {}", error.object, error.message),
+            object_lines
+                .get(error.object.as_str())
+                .copied()
+                .unwrap_or(1),
+            1,
+        ));
     }
 
     let mut endpoints = std::collections::BTreeMap::new();

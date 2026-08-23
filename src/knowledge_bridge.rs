@@ -105,6 +105,7 @@ mod tests {
             relations: Vec::new(),
             object_types: vec![ObjectType {
                 name: "Customer".into(),
+                extends: Vec::new(),
                 properties: vec![
                     PropertyDef {
                         name: "name".into(),
@@ -275,6 +276,7 @@ mod storage_tests {
         let mut ir = OntologyIR::default();
         ir.object_types.push(ObjectType {
             name: "Customer".into(),
+            extends: Vec::new(),
             properties: vec![PropertyDef {
                 name: "name".into(),
                 ty: ScalarType::String,

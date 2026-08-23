@@ -47,9 +47,10 @@ Runtime world facts 不是“假装已经改变”的 projection。执行链必�
 ### 3.1 Runtime schema
 
 `runtime_ir_to_knowledge` 会为每个对象类型生成 `Object ⊑ Thing`；每个标量属性生成
-data-property domain、range 和 functional axiom；显式关系和 action `link_edge` 共享同一命名
-空间，并生成 typed domain/range。关系特征按 IR 投影为 transitive、symmetric、functional、
-inverse-functional、reflexive、irreflexive、asymmetric 和 inverse。
+data-property domain、range 和 functional axiom；`object X extends Parent` 生成 named-class
+SubClassOf 公理。显式关系和 action `link_edge` 共享同一命名空间，并生成 typed domain/range。
+关系特征按 IR 投影为 transitive、symmetric、functional、inverse-functional、reflexive、
+irreflexive、asymmetric 和 inverse。
 
 规则：
 
@@ -123,7 +124,29 @@ ABox：
 - positive/negative data property assertion
 - same/different individuals
 
-### 4.4 ODL property constraints
+### 4.4 ODL object taxonomy
+
+Executable object 可以直接声明继承：
+
+```odl
+object Animal:
+  properties:
+    name: string
+
+object Pet extends Animal:
+  properties:
+    note: string
+
+object Dog extends Animal, Pet:
+  properties:
+    breed: string
+```
+
+每个 edge 投影为 `SubClassOf(Dog, Parent)`，因此 classification、instances、realization 和
+演化影响分析都会看到同一路径。父类型必须是已声明 object；重复父类型、自继承和继承环在 ODL 与
+Runtime IR 校验边界 fail-closed。
+
+### 4.5 ODL property constraints
 
 Executable ODL 属性现在可以在标量类型后直接声明保守约束：
 
@@ -139,7 +162,7 @@ object Customer:
 Runtime IR 将这些约束物化为 `DataPropertyRangeRestriction`，因此它们参与 live-world 一致性检查、
 推理诊断和不可变本体版本治理。
 
-### 4.4 Datatype facet matrix
+### 4.6 Datatype facet matrix
 
 | Base datatype | 支持的 facet |
 |---------------|--------------|
@@ -291,7 +314,7 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 
 ## 9. 已知下一步
 
-1. 扩展更多 DL 结构到 ODL 直接表达面，减少手写 proposal JSON。
+1. 继续扩展更多 DL 结构到 ODL 直接表达面（如 disjoint / equivalent 声明），减少手写 proposal JSON。
 2. 补充 datatype union/intersection 及真实业务需要的 XSD 构造。
 3. 为大 ABox 增加 classification/cache、incremental consistency 和有界解释缓存。
 4. 增加长时并发、恢复、内存和推理延迟基准。

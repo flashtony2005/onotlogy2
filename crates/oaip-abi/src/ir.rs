@@ -232,6 +232,9 @@ pub struct ActionDef {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObjectType {
     pub name: String,
+    /// Declared executable taxonomy edges; each target must be another object type.
+    #[serde(default)]
+    pub extends: Vec<String>,
     pub properties: Vec<PropertyDef>,
     /// 对象自有动作（V0.4）；ODL 未声明时为空。
     #[serde(default)]
@@ -280,5 +283,83 @@ impl OntologyIR {
     /// 按名称查找对象类型（codegen / query 复用）。
     pub fn find(&self, name: &str) -> Option<&ObjectType> {
         self.object_types.iter().find(|o| o.name == name)
+    }
+
+    /// Validate the strict executable taxonomy shared by the ODL frontend and
+    /// governance boundary.  Returning the source object lets parsers retain
+    /// declaration line information without duplicating graph semantics.
+    pub fn validate_extends(&self) -> Result<(), ExtendsError> {
+        let names = self
+            .object_types
+            .iter()
+            .map(|object| object.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        for object in &self.object_types {
+            let mut seen = std::collections::BTreeSet::new();
+            for parent in &object.extends {
+                if parent.trim().is_empty() {
+                    return Err(ExtendsError::new(&object.name, "extends 列表含有空父类型"));
+                }
+                if !seen.insert(parent.as_str()) {
+                    return Err(ExtendsError::new(
+                        &object.name,
+                        format!("重复继承父类型 '{parent}'"),
+                    ));
+                }
+                if !names.contains(parent.as_str()) {
+                    return Err(ExtendsError::new(
+                        &object.name,
+                        format!("继承未声明对象类型 '{parent}'"),
+                    ));
+                }
+                if parent == &object.name {
+                    return Err(ExtendsError::new(&object.name, "不能继承自身"));
+                }
+            }
+        }
+
+        // A strict taxonomy cannot cycle; otherwise distinct `extends` edges
+        // silently collapse into equivalence at the DL layer.
+        for start in &self.object_types {
+            let mut stack = vec![(start.name.as_str(), vec![start.name.as_str()])];
+            while let Some((name, path)) = stack.pop() {
+                let parents = self
+                    .object_types
+                    .iter()
+                    .find(|object| object.name == name)
+                    .map(|object| object.extends.iter().as_slice())
+                    .unwrap_or_default();
+                for parent in parents {
+                    if *parent == start.name {
+                        let mut cycle_path = path.clone();
+                        cycle_path.push(parent);
+                        return Err(ExtendsError::new(
+                            &start.name,
+                            format!("继承关系形成环: {}", cycle_path.join(" -> ")),
+                        ));
+                    }
+                    let mut next_path = path.clone();
+                    next_path.push(parent);
+                    stack.push((parent.as_str(), next_path));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// An invalid executable-taxonomy edge, attributed to its declaring object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtendsError {
+    pub object: String,
+    pub message: String,
+}
+
+impl ExtendsError {
+    fn new(object: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            object: object.into(),
+            message: message.into(),
+        }
     }
 }

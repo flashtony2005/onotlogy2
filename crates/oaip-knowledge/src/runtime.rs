@@ -122,6 +122,9 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
     }
     for object_type in &ir.object_types {
         let source = class(&object_type.name);
+        for parent in &object_type.extends {
+            ontology.push(Axiom::subclass(source.clone(), class(parent)));
+        }
         for property in &object_type.properties {
             let term = Term::new(&property.name);
             ontology.push(Axiom::DataPropertyDomain {
@@ -261,6 +264,13 @@ pub fn validate_runtime_ir(ir: &OntologyIR) -> Result<()> {
                 })?;
         }
     }
+    if let Err(error) = ir.validate_extends() {
+        return Err(KnowledgeError::Invalid(format!(
+            "object `{}`: {}",
+            error.object, error.message
+        )));
+    }
+
     let mut relation_names = BTreeSet::new();
     for relation in &ir.relations {
         if relation.name.trim().is_empty() {
@@ -580,6 +590,7 @@ mod tests {
             relations: Vec::new(),
             object_types: vec![ObjectType {
                 name: "Customer".to_owned(),
+                extends: Vec::new(),
                 properties: vec![PropertyDef {
                     name: "name".to_owned(),
                     ty: ScalarType::String,
@@ -617,6 +628,69 @@ mod tests {
             property: Term::new("needs_retention"),
             class: class("RetentionTask"),
         }));
+    }
+
+    #[test]
+    fn declared_extends_projects_into_reasoned_taxonomy() {
+        let ir = oaip_abi::parse_odl(
+            r#"
+object Animal:
+  properties:
+    name: string
+object Dog extends Animal:
+  properties:
+    breed: string
+"#,
+        )
+        .unwrap();
+        let schema = runtime_ir_to_knowledge(&ir);
+        assert!(
+            schema
+                .axioms()
+                .contains(&Axiom::subclass(class("Dog"), class("Animal")))
+        );
+
+        let fact = RuntimeObjectFact {
+            id: "dog-1".to_owned(),
+            object_type: "Dog".to_owned(),
+            data: serde_json::json!({ "name": "Ada", "breed": "lab" }),
+        };
+        let knowledge_base = runtime_world_to_knowledge(&schema, &[fact], &[]).unwrap();
+        let reasoner = Reasoner::new(&knowledge_base).unwrap();
+        assert!(
+            reasoner
+                .entails_subclass(&Term::new("Dog"), &Term::new("Animal"))
+                .unwrap()
+        );
+        assert!(
+            reasoner
+                .instances_of(&Term::new("Animal"))
+                .unwrap()
+                .contains(&Term::new("dog-1"))
+        );
+    }
+
+    #[test]
+    fn runtime_validation_rejects_undeclared_and_cyclic_extends() {
+        let mut ir = ir(false);
+        ir.object_types.push(ObjectType {
+            name: "Dog".to_owned(),
+            extends: vec!["Animal".to_owned()],
+            properties: vec![PropertyDef {
+                name: "breed".to_owned(),
+                ty: ScalarType::String,
+                constraints: Vec::new(),
+            }],
+            actions: Vec::new(),
+        });
+        assert!(validate_runtime_ir(&ir).is_err());
+
+        ir.object_types[0].name = "Animal".to_owned();
+        ir.object_types[0].extends = vec!["Dog".to_owned()];
+        assert!(matches!(
+            validate_runtime_ir(&ir),
+            Err(KnowledgeError::Invalid(message)) if message.contains("继承关系形成环")
+        ));
     }
 
     #[test]

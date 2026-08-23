@@ -66,9 +66,14 @@ object Customer:
   properties:
     name: string
     level: string
+
+object VIPCustomer extends Customer:
+  properties:
+    tier_note: string
 ```
 
 - [强制] ODL 属性语法定版：属性容器统一为 `properties:` 块，属性逐行 `name: type`（标量类型：`string` / `int` / `float` / `bool`）；禁止使用 `property:` 单条形式。
+- [强制] 对象继承语法：`object Child extends Parent[, OtherParent]:`；父类型必须已声明，且继承图必须无环。
 
 Compiler 生成（符合 V1.3 生成物：struct + const METADATA + trait impl）：
 
@@ -237,6 +242,7 @@ Human → Agent UI → Decision Trace UI
 | V2.2 | lushaohui | 2026-08-12 | 交互式 Human Approval 落地：4.4「Policy 审批约束」补 CLI `ConsoleApprover`（stdin 交互）+ server `--auto-approve` 开关；TC-021a/b 全绿 |
 | V2.3 | lushaohui | 2026-08-12 | V0.5 Memory 沉淀落地：4.4 能力边界表新增「Memory 沉淀（REQ-016）」由 ❌ 改 ✅（Action→Memory→下次 Plan 闭环）；Evolution Engine 行改标「远期」；TC-022a/b 全绿 |
 | V2.4 | lushaohui | 2026-08-12 | server 挂起式 HTTP 审批端点（V0.4 遗留项）落地：4.4「Policy 审批约束」补 `ServerApprover`+`ApprovalStore` 与 `GET /run/:run_id/approvals` + `POST /run/:run_id/approval/:req_id`（挂起→浏览器批准恢复 / 拒绝→WB2005 终止）；`PolicyApprover::approve` 升 async；TC-023a/b 全绿 |
+| V2.6 | lushaohui | 2026-08-23 | ODL 增加 `object ... extends ...` 无环多继承声明，并投影为 DL SubClassOf |
 | V2.5 | lushaohui | 2026-08-12 | 观察 UI 接入 Memory 视图：4.4 能力边界表新增「观察 UI · Memory 视图」由 ❌ 改 ✅；后端 `GET /api/v1/wb/agent/memory` + 前端 Memory 标签；TC-024a 全绿 |
 | V2.6 | lushaohui | 2026-08-12 | Evolution Engine MVP（REQ-017）落地：4.4 能力边界表「Evolution Engine（自学习/自我进化）」由 ❌ 改 ✅（MVP，Learn≠Permission）；新增 `src/evolution.rs` + storage 三表 + RuntimeKernel `run_evolution` + server `GET /api/v1/wb/agent/evolution`；TC-025a~h 全绿 |
 | V2.7 | lushaohui | 2026-08-12 | REQ-018 Evolution 第二阶段 AutoApprove 落地：4.4 能力边界表新增「Evolution 第二阶段 AutoApprove（REQ-018）」由 ❌ 改 ✅；5 道闸门（`may_auto_approve`）+ `RuntimeConfig.auto_approve_from_evolution` 默认关闭 + `wb_approval_audit` 审计 + `LearnedKnowledge.auto_approve_enabled` 可撤销 + `ActionFailed` 埋点；`Policy::check_action` 上游替代 approver（异常回退 Human）；`--auto-approve-evolution` + `POST /evolution/learned/:id/auto-approve`；TC-026a~h 全绿 |
