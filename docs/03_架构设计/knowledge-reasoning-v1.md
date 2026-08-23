@@ -331,8 +331,13 @@ ontology 超过 `MAX_EXPLANATION_AXIOMS = 512` 时解释请求 fail-closed，避
 
 `Reasoner` 绑定一份不可变 ontology snapshot，并在实例内缓存 consistency 与完整 classification。
 同一 snapshot 上重复 satisfiability、instances、realization 或 evolution impact 查询可以复用该结果；
-新版本必须创建新的 `Reasoner`，因此不存在跨版本脏缓存。24 类固定链路的 Criterion 基准显示，
-首次分类约 1.36 ms，命中缓存后约 9.4 µs（本机开发环境微基线）。
+新版本必须创建新的 `Reasoner`，因此不存在跨版本脏缓存。
+
+进程内还保留一个容量为 16 的 immutable snapshot LRU。相同 ontology 的多个 `Reasoner`
+实例共享同一份 snapshot；consistency 和 classification 一旦完成，也会随 snapshot 对后续
+实例可见。cache key 只用于定位候选，复用前仍执行完整 ontology equality，避免 fingerprint
+碰撞串用知识库。24 类固定链路的 Criterion 基准显示，首次分类约 1.36 ms，命中缓存后约
+9.4 µs（本机开发环境微基线）。
 
 ### 5.5 明确限制
 
@@ -429,6 +434,6 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 
 1. 继续扩展更多 DL 结构到 ODL 直接表达面（如跨 datatype composable range），进一步减少手写 proposal JSON。
 2. 在真实业务需要时继续扩展 XSD 构造（如自定义 datatype 定义），保持保守语义。
-3. 为大 ABox 增加 incremental consistency 和跨版本 classification 复用。
+3. 为大 ABox 增加 incremental consistency。
 4. 增加长时并发、恢复、内存和推理延迟基准。
 5. 在能力矩阵继续扩展时同步刷新本文档。

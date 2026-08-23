@@ -16,20 +16,22 @@ use crate::model::{
 use crate::model::{Datatype, Literal};
 use chrono::{DateTime, Utc};
 use horned_owl::model::{
-    AsymmetricObjectProperty, Build, ClassAssertion, ClassExpression as OwlClassExpression,
+    ArcStr, AsymmetricObjectProperty, Build, ClassAssertion, ClassExpression as OwlClassExpression,
     DataProperty, DataPropertyAssertion, DataPropertyDomain, DataPropertyRange, DataRange,
     Datatype as OwlDatatype, DifferentIndividuals, DisjointClasses, EquivalentClasses,
     FacetRestriction as OwlFacetRestriction, FunctionalDataProperty, FunctionalObjectProperty,
     InverseFunctionalObjectProperty, InverseObjectProperties, IrreflexiveObjectProperty,
     Literal as OwlLiteral, MutableOntology, NamedIndividual, NegativeObjectPropertyAssertion,
     ObjectProperty, ObjectPropertyAssertion, ObjectPropertyDomain, ObjectPropertyExpression,
-    ObjectPropertyRange, RcStr, ReflexiveObjectProperty, SameIndividual, SubClassOf,
+    ObjectPropertyRange, ReflexiveObjectProperty, SameIndividual, SubClassOf,
     SubObjectPropertyExpression, SubObjectPropertyOf, SymmetricObjectProperty,
     TransitiveObjectProperty,
 };
 use horned_owl::ontology::set::SetOntology;
 use horned_owl::vocab::Facet as OwlFacet;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// A reasoned view of all named classes in an ontology.
@@ -111,12 +113,111 @@ fn display_term(iri: impl AsRef<str>) -> Term {
 /// A facade over the mature OWL DL reasoner.
 #[derive(Debug, Clone)]
 pub struct Reasoner {
+    snapshot: Arc<ReasonerSnapshot>,
+    pub(crate) explanations: Arc<Mutex<ExplanationLru>>,
+}
+
+/// Immutable inputs and memoized conclusions for one ontology snapshot.
+#[derive(Debug)]
+struct ReasonerSnapshot {
     ontology: Ontology,
-    owl: SetOntology<RcStr>,
+    owl: SetOntology<ArcStr>,
     aliases: TermAliases,
     consistency: OnceLock<Result<bool>>,
-    classification: OnceLock<Result<ReasonedClassification>>,
-    pub(crate) explanations: Arc<Mutex<ExplanationLru>>,
+    classification: OnceLock<Result<Arc<ReasonedClassification>>>,
+}
+
+/// Number of recently created ontology snapshots retained for cross-instance reuse.
+const SNAPSHOT_CACHE_CAPACITY: usize = 16;
+
+type SnapshotCacheEntry = (u64, Arc<ReasonerSnapshot>);
+
+/// A small exact LRU of expensive immutable reasoner snapshots.
+#[derive(Debug)]
+struct SnapshotLru {
+    entries: VecDeque<SnapshotCacheEntry>,
+    capacity: usize,
+}
+
+impl SnapshotLru {
+    fn new(capacity: usize) -> Self {
+        Self {
+            entries: VecDeque::new(),
+            capacity: capacity.max(1),
+        }
+    }
+
+    fn get(&mut self, key: u64, ontology: &Ontology) -> Option<Arc<ReasonerSnapshot>> {
+        let position = self
+            .entries
+            .iter()
+            .position(|(candidate, candidate_snapshot)| {
+                *candidate == key && candidate_snapshot.ontology == *ontology
+            })?;
+        let entry = self.entries.remove(position);
+        let (_, snapshot) = entry.expect("position came from entries");
+        self.entries.push_back((key, Arc::clone(&snapshot)));
+        Some(snapshot)
+    }
+
+    fn put(&mut self, key: u64, ontology: &Ontology, snapshot: Arc<ReasonerSnapshot>) {
+        self.get(key, ontology);
+        self.entries.push_back((key, snapshot));
+        while self.entries.len() > self.capacity {
+            self.entries.pop_front();
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+fn snapshot_cache() -> &'static Mutex<SnapshotLru> {
+    static CACHE: OnceLock<Mutex<SnapshotLru>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(SnapshotLru::new(SNAPSHOT_CACHE_CAPACITY)))
+}
+
+/// Hash only to locate a candidate; equality on the retained ontology prevents
+/// a fingerprint collision from being mistaken for the same knowledge base.
+fn ontology_fingerprint(ontology: &Ontology) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    format!("{:?}", ontology.axioms()).hash(&mut hasher);
+    hasher.finish()
+}
+
+fn shared_snapshot_in(
+    cache: &mut SnapshotLru,
+    ontology: &Ontology,
+) -> Result<Arc<ReasonerSnapshot>> {
+    let key = ontology_fingerprint(ontology);
+    if let Some(snapshot) = cache.get(key, ontology) {
+        return Ok(snapshot);
+    }
+
+    // The upstream tableau does not propagate data-property domains. Feed its
+    // sound derived class assertions to the reasoner while preserving the
+    // original ontology unchanged for explanations and audits.
+    let materialized = crate::data::materialize_data_domain_assertions(ontology);
+    let snapshot = Arc::new(ReasonerSnapshot {
+        owl: to_horned_owl(&materialized)?,
+        aliases: public_terms(ontology),
+        ontology: ontology.clone(),
+        consistency: OnceLock::new(),
+        classification: OnceLock::new(),
+    });
+    cache.put(key, ontology, Arc::clone(&snapshot));
+    Ok(snapshot)
+}
+
+fn shared_snapshot(ontology: &Ontology) -> Result<Arc<ReasonerSnapshot>> {
+    shared_snapshot_in(
+        &mut snapshot_cache()
+            .lock()
+            .expect("reasoner snapshot cache mutex poisoned"),
+        ontology,
+    )
 }
 
 fn literal_values_equal(left: &Literal, right: &Literal) -> bool {
@@ -141,23 +242,24 @@ fn literal_values_equal(left: &Literal, right: &Literal) -> bool {
 
 impl Reasoner {
     pub fn new(ontology: &Ontology) -> Result<Self> {
-        // The upstream tableau does not propagate data-property domains. Feed
-        // its sound derived class assertions to the reasoner while preserving
-        // the original ontology unchanged for explanations and audits.
-        let materialized = crate::data::materialize_data_domain_assertions(ontology);
         Ok(Self {
-            owl: to_horned_owl(&materialized)?,
-            aliases: public_terms(ontology),
-            ontology: ontology.clone(),
-            consistency: OnceLock::new(),
-            classification: OnceLock::new(),
+            snapshot: shared_snapshot(ontology)?,
             explanations: Arc::new(Mutex::new(ExplanationLru::new(EXPLANATION_CACHE_CAPACITY))),
         })
     }
 
+    #[cfg(test)]
+    fn with_snapshot(snapshot: Arc<ReasonerSnapshot>) -> Self {
+        Self {
+            snapshot,
+            explanations: Arc::new(Mutex::new(ExplanationLru::new(EXPLANATION_CACHE_CAPACITY))),
+        }
+    }
+
     /// Restore the caller's term spelling for reasoner-output IRIs.
     fn output_term(&self, iri: &str) -> Term {
-        self.aliases
+        self.snapshot
+            .aliases
             .get(iri)
             .cloned()
             .unwrap_or_else(|| display_term(iri))
@@ -165,17 +267,17 @@ impl Reasoner {
 
     /// Reference to the immutable source ontology.
     pub fn ontology(&self) -> &Ontology {
-        &self.ontology
+        &self.snapshot.ontology
     }
 
     #[cfg(test)]
     fn consistency_cache_is_loaded(&self) -> bool {
-        self.consistency.get().is_some()
+        self.snapshot.consistency.get().is_some()
     }
 
     #[cfg(test)]
     fn classification_cache_is_loaded(&self) -> bool {
-        self.classification.get().is_some()
+        self.snapshot.classification.get().is_some()
     }
 
     /// Whether the whole TBox/ABox has at least one model.
@@ -184,11 +286,11 @@ impl Reasoner {
     /// combine its tableau answer with the kernel's deterministic checks rather
     /// than reporting an unsound "consistent" result.
     pub fn is_consistent(&self) -> Result<bool> {
-        let cached = self.consistency.get_or_init(|| {
-            if crate::data::validate_data_consistency(&self.ontology).is_err() {
+        let cached = self.snapshot.consistency.get_or_init(|| {
+            if crate::data::validate_data_consistency(&self.snapshot.ontology).is_err() {
                 return Ok(false);
             }
-            reasoner(|| owl_dl_reasoner::is_consistent(&self.owl))
+            reasoner(|| owl_dl_reasoner::is_consistent(&self.snapshot.owl))
         });
         cached.clone()
     }
@@ -201,7 +303,7 @@ impl Reasoner {
         if !self.is_consistent()? {
             return Ok(false);
         }
-        reasoner(|| owl_dl_reasoner::is_class_satisfiable(&self.owl, &term_iri(class)))
+        reasoner(|| owl_dl_reasoner::is_class_satisfiable(&self.snapshot.owl, &term_iri(class)))
     }
 
     /// Full OWL DL subclass entailment (`sub ⊑ sup`).
@@ -211,13 +313,19 @@ impl Reasoner {
                 "subclass entailment is undefined for an inconsistent ontology".to_owned(),
             ));
         }
-        reasoner(|| owl_dl_reasoner::is_subclass_of(&self.owl, &term_iri(sub), &term_iri(sup)))
+        reasoner(|| {
+            owl_dl_reasoner::is_subclass_of(&self.snapshot.owl, &term_iri(sub), &term_iri(sup))
+        })
     }
 
     /// Open-world instance check against a named class.
     pub fn is_instance_of(&self, class: &Term, individual: &Term) -> Result<bool> {
         reasoner(|| {
-            owl_dl_reasoner::is_instance_of(&self.owl, &term_iri(class), &term_iri(individual))
+            owl_dl_reasoner::is_instance_of(
+                &self.snapshot.owl,
+                &term_iri(class),
+                &term_iri(individual),
+            )
         })
     }
 
@@ -237,7 +345,7 @@ impl Reasoner {
                 "object-property entailment is undefined for an inconsistent ontology".to_owned(),
             ));
         }
-        let mut contrary = self.ontology.clone();
+        let mut contrary = self.snapshot.ontology.clone();
         contrary.push(Axiom::NegativeObjectPropertyAssertion {
             property: property.clone(),
             subject: subject.clone(),
@@ -268,7 +376,7 @@ impl Reasoner {
         // validator; pairwise `SameIndividuals` groups can overlap.
         let mut aliases = BTreeMap::new();
         let mut sub_properties = BTreeMap::new();
-        for axiom in self.ontology.axioms() {
+        for axiom in self.snapshot.ontology.axioms() {
             match axiom {
                 Axiom::SameIndividuals(terms) if terms.len() >= 2 => {
                     for pair in terms.windows(2) {
@@ -282,7 +390,7 @@ impl Reasoner {
             }
         }
         let query_alias = crate::data::parents(&mut aliases, individual.clone());
-        for axiom in self.ontology.axioms() {
+        for axiom in self.snapshot.ontology.axioms() {
             let Axiom::DataPropertyAssertion {
                 property: asserted_property,
                 individual: asserted_individual,
@@ -309,7 +417,8 @@ impl Reasoner {
                 "instance retrieval is undefined for an inconsistent ontology".to_owned(),
             ));
         }
-        let individuals = reasoner(|| owl_dl_reasoner::instances_of(&self.owl, &term_iri(class)))?;
+        let individuals =
+            reasoner(|| owl_dl_reasoner::instances_of(&self.snapshot.owl, &term_iri(class)))?;
         Ok(individuals
             .into_iter()
             .map(|iri| self.output_term(&iri))
@@ -318,9 +427,11 @@ impl Reasoner {
 
     /// Complete named-class hierarchy and unsatisfiable-class set.
     pub fn classify(&self) -> Result<ReasonedClassification> {
-        self.classification
-            .get_or_init(|| self.compute_classification())
+        self.snapshot
+            .classification
+            .get_or_init(|| self.compute_classification().map(Arc::new))
             .clone()
+            .map(Arc::unwrap_or_clone)
     }
 
     /// Compute the full classification without result caching.
@@ -330,7 +441,7 @@ impl Reasoner {
                 "classification is undefined for an inconsistent ontology".to_owned(),
             ));
         }
-        let classified = reasoner(|| owl_dl_reasoner::classify(&self.owl))?;
+        let classified = reasoner(|| owl_dl_reasoner::classify(&self.snapshot.owl))?;
         let classes = classified
             .classes()
             .iter()
@@ -346,7 +457,9 @@ impl Reasoner {
             .map(|iri| self.output_term(iri))
             .collect::<BTreeSet<_>>();
         for iri in classified.classes() {
-            if !reasoner(|| owl_dl_reasoner::is_class_satisfiable(&self.owl, iri.as_str()))? {
+            if !reasoner(|| {
+                owl_dl_reasoner::is_class_satisfiable(&self.snapshot.owl, iri.as_str())
+            })? {
                 unsatisfiable.insert(self.output_term(iri.as_str()));
             }
         }
@@ -389,7 +502,7 @@ impl Reasoner {
                 "realization is undefined for an inconsistent ontology".to_owned(),
             ));
         }
-        let realization = reasoner(|| owl_dl_reasoner::realize(&self.owl))?;
+        let realization = reasoner(|| owl_dl_reasoner::realize(&self.snapshot.owl))?;
         let mut individuals = realization
             .individuals()
             .iter()
@@ -506,9 +619,9 @@ fn reasoner<T>(
     query().map_err(|error| KnowledgeError::Reasoner(error.to_string()))
 }
 
-fn to_horned_owl(ontology: &Ontology) -> Result<SetOntology<RcStr>> {
-    let build = Build::new_rc();
-    let mut out = SetOntology::new_rc();
+fn to_horned_owl(ontology: &Ontology) -> Result<SetOntology<ArcStr>> {
+    let build = Build::new_arc();
+    let mut out = SetOntology::new();
 
     for axiom in ontology.axioms() {
         match axiom {
@@ -768,7 +881,7 @@ fn to_horned_owl(ontology: &Ontology) -> Result<SetOntology<RcStr>> {
     Ok(out)
 }
 
-fn owl_data_range(build: &Build<RcStr>, range: &ModelDataRange) -> DataRange<RcStr> {
+fn owl_data_range(build: &Build<ArcStr>, range: &ModelDataRange) -> DataRange<ArcStr> {
     match range {
         ModelDataRange::Datatype(datatype) => DataRange::Datatype(owl_datatype(build, *datatype)),
         ModelDataRange::OneOf(values) => DataRange::DataOneOf(
@@ -807,9 +920,9 @@ fn owl_data_range(build: &Build<RcStr>, range: &ModelDataRange) -> DataRange<RcS
 
 fn class_expression(
     expression: &ClassExpression,
-    build: &Build<RcStr>,
-    out: &mut SetOntology<RcStr>,
-) -> OwlClassExpression<RcStr> {
+    build: &Build<ArcStr>,
+    out: &mut SetOntology<ArcStr>,
+) -> OwlClassExpression<ArcStr> {
     match expression {
         ClassExpression::Thing => {
             OwlClassExpression::Class(build.class("http://www.w3.org/2002/07/owl#Thing"))
@@ -932,15 +1045,15 @@ fn class_expression(
     }
 }
 
-fn data_range(build: &Build<RcStr>, datatype: Datatype) -> DataRange<RcStr> {
+fn data_range(build: &Build<ArcStr>, datatype: Datatype) -> DataRange<ArcStr> {
     DataRange::Datatype(owl_datatype(build, datatype))
 }
 
-fn owl_datatype(build: &Build<RcStr>, datatype: Datatype) -> OwlDatatype<RcStr> {
+fn owl_datatype(build: &Build<ArcStr>, datatype: Datatype) -> OwlDatatype<ArcStr> {
     build.datatype(datatype.iri())
 }
 
-fn owl_literal(build: &Build<RcStr>, literal: &Literal) -> OwlLiteral<RcStr> {
+fn owl_literal(build: &Build<ArcStr>, literal: &Literal) -> OwlLiteral<ArcStr> {
     match literal {
         Literal::String(value) => OwlLiteral::Simple {
             literal: value.clone(),
@@ -986,26 +1099,26 @@ fn owl_facet(facet: DataFacet) -> OwlFacet {
     }
 }
 
-fn declare_data_property(build: &Build<RcStr>, out: &mut SetOntology<RcStr>, term: &Term) {
-    let property: DataProperty<RcStr> = build.data_property(term_iri(term));
+fn declare_data_property(build: &Build<ArcStr>, out: &mut SetOntology<ArcStr>, term: &Term) {
+    let property: DataProperty<ArcStr> = build.data_property(term_iri(term));
     out.declare(property);
 }
 
-fn property_expression(build: &Build<RcStr>, term: &Term) -> ObjectPropertyExpression<RcStr> {
+fn property_expression(build: &Build<ArcStr>, term: &Term) -> ObjectPropertyExpression<ArcStr> {
     ObjectPropertyExpression::ObjectProperty(build.object_property(term_iri(term)))
 }
 
-fn declare_property(build: &Build<RcStr>, out: &mut SetOntology<RcStr>, term: &Term) {
-    let property: ObjectProperty<RcStr> = build.object_property(term_iri(term));
+fn declare_property(build: &Build<ArcStr>, out: &mut SetOntology<ArcStr>, term: &Term) {
+    let property: ObjectProperty<ArcStr> = build.object_property(term_iri(term));
     out.declare(property);
 }
 
 fn named_individual(
-    build: &Build<RcStr>,
-    out: &mut SetOntology<RcStr>,
+    build: &Build<ArcStr>,
+    out: &mut SetOntology<ArcStr>,
     term: &Term,
-) -> NamedIndividual<RcStr> {
-    let individual: NamedIndividual<RcStr> = build.named_individual(term_iri(term));
+) -> NamedIndividual<ArcStr> {
+    let individual: NamedIndividual<ArcStr> = build.named_individual(term_iri(term));
     out.declare(individual.clone());
     individual
 }
@@ -1062,7 +1175,9 @@ mod tests {
 
     #[test]
     fn immutable_reasoner_caches_expensive_snapshot_results() {
-        let reasoner = Reasoner::new(&ontology()).unwrap();
+        let mut cache = SnapshotLru::new(1);
+        let snapshot = shared_snapshot_in(&mut cache, &ontology()).unwrap();
+        let reasoner = Reasoner::with_snapshot(snapshot);
         assert!(!reasoner.consistency_cache_is_loaded());
         assert!(reasoner.is_consistent().unwrap());
         assert!(reasoner.consistency_cache_is_loaded());
@@ -1076,6 +1191,72 @@ mod tests {
             first.unsatisfiable_classes(),
             second.unsatisfiable_classes()
         );
+    }
+
+    #[test]
+    fn completed_classification_is_reused_across_identical_snapshots() {
+        let source = ontology().with_axiom(Axiom::subclass(
+            class("CrossSnapshotChild"),
+            class("CrossSnapshotParent"),
+        ));
+        let mut cache = SnapshotLru::new(2);
+        let first_snapshot = shared_snapshot_in(&mut cache, &source).unwrap();
+        let second_snapshot = shared_snapshot_in(&mut cache, &source).unwrap();
+        assert!(Arc::ptr_eq(&first_snapshot, &second_snapshot));
+
+        let first = Reasoner::with_snapshot(first_snapshot);
+        assert!(!first.classification_cache_is_loaded());
+        first.classify().unwrap();
+
+        let second = Reasoner::with_snapshot(second_snapshot);
+        assert!(second.classification_cache_is_loaded());
+        assert_eq!(
+            first.classify().unwrap().classes(),
+            second.classify().unwrap().classes()
+        );
+    }
+
+    #[test]
+    fn snapshot_cache_never_confuses_different_ontologies() {
+        let source = ontology().with_axiom(Axiom::subclass(
+            class("DistinctCacheChild"),
+            class("DistinctCacheParent"),
+        ));
+        let other = source.clone().with_axiom(Axiom::subclass(
+            class("OtherCacheChild"),
+            class("DistinctCacheParent"),
+        ));
+        let mut cache = SnapshotLru::new(2);
+        let source_snapshot = shared_snapshot_in(&mut cache, &source).unwrap();
+        let other_snapshot = shared_snapshot_in(&mut cache, &other).unwrap();
+        assert!(!Arc::ptr_eq(&source_snapshot, &other_snapshot));
+        assert_eq!(2, cache.len());
+    }
+
+    #[test]
+    fn bounded_snapshot_lru_evicts_least_recent_snapshot() {
+        let ontology = |name: &str| {
+            Ontology::new().with_axiom(Axiom::subclass(class(name), ClassExpression::Thing))
+        };
+        let snapshot = |ontology: &Ontology| {
+            Arc::new(ReasonerSnapshot {
+                ontology: ontology.clone(),
+                owl: SetOntology::new(),
+                aliases: TermAliases::new(),
+                consistency: OnceLock::new(),
+                classification: OnceLock::new(),
+            })
+        };
+        let mut cache = SnapshotLru::new(2);
+        cache.put(1, &ontology("LruA"), snapshot(&ontology("LruA")));
+        cache.put(2, &ontology("LruB"), snapshot(&ontology("LruB")));
+        assert!(cache.get(1, &ontology("LruA")).is_some());
+        cache.put(3, &ontology("LruC"), snapshot(&ontology("LruC")));
+
+        assert_eq!(2, cache.len());
+        assert!(cache.get(1, &ontology("LruA")).is_some());
+        assert!(cache.get(3, &ontology("LruC")).is_some());
+        assert!(cache.get(2, &ontology("LruB")).is_none());
     }
 
     #[test]

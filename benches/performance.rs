@@ -150,14 +150,22 @@ fn core_performance(c: &mut Criterion) {
         })
     });
 
-    let ontology = benchmark_ontology();
     group.throughput(Throughput::Elements(REASONER_CLASSES as u64));
     group.bench_function("reasoner_classification_new_24_classes", |b| {
+        let iteration = AtomicU64::new(0);
         b.iter(|| {
+            let sequence = iteration.fetch_add(1, Ordering::Relaxed);
+            // A unique ABox individual keeps this benchmark on the cold path;
+            // process-level snapshot reuse would otherwise hide conversion cost.
+            let ontology = benchmark_ontology().with_axiom(Axiom::ClassAssertion {
+                class: ClassExpression::Thing,
+                individual: Term::new(format!("cold-{sequence}")),
+            });
             let reasoner = Reasoner::new(black_box(&ontology)).expect("create reasoner");
             black_box(reasoner.classify().expect("classify").classes().len())
         })
     });
+    let ontology = benchmark_ontology();
     let reasoner = Reasoner::new(&ontology).expect("warm reasoner");
     reasoner.classify().expect("warm classification");
     group.bench_function("reasoner_classification_cached_24_classes", |b| {
