@@ -36,11 +36,86 @@ struct DataConsistencyCacheEntry {
     result: Result<()>,
 }
 
-/// Number of assertions applied through a cached append-only prefix.  This is
-/// test-only evidence that a longer ontology did not repeat the base scan.
-#[cfg(test)]
-static DELTA_ASSERTIONS_APPLIED: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+/// Immutable counters for the process-local consistency cache.  They make the
+/// storage governance path observable without weakening cache correctness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DataConsistencyCacheStats {
+    pub exact_hits: u64,
+    pub prefix_hits: u64,
+    pub rebuilds: u64,
+    pub delta_assertions: u64,
+}
+
+static EXACT_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static PREFIX_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static REBUILDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static DELTA_ASSERTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Return the lifetime totals recorded by [`validate_data_consistency`].
+pub fn data_consistency_cache_stats() -> DataConsistencyCacheStats {
+    DataConsistencyCacheStats {
+        exact_hits: EXACT_HITS.load(std::sync::atomic::Ordering::Relaxed),
+        prefix_hits: PREFIX_HITS.load(std::sync::atomic::Ordering::Relaxed),
+        rebuilds: REBUILDS.load(std::sync::atomic::Ordering::Relaxed),
+        delta_assertions: DELTA_ASSERTIONS.load(std::sync::atomic::Ordering::Relaxed),
+    }
+}
+
+fn record_exact_hit() {
+    EXACT_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(feature = "test-util")]
+    THREAD_EXACT_HITS.with(|count| count.set(count.get() + 1));
+}
+
+fn record_prefix_hit() {
+    PREFIX_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(feature = "test-util")]
+    THREAD_PREFIX_HITS.with(|count| count.set(count.get() + 1));
+}
+
+fn record_rebuild() {
+    REBUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(feature = "test-util")]
+    THREAD_REBUILDS.with(|count| count.set(count.get() + 1));
+}
+
+fn record_delta_assertion() {
+    DELTA_ASSERTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(feature = "test-util")]
+    THREAD_DELTA_ASSERTIONS.with(|count| count.set(count.get() + 1));
+}
+
+// Per-thread counters let storage regressions assert cache behavior without
+// observing unrelated traffic from concurrent tests.
+#[cfg(feature = "test-util")]
+thread_local! {
+    static THREAD_EXACT_HITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static THREAD_PREFIX_HITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static THREAD_REBUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static THREAD_DELTA_ASSERTIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(feature = "test-util")]
+pub fn reset_data_consistency_thread_stats() {
+    THREAD_EXACT_HITS.with(|count| count.set(0));
+    THREAD_PREFIX_HITS.with(|count| count.set(0));
+    THREAD_REBUILDS.with(|count| count.set(0));
+    THREAD_DELTA_ASSERTIONS.with(|count| count.set(0));
+}
+
+#[cfg(feature = "test-util")]
+pub fn data_consistency_thread_stats() -> DataConsistencyCacheStats {
+    let exact_hits = THREAD_EXACT_HITS.with(std::cell::Cell::get);
+    let prefix_hits = THREAD_PREFIX_HITS.with(std::cell::Cell::get);
+    let rebuilds = THREAD_REBUILDS.with(std::cell::Cell::get);
+    let delta_assertions = THREAD_DELTA_ASSERTIONS.with(std::cell::Cell::get);
+    DataConsistencyCacheStats {
+        exact_hits,
+        prefix_hits,
+        rebuilds,
+        delta_assertions,
+    }
+}
 
 type DataRestrictionIndex = BTreeMap<Term, Vec<(usize, Datatype, Vec<FacetValue>, Option<Regex>)>>;
 
@@ -180,7 +255,11 @@ fn data_projection_prefix_hashes(projection: &[&Axiom]) -> Vec<u64> {
 }
 
 fn projection_prefix_equals(ontology: &Ontology, query: &[&Axiom]) -> bool {
-    let candidate = ontology.axioms().iter().collect::<Vec<_>>();
+    let candidate = ontology
+        .axioms()
+        .iter()
+        .filter(|axiom| data_consistency_relevant(axiom))
+        .collect::<Vec<_>>();
     candidate.len() == query.len()
         && candidate
             .into_iter()
@@ -1075,6 +1154,7 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
         .expect("data consistency cache mutex poisoned");
 
     if let Some((result, _)) = cache.get(key, ontology) {
+        record_exact_hit();
         return result;
     }
 
@@ -1082,6 +1162,7 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
     // commonly rewrite their trailing DifferentIndividuals list as objects are
     // added; that change does not affect this deterministic data fragment.
     if let Some((prefix_length, mut entry)) = cache.find_prefix(&projection) {
+        record_prefix_hit();
         if prefix_length == projection.len() {
             let result = entry.result.clone();
             cache.restore(entry);
@@ -1112,8 +1193,7 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
             for axiom in suffix {
                 match delta_state.insert_delta(axiom) {
                     Ok(()) => {
-                        #[cfg(test)]
-                        DELTA_ASSERTIONS_APPLIED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        record_delta_assertion();
                     }
                     Err(error) => {
                         outcome = Err(error);
@@ -1133,9 +1213,11 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
             (state, Err(error))
         }
     };
+    record_rebuild();
     cache.put(key, ontology, state, result.clone());
     result
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;

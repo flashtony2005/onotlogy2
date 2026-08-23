@@ -4,6 +4,9 @@ version = "0.14.0"
 edition = "2024"
 description = "OpenAIP-OS knowledge representation and ontology reasoning kernel"
 
+[features]
+test-util = []
+
 [dependencies]
 oaip-abi = { path = "../oaip-abi" }
 serde = { version = "1", features = ["derive", "rc"] }

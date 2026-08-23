@@ -10,6 +10,7 @@ pub mod runtime;
 pub mod tbox;
 
 pub use data::validate_data_consistency;
+pub use data::{DataConsistencyCacheStats, data_consistency_cache_stats};
 pub use error::{KnowledgeError, Result};
 pub use evolution::{
     OntologyChange, OntologyImpact, OntologyProposal, OntologyReview, OntologyReviewDecision,
@@ -29,3 +30,6 @@ pub use runtime::{
     validate_canonical_ontology_with_world, validate_runtime_ir,
 };
 pub use tbox::{Classification, TBox};
+
+#[cfg(feature = "test-util")]
+pub use data::{data_consistency_thread_stats, reset_data_consistency_thread_stats};
