@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 /// Stable identifier for a named class, property or individual.
 ///
@@ -510,9 +511,12 @@ impl Axiom {
 }
 
 /// An append-only set of asserted axioms.  Derived facts never mutate it.
+///
+/// Cloning shares the immutable axiom vector; mutation is COW so long-lived
+/// snapshots can be retained by caches without deep copies.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Ontology {
-    axioms: Vec<Axiom>,
+    axioms: Arc<Vec<Axiom>>,
 }
 
 impl Ontology {
@@ -521,7 +525,7 @@ impl Ontology {
     }
 
     pub fn push(&mut self, axiom: Axiom) -> usize {
-        self.axioms.push(axiom);
+        Arc::make_mut(&mut self.axioms).push(axiom);
         self.axioms.len() - 1
     }
 
@@ -531,7 +535,7 @@ impl Ontology {
     }
 
     pub fn extend<I: IntoIterator<Item = Axiom>>(&mut self, iter: I) {
-        self.axioms.extend(iter);
+        Arc::make_mut(&mut self.axioms).extend(iter);
     }
 
     pub fn axioms(&self) -> &[Axiom] {
@@ -568,7 +572,7 @@ impl std::iter::Extend<Axiom> for Ontology {
 impl FromIterator<Axiom> for Ontology {
     fn from_iter<I: IntoIterator<Item = Axiom>>(iter: I) -> Self {
         Self {
-            axioms: iter.into_iter().collect(),
+            axioms: Arc::new(iter.into_iter().collect()),
         }
     }
 }

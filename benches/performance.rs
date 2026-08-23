@@ -6,9 +6,12 @@
 //! - World query: 500 persisted objects (the engine query limit is 1,000).
 //! - Audit write: one append-only event and hash-chain node per iteration.
 
+use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use criterion::{Criterion, SamplingMode, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{
+    BatchSize, Criterion, SamplingMode, Throughput, black_box, criterion_group, criterion_main,
+};
 use openaip_os::abi::{codegen, parse_odl};
 use openaip_os::kernel::{Kernel, Scope};
 use openaip_os::knowledge::{
@@ -243,26 +246,67 @@ fn core_performance(c: &mut Criterion) {
 fn knowledge_abox_performance(c: &mut Criterion) {
     let ontology = benchmark_data_ontology();
     assert!(validate_data_consistency(&ontology).is_ok());
-    let iteration = AtomicU64::new(0);
+    let cold_iteration = AtomicU64::new(0);
+    let delta_iteration = AtomicU64::new(0);
+    let delta_snapshot = RefCell::new(ontology.clone());
 
     let mut group = c.benchmark_group("knowledge_abox");
     group.sample_size(10);
     group.throughput(Throughput::Elements(DATA_FACTS as u64));
     group.bench_function("data_consistency_1000_assertions", |b| {
-        b.iter(|| {
-            let sequence = iteration.fetch_add(1, Ordering::Relaxed);
-            // A unique ignored class assertion keeps each iteration on the cold
-            // path; the exact-result cache must not hide indexing cost.
-            let cold = ontology.clone().with_axiom(Axiom::ClassAssertion {
-                class: ClassExpression::Thing,
-                individual: Term::new(format!("cold-{sequence}")),
-            });
-            black_box(validate_data_consistency(black_box(&cold)).is_ok())
-        })
+        b.iter_batched(
+            || {
+                let sequence = cold_iteration.fetch_add(1, Ordering::Relaxed);
+                // A unique, inert SameIndividuals axiom is data-relevant but
+                // too small to create an alias.  It forces a fresh index
+                // instead of an append-only prefix or exact-result cache hit.
+                ontology
+                    .clone()
+                    .with_axiom(Axiom::SameIndividuals(vec![Term::new(format!(
+                        "cold-{sequence}"
+                    ))]))
+            },
+            |cold| black_box(validate_data_consistency(black_box(&cold)).is_ok()),
+            BatchSize::PerIteration,
+        )
     });
     assert!(validate_data_consistency(&ontology).is_ok());
     group.bench_function("data_consistency_cached_1000_assertions", |b| {
         b.iter(|| black_box(validate_data_consistency(black_box(&ontology)).is_ok()))
+    });
+
+    // The cold loop deliberately evicts the base snapshot from the small LRU.
+    // Re-warm it so this group isolates append-only reuse from unrelated cache
+    // churn caused by measuring the full-rebuild baseline in the same process.
+    assert!(validate_data_consistency(&ontology).is_ok());
+
+    // Measure a bounded append-only chain: the previous validated snapshot is
+    // the next prefix.  Distinct siblings are never prefixes of each other, so
+    // repeatedly appending to base would measure LRU churn and full rebuilds
+    // instead of delta reuse.  Reset after the fixed workload so Criterion's
+    // warmup cannot silently grow the ontology into a different benchmark.
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("data_consistency_delta_append_chain", |b| {
+        b.iter_batched(
+            || {
+                let sequence = delta_iteration.fetch_add(1, Ordering::Relaxed);
+                if sequence.is_multiple_of(DATA_FACTS as u64) {
+                    delta_snapshot.replace(ontology.clone());
+                }
+                let next =
+                    delta_snapshot
+                        .borrow()
+                        .clone()
+                        .with_axiom(Axiom::DataPropertyAssertion {
+                            property: Term::new("status"),
+                            individual: Term::new(format!("delta-{sequence}")),
+                            value: Literal::String("active".into()),
+                        });
+                delta_snapshot.replace(next.clone())
+            },
+            |extended| black_box(validate_data_consistency(black_box(&extended)).is_ok()),
+            BatchSize::PerIteration,
+        )
     });
     group.finish();
 }

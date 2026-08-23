@@ -27,7 +27,22 @@ struct DataFact {
 /// Number of immutable data-consistency conclusions retained across calls.
 const DATA_CONSISTENCY_CACHE_CAPACITY: usize = 32;
 
-type DataConsistencyCacheEntry = (u64, Arc<Ontology>, Result<()>);
+#[derive(Debug)]
+struct DataConsistencyCacheEntry {
+    fingerprint: u64,
+    ontology: Arc<Ontology>,
+    prefix_hash: Option<u64>,
+    state: Arc<DataConsistencyState>,
+    result: Result<()>,
+}
+
+/// Number of assertions applied through a cached append-only prefix.  This is
+/// test-only evidence that a longer ontology did not repeat the base scan.
+#[cfg(test)]
+static DELTA_ASSERTIONS_APPLIED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+type DataRestrictionIndex = BTreeMap<Term, Vec<(usize, Datatype, Vec<FacetValue>, Option<Regex>)>>;
 
 /// An exact LRU for completed checks of immutable ontology snapshots.
 ///
@@ -47,36 +62,76 @@ impl DataConsistencyLru {
         }
     }
 
-    fn get(&mut self, key: u64, ontology: &Ontology) -> Option<Result<()>> {
+    fn get(
+        &mut self,
+        key: u64,
+        ontology: &Ontology,
+    ) -> Option<(Result<()>, Arc<DataConsistencyState>)> {
         let position = self
             .entries
             .iter()
-            .position(|(candidate, candidate_ontology, _)| {
-                *candidate == key && candidate_ontology.as_ref() == ontology
-            })?;
+            .position(|entry| entry.fingerprint == key && entry.ontology.as_ref() == ontology)?;
         let entry = self.entries.remove(position);
-        let (_, cached_ontology, result) = entry.expect("position came from entries");
-        self.entries
-            .push_back((key, cached_ontology, result.clone()));
-        Some(result)
+        let entry = entry.expect("position came from entries");
+        let result = entry.result.clone();
+        let state = Arc::clone(&entry.state);
+        self.entries.push_back(entry);
+        Some((result, state))
     }
 
     #[cfg(test)]
     fn contains_key(&self, key: u64, ontology: &Ontology) -> bool {
         self.entries
             .iter()
-            .any(|(candidate, candidate_ontology, _)| {
-                *candidate == key && candidate_ontology.as_ref() == ontology
-            })
+            .any(|entry| entry.fingerprint == key && entry.ontology.as_ref() == ontology)
     }
 
-    fn put(&mut self, key: u64, ontology: &Ontology, result: Result<()>) {
-        self.get(key, ontology);
-        self.entries
-            .push_back((key, Arc::new(ontology.clone()), result));
+    fn put(
+        &mut self,
+        key: u64,
+        ontology: &Ontology,
+        state: DataConsistencyState,
+        result: Result<()>,
+    ) {
+        self.entries.push_back(DataConsistencyCacheEntry {
+            fingerprint: key,
+            ontology: Arc::new(ontology.clone()),
+            prefix_hash: data_projection_prefix_hashes(&data_consistency_projection(ontology))
+                .pop(),
+            state: Arc::new(state),
+            result,
+        });
         while self.entries.len() > self.capacity {
             self.entries.pop_front();
         }
+    }
+
+    /// Restore an entry removed by [`find_prefix`], promoting it like a hit.
+    fn restore(&mut self, entry: DataConsistencyCacheEntry) {
+        self.entries.push_back(entry);
+        while self.entries.len() > self.capacity {
+            self.entries.pop_front();
+        }
+    }
+
+    /// Find the longest cached data-fragment projection that is a prefix of
+    /// `query`.  Equality is axiom-by-axiom, so fingerprints never authorize a
+    /// semantic hit.  The found entry is promoted for normal LRU behavior.
+    fn find_prefix(&mut self, query: &[&Axiom]) -> Option<(usize, DataConsistencyCacheEntry)> {
+        let query_hashes = data_projection_prefix_hashes(query);
+        for length in (1..=query.len()).rev() {
+            let hash = query_hashes[length - 1];
+            for (position, entry) in self.entries.iter().enumerate() {
+                if entry.prefix_hash != Some(hash)
+                    || !projection_prefix_equals(entry.ontology.as_ref(), &query[..length])
+                {
+                    continue;
+                }
+                let entry = self.entries.remove(position)?;
+                return Some((length, entry));
+            }
+        }
+        None
     }
 
     #[cfg(test)]
@@ -94,6 +149,43 @@ fn ontology_fingerprint(ontology: &Ontology) -> u64 {
     let mut hasher = DefaultHasher::new();
     ontology.axioms().hash(&mut hasher);
     hasher.finish()
+}
+
+/// A small process-local rolling hasher for candidate lookup.  Every candidate
+/// is still verified axiom-by-axiom, so collisions only cost time, never soundness.
+#[derive(Default)]
+struct PrefixHasher(u64);
+
+impl Hasher for PrefixHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 = (self.0 ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3);
+        }
+    }
+}
+
+fn data_projection_prefix_hashes(projection: &[&Axiom]) -> Vec<u64> {
+    let mut hasher = PrefixHasher::default();
+    projection
+        .iter()
+        .map(|axiom| {
+            axiom.hash(&mut hasher);
+            hasher.finish()
+        })
+        .collect()
+}
+
+fn projection_prefix_equals(ontology: &Ontology, query: &[&Axiom]) -> bool {
+    let candidate = ontology.axioms().iter().collect::<Vec<_>>();
+    candidate.len() == query.len()
+        && candidate
+            .into_iter()
+            .zip(query)
+            .all(|(left, right)| *left == **right)
 }
 
 fn literal_equal(left: &Literal, right: &Literal) -> bool {
@@ -573,165 +665,180 @@ pub(crate) fn materialize_data_domain_assertions(ontology: &Ontology) -> Ontolog
     materialized
 }
 
-/// Validate the asserted data fragment that is not yet covered soundly by the
-/// external tableau.  The checks are conservative for the supported vocabulary.
-pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
-    let key = ontology_fingerprint(ontology);
-    let mut cache = data_consistency_cache()
-        .lock()
-        .expect("data consistency cache mutex poisoned");
-    if let Some(result) = cache.get(key, ontology) {
-        return result;
-    }
-
-    let result = validate_data_consistency_uncached(ontology);
-    cache.put(key, ontology, result.clone());
-    result
+/// Reusable indexes for the deterministic asserted-data fragment.
+///
+/// A completed state is immutable in the cache.  Appending data assertions can
+/// clone that state and touch only the affected buckets; any other axiom kind
+/// falls back to a fresh full scan so a prefix hit can never hide a TBox change.
+#[derive(Debug, Clone, Default)]
+struct DataConsistencyState {
+    aliases: BTreeMap<Term, Term>,
+    functional: BTreeSet<Term>,
+    disjoint: BTreeSet<(Term, Term)>,
+    ranges: BTreeMap<Term, BTreeSet<Datatype>>,
+    one_ofs: BTreeMap<Term, Vec<Vec<Literal>>>,
+    restrictions: DataRestrictionIndex,
+    range_expressions: BTreeMap<Term, Vec<DataRange>>,
+    sub_data_properties: BTreeMap<Term, Term>,
+    positives: Vec<DataFact>,
+    negatives: Vec<DataFact>,
+    positive_index: BTreeMap<(Term, Term), Vec<usize>>,
+    negative_index: BTreeMap<(Term, Term), Vec<usize>>,
+    properties_by_individual: BTreeMap<Term, BTreeSet<Term>>,
+    functional_values: BTreeMap<(Term, Term), Literal>,
 }
 
-fn validate_data_consistency_uncached(ontology: &Ontology) -> Result<()> {
-    let mut aliases = BTreeMap::new();
-    let mut positive = Vec::new();
-    let mut negative = Vec::new();
-    let mut functional = BTreeSet::new();
-    let mut disjoint = BTreeSet::new();
-    let mut ranges = BTreeMap::<Term, BTreeSet<Datatype>>::new();
-    let mut one_ofs = BTreeMap::<Term, Vec<Vec<Literal>>>::new();
-    let mut restrictions =
-        BTreeMap::<Term, Vec<(usize, Datatype, Vec<FacetValue>, Option<Regex>)>>::new();
-    let mut restriction_count = 0usize;
-    let mut range_expressions = BTreeMap::<Term, Vec<DataRange>>::new();
-    let mut sub_data_properties = BTreeMap::new();
+impl DataConsistencyState {
+    fn from_ontology(ontology: &Ontology) -> Result<Self> {
+        let mut state = Self::default();
+        let mut raw_positive = Vec::new();
+        let mut raw_negative = Vec::new();
+        let mut restriction_count = 0usize;
 
-    for axiom in ontology.axioms() {
-        match axiom {
-            Axiom::SameIndividuals(terms) if terms.len() >= 2 => {
-                for pair in terms.windows(2) {
-                    union(&mut aliases, &pair[0], &pair[1]);
-                }
-            }
-            Axiom::DataPropertyAssertion {
-                property,
-                individual,
-                value,
-            } => positive.push(DataFact {
-                individual: individual.clone(),
-                property: property.clone(),
-                value: value.clone(),
-            }),
-            Axiom::NegativeDataPropertyAssertion {
-                property,
-                individual,
-                value,
-            } => negative.push(DataFact {
-                individual: individual.clone(),
-                property: property.clone(),
-                value: value.clone(),
-            }),
-            Axiom::FunctionalDataProperty(property) => {
-                functional.insert(property.clone());
-            }
-            Axiom::DisjointDataProperties(properties) if properties.len() >= 2 => {
-                for left in 0..properties.len() {
-                    for right in left + 1..properties.len() {
-                        let first = &properties[left];
-                        let second = &properties[right];
-                        disjoint.insert((first.min(second).clone(), first.max(second).clone()));
+        for axiom in ontology.axioms() {
+            match axiom {
+                Axiom::SameIndividuals(terms) if terms.len() >= 2 => {
+                    for pair in terms.windows(2) {
+                        union(&mut state.aliases, &pair[0], &pair[1]);
                     }
                 }
+                Axiom::DataPropertyAssertion {
+                    property,
+                    individual,
+                    value,
+                } => raw_positive.push(DataFact {
+                    individual: individual.clone(),
+                    property: property.clone(),
+                    value: value.clone(),
+                }),
+                Axiom::NegativeDataPropertyAssertion {
+                    property,
+                    individual,
+                    value,
+                } => raw_negative.push(DataFact {
+                    individual: individual.clone(),
+                    property: property.clone(),
+                    value: value.clone(),
+                }),
+                Axiom::FunctionalDataProperty(property) => {
+                    state.functional.insert(property.clone());
+                }
+                Axiom::DisjointDataProperties(properties) if properties.len() >= 2 => {
+                    for left in 0..properties.len() {
+                        for right in left + 1..properties.len() {
+                            let first = &properties[left];
+                            let second = &properties[right];
+                            state
+                                .disjoint
+                                .insert((first.min(second).clone(), first.max(second).clone()));
+                        }
+                    }
+                }
+                Axiom::DataPropertyRange { property, datatype } => {
+                    state
+                        .ranges
+                        .entry(property.clone())
+                        .or_default()
+                        .insert(*datatype);
+                }
+                Axiom::DataPropertyOneOf { property, values } => {
+                    state
+                        .one_ofs
+                        .entry(property.clone())
+                        .or_default()
+                        .push(values.clone());
+                }
+                Axiom::DataPropertyRangeRestriction {
+                    property,
+                    datatype,
+                    facets,
+                } => {
+                    let pattern = validate_restriction(property, datatype, facets)?;
+                    state
+                        .restrictions
+                        .entry(property.clone())
+                        .or_default()
+                        .push((restriction_count, *datatype, facets.clone(), pattern));
+                    restriction_count += 1;
+                }
+                Axiom::DataPropertyDataRange { property, range } => {
+                    validate_data_range(range, property)?;
+                    state
+                        .range_expressions
+                        .entry(property.clone())
+                        .or_default()
+                        .push(range.clone());
+                }
+                Axiom::SubDataPropertyOf { sub, sup } => {
+                    state.sub_data_properties.insert(sub.clone(), sup.clone());
+                }
+                _ => {}
             }
-            Axiom::DataPropertyRange { property, datatype } => {
-                ranges
-                    .entry(property.clone())
-                    .or_default()
-                    .insert(*datatype);
+        }
+
+        // Two different concrete ranges make every assertion violate at least
+        // one of them under the current basic-datatype vocabulary.
+        for (property, datatypes) in &state.ranges {
+            if datatypes.len() > 1 {
+                return Err(KnowledgeError::Invalid(format!(
+                    "data property `{property}` has contradictory ranges: {datatypes:?}"
+                )));
             }
-            Axiom::DataPropertyOneOf { property, values } => {
-                one_ofs
-                    .entry(property.clone())
-                    .or_default()
-                    .push(values.clone());
-            }
-            Axiom::DataPropertyRangeRestriction {
-                property,
-                datatype,
-                facets,
-            } => {
-                let pattern = validate_restriction(property, datatype, facets)?;
-                restrictions.entry(property.clone()).or_default().push((
-                    restriction_count,
-                    *datatype,
-                    facets.clone(),
-                    pattern,
-                ));
-                restriction_count += 1;
-            }
-            Axiom::DataPropertyDataRange { property, range } => {
-                validate_data_range(range, property)?;
-                range_expressions
-                    .entry(property.clone())
-                    .or_default()
-                    .push(range.clone());
-            }
-            Axiom::SubDataPropertyOf { sub, sup } => {
-                sub_data_properties.insert(sub.clone(), sup.clone());
-            }
-            _ => {}
+        }
+
+        // Materialize entailments through the data-property hierarchy before the
+        // deterministic checks below.  Both polarities propagate upward: if
+        // `work-email ⊑ email`, then positive/negative facts about `work-email`
+        // entail the same polarity about `email`.
+        state.negatives = state.expand_all(&raw_negative);
+        state.positives = state.expand_all(&raw_positive);
+
+        // Negatives are indexed first so the first positive insertion observes
+        // exactly the same closed snapshot as the previous full validator.
+        for fact in std::mem::take(&mut state.negatives) {
+            state.insert_negative(fact)?;
+        }
+        for fact in std::mem::take(&mut state.positives) {
+            state.insert_positive(fact)?;
+        }
+        Ok(state)
+    }
+
+    fn expand_one(&self, fact: &DataFact, property: Term) -> DataFact {
+        DataFact {
+            individual: fact.individual.clone(),
+            property,
+            value: fact.value.clone(),
         }
     }
 
-    // Materialize entailments through the data-property hierarchy before the
-    // deterministic checks below.  Both polarities propagate upward: if
-    // `work-email ⊑ email`, then positive/negative facts about `work-email`
-    // entail the same polarity about `email`.
-    let expand = |facts: &[DataFact]| -> Vec<DataFact> {
+    fn expand_all(&self, facts: &[DataFact]) -> Vec<DataFact> {
         facts
             .iter()
             .flat_map(|fact| {
-                property_ancestors(&sub_data_properties, &fact.property)
+                property_ancestors(&self.sub_data_properties, &fact.property)
                     .into_iter()
-                    .map(move |property| DataFact {
-                        individual: fact.individual.clone(),
-                        property,
-                        value: fact.value.clone(),
-                    })
+                    .map(move |property| self.expand_one(fact, property))
             })
             .collect()
-    };
-    let positive = expand(&positive);
-    let negative = expand(&negative);
-
-    for fact in positive.iter().chain(negative.iter()) {
-        validate_literal(&fact.property, &fact.value)?;
     }
 
-    // Index negatives by canonical individual and property so a large ABox does
-    // not pay an O(assertions x negative-assertions) contradiction scan.
-    let mut negatives = BTreeMap::<(Term, Term), Vec<&DataFact>>::new();
-    for fact in &negative {
-        let individual = parents(&mut aliases, fact.individual.clone());
-        negatives
-            .entry((individual, fact.property.clone()))
-            .or_default()
-            .push(fact);
-    }
-
-    // Two different concrete ranges make every assertion violate at least one
-    // of them under the current basic-datatype vocabulary.
-    for (property, datatypes) in &ranges {
-        if datatypes.len() > 1 {
-            return Err(KnowledgeError::Invalid(format!(
-                "data property `{property}` has contradictory ranges: {datatypes:?}"
-            )));
+    fn canonical_individual(&self, individual: &Term) -> Term {
+        let mut current = individual.clone();
+        while let Some(next) = self.aliases.get(&current) {
+            if *next == current {
+                break;
+            }
+            current = next.clone();
         }
+        current
     }
 
-    let mut functional_values = BTreeMap::<(Term, Term), Literal>::new();
-    let mut properties_by_individual = BTreeMap::<Term, BTreeSet<Term>>::new();
-    for fact in &positive {
-        let individual = parents(&mut aliases, fact.individual.clone());
+    fn insert_positive(&mut self, fact: DataFact) -> Result<()> {
+        validate_literal(&fact.property, &fact.value)?;
+        let individual = self.canonical_individual(&fact.individual);
 
-        if let Some(candidate_ranges) = range_expressions.get(&fact.property) {
+        if let Some(candidate_ranges) = self.range_expressions.get(&fact.property) {
             for range in candidate_ranges {
                 if !data_range_admits(range, &fact.value) {
                     return Err(KnowledgeError::Invalid(format!(
@@ -742,17 +849,18 @@ fn validate_data_consistency_uncached(ontology: &Ontology) -> Result<()> {
             }
         }
 
-        let violated_range = ranges
+        if self
+            .ranges
             .get(&fact.property)
-            .is_some_and(|allowed| !allowed.contains(&fact.value.datatype()));
-        if violated_range {
+            .is_some_and(|allowed| !allowed.contains(&fact.value.datatype()))
+        {
             return Err(KnowledgeError::Invalid(format!(
                 "data property `{}` range rejects `{individual}` value {:?}",
                 fact.property, fact.value
             )));
         }
 
-        if let Some(matching) = restrictions.get(&fact.property) {
+        if let Some(matching) = self.restrictions.get(&fact.property) {
             let mut violated_restriction = None;
             for (restriction_index, datatype, facets, pattern) in matching {
                 let facets_admit = facets
@@ -777,7 +885,7 @@ fn validate_data_consistency_uncached(ontology: &Ontology) -> Result<()> {
             }
         }
 
-        if let Some(enumerations) = one_ofs.get(&fact.property) {
+        if let Some(enumerations) = self.one_ofs.get(&fact.property) {
             let rejected = enumerations.iter().any(|allowed| {
                 !allowed
                     .iter()
@@ -791,12 +899,15 @@ fn validate_data_consistency_uncached(ontology: &Ontology) -> Result<()> {
             }
         }
 
-        let contradicted = negatives
+        let contradicted = self
+            .negative_index
             .get(&(individual.clone(), fact.property.clone()))
             .is_some_and(|candidates| {
-                candidates
-                    .iter()
-                    .any(|negative| literal_equal(&negative.value, &fact.value))
+                candidates.iter().any(|index| {
+                    self.negatives
+                        .get(*index)
+                        .is_some_and(|negative| literal_equal(&negative.value, &fact.value))
+                })
             });
         if contradicted {
             return Err(KnowledgeError::Invalid(format!(
@@ -805,7 +916,8 @@ fn validate_data_consistency_uncached(ontology: &Ontology) -> Result<()> {
             )));
         }
 
-        let properties = properties_by_individual
+        let properties = self
+            .properties_by_individual
             .entry(individual.clone())
             .or_default();
         if properties.insert(fact.property.clone()) {
@@ -818,7 +930,7 @@ fn validate_data_consistency_uncached(ontology: &Ontology) -> Result<()> {
                 } else {
                     (fact.property.clone(), existing.clone())
                 };
-                if disjoint.contains(&pair) {
+                if self.disjoint.contains(&pair) {
                     return Err(KnowledgeError::Invalid(format!(
                         "data properties `{}` and `{}` are disjoint but both are asserted for `{individual}`",
                         pair.0, pair.1
@@ -827,27 +939,203 @@ fn validate_data_consistency_uncached(ontology: &Ontology) -> Result<()> {
             }
         }
 
-        if !functional.contains(&fact.property) {
-            continue;
+        if self.functional.contains(&fact.property) {
+            let key = (individual.clone(), fact.property.clone());
+            match self.functional_values.get(&key) {
+                Some(existing) if literal_equal(existing, &fact.value) => {}
+                Some(_) => {
+                    return Err(KnowledgeError::Invalid(format!(
+                        "functional data property `{}` has conflicting values for `{}`",
+                        fact.property, key.0
+                    )));
+                }
+                None => {
+                    self.functional_values.insert(key, fact.value.clone());
+                }
+            }
         }
+
         let key = (individual, fact.property.clone());
-        match functional_values.get(&key) {
-            Some(existing) if literal_equal(existing, &fact.value) => {}
-            Some(_) => {
-                return Err(KnowledgeError::Invalid(format!(
-                    "functional data property `{}` has conflicting values for `{}`",
-                    fact.property, key.0
-                )));
+        let index = self.positives.len();
+        self.positives.push(fact);
+        self.positive_index.entry(key).or_default().push(index);
+        Ok(())
+    }
+
+    fn insert_negative(&mut self, fact: DataFact) -> Result<()> {
+        validate_literal(&fact.property, &fact.value)?;
+        let individual = self.canonical_individual(&fact.individual);
+        let contradicted = self
+            .positive_index
+            .get(&(individual.clone(), fact.property.clone()))
+            .is_some_and(|candidates| {
+                candidates.iter().any(|index| {
+                    self.positives
+                        .get(*index)
+                        .is_some_and(|positive| literal_equal(&positive.value, &fact.value))
+                })
+            });
+        if contradicted {
+            return Err(KnowledgeError::Invalid(format!(
+                "individual `{individual}` has positive and negative assertions for data property `{}`",
+                fact.property
+            )));
+        }
+
+        let key = (individual, fact.property.clone());
+        let index = self.negatives.len();
+        self.negatives.push(fact);
+        self.negative_index.entry(key).or_default().push(index);
+        Ok(())
+    }
+
+    /// Apply an append-only ABox fact to an already indexed snapshot.
+    ///
+    /// Same-individual axioms are deliberately excluded: they can change the
+    /// canonical identity of existing assertions and therefore require a fresh
+    /// index rather than a local update.
+    fn insert_delta(&mut self, axiom: &Axiom) -> Result<()> {
+        match axiom {
+            Axiom::DataPropertyAssertion {
+                property,
+                individual,
+                value,
+            } => {
+                let fact = DataFact {
+                    individual: individual.clone(),
+                    property: property.clone(),
+                    value: value.clone(),
+                };
+                for fact in self.expand_all(std::slice::from_ref(&fact)) {
+                    self.insert_positive(fact)?;
+                }
+                Ok(())
             }
-            None => {
-                functional_values.insert(key, fact.value.clone());
+            Axiom::NegativeDataPropertyAssertion {
+                property,
+                individual,
+                value,
+            } => {
+                let fact = DataFact {
+                    individual: individual.clone(),
+                    property: property.clone(),
+                    value: value.clone(),
+                };
+                for fact in self.expand_all(std::slice::from_ref(&fact)) {
+                    self.insert_negative(fact)?;
+                }
+                Ok(())
             }
+            _ => Err(KnowledgeError::Invalid(
+                "data consistency delta supports only appended data-property assertions".to_owned(),
+            )),
+        }
+    }
+}
+
+fn data_consistency_relevant(axiom: &Axiom) -> bool {
+    matches!(
+        axiom,
+        Axiom::SameIndividuals(_)
+            | Axiom::SubDataPropertyOf { .. }
+            | Axiom::DisjointDataProperties(_)
+            | Axiom::DataPropertyDomain { .. }
+            | Axiom::DataPropertyRange { .. }
+            | Axiom::DataPropertyOneOf { .. }
+            | Axiom::DataPropertyRangeRestriction { .. }
+            | Axiom::DataPropertyDataRange { .. }
+            | Axiom::FunctionalDataProperty(_)
+            | Axiom::DataPropertyAssertion { .. }
+            | Axiom::NegativeDataPropertyAssertion { .. }
+    )
+}
+
+fn is_incremental_data_assertion(axiom: &Axiom) -> bool {
+    matches!(
+        axiom,
+        Axiom::DataPropertyAssertion { .. } | Axiom::NegativeDataPropertyAssertion { .. }
+    )
+}
+
+fn data_consistency_projection(ontology: &Ontology) -> Vec<&Axiom> {
+    ontology
+        .axioms()
+        .iter()
+        .filter(|axiom| data_consistency_relevant(axiom))
+        .collect()
+}
+
+/// Validate the asserted data fragment that is not yet covered soundly by the
+/// external tableau.  The checks are conservative for the supported vocabulary.
+pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
+    let key = ontology_fingerprint(ontology);
+    let projection = data_consistency_projection(ontology);
+    let mut cache = data_consistency_cache()
+        .lock()
+        .expect("data consistency cache mutex poisoned");
+
+    if let Some((result, _)) = cache.get(key, ontology) {
+        return result;
+    }
+
+    // Ignore non-data axioms when locating a reusable prefix.  Live snapshots
+    // commonly rewrite their trailing DifferentIndividuals list as objects are
+    // added; that change does not affect this deterministic data fragment.
+    if let Some((prefix_length, mut entry)) = cache.find_prefix(&projection) {
+        if prefix_length == projection.len() {
+            let result = entry.result.clone();
+            cache.restore(entry);
+            return result;
+        }
+        let suffix = &projection[prefix_length..];
+        if entry.result.is_ok()
+            && suffix
+                .iter()
+                .all(|axiom| is_incremental_data_assertion(axiom))
+        {
+            // Reuse the retained index in place when this is its last cache
+            // reference.  The fallback clone keeps the old prefix available and
+            // preserves correctness under the unusual case of a shared state.
+            let cached_state = entry.state;
+            let (mut delta_state, restored_entry) = match Arc::try_unwrap(cached_state) {
+                Ok(state) => (state, None),
+                Err(state) => {
+                    let cloned_state = (*state).clone();
+                    entry.state = state;
+                    (cloned_state, Some(entry))
+                }
+            };
+            if let Some(restored_entry) = restored_entry {
+                cache.restore(restored_entry);
+            }
+            let mut outcome = Ok(());
+            for axiom in suffix {
+                match delta_state.insert_delta(axiom) {
+                    Ok(()) => {
+                        #[cfg(test)]
+                        DELTA_ASSERTIONS_APPLIED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    Err(error) => {
+                        outcome = Err(error);
+                        break;
+                    }
+                }
+            }
+            cache.put(key, ontology, delta_state, outcome.clone());
+            return outcome;
         }
     }
 
-    Ok(())
+    let (state, result) = match DataConsistencyState::from_ontology(ontology) {
+        Ok(state) => (state, Ok(())),
+        Err(error) => {
+            let state = DataConsistencyState::default();
+            (state, Err(error))
+        }
+    };
+    cache.put(key, ontology, state, result.clone());
+    result
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -946,6 +1234,7 @@ mod tests {
                 .lock()
                 .expect("cache mutex")
                 .get(key, &ontology)
+                .map(|(result, _)| result)
                 == Some(Ok(()))
         );
         assert!(validate_data_consistency(&ontology).is_ok());
@@ -966,8 +1255,84 @@ mod tests {
                 .lock()
                 .expect("cache mutex")
                 .get(key, &conflict)
-                .is_some_and(|result| result.is_err())
+                .is_some_and(|(result, _)| result.is_err())
         );
+    }
+
+    #[test]
+    fn appended_abox_facts_reuse_the_cached_data_prefix() {
+        let base = (0..32).fold(
+            Ontology::new().with_axiom(Axiom::FunctionalDataProperty(term("status"))),
+            |ontology, index| {
+                ontology.with_axiom(fact(
+                    &format!("delta-{index}"),
+                    "status",
+                    Literal::String("active".into()),
+                ))
+            },
+        );
+        assert!(validate_data_consistency(&base).is_ok());
+
+        let extended = base.clone().with_axiom(fact(
+            "delta-new",
+            "status",
+            Literal::String("active".into()),
+        ));
+        let projection = data_consistency_projection(&extended);
+        let prefix = {
+            let mut cache = data_consistency_cache()
+                .lock()
+                .expect("data consistency cache mutex poisoned");
+            cache.find_prefix(&projection)
+        };
+        let Some((prefix_length, entry)) = prefix else {
+            panic!("cached append-only prefix should be reusable");
+        };
+        let result = entry.result.clone();
+        data_consistency_cache()
+            .lock()
+            .expect("data consistency cache mutex poisoned")
+            .restore(entry);
+        assert_eq!(projection.len() - 1, prefix_length);
+        assert!(result.is_ok());
+        assert!(validate_data_consistency(&extended).is_ok());
+    }
+
+    #[test]
+    fn prefix_equality_requires_the_same_projection_length() {
+        let retained = Ontology::new().with_axiom(fact("a", "tag", Literal::String("kept".into())));
+        let extended =
+            retained
+                .clone()
+                .with_axiom(fact("b", "tag", Literal::String("kept".into())));
+        let query = data_consistency_projection(&extended);
+
+        assert!(projection_prefix_equals(
+            &retained,
+            &data_consistency_projection(&retained)
+        ));
+        assert!(!projection_prefix_equals(&retained, &query));
+    }
+
+    #[test]
+    fn appended_negative_and_conflicting_positive_assertions_fail_closed() {
+        let schema = Ontology::new().with_axiom(Axiom::DataPropertyRange {
+            property: term("age"),
+            datatype: Datatype::Integer,
+        });
+        let positive = schema
+            .clone()
+            .with_axiom(fact("alice", "age", Literal::Integer(30)));
+        assert!(validate_data_consistency(&positive).is_ok());
+
+        let negated = positive.with_axiom(negative("alice", "age", Literal::Integer(30)));
+        assert!(validate_data_consistency(&negated).is_err());
+
+        // The reverse append order must reach the same contradiction.
+        let negative_first = schema
+            .with_axiom(negative("bob", "age", Literal::Integer(31)))
+            .with_axiom(fact("bob", "age", Literal::Integer(31)));
+        assert!(validate_data_consistency(&negative_first).is_err());
     }
 
     #[test]
@@ -977,13 +1342,16 @@ mod tests {
             Ontology::new().with_axiom(fact("a", "tag", Literal::String("other".into())));
         let mut cache = DataConsistencyLru::new(1);
 
-        cache.put(42, &retained, Ok(()));
+        cache.put(42, &retained, DataConsistencyState::default(), Ok(()));
         assert!(cache.get(42, &candidate).is_none());
-        cache.put(42, &candidate, Ok(()));
+        cache.put(42, &candidate, DataConsistencyState::default(), Ok(()));
 
         assert_eq!(1, cache.len());
         assert!(!cache.contains_key(42, &retained));
-        assert_eq!(Some(Ok(())), cache.get(42, &candidate));
+        assert_eq!(
+            Some(Ok(())),
+            cache.get(42, &candidate).map(|(result, _)| result)
+        );
     }
 
     #[test]

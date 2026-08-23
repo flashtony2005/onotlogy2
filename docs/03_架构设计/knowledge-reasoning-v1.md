@@ -350,11 +350,23 @@ ontology 超过 `MAX_EXPLANATION_AXIOMS = 512` 时解释请求 fail-closed，避
 同一 immutable ontology 的已完成结果还会进入进程内容量为 32 的 exact-result LRU，包括
 确定性错误结论；因此 repeated governance/diagnosis 调用不会重复索引同一个不可变版本。
 cache key 只用于定位候选，命中前仍执行完整 ontology equality，避免 fingerprint collision。
-Criterion 基准使用每个迭代唯一的 ignored class assertion 保持 cold path，防止该缓存把
-索引成本隐藏掉；本机 1,000 条 functional-property 断言的 cold path 约 733 µs，命中
-exact-result cache 后约 32.5 µs（cold path 还包含基准为绕过缓存而做的 ontology clone）。
+Criterion cold path 使用每个迭代唯一的 inert `SameIndividuals`（单个 term 不建立 alias），
+防止 exact-result 和 prefix cache 隐藏索引成本；本机 1,000 条 functional-property 断言的
+cold rebuild 约 973 µs，命中 exact-result cache 后约 35 µs。
 
-这不是 delta consistency：“只重新检查受新断言影响的部分”仍需要后续设计。
+在上述 exact-result 复用之上，data fragment 现已支持 **append-only ABox delta
+consistency**。缓存条目保留 data-property hierarchy、range/restriction/enumeration、
+negative assertion、functional conflict 和 disjoint-property 的索引状态。新查询先按
+data-relevant axiom 序列寻找最长已缓存前缀：忽略 `ClassAssertion`、object assertion、
+`DifferentIndividuals` 等不影响该确定性片段的 axiom；若后缀只是新增 positive/negative
+data assertion，就克隆索引并只检查新增事实。任何 SameIndividuals、TBox 或其他可改变既有
+canonical identity / constraint set 的后缀都会退回全量重建。前缀命中必须逐 axiom 比较；
+fingerprint 只用于 exact-result 定位，不会授权前缀复用。
+
+Criterion 固定基准在 1,000 条 base 上测量有界 append-only chain：每次追加到上一次已验证
+snapshot，而不是生成互不为前缀的 sibling snapshot。delta path 约 191 µs；它仍需 fingerprint、
+projection 和逐 axiom 前缀确认，因此不宣称 O(suffix)，但避免重建完整 data index。delta 结果
+也会写入同一个容量 32 的 LRU，供下一次追加继续形成前缀。
 
 ### 5.6 明确限制
 
@@ -453,7 +465,7 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 
 1. 继续扩展更多 DL 结构到 ODL 直接表达面（如跨 datatype composable range），进一步减少手写 proposal JSON。
 2. 在真实业务需要时继续扩展 XSD 构造（如自定义 datatype 定义），保持保守语义。
-3. 为大 ABox 增加 delta consistency：immutable ontology 的跨调用 exact-result 复用已完成，
-   只重查受新增断言影响的部分仍开放。
+3. 将 delta consistency 从当前的 append-only positive/negative data assertion 扩展到更新、
+   删除、SameIndividuals 增量和 TBox 变更，并把长生命快照接入存储执行路径。
 4. 增加长时并发、恢复、内存和推理延迟基准。
 5. 在能力矩阵继续扩展时同步刷新本文档。
