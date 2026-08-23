@@ -799,6 +799,9 @@ fn owl_data_range(build: &Build<RcStr>, range: &ModelDataRange) -> DataRange<RcS
                 .map(|branch| owl_data_range(build, branch))
                 .collect(),
         ),
+        ModelDataRange::Complement(child) => {
+            DataRange::DataComplementOf(Box::new(owl_data_range(build, child)))
+        }
     }
 }
 
@@ -1099,6 +1102,42 @@ mod tests {
             property: Term::new("identifier"),
             individual: Term::new("b"),
             value: crate::model::Literal::Boolean(true),
+        });
+        assert!(
+            !Reasoner::new(&inconsistent)
+                .unwrap()
+                .is_consistent()
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn complement_data_range_participates_in_mature_consistency() {
+        let range = ModelDataRange::Complement(Box::new(ModelDataRange::Restriction {
+            datatype: Datatype::String,
+            facets: vec![crate::model::FacetValue {
+                facet: crate::model::DataFacet::Pattern,
+                value: crate::model::Literal::String("[A-Z]{3}-[0-9]{4}".into()),
+            }],
+        }));
+        let axiom = Axiom::DataPropertyDataRange {
+            property: Term::new("identifier"),
+            range,
+        };
+        let consistent =
+            Ontology::new()
+                .with_axiom(axiom)
+                .with_axiom(Axiom::DataPropertyAssertion {
+                    property: Term::new("identifier"),
+                    individual: Term::new("a"),
+                    value: crate::model::Literal::String("outside".into()),
+                });
+        assert!(Reasoner::new(&consistent).unwrap().is_consistent().unwrap());
+
+        let inconsistent = consistent.with_axiom(Axiom::DataPropertyAssertion {
+            property: Term::new("identifier"),
+            individual: Term::new("b"),
+            value: crate::model::Literal::String("ABC-1234".into()),
         });
         assert!(
             !Reasoner::new(&inconsistent)

@@ -130,6 +130,7 @@ fn validate_data_range_inner(range: &DataRange, property: &Term, depth: usize) -
             validate_restriction(property, datatype, facets)?;
             1
         }
+        DataRange::Complement(child) => 1 + validate_data_range_inner(child, property, depth + 1)?,
         DataRange::Union(branches) | DataRange::Intersection(branches) => {
             if branches.len() < 2 {
                 return Err(KnowledgeError::Invalid(format!(
@@ -167,6 +168,7 @@ pub(crate) fn data_range_admits(range: &DataRange, value: &Literal) -> bool {
         DataRange::Datatype(datatype) => literal_datatype_matches(value, *datatype),
         DataRange::OneOf(values) => values.iter().any(|allowed| literal_equal(value, allowed)),
         DataRange::Restriction { datatype, facets } => restriction_admits(value, datatype, facets),
+        DataRange::Complement(child) => !data_range_admits(child, value),
         DataRange::Union(branches) => branches
             .iter()
             .any(|branch| data_range_admits(branch, value)),

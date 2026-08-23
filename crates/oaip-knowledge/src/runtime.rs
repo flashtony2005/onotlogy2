@@ -151,6 +151,9 @@ fn property_data_range(
                 .map(|child| property_data_range(ty, child))
                 .collect::<Result<Vec<_>>>()?,
         ),
+        PropertyDataRange::Complement(child) => {
+            ModelDataRange::Complement(Box::new(property_data_range(ty, child)?))
+        }
     };
     Ok(range)
 }
@@ -1441,6 +1444,57 @@ equivalent Pet, Companion
         for rejected in ["admin", "ABC-123", "administrator"] {
             let world = runtime_world_to_knowledge(&schema, &[fact(rejected)], &[]).unwrap();
             assert!(!Reasoner::new(&world).unwrap().is_consistent().unwrap());
+            assert!(
+                validate_canonical_ontology_with_world(&schema, &[fact(rejected)], &[]).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn odl_complement_range_projects_and_gates_world_facts() {
+        let schema = oaip_abi::parse_odl(
+            r#"object Customer:
+  properties:
+    code: string range(complement(restriction(pattern "[A-Z]{3}-[0-9]{4}")))
+"#,
+        )
+        .unwrap();
+        validate_runtime_ir(&schema).unwrap();
+        let schema = runtime_ir_to_knowledge(&schema);
+        let range = schema.axioms().iter().find_map(|axiom| match axiom {
+            Axiom::DataPropertyDataRange { property, range } if property.as_str() == "code" => {
+                Some(range.clone())
+            }
+            _ => None,
+        });
+        assert_eq!(
+            Some(ModelDataRange::Complement(Box::new(
+                ModelDataRange::Restriction {
+                    datatype: Datatype::String,
+                    facets: vec![FacetValue {
+                        facet: DataFacet::Pattern,
+                        value: Literal::String("[A-Z]{3}-[0-9]{4}".into()),
+                    }],
+                }
+            ))),
+            range
+        );
+
+        let fact = |code: &str| RuntimeObjectFact {
+            id: "customer-1".to_owned(),
+            object_type: "Customer".to_owned(),
+            data: serde_json::json!({ "code": code }),
+        };
+        let admitted = runtime_world_to_knowledge(&schema, &[fact("admin")], &[]).unwrap();
+        assert!(Reasoner::new(&admitted).unwrap().is_consistent().unwrap());
+        assert!(validate_canonical_ontology_with_world(&schema, &[fact("admin")], &[]).is_ok());
+
+        for rejected in ["ABC-1234", "AAA-0000"] {
+            let world = runtime_world_to_knowledge(&schema, &[fact(rejected)], &[]).unwrap();
+            assert!(
+                !Reasoner::new(&world).unwrap().is_consistent().unwrap(),
+                "unexpected admission: {rejected}"
+            );
             assert!(
                 validate_canonical_ontology_with_world(&schema, &[fact(rejected)], &[]).is_err()
             );

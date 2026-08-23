@@ -86,6 +86,7 @@ pub enum PropertyDataRange {
     Datatype,
     OneOf(Vec<String>),
     Restriction(Vec<PropertyFacet>),
+    Complement(Box<PropertyDataRange>),
     Union(Vec<PropertyDataRange>),
     Intersection(Vec<PropertyDataRange>),
 }
@@ -96,6 +97,7 @@ impl PropertyDataRange {
             Self::Datatype => "datatype",
             Self::OneOf(_) => "one_of",
             Self::Restriction(_) => "restriction",
+            Self::Complement(_) => "complement",
             Self::Union(_) => "union",
             Self::Intersection(_) => "intersection",
         }

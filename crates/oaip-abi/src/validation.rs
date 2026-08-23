@@ -437,6 +437,7 @@ fn property_data_range_admits(value: &Value, ty: ScalarType, range: &PropertyDat
         PropertyDataRange::Restriction(facets) => facets
             .iter()
             .all(|facet| constraint_admits(value, ty, facet)),
+        PropertyDataRange::Complement(child) => !property_data_range_admits(value, ty, child),
         PropertyDataRange::Union(children) => children
             .iter()
             .any(|child| property_data_range_admits(value, ty, child)),
@@ -877,6 +878,35 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn parses_complement_range_and_gates_declared_typed_values() {
+        let current = object(
+            r#"object Customer:
+  properties:
+    code: string range(complement(restriction(pattern "[A-Z]{3}-[0-9]{4}")))
+"#,
+        );
+        let PropertyFacet::Range(PropertyDataRange::Complement(child)) =
+            &current.properties[0].constraints[0]
+        else {
+            panic!("complement range should survive parsing");
+        };
+        assert!(matches!(**child, PropertyDataRange::Restriction(_)));
+
+        assert!(
+            validate_object_data(&current, &serde_json::json!({ "code": "admin" })).is_ok(),
+            "a typed value outside the complemented restriction is admitted"
+        );
+        assert!(matches!(
+            validate_object_data(&current, &serde_json::json!({ "code": "ABC-1234" })),
+            Err(DataValidationError::ConstraintViolation { .. })
+        ));
+
+        let missing_child =
+            parse_odl("object Customer:\n  properties:\n    code: string range(complement())\n");
+        assert!(missing_child.is_err());
     }
 
     #[test]

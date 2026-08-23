@@ -115,7 +115,7 @@ TBox / property：
 - Data property domain/range/subproperty/disjointness
 - `DataPropertyOneOf`
 - `DataPropertyRangeRestriction`
-- `DataPropertyDataRange`（可组合 datatype / oneOf / restriction / union / intersection）
+- `DataPropertyDataRange`（可组合 datatype / oneOf / restriction / complement / union / intersection）
 - Functional data property
 
 ABox：
@@ -231,11 +231,20 @@ object Customer:
     code: string range(intersection(datatype,union(restriction(pattern "[A-Z]{3}-[0-9]{4}"),one_of [ADMIN,GUEST])))
 ```
 
+也可以用 `complement` 排除一个嵌套 data range：
+
+```odl
+object Customer:
+  properties:
+    code: string range(complement(restriction(pattern "TEST-.*")))
+```
+
 支持的组合子：
 
 - `datatype`
 - `one_of`
 - `restriction`
+- `complement`
 - `union`
 - `intersection`
 
@@ -244,6 +253,9 @@ object Customer:
 - ODL 属性的 leading scalar type 是唯一 base datatype；`datatype` 与 `restriction`
   都指向它。跨 datatype 的 union 仍由 governed DL proposal 表达，避免破坏 executable
   row 的单一类型契约；
+- `complement(child)` 表示 typed literal 全域中不属于 `child` 的部分。ODL admission 先
+  强制 leading scalar type，因此 executable property 不会通过 complement 意外引入其他
+  JSON/XSD 类型；
 - `range` 是普通属性约束命名空间中的一个 facet，同一属性最多声明一个；它与
   `min_cardinality` / `max_cardinality` 可组合；
 - boolean 组至少两个分支；
@@ -416,7 +428,7 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 ## 9. 已知下一步
 
 1. 继续扩展更多 DL 结构到 ODL 直接表达面（如跨 datatype composable range），进一步减少手写 proposal JSON。
-2. 在真实业务需要时继续扩展 XSD 构造（如 complement / 自定义 datatype 定义），保持保守语义。
+2. 在真实业务需要时继续扩展 XSD 构造（如自定义 datatype 定义），保持保守语义。
 3. 为大 ABox 增加 incremental consistency 和跨版本 classification 复用。
 4. 增加长时并发、恢复、内存和推理延迟基准。
 5. 在能力矩阵继续扩展时同步刷新本文档。

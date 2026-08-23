@@ -1580,6 +1580,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn odl_complement_range_gates_initialization_and_evolution() {
+        let storage = LibSQLStorage::open(":memory:").await.unwrap();
+        let root = Ontology::new().with_axiom(Axiom::subclass(class("Dog"), class("Animal")));
+        let customer = |pattern: &str| {
+            oaip_abi::parse_odl(&format!(
+                r#"object Customer:
+  properties:
+    name: string range(complement(restriction(pattern "{pattern}")))
+"#
+            ))
+            .unwrap()
+        };
+        storage
+            .create(
+                "Customer",
+                "customer-1",
+                serde_json::json!({ "name": "reserved-code" }),
+            )
+            .await
+            .unwrap();
+
+        let valid_ir = customer("[A-Z][a-z]+").clone();
+        storage
+            .initialize_knowledge_version("root", &root, Some(&valid_ir))
+            .await
+            .unwrap();
+        let initialized = storage.knowledge_version("root").await.unwrap().unwrap();
+        assert!(initialized.ontology.axioms().iter().any(|axiom| matches!(
+            axiom,
+            Axiom::DataPropertyDataRange { property, range: DataRange::Complement(_) }
+                if property.as_str() == "name"
+        )));
+
+        // The complement excludes the live lowercase name from the next version.
+        let incompatible_ir = customer("[a-z-]+");
+        let bad = OntologyProposal::new("exclude-live-name-by-complement");
+        assert!(
+            storage
+                .propose_knowledge_change("root", &bad, Some(&incompatible_ir))
+                .await
+                .is_err()
+        );
+
+        // A compatible complement can evolve while preserving the live fact.
+        let compatible_ir = customer("[A-Z][a-z]+");
+        let proposal = OntologyProposal::new("replace-compatible-complement").with_change(
+            OntologyChange::Add(Axiom::subclass(class("Puppy"), class("Dog"))),
+        );
+        storage
+            .propose_knowledge_change("root", &proposal, Some(&compatible_ir.clone()))
+            .await
+            .unwrap();
+        storage
+            .decide_knowledge_proposal("replace-compatible-complement", true, "alice", None)
+            .await
+            .unwrap();
+        let (_, applied) = storage
+            .apply_knowledge_proposal("replace-compatible-complement", "v2")
+            .await
+            .unwrap();
+        assert_eq!(Some(compatible_ir), applied.runtime_ir);
+    }
+
+    #[tokio::test]
     async fn odl_scalar_cardinality_gates_initialization_and_evolution() {
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
         let root = Ontology::new().with_axiom(Axiom::subclass(class("Dog"), class("Animal")));

@@ -341,6 +341,7 @@ pub enum DataRange {
         datatype: Datatype,
         facets: Vec<FacetValue>,
     },
+    Complement(Box<DataRange>),
     Union(Vec<DataRange>),
     Intersection(Vec<DataRange>),
 }
@@ -356,6 +357,10 @@ impl DataRange {
 
     pub fn restriction(datatype: Datatype, facets: Vec<FacetValue>) -> Self {
         Self::Restriction { datatype, facets }
+    }
+
+    pub fn complement(range: DataRange) -> Self {
+        Self::Complement(Box::new(range))
     }
 
     pub fn union(ranges: impl IntoIterator<Item = DataRange>) -> Self {

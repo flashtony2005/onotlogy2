@@ -21,10 +21,10 @@ struct Parser {
     depth: usize,
 }
 
-/// Parse a `union`, `intersection`, `restriction`, `one_of`, or base
-/// `datatype` expression.  Parsing is structural only; typed facet validation
-/// is performed by [`validate_data_range`] so the same checks cover parsed ODL
-/// and governance-supplied runtime IR.
+/// Parse a `union`, `intersection`, `complement`, `restriction`, `one_of`, or
+/// base `datatype` expression.  Parsing is structural only; typed facet
+/// validation is performed by [`validate_data_range`] so the same checks cover
+/// parsed ODL and governance-supplied runtime IR.
 pub fn parse_data_range(source: &str) -> Result<PropertyDataRange, String> {
     let mut parser = Parser::new(source)?;
     let range = parser.expression()?;
@@ -65,6 +65,7 @@ pub fn validate_data_range(
             }
             validate_property_constraints(name, ty, facets)
         }
+        PropertyDataRange::Complement(child) => validate_data_range(name, ty, child),
         PropertyDataRange::Union(children) | PropertyDataRange::Intersection(children) => {
             for child in children {
                 validate_data_range(name, ty, child)?;
@@ -94,6 +95,9 @@ fn shape(range: &PropertyDataRange) -> Result<(), String> {
             for child in children {
                 visit(child, depth + 1, nodes)?;
             }
+        }
+        if let PropertyDataRange::Complement(child) = range {
+            visit(child, depth + 1, nodes)?;
         }
         Ok(())
     }
@@ -165,6 +169,12 @@ impl Parser {
             }
             "one_of" => PropertyDataRange::OneOf(self.values()?),
             "restriction" => PropertyDataRange::Restriction(self.restriction_facets()?),
+            "complement" => {
+                self.expect_punct('(')?;
+                let child = self.expression()?;
+                self.expect_punct(')')?;
+                PropertyDataRange::Complement(Box::new(child))
+            }
             "union" | "intersection" => {
                 self.expect_punct('(')?;
                 let first = self.expression()?;
