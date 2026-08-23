@@ -380,6 +380,12 @@ Criterion 的 bounded replace-chain 每次替换 1,000 条 functional ABox 中�
 patch path 约 780 µs；该路径需要 schema equality、multiset delta、cached-state clone 和局部重索引，
 因此不是 O(1)。
 
+append-only 序列中的真实 `SameIndividuals`（至少两个 term）现在也可增量应用：先合并
+identity graph，再在新 canonical individual 下重新索引既有正/负 assertion，因此旧事实会立即参与
+functional conflict、positive/negative contradiction 和 disjoint-property 检查。若该 axiom 只是重复
+已有等价关系，则不触发重索引；单个 term 的 inert `SameIndividuals` 继续退回全量重建，以保留 cold-path
+基准对索引成本的可见性。identity 合并的成本与现有 assertion 数量相关，不宣称 O(1)。
+
 这条缓存已经接入存储治理执行路径。`initialize_knowledge_version`、
 `propose_knowledge_change` 和 `apply_knowledge_proposal` 统一通过
 `validate_canonical_ontology_with_world` 调用 data consistency，因此长生命知识版本会自动复用
@@ -489,7 +495,7 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 
 1. 继续扩展更多 DL 结构到 ODL 直接表达面（如跨 datatype composable range），进一步减少手写 proposal JSON。
 2. 在真实业务需要时继续扩展 XSD 构造（如自定义 datatype 定义），保持保守语义。
-3. 在 update/delete 已通过 assertion patch 复用后，将 delta consistency 继续扩展到
-   SameIndividuals 增量和 TBox 变更。长生命快照已接入存储执行路径并具备缓存命中率可观测性。
+3. 在 update/delete 和 append-only SameIndividuals 已支持增量复用后，继续处理
+   TBox 变更的增量一致性。长生命快照已接入存储执行路径并具备缓存命中率可观测性。
 4. 在已有短并发、append-only 和 replace-chain 缓存基线之上，继续增加长时并发、恢复、内存和推理延迟基准。
 5. 在能力矩阵继续扩展时同步刷新本文档。

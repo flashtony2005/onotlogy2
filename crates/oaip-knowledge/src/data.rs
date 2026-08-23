@@ -1230,13 +1230,47 @@ impl DataConsistencyState {
         Some(())
     }
 
+    fn merge_same_individuals(&mut self, terms: &[Term]) -> Result<()> {
+        let mut identity_changed = false;
+        for pair in terms.windows(2) {
+            let left_before = self.canonical_individual(&pair[0]);
+            let right_before = self.canonical_individual(&pair[1]);
+            union(&mut self.aliases, &pair[0], &pair[1]);
+            identity_changed |= left_before != self.canonical_individual(&pair[0])
+                || right_before != self.canonical_individual(&pair[1]);
+        }
+        if !identity_changed {
+            return Ok(());
+        }
+
+        // Existing assertions retain their original individual name, so changing
+        // the identity mapping is sound only after every polarity is indexed
+        // again under the merged canonical individual.
+        let positives = std::mem::take(&mut self.positives);
+        let negatives = std::mem::take(&mut self.negatives);
+        self.positive_index.clear();
+        self.negative_index.clear();
+        self.properties_by_individual.clear();
+        self.functional_values.clear();
+
+        for fact in negatives {
+            self.insert_negative(fact)?;
+        }
+        for fact in positives {
+            self.insert_positive(fact)?;
+        }
+        Ok(())
+    }
+
     /// Apply an append-only ABox fact to an already indexed snapshot.
     ///
-    /// Same-individual axioms are deliberately excluded: they can change the
-    /// canonical identity of existing assertions and therefore require a fresh
-    /// index rather than a local update.
+    /// A real SameIndividuals axiom changes the canonical identity of existing
+    /// assertions, so its cached index is rebuilt around the merged identity.
+    /// Inert one-term axioms remain non-incremental and fall back to the full
+    /// scan used by cold-path benchmarks.
     fn insert_delta(&mut self, axiom: &Axiom) -> Result<()> {
         match axiom {
+            Axiom::SameIndividuals(terms) if terms.len() >= 2 => self.merge_same_individuals(terms),
             Axiom::DataPropertyAssertion {
                 property,
                 individual,
@@ -1296,6 +1330,10 @@ fn is_incremental_data_assertion(axiom: &Axiom) -> bool {
         axiom,
         Axiom::DataPropertyAssertion { .. } | Axiom::NegativeDataPropertyAssertion { .. }
     )
+}
+
+fn is_incremental_identity_axiom(axiom: &Axiom) -> bool {
+    matches!(axiom, Axiom::SameIndividuals(terms) if terms.len() >= 2)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1493,9 +1531,9 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
         }
         let suffix = &projection[prefix_length..];
         if entry.result.is_ok()
-            && suffix
-                .iter()
-                .all(|axiom| is_incremental_data_assertion(axiom))
+            && suffix.iter().all(|axiom| {
+                is_incremental_data_assertion(axiom) || is_incremental_identity_axiom(axiom)
+            })
         {
             // Reuse the retained index in place when this is its last cache
             // reference.  The fallback clone keeps the old prefix available and
@@ -1856,6 +1894,76 @@ mod tests {
         assert_eq!(projection.len() - 1, prefix_length);
         assert!(result.is_ok());
         assert!(validate_data_consistency(&extended).is_ok());
+    }
+
+    #[test]
+    fn appended_same_individuals_reindex_existing_assertions() {
+        let schema =
+            Ontology::new().with_axiom(Axiom::FunctionalDataProperty(term("same-functional")));
+        let base = schema
+            .clone()
+            .with_axiom(fact(
+                "same-a",
+                "same-functional",
+                Literal::String("first".into()),
+            ))
+            .with_axiom(fact(
+                "same-b",
+                "same-functional",
+                Literal::String("second".into()),
+            ));
+        let same = Axiom::SameIndividuals(vec![term("same-a"), term("same-b")]);
+
+        assert!(validate_data_consistency(&base).is_ok());
+        let mut state = DataConsistencyState::from_ontology(&base).unwrap();
+        assert!(is_incremental_identity_axiom(&same));
+        assert!(state.insert_delta(&same).is_err());
+
+        let extended = base.clone().with_axiom(same);
+        let candidate = data_consistency_cache()
+            .lock()
+            .expect("cache mutex")
+            .find_prefix(&data_consistency_projection(&extended));
+        let Some((prefix_length, entry)) = candidate else {
+            panic!("a real SameIndividuals suffix should use the append-only path");
+        };
+        assert_eq!(data_consistency_projection(&base).len(), prefix_length);
+        assert_eq!(
+            data_consistency_projection(&extended).len(),
+            prefix_length + 1
+        );
+        data_consistency_cache()
+            .lock()
+            .expect("cache mutex")
+            .restore(entry);
+        assert!(validate_data_consistency(&extended).is_err());
+    }
+
+    #[test]
+    fn appended_same_individuals_preserve_disjoint_property_checks() {
+        let schema = Ontology::new().with_axiom(Axiom::DisjointDataProperties(vec![
+            term("same-age"),
+            term("same-height"),
+        ]));
+        let base = schema
+            .clone()
+            .with_axiom(fact("same-disjoint-a", "same-age", Literal::Integer(30)))
+            .with_axiom(fact(
+                "same-disjoint-b",
+                "same-height",
+                Literal::Integer(180),
+            ));
+
+        assert!(validate_data_consistency(&base).is_ok());
+        let mut state = DataConsistencyState::from_ontology(&base).unwrap();
+        assert!(
+            state
+                .insert_delta(&Axiom::SameIndividuals(vec![
+                    term("same-disjoint-a"),
+                    term("same-disjoint-b"),
+                ]))
+                .is_err()
+        );
     }
 
     #[test]
