@@ -9,6 +9,7 @@
 //! conclusions.  Derived conclusions still never mutate the source ontology.
 
 use crate::error::{KnowledgeError, Result};
+use crate::explanation::{EXPLANATION_CACHE_CAPACITY, ExplanationLru};
 use crate::model::{
     Axiom, ClassExpression, DataFacet, DataRange as ModelDataRange, Ontology, Term,
 };
@@ -29,7 +30,7 @@ use horned_owl::model::{
 use horned_owl::ontology::set::SetOntology;
 use horned_owl::vocab::Facet as OwlFacet;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// A reasoned view of all named classes in an ontology.
 #[derive(Debug, Clone, Default)]
@@ -115,6 +116,7 @@ pub struct Reasoner {
     aliases: TermAliases,
     consistency: OnceLock<Result<bool>>,
     classification: OnceLock<Result<ReasonedClassification>>,
+    pub(crate) explanations: Arc<Mutex<ExplanationLru>>,
 }
 
 fn literal_values_equal(left: &Literal, right: &Literal) -> bool {
@@ -149,6 +151,7 @@ impl Reasoner {
             ontology: ontology.clone(),
             consistency: OnceLock::new(),
             classification: OnceLock::new(),
+            explanations: Arc::new(Mutex::new(ExplanationLru::new(EXPLANATION_CACHE_CAPACITY))),
         })
     }
 

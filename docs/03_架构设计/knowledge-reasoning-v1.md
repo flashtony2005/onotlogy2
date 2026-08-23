@@ -312,6 +312,8 @@ consistency、unsatisfiable classes、unsatisfiability explanation 和 inconsist
 
 解释接口覆盖 subclass、instance、object/data property、unsatisfiable class 和 inconsistency。
 ontology 超过 `MAX_EXPLANATION_AXIOMS = 512` 时解释请求 fail-closed，避免把无界搜索伪装成证明。
+同一 immutable snapshot 上的已完成解释结果进入容量为 128 的 LRU 缓存；缓存 key 覆盖全部
+六类查询，失败探测不缓存。新版本创建新的 reasoner snapshot，因此不存在跨版本脏缓存。
 
 ### 5.4 Snapshot caching
 
@@ -415,6 +417,6 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 
 1. 继续扩展更多 DL 结构到 ODL 直接表达面（如跨 datatype composable range），进一步减少手写 proposal JSON。
 2. 在真实业务需要时继续扩展 XSD 构造（如 complement / 自定义 datatype 定义），保持保守语义。
-3. 为大 ABox 增加 incremental consistency、跨版本 classification 复用和有界解释缓存。
+3. 为大 ABox 增加 incremental consistency 和跨版本 classification 复用。
 4. 增加长时并发、恢复、内存和推理延迟基准。
 5. 在能力矩阵继续扩展时同步刷新本文档。

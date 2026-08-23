@@ -9,6 +9,7 @@ use crate::error::{KnowledgeError, Result};
 use crate::model::{Axiom, ClassExpression, Ontology, Term};
 use crate::reasoner::Reasoner;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -19,12 +20,88 @@ use std::hash::{Hash, Hasher};
 /// used as an accidental denial-of-service vector.
 pub const MAX_EXPLANATION_AXIOMS: usize = 512;
 
+/// Number of completed justification queries retained per immutable snapshot.
+pub(crate) const EXPLANATION_CACHE_CAPACITY: usize = 128;
+
 /// An irredundant set of asserted axioms supporting one reasoned conclusion.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReasonedJustification {
     pub axiom_indices: Vec<usize>,
     pub axioms: Vec<Axiom>,
+}
+
+/// A tiny exact-LRU cache for expensive black-box justification searches.
+#[derive(Debug, Clone)]
+pub(crate) struct ExplanationLru {
+    entries: VecDeque<(ExplanationKey, Option<ReasonedJustification>)>,
+    capacity: usize,
+}
+
+impl ExplanationLru {
+    pub(crate) fn new(capacity: usize) -> Self {
+        Self {
+            entries: VecDeque::new(),
+            capacity: capacity.max(1),
+        }
+    }
+
+    fn get(&mut self, key: &ExplanationKey) -> Option<Option<ReasonedJustification>> {
+        let position = self
+            .entries
+            .iter()
+            .position(|(candidate, _)| candidate == key)?;
+        let entry = self.entries.remove(position);
+        self.entries
+            .push_front(entry.expect("position came from entries"));
+        Some(self.entries.front().and_then(|(_, value)| value.clone()))
+    }
+
+    fn put(&mut self, key: ExplanationKey, value: Option<ReasonedJustification>) {
+        if let Some(position) = self
+            .entries
+            .iter()
+            .position(|(candidate, _)| candidate == &key)
+        {
+            self.entries.remove(position);
+        }
+        self.entries.push_front((key, value));
+        while self.entries.len() > self.capacity {
+            self.entries.pop_back();
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+/// Distinguishes the six bounded explanation query shapes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ExplanationKey {
+    Subclass {
+        sub: Term,
+        sup: Term,
+    },
+    Instance {
+        class: Term,
+        individual: Term,
+    },
+    UnsatisfiableClass {
+        class: Term,
+    },
+    ObjectProperty {
+        property: Term,
+        subject: Term,
+        object: Term,
+    },
+    DataProperty {
+        property: Term,
+        individual: Term,
+        value_debug: String,
+    },
+    Inconsistency,
 }
 
 impl ReasonedJustification {
@@ -109,13 +186,19 @@ impl Reasoner {
         sub: &Term,
         sup: &Term,
     ) -> Result<Option<ReasonedJustification>> {
-        if !self.entails_subclass(sub, sup)? {
-            return Ok(None);
-        }
-        let indices = shrink(self.ontology(), |candidate| {
-            entailment_probe(Reasoner::new(candidate)?.entails_subclass(sub, sup))
-        })?;
-        Ok(Some(ReasonedJustification::new(&indices, self.ontology())))
+        let key = ExplanationKey::Subclass {
+            sub: sub.clone(),
+            sup: sup.clone(),
+        };
+        self.cached_explanation(key, || {
+            if !self.entails_subclass(sub, sup)? {
+                return Ok(None);
+            }
+            let indices = shrink(self.ontology(), |candidate| {
+                entailment_probe(Reasoner::new(candidate)?.entails_subclass(sub, sup))
+            })?;
+            Ok(Some(ReasonedJustification::new(&indices, self.ontology())))
+        })
     }
 
     /// Explain why `individual` belongs to a named class under the open world
@@ -125,13 +208,19 @@ impl Reasoner {
         class: &Term,
         individual: &Term,
     ) -> Result<Option<ReasonedJustification>> {
-        if !self.is_instance_of(class, individual)? {
-            return Ok(None);
-        }
-        let indices = shrink(self.ontology(), |candidate| {
-            entailment_probe(Reasoner::new(candidate)?.is_instance_of(class, individual))
-        })?;
-        Ok(Some(ReasonedJustification::new(&indices, self.ontology())))
+        let key = ExplanationKey::Instance {
+            class: class.clone(),
+            individual: individual.clone(),
+        };
+        self.cached_explanation(key, || {
+            if !self.is_instance_of(class, individual)? {
+                return Ok(None);
+            }
+            let indices = shrink(self.ontology(), |candidate| {
+                entailment_probe(Reasoner::new(candidate)?.is_instance_of(class, individual))
+            })?;
+            Ok(Some(ReasonedJustification::new(&indices, self.ontology())))
+        })
     }
 
     /// Explain why a named class has no possible instances.
@@ -144,26 +233,31 @@ impl Reasoner {
         &self,
         class: &Term,
     ) -> Result<Option<ReasonedJustification>> {
-        if self.is_satisfiable(class)? {
-            return Ok(None);
-        }
-        let mut hasher = DefaultHasher::new();
-        format!("{:?}", self.ontology().axioms()).hash(&mut hasher);
-        let probe_individual = Term::new(format!(
-            "urn:oaip:class-explanation:{}:{}",
-            hasher.finish(),
-            term_iri_for_probe(class)
-        ));
-        let supports = move |source: &Ontology| -> Result<bool> {
-            let mut probe = source.clone();
-            probe.push(Axiom::ClassAssertion {
-                class: ClassExpression::Class(class.clone()),
-                individual: probe_individual.clone(),
-            });
-            Ok(!Reasoner::new(&probe)?.is_consistent()?)
+        let key = ExplanationKey::UnsatisfiableClass {
+            class: class.clone(),
         };
-        let indices = shrink(self.ontology(), supports)?;
-        Ok(Some(ReasonedJustification::new(&indices, self.ontology())))
+        self.cached_explanation(key, || {
+            if self.is_satisfiable(class)? {
+                return Ok(None);
+            }
+            let mut hasher = DefaultHasher::new();
+            format!("{:?}", self.ontology().axioms()).hash(&mut hasher);
+            let probe_individual = Term::new(format!(
+                "urn:oaip:class-explanation:{}:{}",
+                hasher.finish(),
+                term_iri_for_probe(class)
+            ));
+            let supports = move |source: &Ontology| -> Result<bool> {
+                let mut probe = source.clone();
+                probe.push(Axiom::ClassAssertion {
+                    class: ClassExpression::Class(class.clone()),
+                    individual: probe_individual.clone(),
+                });
+                Ok(!Reasoner::new(&probe)?.is_consistent()?)
+            };
+            let indices = shrink(self.ontology(), supports)?;
+            Ok(Some(ReasonedJustification::new(&indices, self.ontology())))
+        })
     }
 
     /// Explain why one object-property assertion follows, or return `None`.
@@ -173,13 +267,20 @@ impl Reasoner {
         subject: &Term,
         object: &Term,
     ) -> Result<Option<ReasonedJustification>> {
-        if !self.entails_object_property(property, subject, object)? {
-            return Ok(None);
-        }
-        let indices = shrink(self.ontology(), |candidate| {
-            Reasoner::new(candidate)?.entails_object_property(property, subject, object)
-        })?;
-        Ok(Some(ReasonedJustification::new(&indices, self.ontology())))
+        let key = ExplanationKey::ObjectProperty {
+            property: property.clone(),
+            subject: subject.clone(),
+            object: object.clone(),
+        };
+        self.cached_explanation(key, || {
+            if !self.entails_object_property(property, subject, object)? {
+                return Ok(None);
+            }
+            let indices = shrink(self.ontology(), |candidate| {
+                Reasoner::new(candidate)?.entails_object_property(property, subject, object)
+            })?;
+            Ok(Some(ReasonedJustification::new(&indices, self.ontology())))
+        })
     }
 
     /// Explain an entailed typed data fact, including same-individual and sub-property inference.
@@ -189,24 +290,69 @@ impl Reasoner {
         individual: &Term,
         value: &crate::model::Literal,
     ) -> Result<Option<ReasonedJustification>> {
-        if !self.entails_data_property(property, individual, value)? {
-            return Ok(None);
-        }
-        let indices = shrink(self.ontology(), |candidate| {
-            Reasoner::new(candidate)?.entails_data_property(property, individual, value)
-        })?;
-        Ok(Some(ReasonedJustification::new(&indices, self.ontology())))
+        let key = ExplanationKey::DataProperty {
+            property: property.clone(),
+            individual: individual.clone(),
+            value_debug: format!("{value:?}"),
+        };
+        self.cached_explanation(key, || {
+            if !self.entails_data_property(property, individual, value)? {
+                return Ok(None);
+            }
+            let indices = shrink(self.ontology(), |candidate| {
+                Reasoner::new(candidate)?.entails_data_property(property, individual, value)
+            })?;
+            Ok(Some(ReasonedJustification::new(&indices, self.ontology())))
+        })
     }
 
     /// Explain an inconsistent knowledge base, or return `None` when it has a model.
     pub fn explain_inconsistency(&self) -> Result<Option<ReasonedJustification>> {
-        if self.is_consistent()? {
-            return Ok(None);
+        self.cached_explanation(ExplanationKey::Inconsistency, || {
+            if self.is_consistent()? {
+                return Ok(None);
+            }
+            let indices = shrink(self.ontology(), |candidate| {
+                Ok(!Reasoner::new(candidate)?.is_consistent()?)
+            })?;
+            Ok(Some(ReasonedJustification::new(&indices, self.ontology())))
+        })
+    }
+
+    /// Reuse a completed search without ever caching a failed probe.
+    ///
+    /// The cache is intentionally private and bounded: it can only contain
+    /// results derived from this immutable ontology snapshot.
+    fn cached_explanation<F>(
+        &self,
+        key: ExplanationKey,
+        compute: F,
+    ) -> Result<Option<ReasonedJustification>>
+    where
+        F: FnOnce() -> Result<Option<ReasonedJustification>>,
+    {
+        if let Some(cached) = self
+            .explanations
+            .lock()
+            .expect("explanation cache mutex poisoned")
+            .get(&key)
+        {
+            return Ok(cached);
         }
-        let indices = shrink(self.ontology(), |candidate| {
-            Ok(!Reasoner::new(candidate)?.is_consistent()?)
-        })?;
-        Ok(Some(ReasonedJustification::new(&indices, self.ontology())))
+        let computed = compute()?;
+        self.explanations
+            .lock()
+            .expect("explanation cache mutex poisoned")
+            .put(key, computed.clone());
+        Ok(computed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn explanation_cache_len(&self) -> usize {
+        self.explanations
+            .lock()
+            .expect("explanation cache mutex poisoned")
+            .len()
     }
 }
 
@@ -217,6 +363,50 @@ mod tests {
 
     fn term(value: &str) -> Term {
         Term::new(value)
+    }
+
+    #[test]
+    fn bounded_explanation_lru_evicts_the_least_recent_query() {
+        let mut cache = ExplanationLru::new(2);
+        let first = ExplanationKey::Subclass {
+            sub: term("A"),
+            sup: term("B"),
+        };
+        let second = ExplanationKey::Subclass {
+            sub: term("B"),
+            sup: term("C"),
+        };
+        let third = ExplanationKey::Subclass {
+            sub: term("C"),
+            sup: term("D"),
+        };
+
+        cache.put(first.clone(), None);
+        cache.put(second.clone(), None);
+        assert_eq!(cache.get(&first), Some(None), "hit refreshes LRU order");
+        cache.put(third, None);
+
+        assert!(cache.get(&first).is_some());
+        assert_eq!(cache.get(&second), None);
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn repeated_justifications_reuse_one_bounded_snapshot_entry() {
+        let ontology = Ontology::new()
+            .with_axiom(Axiom::subclass(named("Puppy"), named("Dog")))
+            .with_axiom(Axiom::subclass(named("Dog"), named("Animal")));
+        let reasoner = Reasoner::new(&ontology).unwrap();
+
+        let first = reasoner
+            .explain_subclass(&term("Puppy"), &term("Animal"))
+            .unwrap();
+        let second = reasoner
+            .explain_subclass(&term("Puppy"), &term("Animal"))
+            .unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(1, reasoner.explanation_cache_len());
     }
 
     fn named(value: &str) -> ClassExpression {
