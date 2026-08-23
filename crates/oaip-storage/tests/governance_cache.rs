@@ -67,14 +67,14 @@ async fn governance_execution_reuses_cached_data_prefixes_and_exact_results() {
     let stats = oaip_knowledge::data_consistency_thread_stats();
     // Governance also validates proposal impact on source/target snapshots,
     // so the totals include schema-only Reasoner warmup traffic. The fixed
-    // shape still proves both live-fact appends reused a cached prefix while
-    // the repeated applied snapshots hit the completed-result cache.
+    // shape proves live-fact appends and replacements reuse a cached prefix or
+    // patch base while repeated applied snapshots hit the completed cache.
     assert_eq!(
         oaip_knowledge::DataConsistencyCacheStats {
-            exact_hits: 5,
-            prefix_hits: 3,
-            rebuilds: 2,
-            delta_assertions: 2,
+            exact_hits: 3,
+            prefix_hits: 6,
+            rebuilds: 1,
+            delta_assertions: 8,
         },
         stats
     );

@@ -10,7 +10,7 @@ use oaip_abi::{canonical_decimal, compile_xsd_pattern_subset};
 use crate::model::{
     Axiom, ClassExpression, DataFacet, DataRange, Datatype, FacetValue, Literal, Ontology, Term,
 };
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use regex::Regex;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -205,6 +205,30 @@ impl DataConsistencyLru {
                 let entry = self.entries.remove(position)?;
                 return Some((length, entry));
             }
+        }
+        None
+    }
+
+    /// Find a cached snapshot with the same data schema whose ABox differs by
+    /// positive/negative assertion multiset operations.  Unlike prefix reuse,
+    /// this supports replacement and deletion without treating an absent axiom
+    /// as an OWL negative assertion.
+    fn find_patch_base(
+        &mut self,
+        ontology: &Ontology,
+    ) -> Option<(DataConsistencyCacheEntry, AssertionPatch)> {
+        for position in (0..self.entries.len()).rev() {
+            let Some(entry) = self.entries.get(position) else {
+                continue;
+            };
+            if !entry.result.is_ok() || !same_data_schema(entry.ontology.as_ref(), ontology) {
+                continue;
+            }
+            let Some(patch) = assertion_delta(entry.ontology.as_ref(), ontology) else {
+                continue;
+            };
+            let entry = self.entries.remove(position)?;
+            return Some((entry, patch));
         }
         None
     }
@@ -1068,6 +1092,139 @@ impl DataConsistencyState {
         Ok(())
     }
 
+    fn positive_matches(&self, fact: &DataFact, index: usize) -> bool {
+        self.positives.get(index).is_some_and(|stored| {
+            stored.property == fact.property
+                && literal_equal(&stored.value, &fact.value)
+                && self.canonical_individual(&stored.individual) == fact.individual
+        })
+    }
+
+    fn can_remove_positive(&self, fact: &DataFact) -> bool {
+        let key = (
+            self.canonical_individual(&fact.individual),
+            fact.property.clone(),
+        );
+        self.positive_index.get(&key).is_some_and(|candidates| {
+            candidates
+                .iter()
+                .any(|index| self.positive_matches(fact, *index))
+        })
+    }
+
+    fn can_remove_negative(&self, fact: &DataFact) -> bool {
+        let key = (
+            self.canonical_individual(&fact.individual),
+            fact.property.clone(),
+        );
+        self.negative_index.get(&key).is_some_and(|candidates| {
+            candidates
+                .iter()
+                .any(|index| self.negative_matches(fact, *index))
+        })
+    }
+
+    fn negative_matches(&self, fact: &DataFact, index: usize) -> bool {
+        self.negatives.get(index).is_some_and(|stored| {
+            stored.property == fact.property
+                && literal_equal(&stored.value, &fact.value)
+                && self.canonical_individual(&stored.individual) == fact.individual
+        })
+    }
+
+    fn remove_positive(&mut self, fact: &DataFact) -> Option<()> {
+        let individual = self.canonical_individual(&fact.individual);
+        let key = (individual.clone(), fact.property.clone());
+        let candidate = self.positive_index.get(&key).and_then(|candidates| {
+            candidates.iter().copied().find(|index| {
+                self.positives.get(*index).is_some_and(|stored| {
+                    stored.property == fact.property
+                        && literal_equal(&stored.value, &fact.value)
+                        && self.canonical_individual(&stored.individual) == individual
+                })
+            })
+        })?;
+        let candidates = self.positive_index.get_mut(&key)?;
+        let occurrence = candidates
+            .iter()
+            .position(|index| *index == candidate)
+            .expect("candidate index remains indexed");
+        let position = candidates.remove(occurrence);
+        if candidates.is_empty() {
+            self.positive_index.remove(&key);
+        }
+
+        self.positives.swap_remove(position);
+        let last = self.positives.len();
+        if position < last {
+            let previous_position = last;
+            let moved = self.positives[position].clone();
+            let moved_individual = self.canonical_individual(&moved.individual);
+            let moved_key = (moved_individual.clone(), moved.property.clone());
+            let candidates = self.positive_index.get_mut(&moved_key)?;
+            let moved_position = candidates
+                .iter()
+                .position(|index| *index == previous_position)?;
+            candidates[moved_position] = position;
+        }
+
+        if !self.positive_index.contains_key(&key) {
+            self.properties_by_individual.remove(&individual);
+        }
+        if self.functional.contains(&fact.property)
+            && self
+                .functional_values
+                .get(&key)
+                .is_some_and(|value| literal_equal(value, &fact.value))
+            && !self.positives.iter().any(|stored| {
+                self.canonical_individual(&stored.individual) == individual
+                    && stored.property == fact.property
+                    && literal_equal(&stored.value, &fact.value)
+            })
+        {
+            self.functional_values.remove(&key);
+        }
+        Some(())
+    }
+
+    fn remove_negative(&mut self, fact: &DataFact) -> Option<()> {
+        let individual = self.canonical_individual(&fact.individual);
+        let key = (individual.clone(), fact.property.clone());
+        let candidate = self.negative_index.get(&key).and_then(|candidates| {
+            candidates.iter().copied().find(|index| {
+                self.negatives.get(*index).is_some_and(|stored| {
+                    stored.property == fact.property
+                        && literal_equal(&stored.value, &fact.value)
+                        && self.canonical_individual(&stored.individual) == individual
+                })
+            })
+        })?;
+        let candidates = self.negative_index.get_mut(&key)?;
+        let occurrence = candidates
+            .iter()
+            .position(|index| *index == candidate)
+            .expect("candidate index remains indexed");
+        let position = candidates.remove(occurrence);
+        if candidates.is_empty() {
+            self.negative_index.remove(&key);
+        }
+
+        self.negatives.swap_remove(position);
+        let last = self.negatives.len();
+        if position < last {
+            let previous_position = last;
+            let moved = self.negatives[position].clone();
+            let moved_individual = self.canonical_individual(&moved.individual);
+            let moved_key = (moved_individual.clone(), moved.property.clone());
+            let candidates = self.negative_index.get_mut(&moved_key)?;
+            let moved_position = candidates
+                .iter()
+                .position(|index| *index == previous_position)?;
+            candidates[moved_position] = position;
+        }
+        Some(())
+    }
+
     /// Apply an append-only ABox fact to an already indexed snapshot.
     ///
     /// Same-individual axioms are deliberately excluded: they can change the
@@ -1136,6 +1293,166 @@ fn is_incremental_data_assertion(axiom: &Axiom) -> bool {
     )
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum AssertionPolarity {
+    Positive,
+    Negative,
+}
+
+#[derive(Debug, Default)]
+struct AssertionPatch {
+    remove_positive: Vec<DataFact>,
+    add_positive: Vec<DataFact>,
+    remove_negative: Vec<DataFact>,
+    add_negative: Vec<DataFact>,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct AssertionKey {
+    polarity: AssertionPolarity,
+    individual: Term,
+    property: Term,
+    literal: String,
+}
+
+fn assertion_fact(axiom: &Axiom) -> Option<(AssertionPolarity, DataFact)> {
+    let (polarity, property, individual, value) = match axiom {
+        Axiom::DataPropertyAssertion {
+            property,
+            individual,
+            value,
+        } => Some((AssertionPolarity::Positive, property, individual, value)),
+        Axiom::NegativeDataPropertyAssertion {
+            property,
+            individual,
+            value,
+        } => Some((AssertionPolarity::Negative, property, individual, value)),
+        _ => None,
+    }?;
+    Some((
+        polarity,
+        DataFact {
+            individual: individual.clone(),
+            property: property.clone(),
+            value: value.clone(),
+        },
+    ))
+}
+
+fn literal_cache_key(value: &Literal) -> String {
+    let datatype = value.datatype();
+    let lexical = match value {
+        Literal::Decimal(value) => canonical_decimal(value).unwrap_or_else(|| value.clone()),
+        Literal::Date(value) => date_value(value)
+            .map(|date| date.num_days_from_ce().to_string())
+            .unwrap_or_else(|| value.clone()),
+        Literal::DateTime(value) => date_time_value(value)
+            .map(|instant| {
+                instant
+                    .timestamp_nanos_opt()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .unwrap_or_else(|| value.clone()),
+        Literal::Double(value) => {
+            if *value == 0.0 {
+                "0".to_owned()
+            } else {
+                value.to_bits().to_string()
+            }
+        }
+        Literal::Boolean(value) => value.to_string(),
+        Literal::Integer(value) => value.to_string(),
+        Literal::String(value) => value.clone(),
+    };
+    format!("{datatype:?}:{lexical}")
+}
+
+fn assertion_key(polarity: AssertionPolarity, fact: &DataFact) -> AssertionKey {
+    AssertionKey {
+        polarity,
+        individual: fact.individual.clone(),
+        property: fact.property.clone(),
+        literal: literal_cache_key(&fact.value),
+    }
+}
+
+/// Compare the fixed constraint/identity part of two data projections.
+///
+/// Assertions are deliberately excluded; they are handled as multiset deltas.
+/// Requiring the retained schema to be exactly equal keeps SameIndividuals,
+/// subproperties, ranges and restrictions outside the reach of patch reuse.
+fn same_data_schema(left: &Ontology, right: &Ontology) -> bool {
+    let left = left
+        .axioms()
+        .iter()
+        .filter(|axiom| data_consistency_relevant(axiom) && !is_incremental_data_assertion(axiom))
+        .collect::<Vec<_>>();
+    let right = right
+        .axioms()
+        .iter()
+        .filter(|axiom| data_consistency_relevant(axiom) && !is_incremental_data_assertion(axiom))
+        .collect::<Vec<_>>();
+    left.len() == right.len()
+        && left
+            .into_iter()
+            .zip(right)
+            .all(|(left, right)| left == right)
+}
+
+/// Return the symmetric difference between two asserted ABox multisets.
+/// Net-equal duplicates cancel, while repeated distinct occurrences retain the
+/// expected multiplicity.
+fn assertion_delta(base: &Ontology, next: &Ontology) -> Option<AssertionPatch> {
+    let mut counts = BTreeMap::new();
+    for axiom in base
+        .axioms()
+        .iter()
+        .filter(|axiom| is_incremental_data_assertion(axiom))
+    {
+        let (polarity, fact) = assertion_fact(axiom)?;
+        let entry =
+            counts
+                .entry(assertion_key(polarity, &fact))
+                .or_insert((0i64, polarity, fact.clone()));
+        entry.0 -= 1;
+        entry.2 = fact;
+    }
+    for axiom in next
+        .axioms()
+        .iter()
+        .filter(|axiom| is_incremental_data_assertion(axiom))
+    {
+        let (polarity, fact) = assertion_fact(axiom)?;
+        let entry =
+            counts
+                .entry(assertion_key(polarity, &fact))
+                .or_insert((0i64, polarity, fact.clone()));
+        entry.0 += 1;
+        entry.2 = fact;
+    }
+
+    let mut patch = AssertionPatch::default();
+    for (_, (count, polarity, fact)) in counts {
+        match (polarity, count) {
+            (AssertionPolarity::Positive, count) if count < 0 => patch
+                .remove_positive
+                .extend(std::iter::repeat_n(fact, (-count) as usize)),
+            (AssertionPolarity::Positive, count) if count > 0 => patch
+                .add_positive
+                .extend(std::iter::repeat_n(fact, count as usize)),
+            (AssertionPolarity::Negative, count) if count < 0 => patch
+                .remove_negative
+                .extend(std::iter::repeat_n(fact, (-count) as usize)),
+            (AssertionPolarity::Negative, count) if count > 0 => patch
+                .add_negative
+                .extend(std::iter::repeat_n(fact, count as usize)),
+            _ => {}
+        }
+    }
+    Some(patch)
+}
+
 fn data_consistency_projection(ontology: &Ontology) -> Vec<&Axiom> {
     ontology
         .axioms()
@@ -1199,6 +1516,85 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
                         outcome = Err(error);
                         break;
                     }
+                }
+            }
+            cache.put(key, ontology, delta_state, outcome.clone());
+            return outcome;
+        }
+    }
+
+    // Replacement/deletion snapshots do not share a projection prefix with the
+    // previous ABox.  Reuse their completed index only when the constraint and
+    // identity schema is exactly unchanged and the difference reduces to data
+    // assertion insert/remove operations.
+    if let Some((mut entry, patch)) = cache.find_patch_base(ontology) {
+        record_prefix_hit();
+        let cached_state = entry.state;
+        let (mut delta_state, restored_entry) = match Arc::try_unwrap(cached_state) {
+            Ok(state) => (state, None),
+            Err(state) => {
+                let cloned_state = (*state).clone();
+                entry.state = state;
+                (cloned_state, Some(entry))
+            }
+        };
+        if let Some(restored_entry) = restored_entry {
+            cache.restore(restored_entry);
+        }
+
+        // Expand raw assertions through the unchanged subproperty hierarchy
+        // and prove every removal exists before mutating the cloned index.
+        let mut removals = Vec::new();
+        for fact in &patch.remove_positive {
+            removals.extend(
+                delta_state
+                    .expand_all(std::slice::from_ref(fact))
+                    .into_iter()
+                    .map(|fact| (false, fact)),
+            );
+        }
+        for fact in &patch.remove_negative {
+            removals.extend(
+                delta_state
+                    .expand_all(std::slice::from_ref(fact))
+                    .into_iter()
+                    .map(|fact| (true, fact)),
+            );
+        }
+        let removable = removals.iter().all(|(negative, fact)| {
+            if *negative {
+                delta_state.can_remove_negative(fact)
+            } else {
+                delta_state.can_remove_positive(fact)
+            }
+        });
+
+        if removable {
+            let mut outcome = Ok(());
+            for (negative, fact) in removals {
+                let removed = if negative {
+                    delta_state.remove_negative(&fact)
+                } else {
+                    delta_state.remove_positive(&fact)
+                };
+                if removed.is_some() {
+                    record_delta_assertion();
+                }
+            }
+            for fact in patch.add_positive {
+                if let Err(error) = delta_state.insert_positive(fact) {
+                    outcome = Err(error);
+                    break;
+                }
+                record_delta_assertion();
+            }
+            if outcome.is_ok() {
+                for fact in patch.add_negative {
+                    if let Err(error) = delta_state.insert_negative(fact) {
+                        outcome = Err(error);
+                        break;
+                    }
+                    record_delta_assertion();
                 }
             }
             cache.put(key, ontology, delta_state, outcome.clone());

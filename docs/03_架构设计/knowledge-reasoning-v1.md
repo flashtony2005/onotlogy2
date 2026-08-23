@@ -368,6 +368,14 @@ snapshot，而不是生成互不为前缀的 sibling snapshot。delta path 约 1
 projection 和逐 axiom 前缀确认，因此不宣称 O(suffix)，但避免重建完整 data index。delta 结果
 也会写入同一个容量 32 的 LRU，供下一次追加继续形成前缀。
 
+append-only 之外，成功缓存的 snapshot 还可作为 **assertion patch base**：当两个 ontology 的
+非断言 data-relevant axiom 完全相等（SameIndividuals、subproperty、range 和 restriction 都未变），
+正/负 assertion 可按 multiset 对称差归约为 remove/add 操作。删除会先经 subproperty hierarchy 展开，
+并在修改克隆索引前证明全部可删除；canonical decimal、date、dateTime、double 等值使用等价 key，
+避免只改词法形式的事实被误判为冲突。这里的“absence”只是移除旧 positive assertion，不会转换成
+OWL negative assertion。schema 不相等或 removal 无法应用时仍退回全量重建，patch 复用计入
+prefix-hit 指标。
+
 这条缓存已经接入存储治理执行路径。`initialize_knowledge_version`、
 `propose_knowledge_change` 和 `apply_knowledge_proposal` 统一通过
 `validate_canonical_ontology_with_world` 调用 data consistency，因此长生命知识版本会自动复用
@@ -476,8 +484,7 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 
 1. 继续扩展更多 DL 结构到 ODL 直接表达面（如跨 datatype composable range），进一步减少手写 proposal JSON。
 2. 在真实业务需要时继续扩展 XSD 构造（如自定义 datatype 定义），保持保守语义。
-3. 将 delta consistency 从当前的 append-only positive/negative data assertion 扩展到更新、
-   删除、SameIndividuals 增量和 TBox 变更。长生命快照已接入存储执行路径并具备缓存命中率
-   可观测性。
+3. 在 update/delete 已通过 assertion patch 复用后，将 delta consistency 继续扩展到
+   SameIndividuals 增量和 TBox 变更。长生命快照已接入存储执行路径并具备缓存命中率可观测性。
 4. 在已有短并发缓存基线之上，继续增加长时并发、恢复、内存和推理延迟基准。
 5. 在能力矩阵继续扩展时同步刷新本文档。
