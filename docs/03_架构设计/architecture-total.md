@@ -247,7 +247,7 @@ Human → Agent UI → Decision Trace UI
 | V2.3 | lushaohui | 2026-08-12 | V0.5 Memory 沉淀落地：4.4 能力边界表新增「Memory 沉淀（REQ-016）」由 ❌ 改 ✅（Action→Memory→下次 Plan 闭环）；Evolution Engine 行改标「远期」；TC-022a/b 全绿 |
 | V2.4 | lushaohui | 2026-08-12 | server 挂起式 HTTP 审批端点（V0.4 遗留项）落地：4.4「Policy 审批约束」补 `ServerApprover`+`ApprovalStore` 与 `GET /run/:run_id/approvals` + `POST /run/:run_id/approval/:req_id`（挂起→浏览器批准恢复 / 拒绝→WB2005 终止）；`PolicyApprover::approve` 升 async；TC-023a/b 全绿 |
 | V2.8 | lushaohui | 2026-08-23 | 知识层增加有界可组合 datatype union/intersection 表达与 live-world 治理检查 |
-| V2.9 | lushaohui | 2026-08-23 | ODL 关系支持 min/max 参与基数，投影为 DL 对象基数公理并纳入 live-world 治理门禁 |
+| V2.9 | lushaohui | 2026-08-23 | ODL 关系支持 min/max 参与基数，投影为 DL 对象基数公理；治理与诊断区分开放世界一致性和 closed-world admission |
 | V2.7 | lushaohui | 2026-08-23 | ODL 增加顶层 `disjoint` / `equivalent` 类组并投影为对应 DL 公理 |
 | V2.6 | lushaohui | 2026-08-23 | ODL 增加 `object ... extends ...` 无环多继承声明，并投影为 DL SubClassOf |
 | V2.5 | lushaohui | 2026-08-12 | 观察 UI 接入 Memory 视图：4.4 能力边界表新增「观察 UI · Memory 视图」由 ❌ 改 ✅；后端 `GET /api/v1/wb/agent/memory` + 前端 Memory 标签；TC-024a 全绿 |

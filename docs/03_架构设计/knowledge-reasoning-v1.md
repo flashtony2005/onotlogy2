@@ -187,8 +187,10 @@ relation placed:
 - `min_cardinality` / `max_cardinality` 是包含边界，约束每个 source 实例的出边数量；
 - 未声明的一侧不引入约束，`min <= max` 在解析和 Runtime IR 治理边界共同强制；
 - 投影为 `SubClassOf(source, ObjectMin/MaxCardinality(property, target))`；
-- live-world admission 按 closed snapshot 精确检查，并沿 `extends` / `equivalent`
-  named-class 关系识别子类型实例；不确定构造仍交由 mature reasoner 或拒绝。
+- pure DL reasoning 保持 OWL 开放世界语义：缺少可观察的 min 边不会误报 logical inconsistency；
+- executable admission 按 closed snapshot 逐个 source 实例精确检查，并沿 `extends` /
+  `equivalent` named-class 关系识别子类型实例；evolution gate 拒绝违反，diagnosis 以
+  `cardinalityViolations` 显式报告。
 
 ### 4.7 Composable data ranges
 
@@ -336,7 +338,7 @@ reviewer；系统不会因为 validation 通过而自动授权 evolution。
 | `GET /api/v1/knowledge/ontology/versions` | 版本谱系 |
 | `POST /api/v1/knowledge/ontology/init` | 初始化首个版本 |
 | `POST /api/v1/knowledge/reason` | 单项推理查询 |
-| `GET /api/v1/knowledge/diagnosis` | TBox + live ABox 诊断 |
+| `GET /api/v1/knowledge/diagnosis` | TBox + live ABox 诊断；closed-world 基数违反在 `cardinalityViolations` 返回 |
 | `GET/POST /api/v1/knowledge/proposals` | 列出/创建演化提案 |
 | `POST /api/v1/knowledge/proposals/:id/review` | 具名批准/驳回 |
 | `POST /api/v1/knowledge/proposals/:id/apply` | 应用为新版本 |

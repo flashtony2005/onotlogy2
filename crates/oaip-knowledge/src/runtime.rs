@@ -17,6 +17,7 @@ use oaip_abi::{
     ir::{OntologyIR, PropertyFacet, ScalarType},
     validate_property_constraints,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -430,6 +431,17 @@ pub fn canonical_runtime_ontology(
     canonical
 }
 
+/// A closed-world participation violation found in an authoritative world snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelationCardinalityViolation {
+    pub individual: String,
+    pub property: String,
+    pub target_class: String,
+    pub min: u32,
+    pub max: u32,
+    pub actual: u32,
+}
+
 /// A storage-independent world object fact awaiting DL materialization.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeObjectFact {
@@ -557,7 +569,6 @@ pub fn runtime_world_to_knowledge(
     objects: &[RuntimeObjectFact],
     relations: &[RuntimeRelationFact],
 ) -> Result<Ontology> {
-    validate_declared_cardinality_facts(ontology, objects, relations)?;
     let ranges = data_property_ranges(ontology);
     let mut knowledge_base = ontology.clone();
     for object in objects {
@@ -603,11 +614,12 @@ pub fn validate_canonical_ontology(ontology: &Ontology) -> Result<()> {
 /// Evolution gates must see the same closed set of facts that reasoning APIs
 /// will later read; otherwise a proposal can pass schema review and immediately
 /// make the live knowledge base inconsistent.
-fn validate_declared_cardinality_facts(
+pub fn declared_cardinality_violations(
     ontology: &Ontology,
     objects: &[RuntimeObjectFact],
     relations: &[RuntimeRelationFact],
-) -> Result<()> {
+) -> Vec<RelationCardinalityViolation> {
+    let mut violations = Vec::new();
     let mut bounds: BTreeMap<(String, String, String), (u32, u32)> = BTreeMap::new();
     for axiom in ontology.axioms() {
         let Axiom::SubClassOf { sub, sup } = axiom else {
@@ -715,17 +727,45 @@ fn validate_declared_cardinality_facts(
                             .is_some_and(|object_type| instance_of(object_type, &target))
                 })
                 .count();
-            let actual = u32::try_from(actual).map_err(|_| {
-                KnowledgeError::Invalid(format!("relation `{property}` has too many live facts"))
-            })?;
+            let actual = u32::try_from(actual).unwrap_or(u32::MAX);
             if actual < min || actual > max {
-                return Err(KnowledgeError::Invalid(format!(
-                    "individual `{subject}` requires {min}..={max} `{property}` edges to `{target}`, found {actual}"
-                )));
+                violations.push(RelationCardinalityViolation {
+                    individual: subject.to_owned(),
+                    property: property.clone(),
+                    target_class: target.clone(),
+                    min,
+                    max,
+                    actual,
+                });
             }
         }
     }
-    Ok(())
+    violations
+}
+
+fn validate_declared_cardinality_facts(
+    ontology: &Ontology,
+    objects: &[RuntimeObjectFact],
+    relations: &[RuntimeRelationFact],
+) -> Result<()> {
+    let violation = declared_cardinality_violations(ontology, objects, relations)
+        .into_iter()
+        .next()
+        .map(|violation| {
+            KnowledgeError::Invalid(format!(
+                "individual `{}` requires {}..={} `{}` edges to `{}`, found {}",
+                violation.individual,
+                violation.min,
+                violation.max,
+                violation.property,
+                violation.target_class,
+                violation.actual
+            ))
+        });
+    match violation {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 pub fn validate_canonical_ontology_with_world(
@@ -733,6 +773,7 @@ pub fn validate_canonical_ontology_with_world(
     objects: &[RuntimeObjectFact],
     relations: &[RuntimeRelationFact],
 ) -> Result<()> {
+    validate_declared_cardinality_facts(ontology, objects, relations)?;
     let knowledge_base = runtime_world_to_knowledge(ontology, objects, relations)?;
     crate::data::validate_data_consistency(&knowledge_base)?;
     if Reasoner::new(&knowledge_base)?.is_consistent()? {
@@ -1266,6 +1307,9 @@ relation companion_of:
             relation: "companion_of".to_owned(),
             target: "dog-1".to_owned(),
         };
+        // DL consistency is open-world: a missing edge does not make ABox
+        // projection inconsistent, though it fails the executable closed-world
+        // participation gate.
         assert!(
             runtime_world_to_knowledge(
                 &schema,
@@ -1274,13 +1318,21 @@ relation companion_of:
             )
             .is_ok()
         );
+        let isolated =
+            runtime_world_to_knowledge(&schema, std::slice::from_ref(&dog), &[]).unwrap();
+        assert!(Reasoner::new(&isolated).unwrap().is_consistent().unwrap());
+        assert!(
+            validate_canonical_ontology_with_world(&schema, std::slice::from_ref(&dog), &[])
+                .is_err()
+        );
 
         let other = RuntimeObjectFact {
             id: "dog-2".to_owned(),
             object_type: "Dog".to_owned(),
             data: serde_json::json!({ "name": "Ben", "breed": "poodle" }),
         };
-        let missing = runtime_world_to_knowledge(&schema, &[dog, other], &[edge]).unwrap_err();
+        let missing =
+            validate_canonical_ontology_with_world(&schema, &[dog, other], &[edge]).unwrap_err();
         assert!(missing.to_string().contains("individual `dog-2`"));
     }
 

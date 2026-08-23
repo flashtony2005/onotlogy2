@@ -7,7 +7,8 @@
 use crate::abi::ir::OntologyIR;
 use crate::abi::validate_object_data;
 use crate::knowledge::{
-    KnowledgeError, Ontology, RuntimeObjectFact, RuntimeRelationFact, runtime_world_to_knowledge,
+    KnowledgeError, Ontology, RelationCardinalityViolation, RuntimeObjectFact, RuntimeRelationFact,
+    declared_cardinality_violations, runtime_world_to_knowledge,
 };
 use crate::storage::{LibSQLStorage, ObjectRecord, RelationRecord};
 
@@ -49,11 +50,10 @@ pub async fn validate_runtime_ir_against_world(
     Ok(())
 }
 
-/// Read the authoritative current world snapshot and project it to an ABox.
-pub async fn storage_world_snapshot_to_knowledge(
-    schema: &Ontology,
+/// Read the authoritative current world snapshot.
+pub async fn storage_world_snapshot(
     storage: &LibSQLStorage,
-) -> Result<Ontology, KnowledgeBridgeError> {
+) -> Result<(Vec<ObjectRecord>, Vec<RelationRecord>), KnowledgeBridgeError> {
     let objects = storage
         .list_all_objects()
         .await
@@ -62,7 +62,41 @@ pub async fn storage_world_snapshot_to_knowledge(
         .list_all_relations()
         .await
         .map_err(|error| KnowledgeBridgeError::Storage(error.to_string()))?;
+    Ok((objects, relations))
+}
+
+/// Read the authoritative current world snapshot and project it to an ABox.
+pub async fn storage_world_snapshot_to_knowledge(
+    schema: &Ontology,
+    storage: &LibSQLStorage,
+) -> Result<Ontology, KnowledgeBridgeError> {
+    let (objects, relations) = storage_world_snapshot(storage).await?;
     world_snapshot_to_knowledge(schema, &objects, &relations)
+}
+
+/// Evaluate closed-world ODL participation bounds against the current snapshot.
+pub fn world_snapshot_cardinality_violations(
+    schema: &Ontology,
+    objects: &[ObjectRecord],
+    relations: &[RelationRecord],
+) -> Vec<RelationCardinalityViolation> {
+    let objects = objects
+        .iter()
+        .map(|record| RuntimeObjectFact {
+            id: record.id.clone(),
+            object_type: record.r#type.clone(),
+            data: record.data.clone(),
+        })
+        .collect::<Vec<_>>();
+    let relations = relations
+        .iter()
+        .map(|record| RuntimeRelationFact {
+            source: record.source.clone(),
+            relation: record.relation.clone(),
+            target: record.target.clone(),
+        })
+        .collect::<Vec<_>>();
+    declared_cardinality_violations(schema, &objects, &relations)
 }
 
 /// Append live-world ABox assertions to a schema ontology without changing it.

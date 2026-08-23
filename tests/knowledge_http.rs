@@ -472,6 +472,83 @@ async fn wait_run_completed(kernel: &LibSQLStorage, run_id: &str) -> bool {
 }
 
 #[tokio::test]
+async fn knowledge_diagnosis_reports_closed_world_cardinality_violations() {
+    let kernel = Arc::new(LibSQLStorage::open(":memory:").await.unwrap());
+    for (object_type, id) in [
+        ("Customer", "customer-1"),
+        ("Order", "order-1"),
+        ("Order", "order-2"),
+    ] {
+        kernel.create(object_type, id, json!({})).await.unwrap();
+    }
+    kernel
+        .apply_world(WorldCommand::LinkRelation {
+            source: "customer-1".into(),
+            edge: "placed".into(),
+            target: "order-1".into(),
+            project_id: None,
+        })
+        .await
+        .unwrap();
+
+    let mut candidate: openaip_os::abi::ir::OntologyIR =
+        serde_json::from_value(runtime_ir(false)).unwrap();
+    let placed = candidate
+        .relations
+        .iter_mut()
+        .find(|relation| relation.name == "placed")
+        .unwrap();
+    placed.min_cardinality = Some(1);
+    placed.max_cardinality = Some(2);
+    kernel
+        .initialize_knowledge_version(
+            "root",
+            &serde_json::from_value(root_ontology()).unwrap(),
+            Some(&candidate),
+        )
+        .await
+        .unwrap();
+
+    let addr = common::spawn_server(kernel.clone()).await;
+    let (status, body) = call(addr, "GET", "/api/v1/knowledge/diagnosis", None).await;
+    assert_eq!(status, 200, "初始化后的诊断失败: {body}");
+    assert_eq!(body["data"]["consistent"], true);
+    assert_eq!(body["data"]["cardinalityViolations"], json!([]));
+
+    // World evolution after approval must remain diagnosable. A missing minimum
+    // edge is a closed-world executable-schema violation, not an OWL inconsistency.
+    kernel
+        .apply_world(WorldCommand::UnlinkRelation {
+            source: "customer-1".into(),
+            edge: "placed".into(),
+            target: "order-1".into(),
+            project_id: None,
+        })
+        .await
+        .unwrap();
+
+    let (status, body) = call(addr, "GET", "/api/v1/knowledge/diagnosis", None).await;
+    assert_eq!(status, 200, "基数诊断失败: {body}");
+    assert_eq!(body["data"]["consistent"], true);
+    let violations = body["data"]["cardinalityViolations"].as_array().unwrap();
+    assert_eq!(1, violations.len());
+    assert_eq!("customer-1", violations[0]["individual"]);
+    assert_eq!("placed", violations[0]["property"]);
+    assert_eq!(1, violations[0]["min"]);
+    assert_eq!(0, violations[0]["actual"]);
+
+    let (status, body) = call(
+        addr,
+        "POST",
+        "/api/v1/knowledge/reason",
+        Some(json!({ "query": "consistency" })),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["data"]["consistent"], true);
+}
+
+#[tokio::test]
 async fn approved_runtime_evolution_hot_swaps_compiled_definitions() {
     let kernel = Arc::new(LibSQLStorage::open(":memory:").await.unwrap());
     kernel

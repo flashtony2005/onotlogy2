@@ -16,7 +16,10 @@ use crate::knowledge::Ontology as KnowledgeOntology;
 use crate::knowledge::{
     OntologyProposal, ReasonedJustification, Reasoner, validate_explanation_limit,
 };
-use crate::knowledge_bridge::storage_world_snapshot_to_knowledge;
+use crate::knowledge_bridge::{
+    storage_world_snapshot, storage_world_snapshot_to_knowledge,
+    world_snapshot_cardinality_violations, world_snapshot_to_knowledge,
+};
 use crate::storage::StorageError;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -323,7 +326,13 @@ pub(crate) async fn diagnose_current_knowledge(
         )
             .into_response();
     };
-    let knowledge_base = match storage_world_snapshot_to_knowledge(&schema, &st.storage).await {
+    let (objects, relations) = match storage_world_snapshot(&st.storage).await {
+        Ok(snapshot) => snapshot,
+        Err(error) => return reasoning_error(error),
+    };
+    let cardinality_violations =
+        world_snapshot_cardinality_violations(&schema, &objects, &relations);
+    let knowledge_base = match world_snapshot_to_knowledge(&schema, &objects, &relations) {
         Ok(knowledge_base) => knowledge_base,
         Err(error) => return reasoning_error(error),
     };
@@ -352,6 +361,18 @@ pub(crate) async fn diagnose_current_knowledge(
             "unsatisfiableClasses": [],
             "unsatisfiable": [],
             "inconsistency": inconsistency,
+            "cardinalityViolations": cardinality_violations,
+        });
+        return ApiResponse::ok(result).into_response();
+    }
+
+    if !cardinality_violations.is_empty() {
+        let result = json!({
+            "consistent": true,
+            "unsatisfiableClasses": [],
+            "unsatisfiable": [],
+            "inconsistency": Option::<ReasonedJustification>::None,
+            "cardinalityViolations": cardinality_violations,
         });
         return ApiResponse::ok(result).into_response();
     }
@@ -386,6 +407,7 @@ pub(crate) async fn diagnose_current_knowledge(
         "unsatisfiableClasses": classification.unsatisfiable_classes(),
         "unsatisfiable": unsatisfiable,
         "inconsistency": Option::<ReasonedJustification>::None,
+        "cardinalityViolations": Vec::<crate::knowledge::RelationCardinalityViolation>::new(),
     });
     ApiResponse::ok(result).into_response()
 }
