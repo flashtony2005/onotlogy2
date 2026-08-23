@@ -92,6 +92,7 @@ relation 把两个真实实体合并成同一个 individual。非标量 runtime 
 - `ObjectSomeValuesFrom`
 - `ObjectAllValuesFrom`
 - `ObjectHasValue`
+- `ObjectOneOf`（nominal / enumerated class；空枚举等价 `Nothing`）
 - `ObjectMinCardinality`
 - `ObjectMaxCardinality`
 - `DataSomeValuesFrom`
@@ -353,6 +354,8 @@ ontology 超过 `MAX_EXPLANATION_AXIOMS = 512` 时解释请求 fail-closed，避
 - 不宣称完整 OWL 2 DL entailment。
 - general datatype entailment 仍受 mature backend 能力限制；data-property entailment 当前主要覆盖
   asserted fact、same-individual alias 和 data subproperty fragment。
+- 上游 tableau 会把 reachable nominal（`ObjectOneOf`）保守分类为 snapshot-replay unsafe，
+  并退回逐查询推理路径。这是性能边界，不是拒绝 nominal 语义。
 - facet/range/enumeration 的确定性检查用于阻止不一致持久化和错误 query 结果，不等于声明完整 XSD
   datatype tableau。
 - 大 ontology、大 ABox 的性能尚未完成生产级审计；当前正确性优先。

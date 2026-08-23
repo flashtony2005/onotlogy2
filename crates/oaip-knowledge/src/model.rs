@@ -138,6 +138,7 @@ pub enum ClassExpression {
         property: Term,
         individual: Term,
     },
+    ObjectOneOf(Vec<Term>),
     ObjectMinCardinality {
         cardinality: u32,
         property: Term,
@@ -208,6 +209,10 @@ impl ClassExpression {
             property: property.into(),
             individual: individual.into(),
         }
+    }
+
+    pub fn object_one_of(individuals: impl IntoIterator<Item = impl Into<Term>>) -> Self {
+        Self::ObjectOneOf(individuals.into_iter().map(Into::into).collect())
     }
 
     pub fn min_cardinality(
@@ -282,6 +287,7 @@ impl ClassExpression {
             | Self::ObjectMinCardinality { value: item, .. }
             | Self::ObjectMaxCardinality { value: item, .. } => item.push_named_classes(out),
             Self::ObjectHasValue { .. }
+            | Self::ObjectOneOf(_)
             | Self::DataSomeValuesFrom { .. }
             | Self::DataAllValuesFrom { .. }
             | Self::DataHasValue { .. }

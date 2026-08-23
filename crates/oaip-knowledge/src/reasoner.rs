@@ -566,6 +566,9 @@ fn public_terms(ontology: &Ontology) -> TermAliases {
                 class_terms(value, aliases);
             }
             ClassExpression::ObjectHasValue { individual, .. } => insert(aliases, individual),
+            ClassExpression::ObjectOneOf(individuals) => {
+                individuals.iter().for_each(|term| insert(aliases, term));
+            }
             ClassExpression::Thing
             | ClassExpression::Nothing
             | ClassExpression::DataSomeValuesFrom { .. }
@@ -973,6 +976,15 @@ fn class_expression(
                 i: named_individual(build, out, individual).into(),
             }
         }
+        ClassExpression::ObjectOneOf(individuals) if individuals.is_empty() => {
+            OwlClassExpression::Class(build.class("http://www.w3.org/2002/07/owl#Nothing"))
+        }
+        ClassExpression::ObjectOneOf(individuals) => OwlClassExpression::ObjectOneOf(
+            individuals
+                .iter()
+                .map(|individual| named_individual(build, out, individual).into())
+                .collect(),
+        ),
         ClassExpression::ObjectMinCardinality {
             cardinality,
             property,
@@ -1380,6 +1392,107 @@ mod tests {
                 .unwrap()
                 .contains(&term("Animal"))
         );
+    }
+
+    #[test]
+    fn object_one_of_entails_exactly_its_nominals() {
+        let ontology = Ontology::new()
+            .with_axiom(Axiom::EquivalentClasses(vec![
+                class("Chosen"),
+                ClassExpression::object_one_of([term("alice"), term("bob")]),
+            ]))
+            .with_axiom(Axiom::DifferentIndividuals(vec![
+                term("alice"),
+                term("bob"),
+                term("carol"),
+            ]));
+        let reasoner = Reasoner::new(&ontology).unwrap();
+
+        assert!(reasoner.is_consistent().unwrap());
+        assert!(
+            reasoner
+                .is_instance_of(&term("Chosen"), &term("alice"))
+                .unwrap()
+        );
+        assert!(
+            reasoner
+                .is_instance_of(&term("Chosen"), &term("bob"))
+                .unwrap()
+        );
+        assert!(
+            !reasoner
+                .is_instance_of(&term("Chosen"), &term("carol"))
+                .unwrap()
+        );
+        assert_eq!(
+            reasoner.instances_of(&term("Chosen")).unwrap(),
+            BTreeSet::from([term("alice"), term("bob")])
+        );
+
+        let explanation = reasoner
+            .explain_instance(&term("Chosen"), &term("alice"))
+            .unwrap()
+            .expect("nominal membership should be explainable");
+        assert!(
+            explanation.axioms.iter().any(|axiom| matches!(
+                axiom,
+                Axiom::EquivalentClasses(classes)
+                    if classes.contains(&class("Chosen"))
+            )),
+            "explanation should retain the nominal definition: {explanation:?}"
+        );
+    }
+
+    #[test]
+    fn object_one_of_participates_in_satisfiability() {
+        let ontology = Ontology::new()
+            .with_axiom(Axiom::DifferentIndividuals(vec![term("adam"), term("bob")]))
+            .with_axiom(Axiom::subclass(
+                class("Pet"),
+                ClassExpression::has_value("likes", term("adam")),
+            ))
+            .with_axiom(Axiom::subclass(
+                class("Pet"),
+                ClassExpression::all_values_from(
+                    "likes",
+                    ClassExpression::object_one_of([term("bob")]),
+                ),
+            ));
+        let reasoner = Reasoner::new(&ontology).unwrap();
+        let classified = reasoner.classify().unwrap();
+
+        assert_eq!(
+            classified.unsatisfiable_classes(),
+            &BTreeSet::from([term("Pet")])
+        );
+
+        let explanation = reasoner
+            .explain_class_unsatisfiable(&term("Pet"))
+            .unwrap()
+            .expect("nominal-driven unsatisfiability should be explainable");
+        let nominal_restriction = ClassExpression::all_values_from(
+            "likes",
+            ClassExpression::object_one_of([term("bob")]),
+        );
+        assert!(
+            explanation.axioms.iter().any(|axiom| matches!(
+                axiom,
+                Axiom::SubClassOf { sup, .. } if *sup == nominal_restriction
+            )),
+            "explanation should retain the nominal definition: {explanation:?}"
+        );
+    }
+
+    #[test]
+    fn empty_object_one_of_is_the_bottom_class() {
+        let ontology = Ontology::new().with_axiom(Axiom::EquivalentClasses(vec![
+            class("Nobody"),
+            ClassExpression::object_one_of(Vec::<Term>::new()),
+        ]));
+        let reasoner = Reasoner::new(&ontology).unwrap();
+
+        assert!(!reasoner.is_satisfiable(&term("Nobody")).unwrap());
+        assert!(reasoner.instances_of(&term("Nobody")).unwrap().is_empty());
     }
 
     #[test]
