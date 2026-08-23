@@ -243,11 +243,25 @@ fn core_performance(c: &mut Criterion) {
 fn knowledge_abox_performance(c: &mut Criterion) {
     let ontology = benchmark_data_ontology();
     assert!(validate_data_consistency(&ontology).is_ok());
+    let iteration = AtomicU64::new(0);
 
     let mut group = c.benchmark_group("knowledge_abox");
     group.sample_size(10);
     group.throughput(Throughput::Elements(DATA_FACTS as u64));
     group.bench_function("data_consistency_1000_assertions", |b| {
+        b.iter(|| {
+            let sequence = iteration.fetch_add(1, Ordering::Relaxed);
+            // A unique ignored class assertion keeps each iteration on the cold
+            // path; the exact-result cache must not hide indexing cost.
+            let cold = ontology.clone().with_axiom(Axiom::ClassAssertion {
+                class: ClassExpression::Thing,
+                individual: Term::new(format!("cold-{sequence}")),
+            });
+            black_box(validate_data_consistency(black_box(&cold)).is_ok())
+        })
+    });
+    assert!(validate_data_consistency(&ontology).is_ok());
+    group.bench_function("data_consistency_cached_1000_assertions", |b| {
         b.iter(|| black_box(validate_data_consistency(black_box(&ontology)).is_ok()))
     });
     group.finish();

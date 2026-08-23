@@ -12,13 +12,88 @@ use crate::model::{
 };
 use chrono::{DateTime, NaiveDate, Utc};
 use regex::Regex;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Debug, Clone, PartialEq)]
 struct DataFact {
     individual: Term,
     property: Term,
     value: Literal,
+}
+
+/// Number of immutable data-consistency conclusions retained across calls.
+const DATA_CONSISTENCY_CACHE_CAPACITY: usize = 32;
+
+type DataConsistencyCacheEntry = (u64, Arc<Ontology>, Result<()>);
+
+/// An exact LRU for completed checks of immutable ontology snapshots.
+///
+/// The fingerprint only locates a candidate; equality on the retained ontology
+/// makes a hash collision a miss rather than an unsound hit.
+#[derive(Debug)]
+struct DataConsistencyLru {
+    entries: VecDeque<DataConsistencyCacheEntry>,
+    capacity: usize,
+}
+
+impl DataConsistencyLru {
+    fn new(capacity: usize) -> Self {
+        Self {
+            entries: VecDeque::new(),
+            capacity: capacity.max(1),
+        }
+    }
+
+    fn get(&mut self, key: u64, ontology: &Ontology) -> Option<Result<()>> {
+        let position = self
+            .entries
+            .iter()
+            .position(|(candidate, candidate_ontology, _)| {
+                *candidate == key && candidate_ontology.as_ref() == ontology
+            })?;
+        let entry = self.entries.remove(position);
+        let (_, cached_ontology, result) = entry.expect("position came from entries");
+        self.entries
+            .push_back((key, cached_ontology, result.clone()));
+        Some(result)
+    }
+
+    #[cfg(test)]
+    fn contains_key(&self, key: u64, ontology: &Ontology) -> bool {
+        self.entries
+            .iter()
+            .any(|(candidate, candidate_ontology, _)| {
+                *candidate == key && candidate_ontology.as_ref() == ontology
+            })
+    }
+
+    fn put(&mut self, key: u64, ontology: &Ontology, result: Result<()>) {
+        self.get(key, ontology);
+        self.entries
+            .push_back((key, Arc::new(ontology.clone()), result));
+        while self.entries.len() > self.capacity {
+            self.entries.pop_front();
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+fn data_consistency_cache() -> &'static Mutex<DataConsistencyLru> {
+    static CACHE: OnceLock<Mutex<DataConsistencyLru>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(DataConsistencyLru::new(DATA_CONSISTENCY_CACHE_CAPACITY)))
+}
+
+fn ontology_fingerprint(ontology: &Ontology) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    ontology.axioms().hash(&mut hasher);
+    hasher.finish()
 }
 
 fn literal_equal(left: &Literal, right: &Literal) -> bool {
@@ -501,6 +576,20 @@ pub(crate) fn materialize_data_domain_assertions(ontology: &Ontology) -> Ontolog
 /// Validate the asserted data fragment that is not yet covered soundly by the
 /// external tableau.  The checks are conservative for the supported vocabulary.
 pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
+    let key = ontology_fingerprint(ontology);
+    let mut cache = data_consistency_cache()
+        .lock()
+        .expect("data consistency cache mutex poisoned");
+    if let Some(result) = cache.get(key, ontology) {
+        return result;
+    }
+
+    let result = validate_data_consistency_uncached(ontology);
+    cache.put(key, ontology, result.clone());
+    result
+}
+
+fn validate_data_consistency_uncached(ontology: &Ontology) -> Result<()> {
     let mut aliases = BTreeMap::new();
     let mut positive = Vec::new();
     let mut negative = Vec::new();
@@ -834,6 +923,79 @@ mod tests {
             Literal::String("archived".into()),
         ));
         assert!(validate_data_consistency(&conflict).is_err());
+    }
+
+    #[test]
+    fn repeated_consistency_calls_reuse_the_exact_result() {
+        let ontology = Ontology::new().with_axiom(fact(
+            "cache-candidate",
+            "status",
+            Literal::String("active".into()),
+        ));
+        let key = ontology_fingerprint(&ontology);
+
+        assert!(
+            !data_consistency_cache()
+                .lock()
+                .expect("cache mutex")
+                .contains_key(key, &ontology)
+        );
+        assert!(validate_data_consistency(&ontology).is_ok());
+        assert!(
+            data_consistency_cache()
+                .lock()
+                .expect("cache mutex")
+                .get(key, &ontology)
+                == Some(Ok(()))
+        );
+        assert!(validate_data_consistency(&ontology).is_ok());
+    }
+
+    #[test]
+    fn consistency_errors_are_reused_without_becoming_successes() {
+        let conflict = Ontology::new()
+            .with_axiom(Axiom::FunctionalDataProperty(term("age")))
+            .with_axiom(fact("cache-conflict", "age", Literal::Integer(30)))
+            .with_axiom(fact("cache-conflict", "age", Literal::Integer(31)));
+        let key = ontology_fingerprint(&conflict);
+
+        assert!(validate_data_consistency(&conflict).is_err());
+        assert!(validate_data_consistency(&conflict).is_err());
+        assert!(
+            data_consistency_cache()
+                .lock()
+                .expect("cache mutex")
+                .get(key, &conflict)
+                .is_some_and(|result| result.is_err())
+        );
+    }
+
+    #[test]
+    fn fingerprint_collision_is_treated_as_a_cache_miss() {
+        let retained = Ontology::new().with_axiom(fact("a", "tag", Literal::String("kept".into())));
+        let candidate =
+            Ontology::new().with_axiom(fact("a", "tag", Literal::String("other".into())));
+        let mut cache = DataConsistencyLru::new(1);
+
+        cache.put(42, &retained, Ok(()));
+        assert!(cache.get(42, &candidate).is_none());
+        cache.put(42, &candidate, Ok(()));
+
+        assert_eq!(1, cache.len());
+        assert!(!cache.contains_key(42, &retained));
+        assert_eq!(Some(Ok(())), cache.get(42, &candidate));
+    }
+
+    #[test]
+    fn signed_zero_literals_hash_as_equal_candidates() {
+        let positive = Ontology::new().with_axiom(fact("sensor", "reading", Literal::Double(0.0)));
+        let negative = Ontology::new().with_axiom(fact("sensor", "reading", Literal::Double(-0.0)));
+
+        assert_eq!(positive, negative);
+        assert_eq!(
+            ontology_fingerprint(&positive),
+            ontology_fingerprint(&negative)
+        );
     }
 
     #[test]

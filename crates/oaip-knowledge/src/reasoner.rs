@@ -183,7 +183,7 @@ fn snapshot_cache() -> &'static Mutex<SnapshotLru> {
 /// a fingerprint collision from being mistaken for the same knowledge base.
 fn ontology_fingerprint(ontology: &Ontology) -> u64 {
     let mut hasher = DefaultHasher::new();
-    format!("{:?}", ontology.axioms()).hash(&mut hasher);
+    ontology.axioms().hash(&mut hasher);
     hasher.finish()
 }
 

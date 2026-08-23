@@ -345,9 +345,16 @@ ontology 超过 `MAX_EXPLANATION_AXIOMS = 512` 时解释请求 fail-closed，避
 `validate_data_consistency` 在单次调用内按 property 索引 range、restriction、enumeration，
 并按 canonical individual + property 索引负断言；functional 冲突和 disjoint data properties
 在扫描正断言时同步判定。这样避免了对每个事实线性搜索全部公理或负断言，也不改变既有
-确定性检查语义。1,000 条 functional-property 断言的本机 Criterion 基准约为 589 µs。
-这只是单次调用的索引化检查，不是跨调用增量缓存；“只重新检查受新断言影响的部分”仍在
-下一步演进中。
+确定性检查语义。
+
+同一 immutable ontology 的已完成结果还会进入进程内容量为 32 的 exact-result LRU，包括
+确定性错误结论；因此 repeated governance/diagnosis 调用不会重复索引同一个不可变版本。
+cache key 只用于定位候选，命中前仍执行完整 ontology equality，避免 fingerprint collision。
+Criterion 基准使用每个迭代唯一的 ignored class assertion 保持 cold path，防止该缓存把
+索引成本隐藏掉；本机 1,000 条 functional-property 断言的 cold path 约 733 µs，命中
+exact-result cache 后约 32.5 µs（cold path 还包含基准为绕过缓存而做的 ontology clone）。
+
+这不是 delta consistency：“只重新检查受新断言影响的部分”仍需要后续设计。
 
 ### 5.6 明确限制
 
@@ -446,6 +453,7 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 
 1. 继续扩展更多 DL 结构到 ODL 直接表达面（如跨 datatype composable range），进一步减少手写 proposal JSON。
 2. 在真实业务需要时继续扩展 XSD 构造（如自定义 datatype 定义），保持保守语义。
-3. 为大 ABox 增加 incremental consistency：单次调用已索引化，跨调用增量复用仍开放。
+3. 为大 ABox 增加 delta consistency：immutable ontology 的跨调用 exact-result 复用已完成，
+   只重查受新增断言影响的部分仍开放。
 4. 增加长时并发、恢复、内存和推理延迟基准。
 5. 在能力矩阵继续扩展时同步刷新本文档。

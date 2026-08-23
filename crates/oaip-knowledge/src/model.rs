@@ -86,6 +86,27 @@ impl Literal {
     }
 }
 
+impl std::hash::Hash for Literal {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Self::Boolean(value) => value.hash(state),
+            Self::Integer(value) => value.hash(state),
+            // A fingerprint is only a candidate locator; full ontology equality
+            // remains authoritative.  Canonicalize signed zero because PartialEq
+            // treats it as equal; bit hashing merely avoids requiring Eq on f64.
+            Self::Double(value) => {
+                let bits = if *value == 0.0 { 0 } else { value.to_bits() };
+                bits.hash(state)
+            }
+            Self::String(value)
+            | Self::Decimal(value)
+            | Self::Date(value)
+            | Self::DateTime(value) => value.hash(state),
+        }
+    }
+}
+
 /// XSD datatypes supported by the first complete bridge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Datatype {
@@ -116,7 +137,7 @@ impl Datatype {
 ///
 /// This is richer than the object-only ODL IR: it can state necessary and
 /// sufficient conditions over relationships as well as typed data values.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Hash, Serialize, Deserialize)]
 pub enum ClassExpression {
     /// The full domain (OWL Thing / ⊤).
     Thing,
@@ -328,7 +349,7 @@ impl DataFacet {
 }
 
 /// One `FacetRestriction` inside an OWL datatype restriction.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Hash, Serialize, Deserialize)]
 pub struct FacetValue {
     pub facet: DataFacet,
     pub value: Literal,
@@ -339,7 +360,7 @@ pub struct FacetValue {
 /// The existing flat property-range axioms remain the canonical executable
 /// projection.  This expression adds governed proposals the ability to state
 /// explicit unions and intersections of datatypes, enumerations and facets.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Hash, Serialize, Deserialize)]
 pub enum DataRange {
     Datatype(Datatype),
     OneOf(Vec<Literal>),
@@ -379,7 +400,7 @@ impl DataRange {
 }
 
 /// Asserted TBox/ABox axioms supported by the knowledge kernel.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Hash, Serialize, Deserialize)]
 pub enum Axiom {
     SubClassOf {
         sub: ClassExpression,
