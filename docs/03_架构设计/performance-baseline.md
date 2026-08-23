@@ -16,6 +16,7 @@
 | Projection replay | 1,000 条确定性 world event |
 | World query | 500 个持久化对象 |
 | Audit write | 每次迭代写 1 条事件 + 1 个哈希链节点 |
+| Reasoner classification | 24 个 named class 的固定继承链；对比新建 Reasoner 和同一不可变快照重复查询 |
 | HTTP/WS load | 10 次并发 submit/approve（并发 5），3 个 WebSocket 客户端，真实 release 二进制 |
 
 ## 基线结果
@@ -26,6 +27,10 @@
 | Projection replay | 335.503 µs | 335.756 µs | 约 2,980,600 events/s | 无既有目标；建立基线 | 已建档 |
 | World object query | 247.964 µs / 批次 | 246.653 µs / 批次 | 约 2,016,400 objects/s | 本地 CRUD < 10 ms | 达标 |
 | Audit append + hash chain | 27.961 µs | 27.985 µs | 约 35,764 writes/s | 无既有目标；建立基线 | 已建档 |
+| Reasoner classification (new) | 1.358 ms | 约 1.358 ms | 约 17,678 classes/s | 无既有目标；建立基线 | 已建档 |
+| Reasoner classification (snapshot cache) | 9.401 µs | 约 9.401 µs | 约 2,553,100 classes/s | 无既有目标；建立基线 | 已建档 |
+
+推理分类缓存只绑定单个不可变 `Reasoner` snapshot；本体版本变化会新建 reasoner，因此不跨版本复用。
 
 ### HTTP/WS 并发基线（S4b）
 

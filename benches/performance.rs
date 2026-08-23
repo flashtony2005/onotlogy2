@@ -11,12 +11,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use criterion::{Criterion, SamplingMode, Throughput, black_box, criterion_group, criterion_main};
 use openaip_os::abi::{codegen, parse_odl};
 use openaip_os::kernel::{Kernel, Scope};
+use openaip_os::knowledge::{Axiom, ClassExpression, Ontology, Reasoner, Term};
 use openaip_os::projection::Projection;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine};
 use openaip_os::trace::{TraceEvent, TraceKind};
 use serde_json::json;
 
 const ODL_OBJECTS: usize = 24;
+const REASONER_CLASSES: usize = 24;
 const PROJECTION_EVENTS: usize = 1_000;
 const QUERY_OBJECTS: usize = 500;
 
@@ -38,6 +40,21 @@ object Item{index}:
         ));
     }
     odl
+}
+
+/// A fixed named-class taxonomy large enough to expose cache overhead/benefit.
+fn benchmark_ontology() -> Ontology {
+    let mut ontology = Ontology::new();
+    for index in 0..REASONER_CLASSES {
+        let sub = Term::new(format!("Item{index}"));
+        let sup = if index + 1 == REASONER_CLASSES {
+            ClassExpression::Thing
+        } else {
+            ClassExpression::class(Term::new(format!("Item{}", index + 1)))
+        };
+        ontology = ontology.with_axiom(Axiom::subclass(ClassExpression::Class(sub), sup));
+    }
+    ontology
 }
 
 fn projection_events() -> Vec<TraceEvent> {
@@ -130,6 +147,28 @@ fn core_performance(c: &mut Criterion) {
             let ir = parse_odl(black_box(&source)).expect("parse ODL");
             let output = codegen(&ir).expect("generate ODL artifacts");
             black_box(output.rust.len() + output.ontology_json.len())
+        })
+    });
+
+    let ontology = benchmark_ontology();
+    group.throughput(Throughput::Elements(REASONER_CLASSES as u64));
+    group.bench_function("reasoner_classification_new_24_classes", |b| {
+        b.iter(|| {
+            let reasoner = Reasoner::new(black_box(&ontology)).expect("create reasoner");
+            black_box(reasoner.classify().expect("classify").classes().len())
+        })
+    });
+    let reasoner = Reasoner::new(&ontology).expect("warm reasoner");
+    reasoner.classify().expect("warm classification");
+    group.bench_function("reasoner_classification_cached_24_classes", |b| {
+        b.iter(|| {
+            black_box(
+                reasoner
+                    .classify()
+                    .expect("cached classify")
+                    .classes()
+                    .len(),
+            )
         })
     });
 

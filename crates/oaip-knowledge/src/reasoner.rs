@@ -3,8 +3,10 @@
 //! The local [`crate::tbox::TBox`] remains a fast, conservative index for
 //! embedded checks.  This module converts the same append-only ontology into
 //! Horned-OWL and delegates soundness-critical DL queries to
-//! `owl-dl-reasoner`.  Derived conclusions still never mutate the source
-//! ontology.
+//! `owl-dl-reasoner`.  A reasoner is an immutable snapshot, so expensive
+//! consistency and classification results are cached on that instance; a new
+//! ontology version gets a new reasoner and therefore cannot observe stale
+//! conclusions.  Derived conclusions still never mutate the source ontology.
 
 use crate::error::{KnowledgeError, Result};
 use crate::model::{
@@ -27,6 +29,7 @@ use horned_owl::model::{
 use horned_owl::ontology::set::SetOntology;
 use horned_owl::vocab::Facet as OwlFacet;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
 
 /// A reasoned view of all named classes in an ontology.
 #[derive(Debug, Clone, Default)]
@@ -110,6 +113,8 @@ pub struct Reasoner {
     ontology: Ontology,
     owl: SetOntology<RcStr>,
     aliases: TermAliases,
+    consistency: OnceLock<Result<bool>>,
+    classification: OnceLock<Result<ReasonedClassification>>,
 }
 
 fn literal_values_equal(left: &Literal, right: &Literal) -> bool {
@@ -142,6 +147,8 @@ impl Reasoner {
             owl: to_horned_owl(&materialized)?,
             aliases: public_terms(ontology),
             ontology: ontology.clone(),
+            consistency: OnceLock::new(),
+            classification: OnceLock::new(),
         })
     }
 
@@ -158,16 +165,29 @@ impl Reasoner {
         &self.ontology
     }
 
+    #[cfg(test)]
+    fn consistency_cache_is_loaded(&self) -> bool {
+        self.consistency.get().is_some()
+    }
+
+    #[cfg(test)]
+    fn classification_cache_is_loaded(&self) -> bool {
+        self.classification.get().is_some()
+    }
+
     /// Whether the whole TBox/ABox has at least one model.
     ///
     /// The external tableau does not yet cover every asserted-data conflict, so
     /// combine its tableau answer with the kernel's deterministic checks rather
     /// than reporting an unsound "consistent" result.
     pub fn is_consistent(&self) -> Result<bool> {
-        if crate::data::validate_data_consistency(&self.ontology).is_err() {
-            return Ok(false);
-        }
-        reasoner(|| owl_dl_reasoner::is_consistent(&self.owl))
+        let cached = self.consistency.get_or_init(|| {
+            if crate::data::validate_data_consistency(&self.ontology).is_err() {
+                return Ok(false);
+            }
+            reasoner(|| owl_dl_reasoner::is_consistent(&self.owl))
+        });
+        cached.clone()
     }
 
     /// Full OWL DL satisfiability of a named class.
@@ -295,6 +315,13 @@ impl Reasoner {
 
     /// Complete named-class hierarchy and unsatisfiable-class set.
     pub fn classify(&self) -> Result<ReasonedClassification> {
+        self.classification
+            .get_or_init(|| self.compute_classification())
+            .clone()
+    }
+
+    /// Compute the full classification without result caching.
+    fn compute_classification(&self) -> Result<ReasonedClassification> {
         if !self.is_consistent()? {
             return Err(KnowledgeError::Invalid(
                 "classification is undefined for an inconsistent ontology".to_owned(),
@@ -1024,6 +1051,24 @@ mod tests {
             !reasoner
                 .entails_subclass(&term("Animal"), &term("Person"))
                 .unwrap()
+        );
+    }
+
+    #[test]
+    fn immutable_reasoner_caches_expensive_snapshot_results() {
+        let reasoner = Reasoner::new(&ontology()).unwrap();
+        assert!(!reasoner.consistency_cache_is_loaded());
+        assert!(reasoner.is_consistent().unwrap());
+        assert!(reasoner.consistency_cache_is_loaded());
+        assert!(reasoner.is_consistent().unwrap());
+
+        let first = reasoner.classify().unwrap();
+        assert!(reasoner.classification_cache_is_loaded());
+        let second = reasoner.classify().unwrap();
+        assert_eq!(first.classes(), second.classes());
+        assert_eq!(
+            first.unsatisfiable_classes(),
+            second.unsatisfiable_classes()
         );
     }
 

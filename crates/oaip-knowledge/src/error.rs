@@ -1,7 +1,7 @@
 use std::result;
 
 /// Errors returned while indexing an asserted ontology.
-#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum KnowledgeError {
     /// The kernel refuses to silently ignore syntax it cannot reason about.
     #[error("axiom {index} uses reasoning beyond the current kernel: {reason}")]

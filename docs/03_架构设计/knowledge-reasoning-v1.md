@@ -297,7 +297,14 @@ consistency、unsatisfiable classes、unsatisfiability explanation 和 inconsist
 解释接口覆盖 subclass、instance、object/data property、unsatisfiable class 和 inconsistency。
 ontology 超过 `MAX_EXPLANATION_AXIOMS = 512` 时解释请求 fail-closed，避免把无界搜索伪装成证明。
 
-### 5.4 明确限制
+### 5.4 Snapshot caching
+
+`Reasoner` 绑定一份不可变 ontology snapshot，并在实例内缓存 consistency 与完整 classification。
+同一 snapshot 上重复 satisfiability、instances、realization 或 evolution impact 查询可以复用该结果；
+新版本必须创建新的 `Reasoner`，因此不存在跨版本脏缓存。24 类固定链路的 Criterion 基准显示，
+首次分类约 1.36 ms，命中缓存后约 9.4 µs（本机开发环境微基线）。
+
+### 5.5 明确限制
 
 - 不宣称完整 OWL 2 DL entailment。
 - general datatype entailment 仍受 mature backend 能力限制；data-property entailment 当前主要覆盖
@@ -392,6 +399,6 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 
 1. 继续扩展更多 DL 结构到 ODL 直接表达面（如嵌套 composable restriction），减少手写 proposal JSON。
 2. 在真实业务需要时继续扩展 XSD 构造（如 complement / 自定义 datatype 定义），保持保守语义。
-3. 为大 ABox 增加 classification/cache、incremental consistency 和有界解释缓存。
+3. 为大 ABox 增加 incremental consistency、跨版本 classification 复用和有界解释缓存。
 4. 增加长时并发、恢复、内存和推理延迟基准。
 5. 在能力矩阵继续扩展时同步刷新本文档。

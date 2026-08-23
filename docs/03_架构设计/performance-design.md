@@ -40,7 +40,7 @@ MVP 为 Local-First 单体（Rust + Turso 嵌入式，无网络往返），目�
 
 ### 4.3 压测方案
 - **API / WS**：用 `oha`（HTTP）与 `k6`（WebSocket）对单节点施压，基线取 P99 与错误率；目标 P99 达标且错误率 0。
-- **本地关键路径**：用 `criterion` 对 ODL 编译、投影重放、世界查询和审计写入做 Rust 基准；执行入口为 `make bench`，首轮数字见 [performance-baseline.md](performance-baseline.md)。
+- **本地关键路径**：用 `criterion` 对 ODL 编译、投影重放、世界查询、审计写入和推理分类做 Rust 基准；执行入口为 `make bench`，首轮数字见 [performance-baseline.md](performance-baseline.md)。
 - **火焰图**：`cargo flamegraph` 定位 compile / query 瓶颈，禁止在热路径做 JSON 全表扫描。
 - **fail-fast**：认知引擎（Pi）未就绪时触发运行应毫秒级返回 WB2004，避免连接悬挂拖垮并发。
 
@@ -58,3 +58,4 @@ MVP 为 Local-First 单体（Rust + Turso 嵌入式，无网络往返），目�
 | V1.0 | lushaohui | 2026-08-11 | 初稿完成 |
 | V1.1 | lushaohui | 2026-08-11 | 填充 4.1 性能目标（MVP 单节点基线）、4.2 缓存策略（ObjectDef/WorldModel 缓存 + Trace 不缓存）、4.3 压测方案 |
 | V1.2 | lushaohui | 2026-08-22 | 增加 Criterion 四路径基线入口与首轮结果链接 |
+| V1.3 | lushaohui | 2026-08-23 | 增加不可变推理快照的首次/缓存分类基准与失效边界 |
