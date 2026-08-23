@@ -16,5 +16,6 @@ pub use ir::{
 pub use odl::parse_odl;
 pub use validation::{
     DataValidationError, canonical_decimal, compile_xsd_pattern_subset,
-    property_cardinality_bounds, validate_object_data, validate_property_constraints,
+    property_cardinality_bounds, property_one_of_json_values, validate_object_data,
+    validate_property_constraints,
 };

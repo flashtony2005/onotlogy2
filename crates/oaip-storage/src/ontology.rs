@@ -1554,6 +1554,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn odl_one_of_gates_initialization_and_evolution() {
+        let storage = LibSQLStorage::open(":memory:").await.unwrap();
+        let root = Ontology::new().with_axiom(Axiom::subclass(class("Dog"), class("Animal")));
+        let customer = |values: &str| {
+            oaip_abi::parse_odl(&format!(
+                r#"object Customer:
+  properties:
+    status: string one_of {values}
+"#
+            ))
+            .unwrap()
+        };
+        storage
+            .create(
+                "Customer",
+                "customer-1",
+                serde_json::json!({ "status": "Pending" }),
+            )
+            .await
+            .unwrap();
+
+        // A live row outside the declared alternatives cannot initialize or
+        // later enter through an approved-looking proposal.
+        assert!(
+            storage
+                .initialize_knowledge_version("root", &root, Some(&customer("[Active]")))
+                .await
+                .is_err()
+        );
+        storage
+            .initialize_knowledge_version("root", &root, Some(&customer("[Active,Pending]")))
+            .await
+            .unwrap();
+        let incompatible = OntologyProposal::new("exclude-pending");
+        assert!(
+            storage
+                .propose_knowledge_change("root", &incompatible, Some(&customer("[Active]")))
+                .await
+                .is_err()
+        );
+
+        let initialized = storage.knowledge_version("root").await.unwrap().unwrap();
+        assert!(initialized.ontology.axioms().iter().any(|axiom| matches!(
+            axiom,
+            Axiom::DataPropertyOneOf { property, .. } if property.as_str() == "status"
+        )));
+    }
+
+    #[tokio::test]
     async fn odl_extends_gates_and_replaces_taxonomy_projection() {
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
         let source = r#"

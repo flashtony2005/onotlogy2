@@ -825,6 +825,9 @@ fn parse_property_definition(
         let facet = match pair[0].as_str() {
             "min_cardinality" => PropertyFacet::MinCardinality(pair[1].clone()),
             "max_cardinality" => PropertyFacet::MaxCardinality(pair[1].clone()),
+            "one_of" => PropertyFacet::OneOf(
+                parse_one_of_values(&pair[1]).map_err(PropertyDefinitionError::Invalid)?,
+            ),
             "min_inclusive" => PropertyFacet::MinInclusive(pair[1].clone()),
             "min_exclusive" => PropertyFacet::MinExclusive(pair[1].clone()),
             "max_inclusive" => PropertyFacet::MaxInclusive(pair[1].clone()),
@@ -852,6 +855,23 @@ fn parse_property_definition(
     validate_property_constraints("property", ty, &constraints)
         .map_err(PropertyDefinitionError::Invalid)?;
     Ok((ty, constraints))
+}
+
+fn parse_one_of_values(token: &str) -> Result<Vec<String>, String> {
+    let body = token
+        .strip_prefix('[')
+        .and_then(|body| body.strip_suffix(']'))
+        .ok_or_else(|| "one_of requires a [value,value] list".to_owned())?;
+    let values = body
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        return Err("one_of requires at least one value".to_owned());
+    }
+    Ok(values)
 }
 
 fn parse_value_expr(v: &str, param_names: &[String]) -> ValueExpr {

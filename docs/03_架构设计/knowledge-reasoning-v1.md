@@ -165,6 +165,7 @@ object Customer:
     age: int min_inclusive 18 max_exclusive 65
     balance: decimal total_digits 10 fraction_digits 2
     nickname: string max_cardinality 0
+    status: string one_of [Active,Pending]
 ```
 
 解析器会按 declared scalar type 校验 facet 兼容性和 bound；quoted pattern 保留 regex escape。
@@ -176,6 +177,11 @@ Runtime IR 将这些约束物化为 `DataPropertyRangeRestriction`，因此它�
 `max_cardinality 0` 禁止值。该边界会投影为 `SubClassOf(object, DataMin/MaxCardinality(...))`，
 参与 DL 推理和演化影响分析；executable admission 同时按 live snapshot 检查继承实例的缺失或
 禁止字段，diagnosis 在 `dataCardinalityViolations` 显式报告。
+
+`one_of` 可直接声明标量枚举，例如 `status: string one_of [Active,Pending]`。值按 declared scalar
+type 做类型和 canonical form 校验（如 decimal 精确比较、date 日历日、dateTime UTC instant），最多
+64 个成员且去重。ODL 枚举投影为 `DataPropertyOneOf`，参与 live-world 一致性、推理诊断、不可变版本
+治理和 proposal 影响分析；不再需要为常见枚举手写 DL proposal JSON。
 
 ### 4.6 ODL relation cardinalities
 

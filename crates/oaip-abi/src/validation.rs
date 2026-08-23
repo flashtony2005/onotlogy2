@@ -1,12 +1,12 @@
 //! Runtime validation for persisted ontology data.
 //!
-//! ODL currently describes scalar types, but it has no required/default marker.
-//! Therefore a definition only validates fields that are present: adding a
-//! property remains compatible with existing JSON rows, while a changed type
-//! is rejected when an old row contains that field. Unknown fields are kept so
-//! older data can survive a definition that removes or renames a property.
+//! ODL scalar fields are optional by default; explicit `min_cardinality`
+//! narrows that rule at language and governance boundaries. Adding an optional
+//! property remains compatible with existing JSON rows, while changed types or
+//! incompatible narrowing constraints reject old rows. Unknown fields are kept
+//! so older data can survive a definition that removes or renames a property.
 
-use chrono::{DateTime, FixedOffset, NaiveDate};
+use chrono::{DateTime, FixedOffset, NaiveDate, Utc};
 use regex::Regex;
 use serde_json::Value;
 use thiserror::Error;
@@ -177,11 +177,13 @@ pub fn validate_property_constraints(
         if !seen.insert(facet.name()) {
             return Err(format!("duplicate `{}` facet", facet.name()));
         }
-        let cardinality = matches!(
+        let datatype_agnostic = matches!(
             facet,
-            PropertyFacet::MinCardinality(_) | PropertyFacet::MaxCardinality(_)
+            PropertyFacet::MinCardinality(_)
+                | PropertyFacet::MaxCardinality(_)
+                | PropertyFacet::OneOf(_)
         );
-        if !cardinality && !allowed(facet) {
+        if !datatype_agnostic && !allowed(facet) {
             return Err(format!("`{}` is not valid for `{}`", facet.name(), ty));
         }
         match facet {
@@ -203,6 +205,21 @@ pub fn validate_property_constraints(
         }
         match facet {
             PropertyFacet::MinCardinality(_) | PropertyFacet::MaxCardinality(_) => {}
+            PropertyFacet::OneOf(values) => {
+                let allowed = one_of_json_values(ty, values)?;
+                if allowed.is_empty() {
+                    return Err("enumeration requires at least one value".to_owned());
+                }
+                if allowed.len() > MAX_ONE_OF_VALUES {
+                    return Err(format!("enumeration exceeds {MAX_ONE_OF_VALUES} values"));
+                }
+                let mut unique = std::collections::BTreeSet::new();
+                for value in allowed {
+                    if !unique.insert(value.to_string()) {
+                        return Err("enumeration contains duplicate values".to_owned());
+                    }
+                }
+            }
             PropertyFacet::MinInclusive(value)
             | PropertyFacet::MinExclusive(value)
             | PropertyFacet::MaxInclusive(value)
@@ -253,6 +270,63 @@ pub fn property_cardinality_bounds(constraints: &[PropertyFacet]) -> Result<(u32
         ));
     }
     Ok(bounds)
+}
+
+const MAX_ONE_OF_VALUES: usize = 64;
+
+/// Normalize enumeration alternatives to typed JSON values.
+pub fn property_one_of_json_values(
+    ty: ScalarType,
+    constraints: &[PropertyFacet],
+) -> Result<Vec<Value>, String> {
+    let mut result = Vec::new();
+    for facet in constraints {
+        if let PropertyFacet::OneOf(values) = facet {
+            result = one_of_json_values(ty, values)?;
+        }
+    }
+    Ok(result)
+}
+
+fn one_of_json_values(ty: ScalarType, values: &[String]) -> Result<Vec<Value>, String> {
+    values
+        .iter()
+        .map(|value| match ty {
+            ScalarType::String => Ok(Value::String(value.clone())),
+            ScalarType::Int => value
+                .parse::<i64>()
+                .map(Value::from)
+                .map_err(|_| format!("invalid integer enumeration value `{value}`")),
+            ScalarType::Float => value
+                .parse::<f64>()
+                .ok()
+                .filter(|value| value.is_finite())
+                .and_then(serde_json::Number::from_f64)
+                .map(Value::Number)
+                .ok_or_else(|| format!("invalid float enumeration value `{value}`")),
+            ScalarType::Bool => match value.as_str() {
+                "true" => Ok(Value::Bool(true)),
+                "false" => Ok(Value::Bool(false)),
+                _ => Err(format!("invalid boolean enumeration value `{value}`")),
+            },
+            ScalarType::Date => strict_date(value)
+                .map(|value| Value::String(value.to_string()))
+                .map_err(|_| format!("invalid date enumeration value `{value}`")),
+            ScalarType::DateTime => value
+                .parse::<DateTime<FixedOffset>>()
+                .map(|value| {
+                    Value::String(
+                        value
+                            .with_timezone(&Utc)
+                            .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
+                    )
+                })
+                .map_err(|_| format!("invalid date-time enumeration value `{value}`")),
+            ScalarType::Decimal => canonical_decimal(value)
+                .map(Value::String)
+                .ok_or_else(|| format!("invalid decimal enumeration value `{value}`")),
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -401,6 +475,7 @@ fn constraint_admits(value: &Value, ty: ScalarType, facet: &PropertyFacet) -> bo
 
     match facet {
         PropertyFacet::MinCardinality(_) | PropertyFacet::MaxCardinality(_) => true,
+        PropertyFacet::OneOf(values) => one_of_admits(ty, value, values),
         PropertyFacet::MinInclusive(_) => {
             ordering().is_some_and(|ordering| ordering != std::cmp::Ordering::Less)
         }
@@ -459,10 +534,32 @@ fn constraint_admits(value: &Value, ty: ScalarType, facet: &PropertyFacet) -> bo
     }
 }
 
+fn one_of_admits(ty: ScalarType, actual: &Value, values: &[String]) -> bool {
+    one_of_json_values(ty, values).is_ok_and(|allowed| {
+        allowed.iter().any(|allowed| match (ty, actual, allowed) {
+            (ScalarType::DateTime, Value::String(actual), Value::String(allowed)) => {
+                let parse = |value: &str| value.parse::<DateTime<FixedOffset>>().ok();
+                match (parse(actual), parse(allowed)) {
+                    (Some(actual), Some(allowed)) => actual == allowed,
+                    _ => false,
+                }
+            }
+            (ScalarType::Float, Value::Number(actual), Value::Number(allowed)) => {
+                actual.as_f64() == allowed.as_f64()
+            }
+            (ScalarType::Decimal, Value::String(actual), Value::String(allowed)) => {
+                let actual = canonical_decimal(actual);
+                actual.is_some() && actual == canonical_decimal(allowed)
+            }
+            (_, actual, allowed) => actual == allowed,
+        })
+    })
+}
+
 /// Validate one persisted JSON row against the current object definition.
 ///
-/// Missing properties are valid because ODL has no required-property syntax.
-/// This is the compatibility rule that lets an additive ODL change read old
+/// Missing properties remain valid unless an explicit scalar cardinality makes
+/// them required. This compatibility rule lets an additive ODL change read old
 /// rows without rewriting the database table or JSON payload.
 pub fn validate_object_data(
     definition: &ObjectType,
@@ -738,6 +835,56 @@ mod tests {
                 .unwrap_err();
             assert_eq!(1011, error.code);
         }
+    }
+
+    #[test]
+    fn typed_one_of_constraints_admit_canonically_equal_values() {
+        let current = object(
+            r#"object Customer:
+  properties:
+    status: string one_of [Active,Pending]
+    tier: int one_of [1,3]
+    score: decimal one_of [1.20,2.50]
+    opened: date one_of [2024-02-29,2024-03-01]
+"#,
+        );
+        assert!(
+            validate_object_data(
+                &current,
+                &json!({
+                    "status": "Active",
+                    "tier": 3,
+                    "score": "1.2",
+                    "opened": "2024-02-29"
+                })
+            )
+            .is_ok()
+        );
+        for (field, value) in [
+            ("status", serde_json::json!("Draft")),
+            ("tier", serde_json::json!(2)),
+            ("score", serde_json::json!("1.21")),
+            ("opened", serde_json::json!("2024-03-02")),
+        ] {
+            let mut data = json!({
+                "status": "Active", "tier": 3,
+                "score": "1.2", "opened": "2024-02-29"
+            });
+            data.as_object_mut().unwrap().insert(field.into(), value);
+            assert!(matches!(
+                validate_object_data(&current, &data),
+                Err(DataValidationError::ConstraintViolation { .. })
+            ));
+        }
+
+        let duplicate = parse_odl(
+            "object Customer:\n  properties:\n    status: string one_of [Active,Active]\n",
+        )
+        .unwrap_err();
+        assert_eq!(1011, duplicate.code);
+        let wrong_type =
+            parse_odl("object Customer:\n  properties:\n    tier: int one_of [A,B]\n").unwrap_err();
+        assert_eq!(1011, wrong_type.code);
     }
 
     #[test]

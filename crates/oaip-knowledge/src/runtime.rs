@@ -15,7 +15,7 @@ use chrono::{NaiveDate, SecondsFormat, Utc};
 use oaip_abi::{
     canonical_decimal,
     ir::{OntologyIR, PropertyFacet, ScalarType},
-    property_cardinality_bounds, validate_property_constraints,
+    property_cardinality_bounds, property_one_of_json_values, validate_property_constraints,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -56,7 +56,9 @@ fn data_property_ranges(ontology: &Ontology) -> BTreeMap<Term, Datatype> {
 
 fn property_facet_value(ty: ScalarType, facet: &PropertyFacet) -> Option<FacetValue> {
     let (data_facet, value) = match facet {
-        PropertyFacet::MinCardinality(_) | PropertyFacet::MaxCardinality(_) => return None,
+        PropertyFacet::MinCardinality(_)
+        | PropertyFacet::MaxCardinality(_)
+        | PropertyFacet::OneOf(_) => return None,
         PropertyFacet::MinInclusive(value) => (DataFacet::MinInclusive, value),
         PropertyFacet::MinExclusive(value) => (DataFacet::MinExclusive, value),
         PropertyFacet::MaxInclusive(value) => (DataFacet::MaxInclusive, value),
@@ -143,7 +145,9 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
                 .filter(|facet| {
                     !matches!(
                         facet,
-                        PropertyFacet::MinCardinality(_) | PropertyFacet::MaxCardinality(_)
+                        PropertyFacet::MinCardinality(_)
+                            | PropertyFacet::MaxCardinality(_)
+                            | PropertyFacet::OneOf(_)
                     )
                 })
                 .collect::<Vec<_>>();
@@ -160,6 +164,22 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
                     property: term.clone(),
                     datatype: scalar_datatype(property.ty),
                     facets,
+                });
+            }
+            if property
+                .constraints
+                .iter()
+                .any(|facet| matches!(facet, PropertyFacet::OneOf(_)))
+            {
+                let literals = property_one_of_json_values(property.ty, &property.constraints)
+                    .expect("validated runtime IR contains valid enumeration values")
+                    .iter()
+                    .map(|value| json_literal("one_of", value, Some(scalar_datatype(property.ty))))
+                    .collect::<std::result::Result<Vec<_>, KnowledgeError>>()
+                    .expect("validated runtime IR enumeration values project as OWL literals");
+                ontology.push(Axiom::DataPropertyOneOf {
+                    property: term.clone(),
+                    values: literals,
                 });
             }
             ontology.push(Axiom::FunctionalDataProperty(term.clone()));
@@ -1531,6 +1551,40 @@ object Dog extends Animal:
         assert_eq!(Datatype::String, violations[0].datatype);
         assert_eq!(0, violations[0].max);
         assert_eq!(1, violations[0].actual);
+    }
+
+    #[test]
+    fn declared_one_of_projects_into_the_canonical_tbox() {
+        let ir = oaip_abi::parse_odl(
+            r#"
+object Customer:
+  properties:
+    status: string one_of [Active,Pending]
+"#,
+        )
+        .unwrap();
+        assert!(validate_runtime_ir(&ir).is_ok());
+        let schema = runtime_ir_to_knowledge(&ir);
+        assert!(schema.axioms().contains(&Axiom::DataPropertyOneOf {
+            property: Term::new("status"),
+            values: vec![
+                Literal::String("Active".into()),
+                Literal::String("Pending".into())
+            ],
+        }));
+
+        let fact = RuntimeObjectFact {
+            id: "customer-1".to_owned(),
+            object_type: "Customer".to_owned(),
+            data: serde_json::json!({ "status": "Draft" }),
+        };
+        let knowledge_base = runtime_world_to_knowledge(&schema, &[fact], &[]).unwrap();
+        assert!(
+            !Reasoner::new(&knowledge_base)
+                .unwrap()
+                .is_consistent()
+                .unwrap()
+        );
     }
 
     #[test]

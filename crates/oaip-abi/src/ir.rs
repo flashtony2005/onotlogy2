@@ -84,6 +84,7 @@ impl fmt::Display for ScalarType {
 pub enum PropertyFacet {
     MinCardinality(String),
     MaxCardinality(String),
+    OneOf(Vec<String>),
     MinInclusive(String),
     MinExclusive(String),
     MaxInclusive(String),
@@ -100,6 +101,7 @@ impl PropertyFacet {
         match self {
             Self::MinCardinality(_) => "min_cardinality",
             Self::MaxCardinality(_) => "max_cardinality",
+            Self::OneOf(_) => "one_of",
             Self::MinInclusive(_) => "min_inclusive",
             Self::MinExclusive(_) => "min_exclusive",
             Self::MaxInclusive(_) => "max_inclusive",
@@ -114,6 +116,7 @@ impl PropertyFacet {
 
     pub fn value(&self) -> &str {
         match self {
+            Self::OneOf(_) => "",
             Self::MinCardinality(value)
             | Self::MaxCardinality(value)
             | Self::MinInclusive(value)
@@ -125,6 +128,14 @@ impl PropertyFacet {
             | Self::TotalDigits(value)
             | Self::FractionDigits(value)
             | Self::Pattern(value) => value,
+        }
+    }
+
+    /// Lexical alternatives attached to `one_of`.
+    pub fn one_of_values(&self) -> Option<&[String]> {
+        match self {
+            Self::OneOf(values) => Some(values),
+            _ => None,
         }
     }
 }
