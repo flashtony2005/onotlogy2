@@ -109,18 +109,22 @@ mod tests {
                     PropertyDef {
                         name: "name".into(),
                         ty: ScalarType::String,
+                        constraints: Vec::new(),
                     },
                     PropertyDef {
                         name: "age".into(),
                         ty: ScalarType::Int,
+                        constraints: Vec::new(),
                     },
                     PropertyDef {
                         name: "score".into(),
                         ty: ScalarType::Float,
+                        constraints: Vec::new(),
                     },
                     PropertyDef {
                         name: "active".into(),
                         ty: ScalarType::Bool,
+                        constraints: Vec::new(),
                     },
                 ],
                 actions: Vec::new(),
@@ -274,6 +278,7 @@ mod storage_tests {
             properties: vec![PropertyDef {
                 name: "name".into(),
                 ty: ScalarType::String,
+                constraints: Vec::new(),
             }],
             actions: Vec::new(),
         });

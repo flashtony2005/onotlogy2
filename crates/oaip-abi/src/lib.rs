@@ -11,7 +11,10 @@ pub mod validation;
 pub use codegen::{CodegenOutput, ObjectDef, codegen};
 pub use ir::{
     ActionDef, Clause, CompareOp, CreateEffect, FieldUpdate, ObjectType, OntologyIR, ParamDef,
-    PolicyDef, PropertyDef, RelationDef, ScalarType, ValueExpr,
+    PolicyDef, PropertyDef, PropertyFacet, RelationDef, ScalarType, ValueExpr,
 };
 pub use odl::parse_odl;
-pub use validation::{DataValidationError, canonical_decimal, validate_object_data};
+pub use validation::{
+    DataValidationError, canonical_decimal, compile_xsd_pattern_subset, validate_object_data,
+    validate_property_constraints,
+};

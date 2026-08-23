@@ -6,11 +6,12 @@
 //! is rejected when an old row contains that field. Unknown fields are kept so
 //! older data can survive a definition that removes or renames a property.
 
-use chrono::{DateTime, NaiveDate};
+use chrono::{DateTime, FixedOffset, NaiveDate};
+use regex::Regex;
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::ir::{ObjectType, ScalarType};
+use crate::ir::{ObjectType, PropertyFacet, ScalarType};
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum DataValidationError {
@@ -22,6 +23,8 @@ pub enum DataValidationError {
         expected: String,
         actual: String,
     },
+    #[error("属性 {field} 违反约束：{message}")]
+    ConstraintViolation { field: String, message: String },
 }
 
 /// Canonicalize an XSD `decimal` lexical form without converting through a
@@ -55,6 +58,350 @@ pub fn canonical_decimal(value: &str) -> Option<String> {
     Some(format!("{sign}{integer}.{fraction}"))
 }
 
+/// Compile the conservative XSD-pattern subset accepted across ODL and DL.
+///
+/// XSD patterns are implicitly fully anchored. Rust regex syntax is close but
+/// not identical, so uncertain constructs fail closed instead of being silently
+/// reinterpreted as Rust regular expressions.
+pub fn compile_xsd_pattern_subset(pattern: &str) -> Result<Regex, String> {
+    let mut escaped = false;
+    let mut in_class = false;
+    let mut chars = pattern.char_indices().peekable();
+
+    while let Some((_, char)) = chars.next() {
+        if escaped {
+            escaped = false;
+            if matches!(char, '^' | '$' | 'A' | 'z' | 'b' | 'B') {
+                return Err(format!("unsupported pattern escape `\\{char}`"));
+            }
+            if char == 'p' || char == 'P' {
+                if chars.peek().copied().map(|(_, value)| value) != Some('{') {
+                    return Err("unsupported Unicode escape".to_owned());
+                }
+                chars.next();
+                let mut depth = 1usize;
+                let mut category = String::new();
+                while let Some((_, value)) = chars.next_if(|&(_, _)| depth > 0) {
+                    match value {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => category.push(value),
+                    }
+                }
+                if depth != 0
+                    || category.is_empty()
+                    || !category
+                        .chars()
+                        .all(|value| value.is_ascii_alphanumeric() || value == '-' || value == '_')
+                {
+                    return Err("invalid Unicode character category".to_owned());
+                }
+            }
+            continue;
+        }
+
+        match char {
+            '\\' => escaped = true,
+            '^' | '$' => {
+                return Err(format!(
+                    "explicit anchor `{char}` is redundant in an XSD pattern"
+                ));
+            }
+            '[' => {
+                if in_class {
+                    return Err("nested or subtracted character classes".to_owned());
+                }
+                in_class = true;
+                if chars.peek().copied().map(|(_, value)| value) == Some('^') {
+                    chars.next();
+                }
+            }
+            ']' if in_class => in_class = false,
+            '|' if in_class => return Err("non-XSD character-class union".to_owned()),
+            '(' if !in_class && chars.peek().copied().map(|(_, value)| value) == Some('?') => {
+                return Err("inline group syntax".to_owned());
+            }
+            '&' if in_class && chars.peek().copied().map(|(_, value)| value) == Some('&') => {
+                return Err("non-XSD character-class intersection".to_owned());
+            }
+            _ => {}
+        }
+    }
+
+    if escaped || in_class {
+        return Err("unterminated escape or character class".to_owned());
+    }
+
+    Regex::new(&format!("^(?:{pattern})$")).map_err(|error| error.to_string())
+}
+
+/// Validate constraints attached to a property definition.
+pub fn validate_property_constraints(
+    _name: &str,
+    ty: ScalarType,
+    constraints: &[PropertyFacet],
+) -> Result<(), String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let allowed = |facet: &PropertyFacet| match ty {
+        ScalarType::String => matches!(
+            facet,
+            PropertyFacet::MinLength(_) | PropertyFacet::MaxLength(_) | PropertyFacet::Pattern(_)
+        ),
+        ScalarType::Int | ScalarType::Float | ScalarType::Date | ScalarType::DateTime => matches!(
+            facet,
+            PropertyFacet::MinInclusive(_)
+                | PropertyFacet::MinExclusive(_)
+                | PropertyFacet::MaxInclusive(_)
+                | PropertyFacet::MaxExclusive(_)
+        ),
+        ScalarType::Decimal => matches!(
+            facet,
+            PropertyFacet::MinInclusive(_)
+                | PropertyFacet::MinExclusive(_)
+                | PropertyFacet::MaxInclusive(_)
+                | PropertyFacet::MaxExclusive(_)
+                | PropertyFacet::TotalDigits(_)
+                | PropertyFacet::FractionDigits(_)
+        ),
+        ScalarType::Bool => false,
+    };
+
+    for facet in constraints {
+        if !seen.insert(facet.name()) {
+            return Err(format!("duplicate `{}` facet", facet.name()));
+        }
+        if !allowed(facet) {
+            return Err(format!("`{}` is not valid for `{}`", facet.name(), ty));
+        }
+        match facet {
+            PropertyFacet::MinInclusive(value)
+            | PropertyFacet::MinExclusive(value)
+            | PropertyFacet::MaxInclusive(value)
+            | PropertyFacet::MaxExclusive(value) => {
+                ordering_bound_value(ty, value)?;
+            }
+            PropertyFacet::MinLength(value)
+            | PropertyFacet::MaxLength(value)
+            | PropertyFacet::TotalDigits(value)
+            | PropertyFacet::FractionDigits(value) => {
+                parse_non_negative_usize(value)?;
+            }
+            PropertyFacet::Pattern(value) => {
+                compile_xsd_pattern_subset(value)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum OrderedValue {
+    Integer(i128),
+    Float(f64),
+    Decimal(String),
+    Date(NaiveDate),
+    DateTime(DateTime<FixedOffset>),
+}
+
+fn ordering_bound_value(ty: ScalarType, value: &str) -> Result<OrderedValue, String> {
+    match ty {
+        ScalarType::Int => Ok(OrderedValue::Integer(
+            value.parse::<i64>().map_err(|_| "invalid integer bound")? as i128,
+        )),
+        ScalarType::Float => Ok(OrderedValue::Float(
+            value
+                .parse::<f64>()
+                .ok()
+                .filter(|value| value.is_finite())
+                .ok_or("invalid float bound")?,
+        )),
+        ScalarType::Decimal => Ok(OrderedValue::Decimal(
+            canonical_decimal(value).ok_or_else(|| "invalid decimal bound".to_owned())?,
+        )),
+        ScalarType::Date => Ok(OrderedValue::Date(strict_date(value)?)),
+        ScalarType::DateTime => Ok(OrderedValue::DateTime(
+            value
+                .parse::<DateTime<FixedOffset>>()
+                .map_err(|_| "invalid date-time bound")?,
+        )),
+        _ => Err("ordering facet is not supported for this datatype".to_owned()),
+    }
+}
+
+fn strict_date(value: &str) -> Result<NaiveDate, String> {
+    let parsed = NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .map_err(|_| "invalid calendar date".to_owned())?;
+    if parsed.to_string() != value {
+        return Err("non-canonical calendar date".to_owned());
+    }
+    Ok(parsed)
+}
+
+fn parse_non_negative_usize(value: &str) -> Result<usize, String> {
+    value
+        .parse::<usize>()
+        .map_err(|_| "bound must be a non-negative integer".to_owned())
+}
+
+fn json_integer(value: &Value) -> Option<i128> {
+    if let Some(number) = value.as_i64() {
+        Some(number as i128)
+    } else {
+        value.as_u64().map(|number| number as i128)
+    }
+}
+
+fn compare_decimal(left: &str, right: &str) -> Option<std::cmp::Ordering> {
+    fn parts(value: &str) -> Option<(bool, String, String)> {
+        let canonical = canonical_decimal(value)?;
+        let negative = canonical.starts_with('-');
+        let body = canonical.strip_prefix('-').unwrap_or(&canonical);
+        let (integer, fraction) = body.split_once('.').unwrap_or((body, ""));
+        Some((negative, integer.to_owned(), fraction.to_owned()))
+    }
+
+    let (left_negative, left_integer, left_fraction) = parts(left)?;
+    let (right_negative, right_integer, right_fraction) = parts(right)?;
+    let unsigned = {
+        let integers = left_integer
+            .len()
+            .cmp(&right_integer.len())
+            .then_with(|| left_integer.cmp(&right_integer));
+        integers.then_with(|| {
+            let common = left_fraction.len().min(right_fraction.len());
+            let ordering = left_fraction[..common].cmp(&right_fraction[..common]);
+            ordering.then_with(|| left_fraction.len().cmp(&right_fraction.len()))
+        })
+    };
+    if left_negative != right_negative {
+        return Some(if left_negative {
+            std::cmp::Ordering::Less
+        } else {
+            std::cmp::Ordering::Greater
+        });
+    }
+    let unsigned = if left_negative {
+        unsigned.reverse()
+    } else {
+        unsigned
+    };
+    Some(if unsigned == std::cmp::Ordering::Equal {
+        std::cmp::Ordering::Equal
+    } else {
+        unsigned
+    })
+}
+
+fn constraint_admits(value: &Value, ty: ScalarType, facet: &PropertyFacet) -> bool {
+    let ordering = || {
+        let bound_value = match facet {
+            PropertyFacet::MinInclusive(value)
+            | PropertyFacet::MinExclusive(value)
+            | PropertyFacet::MaxInclusive(value)
+            | PropertyFacet::MaxExclusive(value) => value,
+            _ => return None,
+        };
+        let actual = match ty {
+            ScalarType::Int => json_integer(value).map(OrderedValue::Integer),
+            ScalarType::Float => value
+                .as_f64()
+                .filter(|value| value.is_finite())
+                .map(OrderedValue::Float),
+            ScalarType::Decimal => value
+                .as_str()
+                .and_then(canonical_decimal)
+                .map(OrderedValue::Decimal),
+            ScalarType::Date => value
+                .as_str()
+                .and_then(|value| strict_date(value).ok())
+                .map(OrderedValue::Date),
+            ScalarType::DateTime => value
+                .as_str()
+                .and_then(|value| value.parse().ok())
+                .map(OrderedValue::DateTime),
+            _ => None,
+        }?;
+        let bound = ordering_bound_value(ty, bound_value).ok()?;
+        match (actual, bound) {
+            (OrderedValue::Integer(actual), OrderedValue::Integer(bound)) => {
+                Some(actual.cmp(&bound))
+            }
+            (OrderedValue::Float(actual), OrderedValue::Float(bound)) => actual.partial_cmp(&bound),
+            (OrderedValue::Decimal(actual), OrderedValue::Decimal(bound)) => {
+                compare_decimal(&actual, &bound)
+            }
+            (OrderedValue::Date(actual), OrderedValue::Date(bound)) => Some(actual.cmp(&bound)),
+            (OrderedValue::DateTime(actual), OrderedValue::DateTime(bound)) => {
+                Some(actual.cmp(&bound))
+            }
+            _ => None,
+        }
+    };
+
+    match facet {
+        PropertyFacet::MinInclusive(_) => {
+            ordering().is_some_and(|ordering| ordering != std::cmp::Ordering::Less)
+        }
+        PropertyFacet::MinExclusive(_) => {
+            ordering().is_some_and(|ordering| ordering == std::cmp::Ordering::Greater)
+        }
+        PropertyFacet::MaxInclusive(_) => {
+            ordering().is_some_and(|ordering| ordering != std::cmp::Ordering::Greater)
+        }
+        PropertyFacet::MaxExclusive(_) => {
+            ordering().is_some_and(|ordering| ordering == std::cmp::Ordering::Less)
+        }
+        PropertyFacet::MinLength(bound) => {
+            let Some(bound) = bound.parse::<usize>().ok() else {
+                return false;
+            };
+            value
+                .as_str()
+                .is_some_and(|value| value.chars().count() >= bound)
+        }
+        PropertyFacet::MaxLength(bound) => {
+            let Some(bound) = bound.parse::<usize>().ok() else {
+                return false;
+            };
+            value
+                .as_str()
+                .is_some_and(|value| value.chars().count() <= bound)
+        }
+        PropertyFacet::Pattern(pattern) => {
+            let Ok(regex) = compile_xsd_pattern_subset(pattern) else {
+                return false;
+            };
+            value.as_str().is_some_and(|value| regex.is_match(value))
+        }
+        PropertyFacet::TotalDigits(bound) | PropertyFacet::FractionDigits(bound) => {
+            let Some(bound) = bound.parse::<usize>().ok() else {
+                return false;
+            };
+            let Some(canonical) = value.as_str().and_then(canonical_decimal) else {
+                return false;
+            };
+            let body = canonical.strip_prefix('-').unwrap_or(&canonical);
+            let (integer, fraction) = body.split_once('.').unwrap_or((body, ""));
+            let count = if matches!(facet, PropertyFacet::TotalDigits(_)) {
+                let zero_empty = integer == "0" && fraction.is_empty();
+                if zero_empty {
+                    0
+                } else {
+                    integer.len() + fraction.len()
+                }
+            } else {
+                fraction.len()
+            };
+            count <= bound
+        }
+    }
+}
+
 /// Validate one persisted JSON row against the current object definition.
 ///
 /// Missing properties are valid because ODL has no required-property syntax.
@@ -80,6 +427,22 @@ pub fn validate_object_data(
                 expected: property.ty.to_string(),
                 actual: json_type(value).to_string(),
             });
+        }
+        if let Err(message) =
+            validate_property_constraints(&property.name, property.ty, &property.constraints)
+        {
+            return Err(DataValidationError::ConstraintViolation {
+                field: property.name.clone(),
+                message,
+            });
+        }
+        for facet in &property.constraints {
+            if !constraint_admits(value, property.ty, facet) {
+                return Err(DataValidationError::ConstraintViolation {
+                    field: property.name.clone(),
+                    message: format!("`{}` rejects {:?}", facet.name(), value),
+                });
+            }
         }
     }
     Ok(())
@@ -219,6 +582,96 @@ mod tests {
                 Err(DataValidationError::InvalidPropertyType { .. })
             ));
         }
+    }
+
+    #[test]
+    fn parses_inline_property_constraints() {
+        let current = object(
+            r#"object Customer:
+  properties:
+    code: string min_length 2 max_length 8 pattern "[A-Z]{2}[0-9]{4}"
+    age: int min_inclusive 18 max_exclusive 65
+    balance: decimal total_digits 10 fraction_digits 2
+"#,
+        );
+        let code = &current.properties[0];
+        assert_eq!(ScalarType::String, code.ty);
+        assert_eq!(3, code.constraints.len());
+        assert_eq!("min_length", code.constraints[0].name());
+        assert_eq!("2", code.constraints[0].value());
+        assert_eq!("pattern", code.constraints[2].name());
+        assert_eq!("[A-Z]{2}[0-9]{4}", code.constraints[2].value());
+
+        let age = &current.properties[1];
+        assert_eq!("min_inclusive", age.constraints[0].name());
+        assert_eq!("18", age.constraints[0].value());
+
+        let balance = &current.properties[2];
+        assert_eq!("total_digits", balance.constraints[0].name());
+        assert_eq!("fraction_digits", balance.constraints[1].name());
+        assert!(
+            validate_object_data(
+                &current,
+                &serde_json::json!({
+                    "code": "AB1234", "age": 30, "balance": "1234.56"
+                })
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn property_constraints_reject_invalid_values_and_bounds() {
+        let current = object(
+            r#"object Customer:
+  properties:
+    code: string min_length 2 pattern "[A-Z]{2}[0-9]{4}"
+    age: int min_inclusive 18 max_inclusive 65
+    balance: decimal min_exclusive 0 fraction_digits 2
+"#,
+        );
+        assert!(
+            validate_object_data(
+                &current,
+                &serde_json::json!({ "code": "AB1234", "age": 30, "balance": "0.01" })
+            )
+            .is_ok()
+        );
+        for invalid in [
+            ("code", serde_json::json!("AB123")),
+            ("code", serde_json::json!("ab1234")),
+            ("code", serde_json::json!("A")),
+            ("age", serde_json::json!(17)),
+            ("age", serde_json::json!(66)),
+            ("balance", serde_json::json!("-0.01")),
+            ("balance", serde_json::json!("0.001")),
+        ] {
+            let mut data = serde_json::json!({
+                "code": "AB1234", "age": 30, "balance": "0.01"
+            });
+            data.as_object_mut()
+                .unwrap()
+                .insert(invalid.0.into(), invalid.1);
+            let error = validate_object_data(&current, &data).unwrap_err();
+            assert!(
+                matches!(error, DataValidationError::ConstraintViolation { .. }),
+                "unexpected error: {error:?}"
+            );
+        }
+
+        let explicit_anchor = parse_odl(
+            r#"object Customer:
+  properties:
+    code: string pattern "^AB""
+"#,
+        )
+        .unwrap_err();
+        assert_eq!(1011, explicit_anchor.code);
+        assert!(explicit_anchor.message.contains("constraint"));
+
+        let wrong_facet =
+            parse_odl("object Customer:\n  properties:\n    age: int min_length 2\n").unwrap_err();
+        assert_eq!(1011, wrong_facet.code);
     }
 
     #[test]

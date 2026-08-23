@@ -19,7 +19,8 @@ fn tc001_parse_valid() {
         ot.properties[0],
         PropertyDef {
             name: "name".into(),
-            ty: ScalarType::String
+            ty: ScalarType::String,
+            constraints: Vec::new(),
         }
     );
     assert_eq!(ot.properties[1].ty, ScalarType::String);

@@ -1776,6 +1776,7 @@ name = "oaip-abi"
 version = "0.14.0"
 dependencies = [
  "chrono",
+ "regex",
  "serde",
  "serde_json",
  "thiserror 2.0.20",

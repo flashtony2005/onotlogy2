@@ -5,7 +5,7 @@
 //! data properties must be checked explicitly before ontology persistence.
 
 use crate::error::{KnowledgeError, Result};
-use oaip_abi::canonical_decimal;
+use oaip_abi::{canonical_decimal, compile_xsd_pattern_subset};
 
 use crate::model::{
     Axiom, ClassExpression, DataFacet, Datatype, FacetValue, Literal, Ontology, Term,
@@ -82,106 +82,9 @@ fn literal_datatype_matches(value: &Literal, datatype: Datatype) -> bool {
     value.datatype() == datatype
 }
 
-/// Validate the conservative XSD-pattern subset accepted by the kernel.
-///
-/// XSD patterns are implicitly fully anchored.  Rust regex syntax is close but
-/// not identical, so uncertain constructs (anchors, inline flags, class set
-/// operations, and word boundaries) are rejected instead of being silently
-/// reinterpreted.
+/// Validate a pattern with the one XSD-subset compiler shared by ODL and DL.
 fn validate_pattern(property: &Term, pattern: &str) -> Result<Regex> {
-    let mut escaped = false;
-    let mut in_class = false;
-    let mut chars = pattern.char_indices().peekable();
-
-    while let Some((index, char)) = chars.next() {
-        if escaped {
-            escaped = false;
-            if matches!(char, '^' | '$' | 'A' | 'z' | 'b' | 'B') {
-                return Err(KnowledgeError::Invalid(format!(
-                    "data property `{property}` uses unsupported pattern escape `\\{char}`"
-                )));
-            }
-            if char == 'p' || char == 'P' {
-                if chars.peek().copied().map(|(_, value)| value) != Some('{') {
-                    return Err(KnowledgeError::Invalid(format!(
-                        "data property `{property}` uses an unsupported Unicode escape"
-                    )));
-                }
-                chars.next();
-                let mut depth = 1usize;
-                let mut category = String::new();
-                while let Some((_, value)) = chars.next_if(|&(_, _)| depth > 0) {
-                    match value {
-                        '{' => depth += 1,
-                        '}' => {
-                            depth -= 1;
-                            if depth == 0 {
-                                break;
-                            }
-                        }
-                        _ => category.push(value),
-                    }
-                }
-                if depth != 0
-                    || category.is_empty()
-                    || !category
-                        .chars()
-                        .all(|value| value.is_ascii_alphanumeric() || value == '-' || value == '_')
-                {
-                    return Err(KnowledgeError::Invalid(format!(
-                        "data property `{property}` contains an invalid Unicode character category"
-                    )));
-                }
-            }
-            continue;
-        }
-
-        match char {
-            '\\' => escaped = true,
-            '^' | '$' => {
-                return Err(KnowledgeError::Invalid(format!(
-                    "data property `{property}` contains anchor `{char}`; XSD patterns are implicitly anchored"
-                )));
-            }
-            '[' => {
-                if in_class {
-                    return Err(KnowledgeError::Invalid(format!(
-                        "data property `{property}` uses nested or subtracted character classes"
-                    )));
-                }
-                let _ = index;
-                in_class = true;
-                if chars.peek().copied().map(|(_, value)| value) == Some('^') {
-                    chars.next();
-                }
-            }
-            ']' if in_class => in_class = false,
-            '|' if in_class => {
-                return Err(KnowledgeError::Invalid(format!(
-                    "data property `{property}` uses non-XSD character-class union syntax"
-                )));
-            }
-            '(' if !in_class && chars.peek().copied().map(|(_, value)| value) == Some('?') => {
-                return Err(KnowledgeError::Invalid(format!(
-                    "data property `{property}` uses unsupported inline group syntax"
-                )));
-            }
-            '&' if in_class && chars.peek().copied().map(|(_, value)| value) == Some('&') => {
-                return Err(KnowledgeError::Invalid(format!(
-                    "data property `{property}` uses non-XSD character-class intersection syntax"
-                )));
-            }
-            _ => {}
-        }
-    }
-
-    if escaped || in_class {
-        return Err(KnowledgeError::Invalid(format!(
-            "data property `{property}` contains an unterminated escape or character class"
-        )));
-    }
-
-    Regex::new(&format!("^(?:{pattern})$")).map_err(|error| {
+    compile_xsd_pattern_subset(pattern).map_err(|error| {
         KnowledgeError::Invalid(format!(
             "data property `{property}` has an unsupported or invalid pattern {pattern:?}: {error}"
         ))
@@ -358,7 +261,7 @@ fn compare_literals(left: &Literal, right: &Literal) -> Option<std::cmp::Orderin
 fn facet_admits(fact: &Literal, facet: DataFacet, bound: &Literal) -> bool {
     if let (DataFacet::Pattern, Literal::String(value), Literal::String(pattern)) =
         (facet, fact, bound)
-        && Regex::new(&format!("^(?:{pattern})$")).is_ok_and(|regex| regex.is_match(value))
+        && compile_xsd_pattern_subset(pattern).is_ok_and(|regex| regex.is_match(value))
     {
         return true;
     }

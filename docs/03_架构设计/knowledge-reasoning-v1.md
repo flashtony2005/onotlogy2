@@ -123,6 +123,22 @@ ABox：
 - positive/negative data property assertion
 - same/different individuals
 
+### 4.4 ODL property constraints
+
+Executable ODL 属性现在可以在标量类型后直接声明保守约束：
+
+```odl
+object Customer:
+  properties:
+    code: string min_length 2 max_length 8 pattern "[A-Z]{2}[0-9]{4}"
+    age: int min_inclusive 18 max_exclusive 65
+    balance: decimal total_digits 10 fraction_digits 2
+```
+
+解析器会按 declared scalar type 校验 facet 兼容性和 bound；quoted pattern 保留 regex escape。
+Runtime IR 将这些约束物化为 `DataPropertyRangeRestriction`，因此它们参与 live-world 一致性检查、
+推理诊断和不可变本体版本治理。
+
 ### 4.4 Datatype facet matrix
 
 | Base datatype | 支持的 facet |
@@ -275,7 +291,7 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 
 ## 9. 已知下一步
 
-1. 扩展 ODL 直接表达更多 DL/facet 约束，减少手写 proposal JSON。
+1. 扩展更多 DL 结构到 ODL 直接表达面，减少手写 proposal JSON。
 2. 补充 datatype union/intersection 及真实业务需要的 XSD 构造。
 3. 为大 ABox 增加 classification/cache、incremental consistency 和有界解释缓存。
 4. 增加长时并发、恢复、内存和推理延迟基准。

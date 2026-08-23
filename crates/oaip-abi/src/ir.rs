@@ -75,11 +75,61 @@ impl fmt::Display for ScalarType {
     }
 }
 
+/// One lexical XSD-style constraint attached to an ODL property.
+///
+/// Ordering bounds remain lexical so `decimal` never travels through an IEEE
+/// float and date/date-time forms can be validated against their declared base
+/// datatype before entering the knowledge kernel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PropertyFacet {
+    MinInclusive(String),
+    MinExclusive(String),
+    MaxInclusive(String),
+    MaxExclusive(String),
+    MinLength(String),
+    MaxLength(String),
+    TotalDigits(String),
+    FractionDigits(String),
+    Pattern(String),
+}
+
+impl PropertyFacet {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::MinInclusive(_) => "min_inclusive",
+            Self::MinExclusive(_) => "min_exclusive",
+            Self::MaxInclusive(_) => "max_inclusive",
+            Self::MaxExclusive(_) => "max_exclusive",
+            Self::MinLength(_) => "min_length",
+            Self::MaxLength(_) => "max_length",
+            Self::TotalDigits(_) => "total_digits",
+            Self::FractionDigits(_) => "fraction_digits",
+            Self::Pattern(_) => "pattern",
+        }
+    }
+
+    pub fn value(&self) -> &str {
+        match self {
+            Self::MinInclusive(value)
+            | Self::MinExclusive(value)
+            | Self::MaxInclusive(value)
+            | Self::MaxExclusive(value)
+            | Self::MinLength(value)
+            | Self::MaxLength(value)
+            | Self::TotalDigits(value)
+            | Self::FractionDigits(value)
+            | Self::Pattern(value) => value,
+        }
+    }
+}
+
 /// 单个属性定义。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PropertyDef {
     pub name: String,
     pub ty: ScalarType,
+    #[serde(default)]
+    pub constraints: Vec<PropertyFacet>,
 }
 
 /// 动作参数定义（对应 ODL `actions.<name>.params`）。

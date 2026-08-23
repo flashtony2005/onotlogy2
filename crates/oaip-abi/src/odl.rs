@@ -27,8 +27,9 @@
 
 use crate::ir::{
     ActionDef, Clause, CompareOp, CreateEffect, FieldUpdate, ObjectType, OntologyIR, ParamDef,
-    PolicyDef, PropertyDef, RelationDef, ScalarType, ValueExpr,
+    PolicyDef, PropertyDef, PropertyFacet, RelationDef, ScalarType, ValueExpr,
 };
+use crate::validation::validate_property_constraints;
 use std::str::FromStr;
 
 /// ODL 解析错误：结构化、含行列号与错误码，绝不 panic。
@@ -62,7 +63,8 @@ const E_MISSING_PROPERTY: u32 = 1001; // object 无任何 property
 const E_RELATION_NAME: u32 = 1007; // relation 声明缺少名称
 const E_DUP_RELATION: u32 = 1008; // 重复 relation 定义或与 action 边冲突
 const E_RELATION_ENDPOINT: u32 = 1009; // relation 端点不是已声明对象类型
-const E_RELATION_CONTRADICTION: u32 = 1010; // relation 特征互相矛盾或引用无效
+const E_RELATION_CONTRADICTION: u32 = 1010;
+const E_INVALID_PROPERTY_CONSTRAINT: u32 = 1011; // relation 特征互相矛盾或引用无效
 
 /// 解析上下文中的块（基于缩进的简易状态机）。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -363,13 +365,24 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                     if k.is_empty() {
                         return Err(OdlError::new(E_EMPTY_PROP_NAME, "属性名为空", line_no, 1));
                     }
-                    let ty = ScalarType::from_str(v).map_err(|e| {
-                        OdlError::new(E_UNKNOWN_TYPE, e, line_no, (k.len() + 2) as u32)
+                    let col = (k.len() + 2) as u32;
+                    let (ty, constraints) = parse_property_definition(v).map_err(|error| {
+                        let (code, message) = match error {
+                            PropertyDefinitionError::UnknownType(message) => {
+                                (E_UNKNOWN_TYPE, message)
+                            }
+                            PropertyDefinitionError::Invalid(message) => (
+                                E_INVALID_PROPERTY_CONSTRAINT,
+                                format!("property constraint: {message}"),
+                            ),
+                        };
+                        OdlError::new(code, message, line_no, col)
                     })?;
                     if let Some((_, obj)) = current.as_mut() {
                         obj.properties.push(PropertyDef {
                             name: k.to_string(),
                             ty,
+                            constraints,
                         });
                     }
                 }
@@ -614,6 +627,113 @@ fn list_item_value<'a>(content: &'a str, key: &str) -> Option<&'a str> {
 }
 
 /// 把 ODL 值文本解析为 `ValueExpr`：引用参数 / self / 字面量（数字 / 布尔 / 字符串）。
+/// Split a property declaration into lexical tokens, preserving quoted spaces.
+///
+/// A quoted value keeps backslashes except for an escaped quote.  Thus
+/// `pattern "[A-Z]\d{2}"` preserves the regex escape while allowing readable
+/// quoted strings in ODL.
+fn split_property_tokens(spec: &str) -> Result<Vec<String>, String> {
+    let mut tokens = Vec::new();
+    let mut token = String::new();
+    let mut quoted = false;
+    let mut chars = spec.chars().peekable();
+
+    while let Some(char) = chars.next() {
+        if quoted {
+            match char {
+                '"' => quoted = false,
+                '\\' => {
+                    if let Some(next) = chars.next() {
+                        if next != '"' && next != '\\' {
+                            token.push('\\');
+                        }
+                        token.push(next);
+                    } else {
+                        return Err("unterminated escape in quoted constraint".to_owned());
+                    }
+                }
+                _ => token.push(char),
+            }
+        } else if char == '"' {
+            quoted = true;
+            if !token.is_empty() {
+                tokens.push(std::mem::take(&mut token));
+            }
+        } else if char.is_whitespace() {
+            if !token.is_empty() {
+                tokens.push(std::mem::take(&mut token));
+            }
+        } else {
+            token.push(char);
+        }
+    }
+
+    if quoted {
+        return Err("unterminated quoted constraint".to_owned());
+    }
+    if !token.is_empty() {
+        tokens.push(token);
+    }
+    Ok(tokens)
+}
+
+/// Distinguish an unknown leading scalar type from an invalid constraint list.
+#[derive(Debug)]
+enum PropertyDefinitionError {
+    UnknownType(String),
+    Invalid(String),
+}
+
+fn parse_property_definition(
+    spec: &str,
+) -> Result<(ScalarType, Vec<PropertyFacet>), PropertyDefinitionError> {
+    let tokens = split_property_tokens(spec).map_err(PropertyDefinitionError::Invalid)?;
+    let Some(type_token) = tokens.first() else {
+        return Err(PropertyDefinitionError::Invalid(
+            "property type is empty".to_owned(),
+        ));
+    };
+    let ty = ScalarType::from_str(type_token).map_err(PropertyDefinitionError::UnknownType)?;
+    let rest = &tokens[1..];
+    if rest.len() % 2 != 0 {
+        return Err(PropertyDefinitionError::Invalid(
+            "every property constraint needs a value".to_owned(),
+        ));
+    }
+
+    let mut seen = std::collections::BTreeSet::new();
+    let mut constraints = Vec::new();
+    for pair in rest.as_chunks::<2>().0 {
+        let facet = match pair[0].as_str() {
+            "min_inclusive" => PropertyFacet::MinInclusive(pair[1].clone()),
+            "min_exclusive" => PropertyFacet::MinExclusive(pair[1].clone()),
+            "max_inclusive" => PropertyFacet::MaxInclusive(pair[1].clone()),
+            "max_exclusive" => PropertyFacet::MaxExclusive(pair[1].clone()),
+            "min_length" => PropertyFacet::MinLength(pair[1].clone()),
+            "max_length" => PropertyFacet::MaxLength(pair[1].clone()),
+            "total_digits" => PropertyFacet::TotalDigits(pair[1].clone()),
+            "fraction_digits" => PropertyFacet::FractionDigits(pair[1].clone()),
+            "pattern" => PropertyFacet::Pattern(pair[1].clone()),
+            other => {
+                return Err(PropertyDefinitionError::Invalid(format!(
+                    "unknown property constraint `{other}`"
+                )));
+            }
+        };
+        if !seen.insert(facet.name()) {
+            return Err(PropertyDefinitionError::Invalid(format!(
+                "duplicate `{}` constraint",
+                facet.name()
+            )));
+        }
+        constraints.push(facet);
+    }
+
+    validate_property_constraints("property", ty, &constraints)
+        .map_err(PropertyDefinitionError::Invalid)?;
+    Ok((ty, constraints))
+}
+
 fn parse_value_expr(v: &str, param_names: &[String]) -> ValueExpr {
     if v.starts_with('"') {
         // 字符串字面量：经 serde_json 校验闭合与转义（`"a\"b"` → `a"b`；

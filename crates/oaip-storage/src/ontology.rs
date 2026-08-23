@@ -817,6 +817,7 @@ mod tests {
             PropertyDef {
                 name: "name".to_owned(),
                 ty,
+                constraints: Vec::new(),
             }
         }
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
@@ -846,6 +847,7 @@ mod tests {
             PropertyDef {
                 name: "score".to_owned(),
                 ty: ScalarType::Int,
+                constraints: Vec::new(),
             },
         ]);
         let proposal = OntologyProposal::new("add-score").with_change(OntologyChange::Add(
@@ -1185,6 +1187,7 @@ mod tests {
                 properties: vec![PropertyDef {
                     name: "occurred_at".to_owned(),
                     ty: ScalarType::DateTime,
+                    constraints: Vec::new(),
                 }],
                 actions: Vec::new(),
             }],
@@ -1235,6 +1238,7 @@ mod tests {
                 properties: vec![PropertyDef {
                     name: "birthday".to_owned(),
                     ty: ScalarType::Date,
+                    constraints: Vec::new(),
                 }],
                 actions: Vec::new(),
             }],
@@ -1294,6 +1298,7 @@ mod tests {
                 properties: vec![PropertyDef {
                     name: "balance".to_owned(),
                     ty: ScalarType::Decimal,
+                    constraints: Vec::new(),
                 }],
                 actions: Vec::new(),
             }],
@@ -1349,6 +1354,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn odl_property_constraints_gate_initialization_and_evolution() {
+        let storage = LibSQLStorage::open(":memory:").await.unwrap();
+        let root = Ontology::new().with_axiom(Axiom::subclass(class("Dog"), class("Animal")));
+        let customer = |constraints: &str| {
+            oaip_abi::parse_odl(&format!(
+                r#"object Customer:
+  properties:
+    name: string {constraints}
+"#
+            ))
+        };
+        let valid_ir = customer("min_length 2 pattern \"[A-Z][a-z]+\"").unwrap();
+        storage
+            .create(
+                "Customer",
+                "customer-1",
+                serde_json::json!({ "name": "Ada" }),
+            )
+            .await
+            .unwrap();
+        storage
+            .initialize_knowledge_version("root", &root, Some(&valid_ir))
+            .await
+            .unwrap();
+
+        // The executable schema is materialized into the persisted DL version,
+        // not merely stored beside it as an untyped annotation.
+        let initialized = storage.knowledge_version("root").await.unwrap().unwrap();
+        assert!(initialized.ontology.axioms().iter().any(|axiom| matches!(
+            axiom,
+            Axiom::DataPropertyRangeRestriction { property, datatype: Datatype::String, facets }
+                if property.as_str() == "name"
+                    && facets.iter().any(|facet| facet.facet == DataFacet::Pattern)
+        )));
+
+        // A narrowing that excludes the already-persisted live fact is rejected
+        // before a proposal/version can be created.
+        let incompatible_ir = customer("min_length 5").unwrap();
+        let bad = OntologyProposal::new("exclude-live-name");
+        assert!(
+            storage
+                .propose_knowledge_change("root", &bad, Some(&incompatible_ir))
+                .await
+                .is_err()
+        );
+
+        // A compatible reviewed replacement persists both lineage and runtime IR.
+        let compatible_ir = customer("min_length 2 pattern \"[A-Z][a-z]+\"").unwrap();
+        let proposal = OntologyProposal::new("constrain-name").with_change(OntologyChange::Add(
+            Axiom::subclass(class("Puppy"), class("Dog")),
+        ));
+        storage
+            .propose_knowledge_change("root", &proposal, Some(&compatible_ir.clone()))
+            .await
+            .unwrap();
+        storage
+            .decide_knowledge_proposal("constrain-name", true, "alice", None)
+            .await
+            .unwrap();
+        let (_, applied) = storage
+            .apply_knowledge_proposal("constrain-name", "v2")
+            .await
+            .unwrap();
+        assert_eq!(Some(compatible_ir), applied.runtime_ir);
+    }
+
+    #[tokio::test]
     async fn pure_dl_evolution_validates_the_current_live_world() {
         fn named(name: &str) -> ClassExpression {
             ClassExpression::class(Term::new(name))
@@ -1391,6 +1463,7 @@ mod tests {
                 properties: vec![PropertyDef {
                     name: "name".to_owned(),
                     ty: ScalarType::String,
+                    constraints: Vec::new(),
                 }],
                 actions: Vec::new(),
             };
@@ -1482,6 +1555,7 @@ mod tests {
                 properties: vec![PropertyDef {
                     name: "name".to_owned(),
                     ty: ScalarType::String,
+                    constraints: Vec::new(),
                 }],
                 actions: Vec::new(),
             }
@@ -1547,6 +1621,7 @@ mod tests {
             properties: vec![PropertyDef {
                 name: "name".to_owned(),
                 ty: ScalarType::String,
+                constraints: Vec::new(),
             }],
             actions: Vec::new(),
         };
