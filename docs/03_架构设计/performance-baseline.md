@@ -5,8 +5,10 @@
 - 记录日期：2026-08-22
 - 版本：V0.14.0 候选
 - 场景：Local-First 单进程，嵌入式 libSQL `:memory:`
-- 微基准方法：`cargo bench --bench performance`（Criterion，30 个样本，默认 3 秒预热 / 5 秒测量）
+- 微基准方法：`cargo bench --bench performance`（Criterion；`core_paths` 30 个样本，
+  `knowledge_abox` 10 个样本；默认 3 秒预热 / 5 秒测量）
 - 环境：Apple M4；10 CPU；16 GiB 内存；macOS 27.0.0；arm64
+- 基线更新：2026-08-24 新增 Knowledge ABox consistency；其余数字记录于 2026-08-22。
 
 ## 固定负载
 
@@ -17,6 +19,7 @@
 | World query | 500 个持久化对象 |
 | Audit write | 每次迭代写 1 条事件 + 1 个哈希链节点 |
 | Reasoner classification | 24 个 named class 的固定继承链；对比新建 Reasoner 和同一不可变快照重复查询 |
+| Knowledge ABox consistency | 1,000 条 functional data property 断言 |
 | HTTP/WS load | 10 次并发 submit/approve（并发 5），3 个 WebSocket 客户端，真实 release 二进制 |
 
 ## 基线结果
@@ -29,6 +32,7 @@
 | Audit append + hash chain | 27.961 µs | 27.985 µs | 约 35,764 writes/s | 无既有目标；建立基线 | 已建档 |
 | Reasoner classification (new) | 1.358 ms | 约 1.358 ms | 约 17,678 classes/s | 无既有目标；建立基线 | 已建档 |
 | Reasoner classification (snapshot cache) | 9.401 µs | 约 9.401 µs | 约 2,553,100 classes/s | 无既有目标；建立基线 | 已建档 |
+| Knowledge ABox consistency | 589.016 µs | 577.335 µs | 约 1,697,700 assertions/s | 无既有目标；建立基线 | 已建档 |
 
 推理分类缓存只绑定单个不可变 `Reasoner` snapshot；本体版本变化会新建 reasoner，因此不跨版本复用。
 

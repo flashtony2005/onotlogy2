@@ -11,7 +11,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use criterion::{Criterion, SamplingMode, Throughput, black_box, criterion_group, criterion_main};
 use openaip_os::abi::{codegen, parse_odl};
 use openaip_os::kernel::{Kernel, Scope};
-use openaip_os::knowledge::{Axiom, ClassExpression, Ontology, Reasoner, Term};
+use openaip_os::knowledge::{
+    Axiom, ClassExpression, Literal, Ontology, Reasoner, Term, validate_data_consistency,
+};
 use openaip_os::projection::Projection;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine};
 use openaip_os::trace::{TraceEvent, TraceKind};
@@ -19,6 +21,7 @@ use serde_json::json;
 
 const ODL_OBJECTS: usize = 24;
 const REASONER_CLASSES: usize = 24;
+const DATA_FACTS: usize = 1_000;
 const PROJECTION_EVENTS: usize = 1_000;
 const QUERY_OBJECTS: usize = 500;
 
@@ -55,6 +58,18 @@ fn benchmark_ontology() -> Ontology {
         ontology = ontology.with_axiom(Axiom::subclass(ClassExpression::Class(sub), sup));
     }
     ontology
+}
+
+/// A fixed functional-property ABox that exercises indexed conflict detection.
+fn benchmark_data_ontology() -> Ontology {
+    let ontology = Ontology::new().with_axiom(Axiom::FunctionalDataProperty(Term::new("status")));
+    (0..DATA_FACTS).fold(ontology, |ontology, index| {
+        ontology.with_axiom(Axiom::DataPropertyAssertion {
+            property: Term::new("status"),
+            individual: Term::new(format!("individual-{index}")),
+            value: Literal::String("active".into()),
+        })
+    })
 }
 
 fn projection_events() -> Vec<TraceEvent> {
@@ -225,5 +240,18 @@ fn core_performance(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, core_performance);
+fn knowledge_abox_performance(c: &mut Criterion) {
+    let ontology = benchmark_data_ontology();
+    assert!(validate_data_consistency(&ontology).is_ok());
+
+    let mut group = c.benchmark_group("knowledge_abox");
+    group.sample_size(10);
+    group.throughput(Throughput::Elements(DATA_FACTS as u64));
+    group.bench_function("data_consistency_1000_assertions", |b| {
+        b.iter(|| black_box(validate_data_consistency(black_box(&ontology)).is_ok()))
+    });
+    group.finish();
+}
+
+criterion_group!(benches, core_performance, knowledge_abox_performance);
 criterion_main!(benches);

@@ -507,9 +507,11 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
     let mut functional = BTreeSet::new();
     let mut disjoint = BTreeSet::new();
     let mut ranges = BTreeMap::<Term, BTreeSet<Datatype>>::new();
-    let mut one_ofs = Vec::<(Term, Vec<Literal>)>::new();
-    let mut restrictions = Vec::<(Term, Datatype, Vec<FacetValue>, Option<Regex>)>::new();
-    let mut range_expressions = Vec::<(Term, DataRange)>::new();
+    let mut one_ofs = BTreeMap::<Term, Vec<Vec<Literal>>>::new();
+    let mut restrictions =
+        BTreeMap::<Term, Vec<(usize, Datatype, Vec<FacetValue>, Option<Regex>)>>::new();
+    let mut restriction_count = 0usize;
+    let mut range_expressions = BTreeMap::<Term, Vec<DataRange>>::new();
     let mut sub_data_properties = BTreeMap::new();
 
     for axiom in ontology.axioms() {
@@ -556,7 +558,10 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
                     .insert(*datatype);
             }
             Axiom::DataPropertyOneOf { property, values } => {
-                one_ofs.push((property.clone(), values.clone()));
+                one_ofs
+                    .entry(property.clone())
+                    .or_default()
+                    .push(values.clone());
             }
             Axiom::DataPropertyRangeRestriction {
                 property,
@@ -564,11 +569,20 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
                 facets,
             } => {
                 let pattern = validate_restriction(property, datatype, facets)?;
-                restrictions.push((property.clone(), *datatype, facets.clone(), pattern));
+                restrictions.entry(property.clone()).or_default().push((
+                    restriction_count,
+                    *datatype,
+                    facets.clone(),
+                    pattern,
+                ));
+                restriction_count += 1;
             }
             Axiom::DataPropertyDataRange { property, range } => {
                 validate_data_range(range, property)?;
-                range_expressions.push((property.clone(), range.clone()));
+                range_expressions
+                    .entry(property.clone())
+                    .or_default()
+                    .push(range.clone());
             }
             Axiom::SubDataPropertyOf { sub, sup } => {
                 sub_data_properties.insert(sub.clone(), sup.clone());
@@ -602,6 +616,17 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
         validate_literal(&fact.property, &fact.value)?;
     }
 
+    // Index negatives by canonical individual and property so a large ABox does
+    // not pay an O(assertions x negative-assertions) contradiction scan.
+    let mut negatives = BTreeMap::<(Term, Term), Vec<&DataFact>>::new();
+    for fact in &negative {
+        let individual = parents(&mut aliases, fact.individual.clone());
+        negatives
+            .entry((individual, fact.property.clone()))
+            .or_default()
+            .push(fact);
+    }
+
     // Two different concrete ranges make every assertion violate at least one
     // of them under the current basic-datatype vocabulary.
     for (property, datatypes) in &ranges {
@@ -612,16 +637,20 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
         }
     }
 
+    let mut functional_values = BTreeMap::<(Term, Term), Literal>::new();
+    let mut properties_by_individual = BTreeMap::<Term, BTreeSet<Term>>::new();
     for fact in &positive {
         let individual = parents(&mut aliases, fact.individual.clone());
 
-        if range_expressions.iter().any(|(property, range)| {
-            property == &fact.property && !data_range_admits(range, &fact.value)
-        }) {
-            return Err(KnowledgeError::Invalid(format!(
-                "data property `{}` range rejects `{individual}` value {:?}",
-                fact.property, fact.value
-            )));
+        if let Some(candidate_ranges) = range_expressions.get(&fact.property) {
+            for range in candidate_ranges {
+                if !data_range_admits(range, &fact.value) {
+                    return Err(KnowledgeError::Invalid(format!(
+                        "data property `{}` range rejects `{individual}` value {:?}",
+                        fact.property, fact.value
+                    )));
+                }
+            }
         }
 
         let violated_range = ranges
@@ -634,105 +663,95 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
             )));
         }
 
-        for (restriction_index, (property, datatype, facets, pattern)) in
-            restrictions.iter().enumerate()
-        {
-            if property != &fact.property || datatype != &fact.value.datatype() {
-                continue;
-            }
-            let violated = facets
-                .iter()
-                .any(|item| !facet_admits(&fact.value, item.facet, &item.value))
-                || pattern.as_ref().is_some_and(|regex| {
-                    let Literal::String(value) = &fact.value else {
-                        return true;
-                    };
-                    !regex.is_match(value)
-                });
-            if violated {
-                return Err(KnowledgeError::Invalid(format!(
-                    "data property `{property}` restriction #{restriction_index} rejects `{individual}` value {:?}",
-                    fact.value
-                )));
-            }
-        }
-
-        for (index, allowed) in one_ofs.iter().enumerate() {
-            if allowed.0 == fact.property
-                && !allowed
-                    .1
+        if let Some(matching) = restrictions.get(&fact.property) {
+            let mut violated_restriction = None;
+            for (restriction_index, datatype, facets, pattern) in matching {
+                let facets_admit = facets
                     .iter()
-                    .any(|value| literal_equal(value, &fact.value))
-            {
+                    .all(|item| facet_admits(&fact.value, item.facet, &item.value));
+                let pattern_admits = pattern.as_ref().is_none_or(|regex| {
+                    let Literal::String(value) = &fact.value else {
+                        return false;
+                    };
+                    regex.is_match(value)
+                });
+                if datatype == &fact.value.datatype() && (!facets_admit || !pattern_admits) {
+                    violated_restriction = Some(*restriction_index);
+                    break;
+                }
+            }
+            if let Some(restriction_index) = violated_restriction {
                 return Err(KnowledgeError::Invalid(format!(
-                    "data property `{}` enumeration #{index} rejects `{individual}` value {:?}",
+                    "data property `{}` restriction #{restriction_index} rejects `{individual}` value {:?}",
                     fact.property, fact.value
                 )));
             }
         }
 
-        let contradicted = negative.iter().any(|negative| {
-            negative.property == fact.property
-                && parents(&mut aliases, negative.individual.clone()) == individual
-                && literal_equal(&negative.value, &fact.value)
-        });
+        if let Some(enumerations) = one_ofs.get(&fact.property) {
+            let rejected = enumerations.iter().any(|allowed| {
+                !allowed
+                    .iter()
+                    .any(|value| literal_equal(value, &fact.value))
+            });
+            if rejected {
+                return Err(KnowledgeError::Invalid(format!(
+                    "data property `{}` enumeration rejects `{individual}` value {:?}",
+                    fact.property, fact.value
+                )));
+            }
+        }
+
+        let contradicted = negatives
+            .get(&(individual.clone(), fact.property.clone()))
+            .is_some_and(|candidates| {
+                candidates
+                    .iter()
+                    .any(|negative| literal_equal(&negative.value, &fact.value))
+            });
         if contradicted {
             return Err(KnowledgeError::Invalid(format!(
                 "individual `{individual}` has positive and negative assertions for data property `{}`",
                 fact.property
             )));
         }
-    }
 
-    // Group by canonical individual and property to detect functional conflicts.
-    let mut grouped = BTreeMap::<(Term, Term), Vec<&DataFact>>::new();
-    for fact in &positive {
-        let individual = parents(&mut aliases, fact.individual.clone());
-        grouped
-            .entry((individual, fact.property.clone()))
-            .or_default()
-            .push(fact);
-    }
-    for ((individual, property), facts) in grouped {
-        if !functional.contains(&property) || facts.len() < 2 {
-            continue;
-        }
-        let conflicting = (0..facts.len()).any(|left| {
-            (left + 1..facts.len())
-                .any(|right| !literal_equal(&facts[left].value, &facts[right].value))
-        });
-        if conflicting {
-            return Err(KnowledgeError::Invalid(format!(
-                "functional data property `{property}` has conflicting values for `{individual}`"
-            )));
-        }
-    }
-
-    // Disjointness concerns the existence of two assertions, not their values.
-    let mut properties_by_individual = BTreeMap::<Term, BTreeSet<Term>>::new();
-    for fact in &positive {
-        let individual = parents(&mut aliases, fact.individual.clone());
-        properties_by_individual
-            .entry(individual)
-            .or_default()
-            .insert(fact.property.clone());
-    }
-    for (individual, properties) in properties_by_individual {
-        let list = properties.into_iter().collect::<Vec<_>>();
-        for left in 0..list.len() {
-            for right in left + 1..list.len() {
-                let (first, second) = if list[left] <= list[right] {
-                    (list[left].clone(), list[right].clone())
+        let properties = properties_by_individual
+            .entry(individual.clone())
+            .or_default();
+        if properties.insert(fact.property.clone()) {
+            for existing in properties.iter() {
+                if *existing == fact.property {
+                    continue;
+                }
+                let pair = if existing <= &fact.property {
+                    (existing.clone(), fact.property.clone())
                 } else {
-                    (list[right].clone(), list[left].clone())
+                    (fact.property.clone(), existing.clone())
                 };
-                let pair = (first, second);
                 if disjoint.contains(&pair) {
                     return Err(KnowledgeError::Invalid(format!(
                         "data properties `{}` and `{}` are disjoint but both are asserted for `{individual}`",
                         pair.0, pair.1
                     )));
                 }
+            }
+        }
+
+        if !functional.contains(&fact.property) {
+            continue;
+        }
+        let key = (individual, fact.property.clone());
+        match functional_values.get(&key) {
+            Some(existing) if literal_equal(existing, &fact.value) => {}
+            Some(_) => {
+                return Err(KnowledgeError::Invalid(format!(
+                    "functional data property `{}` has conflicting values for `{}`",
+                    fact.property, key.0
+                )));
+            }
+            None => {
+                functional_values.insert(key, fact.value.clone());
             }
         }
     }
@@ -786,6 +805,35 @@ mod tests {
             .with_axiom(fact("a", "age", Literal::Integer(30)))
             .with_axiom(fact("a", "age", Literal::Integer(31)));
         assert!(validate_data_consistency(&functional).is_err());
+    }
+
+    #[test]
+    fn large_abox_uses_indexed_consistency_checks() {
+        let ontology = (0..1_000).fold(Ontology::new(), |ontology, index| {
+            if index == 0 {
+                ontology
+                    .with_axiom(Axiom::FunctionalDataProperty(term("status")))
+                    .with_axiom(fact(
+                        &format!("individual-{index}"),
+                        "status",
+                        Literal::String("active".into()),
+                    ))
+            } else {
+                ontology.with_axiom(fact(
+                    &format!("individual-{index}"),
+                    "status",
+                    Literal::String("active".into()),
+                ))
+            }
+        });
+        assert!(validate_data_consistency(&ontology).is_ok());
+
+        let conflict = ontology.with_axiom(fact(
+            "individual-999",
+            "status",
+            Literal::String("archived".into()),
+        ));
+        assert!(validate_data_consistency(&conflict).is_err());
     }
 
     #[test]
