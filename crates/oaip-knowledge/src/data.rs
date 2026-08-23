@@ -1168,8 +1168,13 @@ impl DataConsistencyState {
             candidates[moved_position] = position;
         }
 
-        if !self.positive_index.contains_key(&key) {
-            self.properties_by_individual.remove(&individual);
+        if !self.positive_index.contains_key(&key)
+            && let Some(properties) = self.properties_by_individual.get_mut(&individual)
+        {
+            properties.remove(&fact.property);
+            if properties.is_empty() {
+                self.properties_by_individual.remove(&individual);
+            }
         }
         if self.functional.contains(&fact.property)
             && self
@@ -1348,10 +1353,11 @@ fn literal_cache_key(value: &Literal) -> String {
             .unwrap_or_else(|| value.clone()),
         Literal::DateTime(value) => date_time_value(value)
             .map(|instant| {
-                instant
-                    .timestamp_nanos_opt()
-                    .unwrap_or_default()
-                    .to_string()
+                format!(
+                    "{}:{:09}",
+                    instant.timestamp(),
+                    instant.timestamp_subsec_nanos()
+                )
             })
             .unwrap_or_else(|| value.clone()),
         Literal::Double(value) => {
@@ -1810,6 +1816,58 @@ mod tests {
         assert_eq!(projection.len() - 1, prefix_length);
         assert!(result.is_ok());
         assert!(validate_data_consistency(&extended).is_ok());
+    }
+
+    #[test]
+    fn assertion_patch_keys_preserve_distinct_far_future_date_times() {
+        let property = term("patch-instant");
+        let base = Ontology::new()
+            .with_axiom(Axiom::FunctionalDataProperty(property.clone()))
+            .with_axiom(fact(
+                "patch-dt-a",
+                "patch-instant",
+                Literal::DateTime("3000-01-01T00:00:00Z".into()),
+            ));
+        assert!(validate_data_consistency(&base).is_ok());
+
+        // The old positive value is outside `timestamp_nanos_opt` range.  Its
+        // patch key must still remain distinct from 1970 so it cannot cancel
+        // the replacement and hide this next snapshot's direct contradiction.
+        let next = Ontology::new()
+            .with_axiom(Axiom::FunctionalDataProperty(property))
+            .with_axiom(fact(
+                "patch-dt-a",
+                "patch-instant",
+                Literal::DateTime("1970-01-01T00:00:00Z".into()),
+            ))
+            .with_axiom(negative(
+                "patch-dt-a",
+                "patch-instant",
+                Literal::DateTime("1970-01-01T00:00:00Z".into()),
+            ));
+        assert!(validate_data_consistency(&next).is_err());
+    }
+
+    #[test]
+    fn removing_one_fact_retains_other_properties_in_disjoint_checks() {
+        let schema = Ontology::new().with_axiom(Axiom::DisjointDataProperties(vec![
+            term("patch-age"),
+            term("patch-height"),
+        ]));
+        let base = schema
+            .clone()
+            .with_axiom(fact("patch-index-a", "patch-age", Literal::Integer(30)))
+            .with_axiom(fact("patch-index-a", "patch-temp", Literal::Integer(80)));
+        assert!(validate_data_consistency(&base).is_ok());
+
+        let next = schema
+            .clone()
+            .with_axiom(fact("patch-index-a", "patch-age", Literal::Integer(30)))
+            .with_axiom(fact("patch-index-a", "patch-height", Literal::Integer(180)));
+        assert!(
+            validate_data_consistency(&next).is_err(),
+            "removing patch-temp must not forget the retained patch-age property"
+        );
     }
 
     #[test]

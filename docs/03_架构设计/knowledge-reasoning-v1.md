@@ -372,9 +372,10 @@ append-only 之外，成功缓存的 snapshot 还可作为 **assertion patch bas
 非断言 data-relevant axiom 完全相等（SameIndividuals、subproperty、range 和 restriction 都未变），
 正/负 assertion 可按 multiset 对称差归约为 remove/add 操作。删除会先经 subproperty hierarchy 展开，
 并在修改克隆索引前证明全部可删除；canonical decimal、date、dateTime、double 等值使用等价 key，
-避免只改词法形式的事实被误判为冲突。这里的“absence”只是移除旧 positive assertion，不会转换成
-OWL negative assertion。schema 不相等或 removal 无法应用时仍退回全量重建，patch 复用计入
-prefix-hit 指标。
+避免只改词法形式的事实被误判为冲突。dateTime key 保留秒和 sub-second nanos，避免远未来时间戳
+折叠后隐藏断言差异；删除一个 property 时也会保留同 individual 的其他 property 索引，使 disjoint
+检查继续完整。这里的“absence”只是移除旧 positive assertion，不会转换成 OWL negative assertion。
+schema 不相等或 removal 无法应用时仍退回全量重建，patch 复用计入 prefix-hit 指标。
 
 这条缓存已经接入存储治理执行路径。`initialize_knowledge_version`、
 `propose_knowledge_change` 和 `apply_knowledge_proposal` 统一通过
