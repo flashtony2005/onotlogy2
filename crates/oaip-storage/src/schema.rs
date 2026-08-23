@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 /// 版本化迁移注册表：`(from_version, sql)`，按版本升序执行；每步成功后推进
 /// `wb_meta.schema_version`。迁移在事务内执行（失败整体回滚，版本不推进，可安全重试）。
 /// 新库由 `canonical_schema` 直接建到当前版本，不执行迁移。
-pub(crate) const SCHEMA_VERSION: i64 = 14;
+pub(crate) const SCHEMA_VERSION: i64 = 15;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     // V1 → V2：wb_learned 补 auto_approve_enabled（REQ-018）。
@@ -210,6 +210,34 @@ END;",
 CREATE INDEX IF NOT EXISTS idx_automation_job_status_available
   ON wb_automation_job (status, available_at, created_at);",
     ),
+    // V14 → V15：知识本体版本、演化提案、人工评审与回滚历史持久化。
+    (
+        14,
+        "CREATE TABLE IF NOT EXISTS wb_ontology_version (
+  revision    INTEGER PRIMARY KEY AUTOINCREMENT,
+  id          TEXT NOT NULL UNIQUE,
+  parent_id   TEXT,
+  ontology    TEXT NOT NULL,
+  runtime_ir  TEXT,
+  created_at  TEXT NOT NULL,
+  FOREIGN KEY (parent_id) REFERENCES wb_ontology_version(id)
+);
+CREATE INDEX IF NOT EXISTS idx_ontology_version_parent
+  ON wb_ontology_version (parent_id, revision);
+CREATE TABLE IF NOT EXISTS wb_ontology_proposal (
+  id                 TEXT PRIMARY KEY,
+  source_version_id  TEXT NOT NULL REFERENCES wb_ontology_version(id),
+  proposal_json      TEXT NOT NULL,
+  review_json        TEXT NOT NULL,
+  candidate_runtime_ir TEXT,
+  status             TEXT NOT NULL,
+  applied_version_id TEXT REFERENCES wb_ontology_version(id),
+  created_at         TEXT NOT NULL,
+  reviewed_at        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ontology_proposal_status
+  ON wb_ontology_proposal (status, created_at);",
+    ),
 ];
 
 const MIGRATION_NAMES: &[(i64, &str)] = &[
@@ -227,6 +255,7 @@ const MIGRATION_NAMES: &[(i64, &str)] = &[
     (12, "trace_event_append_only"),
     (13, "audit_integrity_hash_chain"),
     (14, "automation_job_queue"),
+    (15, "ontology_evolution_persistence"),
 ];
 
 const MIGRATION_DOWNS: &[(i64, &str)] = &[
@@ -286,6 +315,10 @@ DROP TABLE IF EXISTS wb_audit_chain",
     (
         13,
         "DROP INDEX IF EXISTS idx_automation_job_status_available; DROP TABLE IF EXISTS wb_automation_job",
+    ),
+    (
+        14,
+        "DROP TABLE IF EXISTS wb_ontology_proposal; DROP TABLE IF EXISTS wb_ontology_version",
     ),
 ];
 

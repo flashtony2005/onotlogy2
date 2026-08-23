@@ -9,6 +9,7 @@ export type ViewKind =
   | 'governance'
   | 'fabric'
   | 'projects'
+  | 'knowledge'
   | 'developer'
   | 'user-management'
   | 'business-packs'
@@ -502,4 +503,66 @@ export interface ProjectEventDto {
   input: unknown
   /// 可选：root --edge--> 此对象（如 contains）。
   edge?: string
+}
+
+// ── Knowledge 视图（GET /api/v1/knowledge/*）─────────────────────────────
+export interface KnowledgeVersionDto {
+  revision: number
+  id: string
+  parent_id?: string | null
+  ontology: { axioms: unknown[] }
+  runtime_ir?: unknown | null
+  created_at: string
+}
+
+export interface ReasonedJustificationDto {
+  axiom_indices: number[]
+  axioms: unknown[]
+}
+
+export interface UnsatisfiableClassDto {
+  class: string
+  justification: ReasonedJustificationDto
+}
+
+export interface KnowledgeDiagnosisDto {
+  consistent: boolean
+  unsatisfiableClasses: string[]
+  unsatisfiable: UnsatisfiableClassDto[]
+  inconsistency?: ReasonedJustificationDto | null
+}
+
+export type KnowledgeReviewDecision = 'Pending' | 'Approved' | 'Rejected'
+
+export interface OntologyImpactDto {
+  currentConsistent: boolean
+  targetConsistent: boolean
+  newlyUnsatisfiable: string[]
+  resolvedUnsatisfiable: string[]
+  addedSubsumptions: [string, string][]
+  removedSubsumptions: [string, string][]
+}
+
+export interface OntologyReviewDto {
+  proposal_id: string
+  impact: OntologyImpactDto
+  decision: KnowledgeReviewDecision
+  reviewer?: string | null
+  reason?: string | null
+}
+
+export interface OntologyProposalDto {
+  id: string
+  changes: Array<Record<string, unknown>>
+}
+
+export interface OntologyEvolutionRecordDto {
+  id: string
+  source_version_id: string
+  proposal: OntologyProposalDto
+  review: OntologyReviewDto
+  candidate_runtime_ir?: unknown | null
+  applied_version_id?: string | null
+  created_at: string
+  reviewed_at?: string | null
 }

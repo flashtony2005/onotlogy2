@@ -10,6 +10,8 @@ pub mod automation;
 pub mod evaluation;
 pub mod events;
 pub mod objects;
+pub use ontology::{OntologyEvolutionRecord, OntologyEvolutionStatus, OntologyVersionRecord};
+pub mod ontology;
 pub mod projects;
 pub mod relations;
 pub mod runs;

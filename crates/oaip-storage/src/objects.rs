@@ -40,12 +40,14 @@ impl LibSQLStorage {
         Ok(out)
     }
 
-    /// 列出全部关系边（is_delete=0），供世界模型快照。
+    /// 列出全部活跃关系边，供世界模型与 DL ABox 快照使用。
+    ///
+    /// 快照必须完整：静默截断会让第 N 条之后的事实绕过推理和演化校验。
     pub async fn list_all_relations(&self) -> Result<Vec<RelationRecord>, StorageError> {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, relation, source, target, data FROM wb_relation_edge WHERE is_delete=0 LIMIT 1000",
+                "SELECT id, relation, source, target, data FROM wb_relation_edge WHERE is_delete=0",
                 params![],
             )
             .await?;

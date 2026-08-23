@@ -1,6 +1,9 @@
 [workspace]
-members = ["crates/oaip-abi", "crates/oaip-eval-core", "crates/oaip-kernel", "crates/oaip-mutation-core", "crates/oaip-session", "crates/oaip-storage", "crates/oaip-trace", "crates/oaip-worker-core"]
+members = ["crates/oaip-abi", "crates/oaip-eval-core", "crates/oaip-kernel", "crates/oaip-knowledge", "crates/oaip-mutation-core", "crates/oaip-session", "crates/oaip-storage", "crates/oaip-trace", "crates/oaip-worker-core"]
 resolver = "2"
+
+[workspace.dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 
 [package]
 name = "openaip-os"
@@ -21,6 +24,7 @@ oaip-eval-core = { path = "crates/oaip-eval-core" }
 oaip-mutation-core = { path = "crates/oaip-mutation-core" }
 oaip-storage = { path = "crates/oaip-storage" }
 oaip-kernel = { path = "crates/oaip-kernel" }
+oaip-knowledge = { path = "crates/oaip-knowledge" }
 oaip-session = { path = "crates/oaip-session" }
 oaip-trace = { path = "crates/oaip-trace" }
 oaip-worker-core = { path = "crates/oaip-worker-core" }

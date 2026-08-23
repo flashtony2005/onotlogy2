@@ -23,11 +23,11 @@
 //!             status: "NEW"
 //!           link: places            # 建立 target --places--> Order
 //! ```
-//! 不支持 Relation / Event 顶层语法（归 V0.2+）；actions 内的 effects 已是声明式表达。
+//! Event 顶层语法暂未开放；action 内的 effects 已是声明式表达。
 
 use crate::ir::{
     ActionDef, Clause, CompareOp, CreateEffect, FieldUpdate, ObjectType, OntologyIR, ParamDef,
-    PolicyDef, PropertyDef, ScalarType, ValueExpr,
+    PolicyDef, PropertyDef, RelationDef, ScalarType, ValueExpr,
 };
 use std::str::FromStr;
 
@@ -59,6 +59,10 @@ const E_NO_PROP_BLOCK: u32 = 1005; // 属性出现在 properties: 块外
 const E_EMPTY_PROP_NAME: u32 = 1003; // 属性名为空 / 无法解析行
 const E_UNKNOWN_TYPE: u32 = 1002; // 未知标量类型
 const E_MISSING_PROPERTY: u32 = 1001; // object 无任何 property
+const E_RELATION_NAME: u32 = 1007; // relation 声明缺少名称
+const E_DUP_RELATION: u32 = 1008; // 重复 relation 定义或与 action 边冲突
+const E_RELATION_ENDPOINT: u32 = 1009; // relation 端点不是已声明对象类型
+const E_RELATION_CONTRADICTION: u32 = 1010; // relation 特征互相矛盾或引用无效
 
 /// 解析上下文中的块（基于缩进的简易状态机）。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -74,6 +78,7 @@ enum Section {
     CreateData,
     ActionPolicy,
     ActionPrecondition,
+    Relation,
 }
 
 /// 解析 .odl 源文本为 IR。
@@ -87,6 +92,9 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     let mut cur_update: Option<FieldUpdate> = None;
     let mut cur_create: Option<CreateEffect> = None;
     let mut cur_clause: Option<Clause> = None;
+    let mut declared_relations: Vec<(u32, RelationDef)> = Vec::new();
+    let mut current_relation: Option<(u32, RelationDef)> = None;
+    let mut link_lines: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
 
     let indent_of = |raw: &str| raw.len() - raw.trim_start().len();
 
@@ -98,6 +106,37 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
         }
         let indent = indent_of(raw);
 
+        // relation 声明：全局有类型边，和 object 同级。
+        if let Some(rest) = line.strip_prefix("relation ") {
+            flush_update(&mut cur_update, &mut cur_action);
+            flush_create(&mut cur_create, &mut cur_action);
+            flush_action(&mut cur_action, &mut current);
+            if let Some(obj) = current.take() {
+                declared.push(obj);
+            }
+            if let Some(relation) = current_relation.take() {
+                declared_relations.push(relation);
+            }
+            let name = rest.trim_end_matches(':').trim();
+            if name.is_empty() {
+                return Err(OdlError::new(
+                    E_RELATION_NAME,
+                    "relation 声明缺少名称",
+                    line_no,
+                    1,
+                ));
+            }
+            current_relation = Some((
+                line_no,
+                RelationDef {
+                    name: name.to_string(),
+                    ..RelationDef::default()
+                },
+            ));
+            section = vec![(Section::Relation, indent)];
+            continue;
+        }
+
         // object 声明（优先级最高，先处理）
         if let Some(rest) = line.strip_prefix("object ") {
             flush_update(&mut cur_update, &mut cur_action);
@@ -105,6 +144,9 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             flush_action(&mut cur_action, &mut current);
             if let Some(obj) = current.take() {
                 declared.push(obj);
+            }
+            if let Some(relation) = current_relation.take() {
+                declared_relations.push(relation);
             }
             let name = rest.trim_end_matches(':').trim();
             if name.is_empty() {
@@ -140,6 +182,11 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                 Section::ActionCreates => flush_create(&mut cur_create, &mut cur_action),
                 Section::ActionPrecondition => flush_clause(&mut cur_clause, &mut cur_action),
                 Section::Action => flush_action(&mut cur_action, &mut current),
+                Section::Relation => {
+                    if let Some(relation) = current_relation.take() {
+                        declared_relations.push(relation);
+                    }
+                }
                 _ => {}
             }
             section.pop();
@@ -199,6 +246,14 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
         // 块头（bare `word:`）
         if let Some(header) = parse_header(line) {
             match (cur.0, header) {
+                (Section::Relation, "source") | (Section::Relation, "target") => {
+                    return Err(OdlError::new(
+                        E_NO_PROP_BLOCK,
+                        format!("无法识别的块 '{header}'"),
+                        line_no,
+                        1,
+                    ));
+                }
                 (Section::Object, "properties") => section.push((Section::Properties, indent)),
                 (Section::Object, "actions") => section.push((Section::Actions, indent)),
                 (Section::Actions, name) => {
@@ -244,6 +299,66 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                 .map(|(_, a)| a.params.iter().map(|p| p.name.clone()).collect())
                 .unwrap_or_default();
             match cur.0 {
+                Section::Relation => {
+                    let boolean_keys = [
+                        "functional",
+                        "inverse_functional",
+                        "symmetric",
+                        "transitive",
+                        "reflexive",
+                        "irreflexive",
+                        "asymmetric",
+                    ];
+                    if k != "source"
+                        && k != "target"
+                        && k != "inverse_of"
+                        && !boolean_keys.contains(&k)
+                    {
+                        return Err(OdlError::new(
+                            E_NO_PROP_BLOCK,
+                            format!("'{k}' 不是 relation 属性"),
+                            line_no,
+                            1,
+                        ));
+                    }
+                    if v.is_empty() {
+                        return Err(OdlError::new(
+                            E_EMPTY_PROP_NAME,
+                            format!("relation {k} 不能为空"),
+                            line_no,
+                            1,
+                        ));
+                    }
+                    let Some((_, relation)) = current_relation.as_mut() else {
+                        continue;
+                    };
+                    match k {
+                        "source" => relation.source = v.to_string(),
+                        "target" => relation.target = v.to_string(),
+                        "inverse_of" => relation.inverse_of = Some(v.to_string()),
+                        _ => {
+                            if v != "true" && v != "false" {
+                                return Err(OdlError::new(
+                                    E_RELATION_CONTRADICTION,
+                                    format!("relation 特征 {k} 只能是 true/false"),
+                                    line_no,
+                                    1,
+                                ));
+                            }
+                            let value = v == "true";
+                            match k {
+                                "functional" => relation.functional = value,
+                                "inverse_functional" => relation.inverse_functional = value,
+                                "symmetric" => relation.symmetric = value,
+                                "transitive" => relation.transitive = value,
+                                "reflexive" => relation.reflexive = value,
+                                "irreflexive" => relation.irreflexive = value,
+                                "asymmetric" => relation.asymmetric = value,
+                                _ => unreachable!("boolean_keys 已约束分支"),
+                            }
+                        }
+                    }
+                }
                 Section::Properties => {
                     if k.is_empty() {
                         return Err(OdlError::new(E_EMPTY_PROP_NAME, "属性名为空", line_no, 1));
@@ -290,6 +405,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         && let Some(c) = cur_create.as_mut()
                     {
                         c.link_edge = Some(v.to_string());
+                        link_lines.insert(v.to_string(), line_no);
                     } else if k == "id"
                         && let Some(c) = cur_create.as_mut()
                     {
@@ -342,6 +458,9 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     if let Some(obj) = current.take() {
         declared.push(obj);
     }
+    if let Some(relation) = current_relation.take() {
+        declared_relations.push(relation);
+    }
 
     // 每个 object 必须至少含一个 property（TC-001-b：缺 property → 错误码，带回声明行列号）
     for (ln, obj) in &declared {
@@ -363,6 +482,110 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             ));
         }
         ir.object_types.push(obj.clone());
+    }
+
+    let mut endpoints = std::collections::BTreeMap::new();
+    let mut seen_relations = std::collections::BTreeSet::new();
+    for (ln, relation) in &declared_relations {
+        if !seen_relations.insert(relation.name.as_str()) {
+            return Err(OdlError::new(
+                E_DUP_RELATION,
+                format!("重复关系定义 '{}'", relation.name),
+                *ln,
+                1,
+            ));
+        }
+        if relation.source.is_empty() || relation.target.is_empty() {
+            return Err(OdlError::new(
+                E_RELATION_ENDPOINT,
+                format!("relation '{}' 缺少 source/target", relation.name),
+                *ln,
+                1,
+            ));
+        }
+        for endpoint in [&relation.source, &relation.target] {
+            if !ir
+                .object_types
+                .iter()
+                .any(|object| &object.name == endpoint)
+            {
+                return Err(OdlError::new(
+                    E_RELATION_ENDPOINT,
+                    format!(
+                        "relation '{}' 引用未声明对象类型 '{endpoint}'",
+                        relation.name
+                    ),
+                    *ln,
+                    1,
+                ));
+            }
+        }
+        if relation.symmetric && relation.asymmetric || relation.reflexive && relation.irreflexive {
+            return Err(OdlError::new(
+                E_RELATION_CONTRADICTION,
+                format!("relation '{}' 含有互相矛盾的特征", relation.name),
+                *ln,
+                1,
+            ));
+        }
+        if let Some(inverse) = relation.inverse_of.as_ref() {
+            if inverse == &relation.name {
+                return Err(OdlError::new(
+                    E_RELATION_CONTRADICTION,
+                    format!("relation '{}' 不能声明自身为逆关系", relation.name),
+                    *ln,
+                    1,
+                ));
+            }
+            if !declared_relations
+                .iter()
+                .any(|(_, other)| other.name == *inverse)
+            {
+                return Err(OdlError::new(
+                    E_RELATION_CONTRADICTION,
+                    format!(
+                        "relation '{}' 引用未声明的逆关系 '{inverse}'",
+                        relation.name
+                    ),
+                    *ln,
+                    1,
+                ));
+            }
+        }
+        let value = (relation.source.clone(), relation.target.clone());
+        if let Some(previous) = endpoints.insert(relation.name.clone(), value.clone())
+            && previous != value
+        {
+            return Err(OdlError::new(
+                E_DUP_RELATION,
+                format!("relation '{}' 与已有端点定义冲突", relation.name),
+                *ln,
+                1,
+            ));
+        }
+    }
+    ir.relations = declared_relations.iter().map(|(_, r)| r.clone()).collect();
+    for object in &ir.object_types {
+        for action in &object.actions {
+            for created in &action.creates {
+                let Some(edge) = created.link_edge.as_ref() else {
+                    continue;
+                };
+                let value = (object.name.clone(), created.object_type.clone());
+                if let Some(previous) = endpoints.get(edge) {
+                    if *previous != value {
+                        return Err(OdlError::new(
+                            E_DUP_RELATION,
+                            format!("action 边 '{edge}' 与显式 relation 端点定义冲突"),
+                            link_lines.get(edge).copied().unwrap_or(1),
+                            1,
+                        ));
+                    }
+                    continue;
+                }
+                endpoints.insert(edge.clone(), value);
+            }
+        }
     }
 
     Ok(ir)

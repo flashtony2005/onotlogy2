@@ -27,11 +27,13 @@ pub mod evaluation {
 }
 pub mod evolution2;
 pub mod health;
+pub mod knowledge_bridge;
 pub mod lottery;
 pub mod lottery_plugin;
 pub use oaip_abi as abi;
 pub use oaip_eval_core as eval_core;
 pub use oaip_kernel as kernel;
+pub use oaip_knowledge as knowledge;
 pub use oaip_mutation_core as mutation_core;
 pub use oaip_session as session;
 pub use oaip_storage as storage;

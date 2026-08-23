@@ -4,6 +4,7 @@ import {
   Boxes,
   ChevronDown,
   ChevronRight,
+  BookOpen,
   Code2,
   Globe2,
   FolderKanban,
@@ -34,6 +35,7 @@ import { ProjectPanel } from './components/ProjectPanel'
 import { UserManagementPanel } from './components/UserManagementPanel'
 import { BusinessPackPanel } from './components/BusinessPackPanel'
 import { GovernancePanel } from './components/GovernancePanel'
+import { KnowledgePanel } from './components/KnowledgePanel'
 import { WorldPanel } from './components/WorldPanel'
 import { fmtJson, fmtTime } from './format'
 import { clearToken, getToken, setToken } from './auth'
@@ -44,7 +46,7 @@ import type { AuthUserDto, TraceEventDto, ViewKind } from './types'
 const VIEW_GROUPS: { name: string; en: string; items: ViewKind[] }[] = [
   { name: '运行', en: 'Operations', items: ['overview', 'world', 'runs'] },
   { name: '学习', en: 'Learning', items: ['workers', 'learning'] },
-  { name: '治理', en: 'Governance', items: ['projects', 'business-packs', 'skills', 'governance', 'fabric', 'developer', 'user-management'] },
+  { name: '治理', en: 'Governance', items: ['projects', 'knowledge', 'business-packs', 'skills', 'governance', 'fabric', 'developer', 'user-management'] },
 ]
 
 interface ViewMeta {
@@ -120,6 +122,14 @@ const VIEWS: ViewMeta[] = [
     icon: FolderKanban,
     q: '现在管理哪些项目？',
     desc: '项目列表、创建、工程本体 seed、项目世界与审计（Phase 8）',
+  },
+  {
+    key: 'knowledge',
+    label: 'Knowledge',
+    cn: '知识推理',
+    icon: BookOpen,
+    q: '本体当前是否一致？',
+    desc: '查看不可变本体版本、Runtime 投影与 TBox/ABox 推理诊断',
   },
   {
     key: 'developer',
@@ -460,6 +470,7 @@ export default function App() {
         )}
 
         {view === 'world' && <WorldPanel />}
+        {view === 'knowledge' && <KnowledgePanel />}
         {view === 'fabric' && <FabricPanel />}
         {view === 'projects' && <ProjectPanel />}
         {view === 'business-packs' && (

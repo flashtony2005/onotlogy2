@@ -343,6 +343,34 @@ CREATE TABLE IF NOT EXISTS wb_project (
 );
 CREATE INDEX IF NOT EXISTS idx_run_status ON wb_run(status);
 
+-- 知识层：不可变本体版本。revision 是数据库分配的线性版本序。
+CREATE TABLE IF NOT EXISTS wb_ontology_version (
+  revision    INTEGER PRIMARY KEY AUTOINCREMENT,
+  id          TEXT NOT NULL UNIQUE,
+  parent_id   TEXT,
+  ontology    TEXT NOT NULL,
+  runtime_ir  TEXT,
+  created_at  TEXT NOT NULL,
+  FOREIGN KEY (parent_id) REFERENCES wb_ontology_version(id)
+);
+CREATE INDEX IF NOT EXISTS idx_ontology_version_parent
+  ON wb_ontology_version (parent_id, revision);
+
+-- 知识层：本体演化提案与人工评审审计记录。
+CREATE TABLE IF NOT EXISTS wb_ontology_proposal (
+  id                 TEXT PRIMARY KEY,
+  source_version_id  TEXT NOT NULL REFERENCES wb_ontology_version(id),
+  proposal_json      TEXT NOT NULL,
+  review_json        TEXT NOT NULL,
+  candidate_runtime_ir TEXT,
+  status             TEXT NOT NULL,
+  applied_version_id TEXT REFERENCES wb_ontology_version(id),
+  created_at         TEXT NOT NULL,
+  reviewed_at        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ontology_proposal_status
+  ON wb_ontology_proposal (status, created_at);
+
 "#
     .to_string()
 }

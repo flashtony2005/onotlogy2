@@ -40,7 +40,8 @@ export WB_BOOTSTRAP_ADMIN_USER=admin WB_BOOTSTRAP_ADMIN_PWD='change-me'
 | L4 | `worker/ plugin/` | Capability → Router → Worker（Provider Agnostic） |
 | L5 | `trace/ server/ ui/ storage/` | 观察层 + 持久化 + 认证 |
 
-设计总纲：`docs/03_架构设计/architecture-v2.md`；技术债清零计划与差集：
+设计总纲：`docs/03_架构设计/architecture-v2.md`；知识推理与治理契约：
+`docs/03_架构设计/knowledge-reasoning-v1.md`；技术债清零计划与差集：
 `docs/09_迭代与版本/tech-debt-reduction-plan.md`。
 
 ## 关键概念

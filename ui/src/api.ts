@@ -37,6 +37,10 @@ import type {
   WorldQueryDto,
   WorldViewDto,
   WorkerDto,
+  KnowledgeVersionDto,
+  KnowledgeDiagnosisDto,
+  OntologyEvolutionRecordDto,
+  OntologyProposalDto,
 } from './types'
 
 /** 401（令牌缺失/过期/禁用）→ UI 据此清令牌并跳登录。 */
@@ -352,6 +356,92 @@ export async function runDomainPackOperation(
 export async function getGraph(): Promise<WorldGraphDto> {
   const res = await authFetch('/api/v1/wb/graph')
   return unwrap<WorldGraphDto>(res)
+}
+
+/// `GET /api/v1/knowledge/ontology/current`：当前不可变知识本体版本。
+export async function getKnowledgeCurrent(): Promise<KnowledgeVersionDto> {
+  const res = await authFetch('/api/v1/knowledge/ontology/current')
+  return unwrap<KnowledgeVersionDto>(res)
+}
+
+/// `GET /api/v1/knowledge/diagnosis`：TBox + live ABox 一次性推理诊断。
+export async function diagnoseKnowledge(): Promise<KnowledgeDiagnosisDto> {
+  const res = await authFetch('/api/v1/knowledge/diagnosis')
+  return unwrap<KnowledgeDiagnosisDto>(res)
+}
+
+/// `GET /api/v1/knowledge/ontology/versions`：不可变本体版本谱系。
+export async function getKnowledgeVersions(): Promise<KnowledgeVersionDto[]> {
+  const res = await authFetch('/api/v1/knowledge/ontology/versions')
+  const page = await unwrap<{ total: number; list: KnowledgeVersionDto[] }>(res)
+  return page.list
+}
+
+/// `GET /api/v1/knowledge/proposals`：持久化治理提案与评审状态。
+export async function getKnowledgeProposals(): Promise<OntologyEvolutionRecordDto[]> {
+  const res = await authFetch('/api/v1/knowledge/proposals')
+  const page = await unwrap<{ total: number; list: OntologyEvolutionRecordDto[] }>(res)
+  return page.list
+}
+
+/// `POST /api/v1/knowledge/proposals`：创建待评审的持久化本体演化提案。
+export async function createKnowledgeProposal(
+  sourceVersionId: string,
+  proposal: OntologyProposalDto,
+  runtimeIr?: unknown,
+): Promise<OntologyEvolutionRecordDto> {
+  const res = await authFetch('/api/v1/knowledge/proposals', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sourceVersionId, proposal, runtimeIr: runtimeIr ?? null }),
+  })
+  return unwrap<OntologyEvolutionRecordDto>(res)
+}
+
+/// `POST /api/v1/knowledge/proposals/:id/review`：具名人工评审。
+export async function reviewKnowledgeProposal(
+  id: string,
+  approve: boolean,
+  reason?: string,
+): Promise<OntologyEvolutionRecordDto> {
+  const res = await authFetch(
+    `/api/v1/knowledge/proposals/${encodeURIComponent(id)}/review`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approve, reason }),
+    },
+  )
+  return unwrap<OntologyEvolutionRecordDto>(res)
+}
+
+/// `POST /api/v1/knowledge/proposals/:id/apply`：创建不可变目标版本并热更新运行时。
+export async function applyKnowledgeProposal(
+  id: string,
+  targetVersionId: string,
+): Promise<{ proposal: OntologyEvolutionRecordDto; version: KnowledgeVersionDto }> {
+  const res = await authFetch(
+    `/api/v1/knowledge/proposals/${encodeURIComponent(id)}/apply`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetVersionId }),
+    },
+  )
+  return unwrap<{ proposal: OntologyEvolutionRecordDto; version: KnowledgeVersionDto }>(res)
+}
+
+/// `POST /api/v1/knowledge/rollback`：把回滚也变成受评审的 Replace 提案。
+export async function proposeKnowledgeRollback(
+  proposalId: string,
+  targetVersionId: string,
+): Promise<OntologyEvolutionRecordDto> {
+  const res = await authFetch('/api/v1/knowledge/rollback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ proposalId, targetVersionId }),
+  })
+  return unwrap<OntologyEvolutionRecordDto>(res)
 }
 
 /// REQ-018：列出自动放行审计（wb_approval_audit，可追溯至 LearnedKnowledge + run）。

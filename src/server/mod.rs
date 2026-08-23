@@ -10,6 +10,7 @@ pub mod automation;
 pub mod domain_packs;
 pub mod facade;
 pub mod graph;
+pub mod ontology;
 mod ops;
 mod plugins;
 mod rate_limit;
@@ -57,6 +58,12 @@ use facade::{
     facade_world_query,
 };
 use graph::list_graph;
+use ontology::{
+    apply_knowledge_proposal, create_knowledge_proposal, current_knowledge,
+    diagnose_current_knowledge, initialize_knowledge, list_knowledge_proposals,
+    list_knowledge_versions, reason_current_knowledge, review_knowledge_proposal,
+    rollback_knowledge,
+};
 use ops::{healthz, metrics, readyz};
 use plugins::{get_plugin_manifest, invoke_plugin_capability, list_plugins};
 use run::run_start;
@@ -152,9 +159,9 @@ pub struct AppState {
     /// Phase 2.5：watcher + 持久化任务队列 + 业务包调度器。
     pub automation: Arc<crate::automation::AutomationEngine>,
     /// M1c V2 组合层：run 路径的服务集合（ODL → compose::Service）。
-    pub v2_services: Arc<Vec<Service>>,
+    pub v2_services: Arc<tokio::sync::RwLock<Vec<Service>>>,
     /// M1c V2 世界效应声明（Phase 5：Effect 真实改变 World）。
-    pub v2_effect_defs: Arc<Vec<crate::compose::defs::RuntimeDefinition>>,
+    pub v2_effect_defs: Arc<tokio::sync::RwLock<Vec<crate::compose::defs::RuntimeDefinition>>>,
     /// M1c V2 认知引擎（run 路径；PiEngine 生产，测试注入 FakeEngine）。
     pub v2_engine: Arc<dyn crate::cognitive::CognitiveEngine>,
     /// 是否自动批准需审批动作（Human Approval）：默认 false → require_approval 动作挂起等待 HTTP 审批。
@@ -349,6 +356,34 @@ fn router() -> Router<Arc<AppState>> {
         )
         .route("/api/v1/domain-packs/:id/scan", post(scan_pack))
         // Phase 7：Facade HTTP Transport（单一语义源：与 CLI/Plugin 同一 OpenAipFacade）
+        // ── 知识本体：DL 推理 + 不可变版本与受控演化 ──
+        .route("/api/v1/knowledge/ontology/current", get(current_knowledge))
+        .route(
+            "/api/v1/knowledge/ontology/versions",
+            get(list_knowledge_versions),
+        )
+        .route(
+            "/api/v1/knowledge/ontology/init",
+            post(initialize_knowledge),
+        )
+        .route("/api/v1/knowledge/reason", post(reason_current_knowledge))
+        .route(
+            "/api/v1/knowledge/diagnosis",
+            get(diagnose_current_knowledge),
+        )
+        .route(
+            "/api/v1/knowledge/proposals",
+            get(list_knowledge_proposals).post(create_knowledge_proposal),
+        )
+        .route(
+            "/api/v1/knowledge/proposals/:id/review",
+            post(review_knowledge_proposal),
+        )
+        .route(
+            "/api/v1/knowledge/proposals/:id/apply",
+            post(apply_knowledge_proposal),
+        )
+        .route("/api/v1/knowledge/rollback", post(rollback_knowledge))
         .route("/api/v1/facade/world/query", post(facade_world_query))
         .route("/api/v1/facade/audit/query", post(facade_audit_query))
         .route("/api/v1/facade/fabric/submit", post(facade_fabric_submit))
@@ -564,14 +599,31 @@ pub async fn serve_with_facade(
         domain_packs_dir.clone(),
         facade.event_tx(),
     ));
+    // Approved ontology evolution is durable: the persisted runtime IR supersedes
+    // process-start definitions on every boot.
+    let (services, effect_defs) = match storage.current_knowledge_version().await {
+        Ok(Some(version)) => match version.runtime_ir {
+            Some(runtime_ir) => (
+                crate::compose::defs::ir_to_services(&runtime_ir),
+                crate::compose::defs::ir_to_runtime(&runtime_ir),
+            ),
+            None => (services, effect_defs),
+        },
+        Ok(None) => (services, effect_defs),
+        Err(error) => {
+            return Err(std::io::Error::other(format!(
+                "知识本体启动恢复失败：{error}"
+            )));
+        }
+    };
     let state = Arc::new(AppState {
         v2: Arc::new(v2_state),
         storage,
         domain_packs_dir,
         plugin_catalog,
         automation,
-        v2_services: Arc::new(services),
-        v2_effect_defs: Arc::new(effect_defs),
+        v2_services: Arc::new(tokio::sync::RwLock::new(services)),
+        v2_effect_defs: Arc::new(tokio::sync::RwLock::new(effect_defs)),
         v2_engine: engine,
         auto_approve,
         auto_approve_evolution,

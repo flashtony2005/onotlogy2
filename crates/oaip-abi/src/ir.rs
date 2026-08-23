@@ -11,6 +11,9 @@ pub enum ScalarType {
     Int,
     Float,
     Bool,
+    Date,
+    DateTime,
+    Decimal,
 }
 
 impl ScalarType {
@@ -21,6 +24,9 @@ impl ScalarType {
             ScalarType::Int => "i64",
             ScalarType::Float => "f64",
             ScalarType::Bool => "bool",
+            ScalarType::Date => "String",
+            ScalarType::DateTime => "String",
+            ScalarType::Decimal => "String",
         }
     }
 
@@ -31,6 +37,9 @@ impl ScalarType {
             ScalarType::Int => "INTEGER",
             ScalarType::Float => "REAL",
             ScalarType::Bool => "INTEGER",
+            ScalarType::Date => "TEXT",
+            ScalarType::DateTime => "TEXT",
+            ScalarType::Decimal => "TEXT",
         }
     }
 }
@@ -43,6 +52,9 @@ impl FromStr for ScalarType {
             "int" => Ok(ScalarType::Int),
             "float" => Ok(ScalarType::Float),
             "bool" => Ok(ScalarType::Bool),
+            "date" => Ok(ScalarType::Date),
+            "decimal" => Ok(ScalarType::Decimal),
+            "datetime" => Ok(ScalarType::DateTime),
             other => Err(format!("未知标量类型: {other}")),
         }
     }
@@ -55,6 +67,9 @@ impl fmt::Display for ScalarType {
             ScalarType::Int => "int",
             ScalarType::Float => "float",
             ScalarType::Bool => "bool",
+            ScalarType::Date => "date",
+            ScalarType::DateTime => "datetime",
+            ScalarType::Decimal => "decimal",
         };
         f.write_str(s)
     }
@@ -173,10 +188,42 @@ pub struct ObjectType {
     pub actions: Vec<ActionDef>,
 }
 
+/// 有类型关系边及其 OWL 对象属性特征（对应 ODL `relation X:`）。
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelationDef {
+    pub name: String,
+    pub source: String,
+    pub target: String,
+    /// 逆关系的名称；两端点各自声明互逆即可，投影会去重。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inverse_of: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub functional: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub inverse_functional: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub symmetric: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub transitive: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reflexive: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub irreflexive: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub asymmetric: bool,
+}
+
 /// 整份 ODL 解析出的 IR。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct OntologyIR {
     pub object_types: Vec<ObjectType>,
+    /// 全局有类型关系；action 创建的隐式边也会进入同一 DL 投影。
+    #[serde(default)]
+    pub relations: Vec<RelationDef>,
 }
 
 impl OntologyIR {

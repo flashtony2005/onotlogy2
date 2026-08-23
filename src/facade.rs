@@ -22,14 +22,20 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::abi::ir::OntologyIR;
 use crate::compose::task::WorldEventSink;
 use crate::fabric::adapter::AgentAdapter;
 use crate::fabric::router::FabricRouter;
 use crate::fabric::session::{Session, SessionManager};
 use crate::fabric::{AgentMessage, Bridge, MessageKind};
 use crate::kernel::{Kernel, KernelError, Scope};
+use crate::knowledge::{
+    Ontology as KnowledgeOntology, OntologyProposal as KnowledgeOntologyProposal,
+    Reasoner as KnowledgeReasoner,
+};
+use crate::knowledge_bridge::storage_world_snapshot_to_knowledge;
 use crate::projection::{Projection, ProjectionError};
-use crate::storage::{LibSQLStorage, TraceQuery};
+use crate::storage::{LibSQLStorage, OntologyEvolutionRecord, OntologyVersionRecord, TraceQuery};
 use crate::trace::TraceEvent;
 use crate::worker::process::ExecutionContext;
 
@@ -44,6 +50,8 @@ pub enum FacadeError {
     Fabric(String),
     #[error("Facade 初始化失败: {0}")]
     Init(String),
+    #[error("知识推理失败: {0}")]
+    Knowledge(String),
 }
 
 impl From<KernelError> for FacadeError {
@@ -55,6 +63,16 @@ impl From<KernelError> for FacadeError {
 impl From<ProjectionError> for FacadeError {
     fn from(e: ProjectionError) -> Self {
         FacadeError::World(e.to_string())
+    }
+}
+impl From<crate::knowledge_bridge::KnowledgeBridgeError> for FacadeError {
+    fn from(error: crate::knowledge_bridge::KnowledgeBridgeError) -> Self {
+        FacadeError::Knowledge(error.to_string())
+    }
+}
+impl From<crate::storage::StorageError> for FacadeError {
+    fn from(error: crate::storage::StorageError) -> Self {
+        FacadeError::Knowledge(error.to_string())
     }
 }
 
@@ -234,6 +252,82 @@ impl Facade {
             storage,
             event_tx,
         })
+    }
+
+    /// Build a DL reasoner from a caller-supplied TBox plus the current world.
+    ///
+    /// The schema is supplied explicitly because compiled definitions remain in
+    /// the compiler/composition boundary; this method adds only the live ABox.
+    pub fn knowledge_reasoner(
+        &self,
+        schema: &KnowledgeOntology,
+    ) -> Result<KnowledgeReasoner, FacadeError> {
+        self.world.storage_knowledge_reasoner(schema)
+    }
+
+    /// Initialize the first immutable DL ontology version.
+    pub fn initialize_knowledge_version(
+        &self,
+        id: impl Into<String>,
+        ontology: &KnowledgeOntology,
+        runtime_ir: Option<&OntologyIR>,
+    ) -> Result<OntologyVersionRecord, FacadeError> {
+        self.world
+            .initialize_knowledge_version(id, ontology, runtime_ir)
+    }
+
+    /// Create a semantically validated, pending ontology evolution proposal.
+    pub fn propose_knowledge_change(
+        &self,
+        source_version_id: &str,
+        proposal: &KnowledgeOntologyProposal,
+        candidate_runtime_ir: Option<&OntologyIR>,
+    ) -> Result<OntologyEvolutionRecord, FacadeError> {
+        self.world
+            .propose_knowledge_change(source_version_id, proposal, candidate_runtime_ir)
+    }
+
+    /// Record a named human approve/reject decision for an ontology proposal.
+    pub fn decide_knowledge_proposal(
+        &self,
+        id: &str,
+        approve: bool,
+        reviewer: &str,
+        reason: Option<&str>,
+    ) -> Result<OntologyEvolutionRecord, FacadeError> {
+        self.world
+            .decide_knowledge_proposal(id, approve, reviewer, reason)
+    }
+
+    /// Atomically apply an approved ontology proposal as a new immutable version.
+    pub fn apply_knowledge_proposal(
+        &self,
+        id: &str,
+        target_version_id: impl Into<String>,
+    ) -> Result<(OntologyEvolutionRecord, OntologyVersionRecord), FacadeError> {
+        self.world.apply_knowledge_proposal(id, target_version_id)
+    }
+
+    /// Create a pending rollback proposal targeting an immutable prior version.
+    pub fn propose_knowledge_rollback(
+        &self,
+        proposal_id: impl Into<String>,
+        target_version_id: &str,
+    ) -> Result<OntologyEvolutionRecord, FacadeError> {
+        self.world
+            .propose_knowledge_rollback(proposal_id, target_version_id)
+    }
+
+    pub fn current_knowledge_version(&self) -> Result<Option<OntologyVersionRecord>, FacadeError> {
+        self.world.current_knowledge_version()
+    }
+
+    pub fn list_knowledge_versions(&self) -> Result<Vec<OntologyVersionRecord>, FacadeError> {
+        self.world.list_knowledge_versions()
+    }
+
+    pub fn list_knowledge_proposals(&self) -> Result<Vec<OntologyEvolutionRecord>, FacadeError> {
+        self.world.list_knowledge_proposals()
     }
 
     /// T1：裁决 fabric 挂起——approve 续跑执行 / reject 发审计事件。
@@ -417,6 +511,102 @@ impl WorldService {
             total,
             at: now,
         })
+    }
+
+    pub(crate) fn storage_knowledge_reasoner(
+        &self,
+        schema: &KnowledgeOntology,
+    ) -> Result<KnowledgeReasoner, FacadeError> {
+        let knowledge_base = self
+            .handle
+            .block_on(storage_world_snapshot_to_knowledge(schema, &self.storage))?;
+        KnowledgeReasoner::new(&knowledge_base)
+            .map_err(|error| FacadeError::Knowledge(error.to_string()))
+    }
+
+    pub fn initialize_knowledge_version(
+        &self,
+        id: impl Into<String>,
+        ontology: &KnowledgeOntology,
+        runtime_ir: Option<&OntologyIR>,
+    ) -> Result<OntologyVersionRecord, FacadeError> {
+        self.handle
+            .block_on(
+                self.storage
+                    .initialize_knowledge_version(id, ontology, runtime_ir),
+            )
+            .map_err(FacadeError::from)
+    }
+
+    pub fn propose_knowledge_change(
+        &self,
+        source_version_id: &str,
+        proposal: &KnowledgeOntologyProposal,
+        candidate_runtime_ir: Option<&OntologyIR>,
+    ) -> Result<OntologyEvolutionRecord, FacadeError> {
+        self.handle
+            .block_on(self.storage.propose_knowledge_change(
+                source_version_id,
+                proposal,
+                candidate_runtime_ir,
+            ))
+            .map_err(FacadeError::from)
+    }
+
+    pub fn decide_knowledge_proposal(
+        &self,
+        id: &str,
+        approve: bool,
+        reviewer: &str,
+        reason: Option<&str>,
+    ) -> Result<OntologyEvolutionRecord, FacadeError> {
+        self.handle
+            .block_on(
+                self.storage
+                    .decide_knowledge_proposal(id, approve, reviewer, reason),
+            )
+            .map_err(FacadeError::from)
+    }
+
+    pub fn apply_knowledge_proposal(
+        &self,
+        id: &str,
+        target_version_id: impl Into<String>,
+    ) -> Result<(OntologyEvolutionRecord, OntologyVersionRecord), FacadeError> {
+        self.handle
+            .block_on(self.storage.apply_knowledge_proposal(id, target_version_id))
+            .map_err(FacadeError::from)
+    }
+
+    pub fn propose_knowledge_rollback(
+        &self,
+        proposal_id: impl Into<String>,
+        target_version_id: &str,
+    ) -> Result<OntologyEvolutionRecord, FacadeError> {
+        self.handle
+            .block_on(
+                self.storage
+                    .propose_knowledge_rollback(proposal_id, target_version_id),
+            )
+            .map_err(FacadeError::from)
+    }
+
+    pub fn current_knowledge_version(&self) -> Result<Option<OntologyVersionRecord>, FacadeError> {
+        self.handle
+            .block_on(self.storage.current_knowledge_version())
+            .map_err(FacadeError::from)
+    }
+
+    pub fn list_knowledge_versions(&self) -> Result<Vec<OntologyVersionRecord>, FacadeError> {
+        self.handle
+            .block_on(self.storage.list_knowledge_versions())
+            .map_err(FacadeError::from)
+    }
+
+    pub fn list_knowledge_proposals(&self) -> Result<Vec<OntologyEvolutionRecord>, FacadeError> {
+        self.handle
+            .block_on(self.storage.list_knowledge_proposals())
+            .map_err(FacadeError::from)
     }
 }
 
@@ -643,8 +833,10 @@ impl From<crate::fabric::FabricError> for FacadeError {
 
 #[cfg(test)]
 mod tests {
-    use super::FabricService;
+    use super::{FabricService, WorldService};
     use crate::fabric::{Bridge, router::FabricRouter};
+    use crate::knowledge::{Axiom, ClassExpression, OntologyChange, OntologyProposal};
+    use std::sync::Arc;
 
     /// 无适配器 / 无 sink 的空 FabricService：验证四个契约方法编译通过且错误路径正确。
     /// FabricService 现持有 tokio Handle（T2b-2 异步契约）→ 测试须在 runtime 内构造。
@@ -671,5 +863,55 @@ mod tests {
         let svc = empty_service();
         assert!(svc.stream("nope").is_err());
         assert!(svc.get("nope").is_err());
+    }
+
+    fn governance_class(name: &str) -> ClassExpression {
+        ClassExpression::class(format!("http://example.com/owl#{name}"))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn facade_governs_and_applies_persistent_knowledge_evolution() {
+        let storage = Arc::new(
+            crate::storage::LibSQLStorage::open(":memory:")
+                .await
+                .unwrap(),
+        );
+        let world = WorldService::new(storage.clone(), tokio::runtime::Handle::current(), &[]);
+        tokio::task::block_in_place(|| {
+            let root = crate::knowledge::Ontology::new().with_axiom(Axiom::subclass(
+                governance_class("Dog"),
+                governance_class("Animal"),
+            ));
+            let root_version = world
+                .initialize_knowledge_version("root", &root, None)
+                .unwrap();
+            assert_eq!(1, root_version.revision);
+
+            let proposal = OntologyProposal::new("add-puppy").with_change(OntologyChange::Add(
+                Axiom::subclass(governance_class("Puppy"), governance_class("Dog")),
+            ));
+            let pending = world
+                .propose_knowledge_change("root", &proposal, None)
+                .unwrap();
+            assert!(!pending.review.is_approved());
+
+            let approved = world
+                .decide_knowledge_proposal("add-puppy", true, "alice", None)
+                .unwrap();
+            assert_eq!("alice", approved.review.reviewer().unwrap());
+            let (_, target) = world.apply_knowledge_proposal("add-puppy", "v2").unwrap();
+            assert_eq!(Some("root".to_owned()), target.parent_id);
+
+            let rollback = world
+                .propose_knowledge_rollback("rollback", "root")
+                .unwrap();
+            assert_eq!("v2", rollback.source_version_id);
+            world
+                .decide_knowledge_proposal("rollback", true, "bob", Some("restore"))
+                .unwrap();
+            let (_, restored) = world.apply_knowledge_proposal("rollback", "v3").unwrap();
+            assert_eq!(root, restored.ontology);
+            assert_eq!(3, world.list_knowledge_versions().unwrap().len());
+        });
     }
 }

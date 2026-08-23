@@ -9,6 +9,7 @@ async-trait = "0.1"
 libsql = "0.9.30"
 oaip-abi = { path = "../oaip-abi" }
 oaip-eval-core = { path = "../oaip-eval-core" }
+oaip-knowledge = { path = "../oaip-knowledge" }
 oaip-mutation-core = { path = "../oaip-mutation-core" }
 oaip-trace = { path = "../oaip-trace" }
 oaip-worker-core = { path = "../oaip-worker-core" }

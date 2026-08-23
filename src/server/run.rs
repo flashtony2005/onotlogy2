@@ -88,7 +88,8 @@ pub(crate) async fn run_start(
     let rid = run_id.clone();
     let agent = agent_id.clone();
     let auto_approve = st.auto_approve;
-    let services = Arc::clone(&st.v2_services);
+    let services = st.v2_services.read().await.clone();
+    let effect_defs = st.v2_effect_defs.read().await.clone();
     let engine = Arc::clone(&st.v2_engine);
     let pending = Arc::clone(&st.pending);
     let approval_timeout = st.approval_timeout;
@@ -227,7 +228,7 @@ pub(crate) async fn run_start(
             &mut agent_state,
             services.as_slice(),
             engine.as_ref(),
-            Some(st2.v2_effect_defs.as_ref().clone()),
+            Some(effect_defs),
             evolution.as_mut(),
             &rid,
             &goal,

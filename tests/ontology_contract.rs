@@ -40,6 +40,50 @@ fn tc001b_parse_invalid() {
     assert_eq!(e3.code, 1005);
 }
 
+#[test]
+fn tc001c_parse_typed_relations() {
+    let odl = [
+        "object Customer:",
+        "  properties:",
+        "    name: string",
+        "object Order:",
+        "  properties:",
+        "    total: int",
+        "relation placed:",
+        "  source: Customer",
+        "  target: Order",
+        "  functional: true",
+        "  transitive: true",
+        "  inverse_of: received_by",
+        "relation received_by:",
+        "  source: Order",
+        "  target: Customer",
+        "  asymmetric: true",
+        "  irreflexive: true",
+    ]
+    .join("\n");
+    let ir = parse_odl(&odl).unwrap();
+    assert_eq!(2, ir.relations.len());
+    assert!(ir.relations[0].functional);
+    assert!(ir.relations[0].transitive);
+    assert_eq!(Some("received_by"), ir.relations[0].inverse_of.as_deref());
+    assert!(ir.relations[1].asymmetric);
+    assert!(ir.relations[1].irreflexive);
+    assert!(codegen::roundtrip_ok(&ir).unwrap());
+
+    let unknown = parse_odl(
+        "object Customer:\n  properties:\n    name: string\nrelation placed:\n  source: Customer\n  target: Order\n",
+    )
+    .unwrap_err();
+    assert_eq!(unknown.code, 1009);
+
+    let duplicate = parse_odl(
+        "object Customer:\n  properties:\n    name: string\nrelation placed:\n  source: Customer\n  target: Customer\nrelation placed:\n  source: Customer\n  target: Customer\n",
+    )
+    .unwrap_err();
+    assert_eq!(duplicate.code, 1008);
+}
+
 // ── TC-002：IR 保真（REQ-002） ───────────────────────────────────────────
 #[test]
 fn tc002_ir_fidelity() {
