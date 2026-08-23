@@ -375,6 +375,9 @@ exact result、data-relevant prefix 和 append-only delta，而不需要 storage
 prefix 复用前只比较 `data_consistency_relevant(axiom)` 投影，避免 live-world snapshot 尾部的
 `DifferentIndividuals` 重写错误地阻断可安全复用的前缀。`DataConsistencyCacheStats` 暴露
 exact hits、prefix hits、rebuilds 和 delta assertions，用于验证治理流程确实命中缓存。
+进程级 cache 由 mutex 序列化元数据访问；cached index 通过 immutable `Arc` 共享，delta 路径
+需要修改时先 clone。并发回归覆盖多个 worker 同时验证各自 valid 与 conflicting ontology 的
+场景，防止 exact/prefix 候选跨 snapshot 串用。
 
 ### 5.6 明确限制
 
@@ -476,5 +479,5 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 3. 将 delta consistency 从当前的 append-only positive/negative data assertion 扩展到更新、
    删除、SameIndividuals 增量和 TBox 变更。长生命快照已接入存储执行路径并具备缓存命中率
    可观测性。
-4. 增加长时并发、恢复、内存和推理延迟基准。
+4. 在已有短并发缓存基线之上，继续增加长时并发、恢复、内存和推理延迟基准。
 5. 在能力矩阵继续扩展时同步刷新本文档。

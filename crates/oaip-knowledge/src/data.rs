@@ -1342,6 +1342,42 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_validation_preserves_distinct_results_and_errors() {
+        const WORKERS: usize = 8;
+        const ROUNDS: usize = 128;
+
+        let results = std::thread::scope(|scope| {
+            (0..WORKERS)
+                .map(|worker| {
+                    scope.spawn(move || {
+                        let individual = Term::new(format!("concurrent-{worker}"));
+                        let valid = Ontology::new()
+                            .with_axiom(Axiom::FunctionalDataProperty(term("age")))
+                            .with_axiom(fact(individual.as_str(), "age", Literal::Integer(30)));
+                        let conflicting = valid.clone().with_axiom(fact(
+                            individual.as_str(),
+                            "age",
+                            Literal::Integer(31),
+                        ));
+
+                        for _ in 0..ROUNDS {
+                            assert!(validate_data_consistency(&valid).is_ok());
+                            assert!(validate_data_consistency(&conflicting).is_err());
+                        }
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(std::thread::ScopedJoinHandle::join)
+                .collect::<Vec<_>>()
+        });
+
+        for result in results {
+            result.unwrap();
+        }
+    }
+
+    #[test]
     fn appended_abox_facts_reuse_the_cached_data_prefix() {
         let base = (0..32).fold(
             Ontology::new().with_axiom(Axiom::FunctionalDataProperty(term("status"))),

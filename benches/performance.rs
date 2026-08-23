@@ -25,6 +25,8 @@ use serde_json::json;
 const ODL_OBJECTS: usize = 24;
 const REASONER_CLASSES: usize = 24;
 const DATA_FACTS: usize = 1_000;
+const CONCURRENT_THREADS: usize = 8;
+const CONCURRENT_CALLS_PER_THREAD: usize = 128;
 const PROJECTION_EVENTS: usize = 1_000;
 const QUERY_OBJECTS: usize = 500;
 
@@ -307,6 +309,34 @@ fn knowledge_abox_performance(c: &mut Criterion) {
             |extended| black_box(validate_data_consistency(black_box(&extended)).is_ok()),
             BatchSize::PerIteration,
         )
+    });
+
+    // The cold/delta loops above intentionally churn the process-local LRU.
+    // Re-warm the shared snapshot so the burst measures cached concurrent
+    // validation rather than eviction caused by the preceding benchmarks.
+    assert!(validate_data_consistency(&ontology).is_ok());
+    let calls_per_burst = CONCURRENT_THREADS * CONCURRENT_CALLS_PER_THREAD;
+    group.throughput(Throughput::Elements(calls_per_burst as u64));
+    group.bench_function("data_consistency_concurrent_cached_8x128", |b| {
+        b.iter(|| {
+            let results = std::thread::scope(|scope| {
+                (0..CONCURRENT_THREADS)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            (0..CONCURRENT_CALLS_PER_THREAD).all(|_| {
+                                black_box(validate_data_consistency(black_box(&ontology)).is_ok())
+                            })
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|handle| handle.join().expect("concurrent consistency worker"))
+                    .collect::<Vec<_>>()
+            });
+            for result in results {
+                black_box(result);
+            }
+        })
     });
     group.finish();
 }
