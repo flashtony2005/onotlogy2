@@ -170,7 +170,27 @@ object Customer:
 Runtime IR 将这些约束物化为 `DataPropertyRangeRestriction`，因此它们参与 live-world 一致性检查、
 推理诊断和不可变本体版本治理。
 
-### 4.6 Composable data ranges
+### 4.6 ODL relation cardinalities
+
+Executable relation 可直接声明 source 端的参与基数：
+
+```odl
+relation placed:
+  source: Customer
+  target: Order
+  min_cardinality: 1
+  max_cardinality: 2
+```
+
+语义边界：
+
+- `min_cardinality` / `max_cardinality` 是包含边界，约束每个 source 实例的出边数量；
+- 未声明的一侧不引入约束，`min <= max` 在解析和 Runtime IR 治理边界共同强制；
+- 投影为 `SubClassOf(source, ObjectMin/MaxCardinality(property, target))`；
+- live-world admission 按 closed snapshot 精确检查，并沿 `extends` / `equivalent`
+  named-class 关系识别子类型实例；不确定构造仍交由 mature reasoner 或拒绝。
+
+### 4.7 Composable data ranges
 
 Governed DL proposal 可以使用通用 `DataPropertyDataRange` 表达属性值域：
 
@@ -203,7 +223,7 @@ DataPropertyDataRange {
 - positive ABox 断言由确定性 kernel 精确检查；mature tableau 同时接收对应 OWL 2 语法；
 - 多个普通 range/restriction 公理仍按交集处理。
 
-### 4.7 Datatype facet matrix
+### 4.8 Datatype facet matrix
 
 | Base datatype | 支持的 facet |
 |---------------|--------------|
@@ -355,7 +375,7 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 
 ## 9. 已知下一步
 
-1. 继续扩展更多 DL 结构到 ODL 直接表达面（如对象/数据基数限制与嵌套 restriction），减少手写 proposal JSON。
+1. 继续扩展更多 DL 结构到 ODL 直接表达面（如数据基数限制与嵌套 restriction），减少手写 proposal JSON。
 2. 在真实业务需要时继续扩展 XSD 构造（如 complement / 自定义 datatype 定义），保持保守语义。
 3. 为大 ABox 增加 classification/cache、incremental consistency 和有界解释缓存。
 4. 增加长时并发、恢复、内存和推理延迟基准。

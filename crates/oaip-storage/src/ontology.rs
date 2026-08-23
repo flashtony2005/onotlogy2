@@ -1948,6 +1948,135 @@ object Cat extends Animal:
     }
 
     #[tokio::test]
+    async fn relation_cardinality_violations_fail_closed_with_live_world() {
+        let source = r#"
+object Customer:
+  properties:
+    name: string
+object Order:
+  properties:
+    total: int
+relation placed:
+  source: Customer
+  target: Order
+"#;
+        fn runtime_ir(min: u32, max: u32) -> OntologyIR {
+            let mut ir = oaip_abi::parse_odl(
+                r#"
+object Customer:
+  properties:
+    name: string
+object Order:
+  properties:
+    total: int
+relation placed:
+  source: Customer
+  target: Order
+"#,
+            )
+            .unwrap();
+            ir.relations[0].min_cardinality = Some(min);
+            ir.relations[0].max_cardinality = Some(max);
+            ir
+        }
+        let storage = LibSQLStorage::open(":memory:").await.unwrap();
+        storage
+            .initialize_knowledge_version(
+                "root",
+                &root(),
+                Some(&oaip_abi::parse_odl(source).unwrap()),
+            )
+            .await
+            .unwrap();
+        for (object_type, id) in [("Customer", "c1"), ("Order", "o1"), ("Order", "o2")] {
+            storage
+                .apply_world(WorldCommand::CreateObject {
+                    object_type: object_type.to_owned(),
+                    id: id.to_owned(),
+                    data: serde_json::json!({}),
+                    project_id: None,
+                })
+                .await
+                .unwrap();
+        }
+        for target in ["o1", "o2"] {
+            storage
+                .apply_world(WorldCommand::LinkRelation {
+                    source: "c1".to_owned(),
+                    edge: "placed".to_owned(),
+                    target: target.to_owned(),
+                    project_id: None,
+                })
+                .await
+                .unwrap();
+        }
+
+        let too_many = runtime_ir(1, 1);
+        let proposal = OntologyProposal::new("too-many-orders").with_change(OntologyChange::Add(
+            Axiom::subclass(class("Puppy"), class("Dog")),
+        ));
+        assert!(
+            storage
+                .propose_knowledge_change("root", &proposal, Some(&too_many))
+                .await
+                .is_err()
+        );
+
+        storage
+            .apply_world(WorldCommand::UnlinkRelation {
+                source: "c1".to_owned(),
+                edge: "placed".to_owned(),
+                target: "o2".to_owned(),
+                project_id: None,
+            })
+            .await
+            .unwrap();
+        let too_few = runtime_ir(2, 2);
+        let proposal = OntologyProposal::new("too-few-orders").with_change(OntologyChange::Add(
+            Axiom::subclass(class("Puppy"), class("Dog")),
+        ));
+        assert!(
+            storage
+                .propose_knowledge_change("root", &proposal, Some(&too_few))
+                .await
+                .is_err()
+        );
+        assert!(storage.list_knowledge_proposals().await.unwrap().is_empty());
+
+        let compatible = runtime_ir(1, 2);
+        let proposal = OntologyProposal::new("bounded-placed").with_change(OntologyChange::Add(
+            Axiom::subclass(class("Puppy"), class("Dog")),
+        ));
+        storage
+            .propose_knowledge_change("root", &proposal, Some(&compatible.clone()))
+            .await
+            .unwrap();
+        storage
+            .decide_knowledge_proposal("bounded-placed", true, "alice", None)
+            .await
+            .unwrap();
+        let (_, applied) = storage
+            .apply_knowledge_proposal("bounded-placed", "v2")
+            .await
+            .unwrap();
+        assert_eq!(Some(compatible), applied.runtime_ir);
+        assert!(applied.ontology.axioms().iter().any(|axiom| matches!(
+            axiom,
+            Axiom::SubClassOf {
+                sup: ClassExpression::ObjectMinCardinality { cardinality: 1, .. },
+                ..
+            }
+        )));
+        assert!(applied.ontology.axioms().iter().any(|axiom| matches!(
+            axiom,
+            Axiom::SubClassOf {
+                sup: ClassExpression::ObjectMaxCardinality { cardinality: 2, .. },
+                ..
+            }
+        )));
+    }
+
+    #[tokio::test]
     async fn inconsistent_or_unapproved_changes_fail_closed() {
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
         storage

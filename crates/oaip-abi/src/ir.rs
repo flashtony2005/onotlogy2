@@ -254,6 +254,12 @@ pub struct RelationDef {
     /// 逆关系的名称；两端点各自声明互逆即可，投影会去重。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inverse_of: Option<String>,
+    /// Minimum number of outgoing edges required for every source instance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_cardinality: Option<u32>,
+    /// Maximum number of outgoing edges allowed for every source instance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_cardinality: Option<u32>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub functional: bool,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -268,6 +274,21 @@ pub struct RelationDef {
     pub irreflexive: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub asymmetric: bool,
+}
+
+impl RelationDef {
+    /// Validate declared participation bounds at both language and governance boundaries.
+    pub fn validate_cardinality(&self) -> Result<(), String> {
+        if let (Some(min), Some(max)) = (self.min_cardinality, self.max_cardinality)
+            && min > max
+        {
+            return Err(format!(
+                "relation `{}` has min cardinality {min} greater than max cardinality {max}",
+                self.name
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// 整份 ODL 解析出的 IR。
@@ -289,6 +310,15 @@ impl OntologyIR {
     /// 按名称查找对象类型（codegen / query 复用）。
     pub fn find(&self, name: &str) -> Option<&ObjectType> {
         self.object_types.iter().find(|o| o.name == name)
+    }
+
+    /// Validate relation participation bounds so hand-built serialized IR cannot
+    /// bypass ODL rules.
+    pub fn validate_relation_cardinalities(&self) -> Result<(), String> {
+        for relation in &self.relations {
+            relation.validate_cardinality()?;
+        }
+        Ok(())
     }
 
     /// Validate named disjoint/equivalent class groups at both language and

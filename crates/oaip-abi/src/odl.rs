@@ -386,6 +386,8 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                     if k != "source"
                         && k != "target"
                         && k != "inverse_of"
+                        && k != "min_cardinality"
+                        && k != "max_cardinality"
                         && !boolean_keys.contains(&k)
                     {
                         return Err(OdlError::new(
@@ -410,6 +412,24 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         "source" => relation.source = v.to_string(),
                         "target" => relation.target = v.to_string(),
                         "inverse_of" => relation.inverse_of = Some(v.to_string()),
+                        "min_cardinality" | "max_cardinality" => {
+                            let value = v.parse::<u32>().map_err(|_| {
+                                OdlError::new(
+                                    E_INVALID_PROPERTY_CONSTRAINT,
+                                    format!("relation {k} must be an unsigned integer"),
+                                    line_no,
+                                    1,
+                                )
+                            })?;
+                            if k == "min_cardinality" {
+                                relation.min_cardinality = Some(value);
+                            } else {
+                                relation.max_cardinality = Some(value);
+                            }
+                            relation.validate_cardinality().map_err(|message| {
+                                OdlError::new(E_INVALID_PROPERTY_CONSTRAINT, message, line_no, 1)
+                            })?;
+                        }
                         _ => {
                             if v != "true" && v != "false" {
                                 return Err(OdlError::new(

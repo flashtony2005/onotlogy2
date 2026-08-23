@@ -159,16 +159,44 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
     for group in &ir.equivalent_groups {
         ontology.push(Axiom::EquivalentClasses(group.iter().map(class).collect()));
     }
-    for (edge, (source_name, target_name)) in relation_endpoints(ir) {
-        let edge = Term::new(edge);
+    let cardinalities = ir
+        .relations
+        .iter()
+        .map(|relation| (relation.name.as_str(), relation))
+        .collect::<BTreeMap<_, _>>();
+    for (edge_name, (source_name, target_name)) in relation_endpoints(ir) {
+        let edge = Term::new(&edge_name);
+        let source = class(source_name);
         ontology.push(Axiom::ObjectPropertyDomain {
             property: edge.clone(),
-            class: class(source_name),
+            class: source.clone(),
         });
         ontology.push(Axiom::ObjectPropertyRange {
-            property: edge,
-            class: class(target_name),
+            property: edge.clone(),
+            class: class(&target_name),
         });
+        if let Some(relation) = cardinalities.get(edge_name.as_str()) {
+            if let Some(cardinality) = relation.min_cardinality {
+                ontology.push(Axiom::subclass(
+                    source.clone(),
+                    ClassExpression::ObjectMinCardinality {
+                        cardinality,
+                        property: edge.clone(),
+                        value: Box::new(class(&target_name)),
+                    },
+                ));
+            }
+            if let Some(cardinality) = relation.max_cardinality {
+                ontology.push(Axiom::subclass(
+                    source,
+                    ClassExpression::ObjectMaxCardinality {
+                        cardinality,
+                        property: edge,
+                        value: Box::new(class(&target_name)),
+                    },
+                ));
+            }
+        }
     }
     let mut inverse_pairs = BTreeSet::new();
     for relation in &ir.relations {
@@ -278,6 +306,9 @@ pub fn validate_runtime_ir(ir: &OntologyIR) -> Result<()> {
     }
     if let Err(error) = ir.validate_class_groups() {
         return Err(KnowledgeError::Invalid(error.message));
+    }
+    if let Err(error) = ir.validate_relation_cardinalities() {
+        return Err(KnowledgeError::Invalid(error));
     }
 
     let mut relation_names = BTreeSet::new();
@@ -526,6 +557,7 @@ pub fn runtime_world_to_knowledge(
     objects: &[RuntimeObjectFact],
     relations: &[RuntimeRelationFact],
 ) -> Result<Ontology> {
+    validate_declared_cardinality_facts(ontology, objects, relations)?;
     let ranges = data_property_ranges(ontology);
     let mut knowledge_base = ontology.clone();
     for object in objects {
@@ -571,6 +603,131 @@ pub fn validate_canonical_ontology(ontology: &Ontology) -> Result<()> {
 /// Evolution gates must see the same closed set of facts that reasoning APIs
 /// will later read; otherwise a proposal can pass schema review and immediately
 /// make the live knowledge base inconsistent.
+fn validate_declared_cardinality_facts(
+    ontology: &Ontology,
+    objects: &[RuntimeObjectFact],
+    relations: &[RuntimeRelationFact],
+) -> Result<()> {
+    let mut bounds: BTreeMap<(String, String, String), (u32, u32)> = BTreeMap::new();
+    for axiom in ontology.axioms() {
+        let Axiom::SubClassOf { sub, sup } = axiom else {
+            continue;
+        };
+        let ClassExpression::Class(source) = sub else {
+            continue;
+        };
+        let (property, value, bound) = match sup {
+            ClassExpression::ObjectMinCardinality {
+                cardinality,
+                property,
+                value,
+            } => (property, value, (*cardinality, u32::MAX)),
+            ClassExpression::ObjectMaxCardinality {
+                cardinality,
+                property,
+                value,
+            } => (property, value, (0, *cardinality)),
+            _ => continue,
+        };
+        let ClassExpression::Class(target) = value.as_ref() else {
+            continue;
+        };
+        // Cardinality axioms outside the executable relation projection are left
+        // to the mature reasoner; only exact ODL projections get a closed-world
+        // admission check.
+        if let Some(previous) =
+            bounds.get_mut(&(source.0.clone(), property.0.clone(), target.0.clone()))
+        {
+            previous.0 = previous.0.max(bound.0);
+            previous.1 = previous.1.min(bound.1);
+        } else {
+            bounds.insert(
+                (source.0.clone(), property.0.clone(), target.0.clone()),
+                bound,
+            );
+        }
+    }
+
+    let mut class_edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut link = |from: &str, to: &str| {
+        class_edges
+            .entry(from.to_owned())
+            .or_default()
+            .insert(to.to_owned());
+    };
+    for axiom in ontology.axioms() {
+        match axiom {
+            Axiom::SubClassOf { sub, sup } => {
+                if let (ClassExpression::Class(from), ClassExpression::Class(to)) = (sub, sup) {
+                    link(&from.0, &to.0);
+                }
+            }
+            Axiom::EquivalentClasses(classes) => {
+                for left in classes {
+                    let ClassExpression::Class(left) = left else {
+                        continue;
+                    };
+                    for right in classes {
+                        let ClassExpression::Class(right) = right else {
+                            continue;
+                        };
+                        if left != right {
+                            link(&left.0, &right.0);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let instance_of = |object_type: &str, declared: &str| {
+        let mut visited = BTreeSet::from([object_type.to_owned()]);
+        let mut pending = vec![object_type];
+        while let Some(current) = pending.pop() {
+            if current == declared {
+                return true;
+            }
+            for next in class_edges.get(current).into_iter().flatten() {
+                if visited.insert(next.clone()) {
+                    pending.push(next);
+                }
+            }
+        }
+        false
+    };
+    let types_by_id = objects
+        .iter()
+        .map(|object| (object.id.as_str(), object.object_type.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    for ((source, property, target), (min, max)) in bounds {
+        for subject in objects
+            .iter()
+            .filter(|object| instance_of(&object.object_type, &source))
+            .map(|object| object.id.as_str())
+        {
+            let actual = relations
+                .iter()
+                .filter(|relation| {
+                    relation.relation == property
+                        && relation.source == subject
+                        && types_by_id
+                            .get(relation.target.as_str())
+                            .is_some_and(|object_type| instance_of(object_type, &target))
+                })
+                .count();
+            let actual = u32::try_from(actual).map_err(|_| {
+                KnowledgeError::Invalid(format!("relation `{property}` has too many live facts"))
+            })?;
+            if actual < min || actual > max {
+                return Err(KnowledgeError::Invalid(format!(
+                    "individual `{subject}` requires {min}..={max} `{property}` edges to `{target}`, found {actual}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn validate_canonical_ontology_with_world(
     ontology: &Ontology,
     objects: &[RuntimeObjectFact],
@@ -1039,6 +1196,92 @@ equivalent Pet, Companion
             ..RelationDef::default()
         });
         assert!(validate_runtime_ir(&conflicting).is_err());
+    }
+
+    #[test]
+    fn declared_relation_cardinalities_project_into_the_canonical_tbox() {
+        let mut schema = ir(false);
+        schema.relations.push(RelationDef {
+            name: "placed".to_owned(),
+            source: "Customer".to_owned(),
+            target: "Customer".to_owned(),
+            min_cardinality: Some(1),
+            max_cardinality: Some(2),
+            ..RelationDef::default()
+        });
+        assert!(validate_runtime_ir(&schema).is_ok());
+        let ontology = runtime_ir_to_knowledge(&schema);
+        let source = class("Customer");
+        let target = Box::new(class("Customer"));
+        let property = Term::new("placed");
+        assert!(ontology.axioms().contains(&Axiom::subclass(
+            source.clone(),
+            ClassExpression::ObjectMinCardinality {
+                cardinality: 1,
+                property: property.clone(),
+                value: target.clone(),
+            }
+        )));
+        assert!(ontology.axioms().contains(&Axiom::subclass(
+            source,
+            ClassExpression::ObjectMaxCardinality {
+                cardinality: 2,
+                property,
+                value: target,
+            }
+        )));
+
+        let mut invalid = schema;
+        invalid.relations[0].min_cardinality = Some(3);
+        invalid.relations[0].max_cardinality = Some(2);
+        assert!(validate_runtime_ir(&invalid).is_err());
+    }
+
+    #[test]
+    fn declared_relation_cardinalities_gate_inherited_instances() {
+        let ir = oaip_abi::parse_odl(
+            r#"
+object Animal:
+  properties:
+    name: string
+object Dog extends Animal:
+  properties:
+    breed: string
+relation companion_of:
+  source: Animal
+  target: Animal
+  min_cardinality: 1
+  max_cardinality: 2
+"#,
+        )
+        .unwrap();
+        let schema = runtime_ir_to_knowledge(&ir);
+        let dog = RuntimeObjectFact {
+            id: "dog-1".to_owned(),
+            object_type: "Dog".to_owned(),
+            data: serde_json::json!({ "name": "Ada", "breed": "lab" }),
+        };
+        let edge = RuntimeRelationFact {
+            source: "dog-1".to_owned(),
+            relation: "companion_of".to_owned(),
+            target: "dog-1".to_owned(),
+        };
+        assert!(
+            runtime_world_to_knowledge(
+                &schema,
+                std::slice::from_ref(&dog),
+                std::slice::from_ref(&edge)
+            )
+            .is_ok()
+        );
+
+        let other = RuntimeObjectFact {
+            id: "dog-2".to_owned(),
+            object_type: "Dog".to_owned(),
+            data: serde_json::json!({ "name": "Ben", "breed": "poodle" }),
+        };
+        let missing = runtime_world_to_knowledge(&schema, &[dog, other], &[edge]).unwrap_err();
+        assert!(missing.to_string().contains("individual `dog-2`"));
     }
 
     #[test]

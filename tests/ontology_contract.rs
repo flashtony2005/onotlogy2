@@ -86,6 +86,55 @@ fn tc001c_parse_typed_relations() {
 }
 
 #[test]
+fn tc001f_parse_relation_cardinalities() {
+    let odl = [
+        "object Customer:",
+        "  properties:",
+        "    name: string",
+        "object Order:",
+        "  properties:",
+        "    total: int",
+        "relation placed:",
+        "  source: Customer",
+        "  target: Order",
+        "  min_cardinality: 1",
+        "  max_cardinality: 2",
+    ]
+    .join("\n");
+    let ir = parse_odl(&odl).unwrap();
+    assert_eq!(Some(1), ir.relations[0].min_cardinality);
+    assert_eq!(Some(2), ir.relations[0].max_cardinality);
+    assert!(codegen::roundtrip_ok(&ir).unwrap());
+
+    let invalid = [
+        "object Customer:",
+        "  properties:",
+        "    name: string",
+        "relation placed:",
+        "  source: Customer",
+        "  target: Customer",
+        "  min_cardinality: 3",
+        "  max_cardinality: 2",
+    ]
+    .join("\n");
+    let error = parse_odl(&invalid).unwrap_err();
+    assert_eq!(1011, error.code);
+    assert_eq!(8, error.line);
+
+    let non_numeric = [
+        "object Customer:",
+        "  properties:",
+        "    name: string",
+        "relation placed:",
+        "  source: Customer",
+        "  target: Customer",
+        "  min_cardinality: many",
+    ]
+    .join("\n");
+    assert_eq!(1011, parse_odl(&non_numeric).unwrap_err().code);
+}
+
+#[test]
 fn tc001d_parse_object_extends() {
     let odl = [
         "object Animal:",
