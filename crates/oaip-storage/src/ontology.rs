@@ -1187,6 +1187,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn odl_nested_data_ranges_gate_live_world_evolution() {
+        let storage = LibSQLStorage::open(":memory:").await.unwrap();
+        let root =
+            Ontology::new().with_axiom(Axiom::subclass(class("Customer"), ClassExpression::Thing));
+        let broad_ir = oaip_abi::parse_odl(
+            r#"object Customer:
+  properties:
+    contact: string range(union(restriction(pattern "[^@]+@[^@]+"),datatype))
+"#,
+        )
+        .unwrap();
+        validate_runtime_ir(&broad_ir).unwrap();
+        storage
+            .initialize_knowledge_version("root", &root, Some(&broad_ir))
+            .await
+            .unwrap();
+
+        let initialized = storage.knowledge_version("root").await.unwrap().unwrap();
+        assert!(initialized.ontology.axioms().iter().any(|axiom| matches!(
+            axiom,
+            Axiom::DataPropertyDataRange { property, range }
+                if property.as_str() == "contact"
+                    && matches!(range, DataRange::Union(_))
+        )));
+        storage
+            .create(
+                "Customer",
+                "customer-1",
+                json!({ "contact": "support@example.com" }),
+            )
+            .await
+            .unwrap();
+
+        // A reviewed ODL replacement intersects the old range; this narrowing
+        // excludes the live lowercase fact and must fail before proposal creation.
+        let narrow_ir = oaip_abi::parse_odl(
+            r#"object Customer:
+  properties:
+    contact: string range(restriction(pattern "[A-Z]+@example[.]com"))
+"#,
+        )
+        .unwrap();
+        let incompatible = OntologyProposal::new("exclude-live-contact");
+        assert!(
+            storage
+                .propose_knowledge_change("root", &incompatible, Some(&narrow_ir))
+                .await
+                .is_err()
+        );
+
+        let proposal = OntologyProposal::new("replace-contact-range").with_change(
+            OntologyChange::Add(Axiom::subclass(class("Preferred"), class("Customer"))),
+        );
+        storage
+            .propose_knowledge_change("root", &proposal, Some(&broad_ir.clone()))
+            .await
+            .unwrap();
+        storage
+            .decide_knowledge_proposal("replace-contact-range", true, "alice", None)
+            .await
+            .unwrap();
+        let (_, applied) = storage
+            .apply_knowledge_proposal("replace-contact-range", "v2")
+            .await
+            .unwrap();
+        assert_eq!(Some(broad_ir), applied.runtime_ir);
+    }
+
+    #[tokio::test]
     async fn data_property_enumeration_gates_live_world_evolution() {
         fn one_of(values: &[&str]) -> Axiom {
             Axiom::DataPropertyOneOf {

@@ -4,6 +4,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 pub mod codegen;
+pub mod data_range;
 pub mod ir;
 pub mod odl;
 pub mod validation;
@@ -11,7 +12,7 @@ pub mod validation;
 pub use codegen::{CodegenOutput, ObjectDef, codegen};
 pub use ir::{
     ActionDef, Clause, CompareOp, CreateEffect, FieldUpdate, ObjectType, OntologyIR, ParamDef,
-    PolicyDef, PropertyDef, PropertyFacet, RelationDef, ScalarType, ValueExpr,
+    PolicyDef, PropertyDataRange, PropertyDef, PropertyFacet, RelationDef, ScalarType, ValueExpr,
 };
 pub use odl::parse_odl;
 pub use validation::{

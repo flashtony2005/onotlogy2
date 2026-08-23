@@ -25,6 +25,7 @@
 //! ```
 //! Event 顶层语法暂未开放；action 内的 effects 已是声明式表达。
 
+use crate::data_range::parse_data_range;
 use crate::ir::{
     ActionDef, Clause, CompareOp, CreateEffect, FieldUpdate, ObjectType, OntologyIR, ParamDef,
     PolicyDef, PropertyDef, PropertyFacet, RelationDef, ScalarType, ValueExpr,
@@ -805,13 +806,21 @@ enum PropertyDefinitionError {
 fn parse_property_definition(
     spec: &str,
 ) -> Result<(ScalarType, Vec<PropertyFacet>), PropertyDefinitionError> {
-    let tokens = split_property_tokens(spec).map_err(PropertyDefinitionError::Invalid)?;
+    let (spec, data_range_source) =
+        extract_data_range(spec).map_err(PropertyDefinitionError::Invalid)?;
+    let tokens = split_property_tokens(&spec).map_err(PropertyDefinitionError::Invalid)?;
     let Some(type_token) = tokens.first() else {
         return Err(PropertyDefinitionError::Invalid(
             "property type is empty".to_owned(),
         ));
     };
     let ty = ScalarType::from_str(type_token).map_err(PropertyDefinitionError::UnknownType)?;
+    let mut constraints = Vec::new();
+    if let Some(source) = data_range_source {
+        let body = &source["range(".len()..source.len() - 1];
+        let range = parse_data_range(body).map_err(PropertyDefinitionError::Invalid)?;
+        constraints.push(PropertyFacet::Range(range));
+    }
     let rest = &tokens[1..];
     if rest.len() % 2 != 0 {
         return Err(PropertyDefinitionError::Invalid(
@@ -820,7 +829,6 @@ fn parse_property_definition(
     }
 
     let mut seen = std::collections::BTreeSet::new();
-    let mut constraints = Vec::new();
     for pair in rest.as_chunks::<2>().0 {
         let facet = match pair[0].as_str() {
             "min_cardinality" => PropertyFacet::MinCardinality(pair[1].clone()),
@@ -855,6 +863,90 @@ fn parse_property_definition(
     validate_property_constraints("property", ty, &constraints)
         .map_err(PropertyDefinitionError::Invalid)?;
     Ok((ty, constraints))
+}
+
+/// Remove a top-level `range(...)` expression before ordinary key/value
+/// constraint parsing.  Quoted facet values are skipped while locating the
+/// balanced expression so patterns such as `pattern "range ("` are inert.
+fn extract_data_range(spec: &str) -> Result<(String, Option<String>), String> {
+    let bytes = spec.as_bytes();
+    let mut escaped = false;
+    let mut quoted = false;
+
+    for (index, &byte) in bytes.iter().enumerate() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                quoted = false;
+            }
+            continue;
+        }
+        if byte == b'"' {
+            quoted = true;
+            continue;
+        }
+        let at_word_start = index == 0 || !word_byte(bytes[index - 1]);
+        if !at_word_start || !spec[index..].starts_with("range") {
+            continue;
+        }
+
+        let end = index + "range".len();
+        if end < bytes.len() && word_byte(bytes[end]) {
+            continue;
+        }
+
+        let mut cursor = end;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+
+        if cursor < bytes.len() && bytes[cursor] == b'(' {
+            let closing = balanced_parenthesis(spec, cursor)?;
+            let source = spec[index..=closing].to_owned();
+            let remaining = format!("{}{}", &spec[..index], &spec[closing + 1..]);
+            return Ok((remaining, Some(source)));
+        }
+    }
+
+    Ok((spec.to_owned(), None))
+}
+
+fn word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn balanced_parenthesis(source: &str, opening: usize) -> Result<usize, String> {
+    let mut depth = 0usize;
+    let mut escaped = false;
+    let mut quoted = false;
+
+    for (index, char) in source.char_indices().skip(opening) {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if char == '\\' {
+                escaped = true;
+            } else if char == '"' {
+                quoted = false;
+            }
+            continue;
+        }
+        match char {
+            '"' => quoted = true,
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Ok(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    Err("unterminated range expression".to_owned())
 }
 
 fn parse_one_of_values(token: &str) -> Result<Vec<String>, String> {

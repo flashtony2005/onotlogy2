@@ -11,7 +11,8 @@ use regex::Regex;
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::ir::{ObjectType, PropertyFacet, ScalarType};
+use crate::data_range::validate_data_range;
+use crate::ir::{ObjectType, PropertyDataRange, PropertyFacet, ScalarType};
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum DataValidationError {
@@ -142,7 +143,7 @@ pub fn compile_xsd_pattern_subset(pattern: &str) -> Result<Regex, String> {
 
 /// Validate constraints attached to a property definition.
 pub fn validate_property_constraints(
-    _name: &str,
+    name: &str,
     ty: ScalarType,
     constraints: &[PropertyFacet],
 ) -> Result<(), String> {
@@ -182,6 +183,7 @@ pub fn validate_property_constraints(
             PropertyFacet::MinCardinality(_)
                 | PropertyFacet::MaxCardinality(_)
                 | PropertyFacet::OneOf(_)
+                | PropertyFacet::Range(_)
         );
         if !datatype_agnostic && !allowed(facet) {
             return Err(format!("`{}` is not valid for `{}`", facet.name(), ty));
@@ -205,6 +207,7 @@ pub fn validate_property_constraints(
         }
         match facet {
             PropertyFacet::MinCardinality(_) | PropertyFacet::MaxCardinality(_) => {}
+            PropertyFacet::Range(range) => validate_data_range(name, ty, range)?,
             PropertyFacet::OneOf(values) => {
                 let allowed = one_of_json_values(ty, values)?;
                 if allowed.is_empty() {
@@ -427,6 +430,22 @@ fn compare_decimal(left: &str, right: &str) -> Option<std::cmp::Ordering> {
     })
 }
 
+fn property_data_range_admits(value: &Value, ty: ScalarType, range: &PropertyDataRange) -> bool {
+    match range {
+        PropertyDataRange::Datatype => true,
+        PropertyDataRange::OneOf(values) => one_of_admits(ty, value, values),
+        PropertyDataRange::Restriction(facets) => facets
+            .iter()
+            .all(|facet| constraint_admits(value, ty, facet)),
+        PropertyDataRange::Union(children) => children
+            .iter()
+            .any(|child| property_data_range_admits(value, ty, child)),
+        PropertyDataRange::Intersection(children) => children
+            .iter()
+            .all(|child| property_data_range_admits(value, ty, child)),
+    }
+}
+
 fn constraint_admits(value: &Value, ty: ScalarType, facet: &PropertyFacet) -> bool {
     let ordering = || {
         let bound_value = match facet {
@@ -476,6 +495,7 @@ fn constraint_admits(value: &Value, ty: ScalarType, facet: &PropertyFacet) -> bo
     match facet {
         PropertyFacet::MinCardinality(_) | PropertyFacet::MaxCardinality(_) => true,
         PropertyFacet::OneOf(values) => one_of_admits(ty, value, values),
+        PropertyFacet::Range(range) => property_data_range_admits(value, ty, range),
         PropertyFacet::MinInclusive(_) => {
             ordering().is_some_and(|ordering| ordering != std::cmp::Ordering::Less)
         }
@@ -796,6 +816,66 @@ mod tests {
                 })
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn parses_nested_composable_property_ranges_and_gates_data() {
+        let current = object(
+            r#"object Customer:
+  properties:
+    code: string min_cardinality 1 range(intersection(datatype,union(restriction(pattern "[A-Z]{3}-[0-9]{4}"),one_of [ADMIN,GUEST])))
+"#,
+        );
+        let PropertyFacet::Range(range) = &current.properties[0].constraints[0] else {
+            panic!("range facet should survive parsing");
+        };
+        let PropertyDataRange::Intersection(intersection) = range else {
+            panic!("top-level intersection should be preserved");
+        };
+        assert_eq!(2, intersection.len());
+
+        for accepted in ["ADMIN", "GUEST", "ABC-1234"] {
+            assert!(
+                validate_object_data(&current, &serde_json::json!({ "code": accepted })).is_ok(),
+                "unexpected rejection: {accepted}"
+            );
+        }
+        for rejected in ["admin", "ABC-123", "administrator"] {
+            assert!(matches!(
+                validate_object_data(&current, &serde_json::json!({ "code": rejected })),
+                Err(DataValidationError::ConstraintViolation { .. })
+            ));
+        }
+
+        let invalid_union =
+            parse_odl("object Customer:\n  properties:\n    code: string range(union(datatype))\n");
+        assert!(invalid_union.is_err());
+
+        // Governance input bypasses the text parser, so the same structural
+        // limits must reject oversized or misplaced composable constructs.
+        let mut deep = PropertyDataRange::Datatype;
+        for _ in 0..9 {
+            deep = PropertyDataRange::Union(vec![deep.clone(), PropertyDataRange::Datatype]);
+        }
+        assert!(
+            validate_property_constraints(
+                "code",
+                ScalarType::String,
+                &[PropertyFacet::Range(deep)]
+            )
+            .is_err()
+        );
+
+        let mut wide = PropertyDataRange::Union(vec![PropertyDataRange::Datatype; 65]);
+        wide = PropertyDataRange::Intersection(vec![wide, PropertyDataRange::Datatype]);
+        assert!(
+            validate_property_constraints(
+                "code",
+                ScalarType::String,
+                &[PropertyFacet::Range(wide)]
+            )
+            .is_err()
         );
     }
 

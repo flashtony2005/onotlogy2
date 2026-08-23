@@ -75,6 +75,40 @@ impl fmt::Display for ScalarType {
     }
 }
 
+/// A composable data-range expression attached to a typed ODL property.
+///
+/// The property declaration supplies the datatype; `restriction` and `datatype`
+/// therefore denote that same base datatype.  This keeps executable rows and
+/// generated storage schemas singly typed while still allowing nested unions
+/// and intersections of facets and enumerations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PropertyDataRange {
+    Datatype,
+    OneOf(Vec<String>),
+    Restriction(Vec<PropertyFacet>),
+    Union(Vec<PropertyDataRange>),
+    Intersection(Vec<PropertyDataRange>),
+}
+
+impl PropertyDataRange {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Datatype => "datatype",
+            Self::OneOf(_) => "one_of",
+            Self::Restriction(_) => "restriction",
+            Self::Union(_) => "union",
+            Self::Intersection(_) => "intersection",
+        }
+    }
+
+    pub fn children(&self) -> &[PropertyDataRange] {
+        match self {
+            Self::Union(children) | Self::Intersection(children) => children,
+            _ => &[],
+        }
+    }
+}
+
 /// One lexical XSD-style constraint attached to an ODL property.
 ///
 /// Ordering bounds remain lexical so `decimal` never travels through an IEEE
@@ -85,6 +119,7 @@ pub enum PropertyFacet {
     MinCardinality(String),
     MaxCardinality(String),
     OneOf(Vec<String>),
+    Range(PropertyDataRange),
     MinInclusive(String),
     MinExclusive(String),
     MaxInclusive(String),
@@ -102,6 +137,7 @@ impl PropertyFacet {
             Self::MinCardinality(_) => "min_cardinality",
             Self::MaxCardinality(_) => "max_cardinality",
             Self::OneOf(_) => "one_of",
+            Self::Range(_) => "range",
             Self::MinInclusive(_) => "min_inclusive",
             Self::MinExclusive(_) => "min_exclusive",
             Self::MaxInclusive(_) => "max_inclusive",
@@ -116,7 +152,7 @@ impl PropertyFacet {
 
     pub fn value(&self) -> &str {
         match self {
-            Self::OneOf(_) => "",
+            Self::OneOf(_) | Self::Range(_) => "",
             Self::MinCardinality(value)
             | Self::MaxCardinality(value)
             | Self::MinInclusive(value)
