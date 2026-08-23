@@ -140,11 +140,18 @@ object Pet extends Animal:
 object Dog extends Animal, Pet:
   properties:
     breed: string
+
+disjoint Dog, Cat
+equivalent Pet, Companion
 ```
 
 每个 edge 投影为 `SubClassOf(Dog, Parent)`，因此 classification、instances、realization 和
 演化影响分析都会看到同一路径。父类型必须是已声明 object；重复父类型、自继承和继承环在 ODL 与
 Runtime IR 校验边界 fail-closed。
+
+顶层 `disjoint` / `equivalent` 分别投影为 `DisjointClasses` 和 `EquivalentClasses`。组内至少两个
+已声明 object、成员不重复、同一语义组不可重复声明；这些约束同样作用于手工构造或持久化反序列化的
+Runtime IR。
 
 ### 4.5 ODL property constraints
 
@@ -314,7 +321,7 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 
 ## 9. 已知下一步
 
-1. 继续扩展更多 DL 结构到 ODL 直接表达面（如 disjoint / equivalent 声明），减少手写 proposal JSON。
+1. 继续扩展更多 DL 结构到 ODL 直接表达面（如对象/数据基数限制与嵌套 restriction），减少手写 proposal JSON。
 2. 补充 datatype union/intersection 及真实业务需要的 XSD 构造。
 3. 为大 ABox 增加 classification/cache、incremental consistency 和有界解释缓存。
 4. 增加长时并发、恢复、内存和推理延迟基准。

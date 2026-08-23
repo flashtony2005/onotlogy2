@@ -124,6 +124,58 @@ fn tc001d_parse_object_extends() {
     assert!(cycle.message.contains("继承关系形成环"));
 }
 
+#[test]
+fn tc001e_parse_disjoint_and_equivalent_groups() {
+    let odl = [
+        "object Animal:",
+        "  properties:",
+        "    name: string",
+        "object Dog extends Animal:",
+        "  properties:",
+        "    breed: string",
+        "object Cat extends Animal:",
+        "  properties:",
+        "    indoor: bool",
+        "object Pet:",
+        "  properties:",
+        "    nickname: string",
+        "object Companion:",
+        "  properties:",
+        "    owner_note: string",
+        "disjoint Dog, Cat",
+        "equivalent Pet, Companion",
+    ]
+    .join("\n");
+    let ir = parse_odl(&odl).unwrap();
+    assert_eq!(vec![vec!["Dog", "Cat"]], ir.disjoint_groups);
+    assert_eq!(vec![vec!["Pet", "Companion"]], ir.equivalent_groups);
+    assert!(codegen::roundtrip_ok(&ir).unwrap());
+
+    let unknown =
+        parse_odl("object Dog:\n  properties:\n    name: string\ndisjoint Dog, Cat\n").unwrap_err();
+    assert_eq!(1013, unknown.code);
+    assert_eq!(4, unknown.line);
+
+    let singleton =
+        parse_odl("object Dog:\n  properties:\n    name: string\ndisjoint Dog\n").unwrap_err();
+    assert_eq!(1013, singleton.code);
+
+    let duplicate = [
+        "object Dog:",
+        "  properties:",
+        "    name: string",
+        "object Cat:",
+        "  properties:",
+        "    name: string",
+        "disjoint Dog, Cat",
+        "disjoint Cat, Dog",
+    ]
+    .join("\n");
+    let duplicate = parse_odl(&duplicate).unwrap_err();
+    assert_eq!(1013, duplicate.code);
+    assert!(duplicate.message.contains("duplicate"));
+}
+
 // ── TC-002：IR 保真（REQ-002） ───────────────────────────────────────────
 #[test]
 fn tc002_ir_fidelity() {

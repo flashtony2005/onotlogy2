@@ -66,6 +66,7 @@ const E_RELATION_ENDPOINT: u32 = 1009; // relation 端点不是已声明对象�
 const E_RELATION_CONTRADICTION: u32 = 1010;
 const E_INVALID_PROPERTY_CONSTRAINT: u32 = 1011; // relation 特征互相矛盾或引用无效
 const E_INVALID_OBJECT_HIERARCHY: u32 = 1012; // object extends 引用无效或形成继承环
+const E_INVALID_CLASS_GROUP: u32 = 1013; // disjoint/equivalent 类组声明无效
 
 /// 解析上下文中的块（基于缩进的简易状态机）。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -98,16 +99,56 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     let mut declared_relations: Vec<(u32, RelationDef)> = Vec::new();
     let mut current_relation: Option<(u32, RelationDef)> = None;
     let mut link_lines: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
+    let mut declared_disjoint: Vec<(u32, Vec<String>)> = Vec::new();
+    let mut declared_equivalent: Vec<(u32, Vec<String>)> = Vec::new();
 
     let indent_of = |raw: &str| raw.len() - raw.trim_start().len();
 
-    for (idx, raw) in src.lines().enumerate() {
+    'line: for (idx, raw) in src.lines().enumerate() {
         let line_no = (idx + 1) as u32;
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
         let indent = indent_of(raw);
+
+        // Named-class DL 组声明：让常见 TBox 约束无需手写 proposal JSON。
+        for (keyword, is_disjoint) in [("disjoint ", true), ("equivalent ", false)] {
+            let Some(mut rest) = line.strip_prefix(keyword) else {
+                continue;
+            };
+            flush_update(&mut cur_update, &mut cur_action);
+            flush_create(&mut cur_create, &mut cur_action);
+            flush_action(&mut cur_action, &mut current);
+            if let Some(obj) = current.take() {
+                declared.push(obj);
+            }
+            if let Some(relation) = current_relation.take() {
+                declared_relations.push(relation);
+            }
+            rest = rest.trim();
+            let group = rest
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            if group.len() < 2 {
+                return Err(OdlError::new(
+                    E_INVALID_CLASS_GROUP,
+                    format!("{} 声明至少需要两个对象类型", keyword.trim()),
+                    line_no,
+                    1,
+                ));
+            }
+            if is_disjoint {
+                declared_disjoint.push((line_no, group));
+            } else {
+                declared_equivalent.push((line_no, group));
+            }
+            section = vec![(Section::Top, 0)];
+            continue 'line;
+        }
 
         // relation 声明：全局有类型边，和 object 同级。
         if let Some(rest) = line.strip_prefix("relation ") {
@@ -540,6 +581,18 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                 .unwrap_or(1),
             1,
         ));
+    }
+
+    ir.disjoint_groups = declared_disjoint.iter().map(|(_, g)| g.clone()).collect();
+    ir.equivalent_groups = declared_equivalent.iter().map(|(_, g)| g.clone()).collect();
+    if let Err(error) = ir.validate_class_groups() {
+        let lines = if error.kind == "disjoint" {
+            &declared_disjoint
+        } else {
+            &declared_equivalent
+        };
+        let line = lines.get(error.index).map(|(line, _)| *line).unwrap_or(1);
+        return Err(OdlError::new(E_INVALID_CLASS_GROUP, error.message, line, 1));
     }
 
     let mut endpoints = std::collections::BTreeMap::new();

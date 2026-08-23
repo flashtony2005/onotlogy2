@@ -806,6 +806,8 @@ mod tests {
         fn customer_ir(properties: Vec<PropertyDef>) -> OntologyIR {
             OntologyIR {
                 relations: Vec::new(),
+                disjoint_groups: Vec::new(),
+                equivalent_groups: Vec::new(),
                 object_types: vec![ObjectType {
                     name: "Customer".to_owned(),
                     extends: Vec::new(),
@@ -1183,6 +1185,8 @@ mod tests {
     async fn date_time_runtime_properties_validate_live_world_and_evolution() {
         let ir = OntologyIR {
             relations: Vec::new(),
+            disjoint_groups: Vec::new(),
+            equivalent_groups: Vec::new(),
             object_types: vec![ObjectType {
                 name: "Event".to_owned(),
                 extends: Vec::new(),
@@ -1235,6 +1239,8 @@ mod tests {
     async fn date_runtime_properties_validate_live_world_and_evolution() {
         let ir = OntologyIR {
             relations: Vec::new(),
+            disjoint_groups: Vec::new(),
+            equivalent_groups: Vec::new(),
             object_types: vec![ObjectType {
                 name: "Person".to_owned(),
                 extends: Vec::new(),
@@ -1296,6 +1302,8 @@ mod tests {
     async fn decimal_runtime_properties_validate_live_world_and_evolution() {
         let ir = OntologyIR {
             relations: Vec::new(),
+            disjoint_groups: Vec::new(),
+            equivalent_groups: Vec::new(),
             object_types: vec![ObjectType {
                 name: "Account".to_owned(),
                 extends: Vec::new(),
@@ -1490,6 +1498,115 @@ object Dog extends Animal:
     }
 
     #[tokio::test]
+    async fn odl_class_groups_gate_live_world_and_replace_exactly() {
+        let storage = LibSQLStorage::open(":memory:").await.unwrap();
+        let base = r#"
+object Animal:
+  properties:
+    name: string
+object Dog extends Animal:
+  properties:
+    breed: string
+object Cat extends Animal:
+  properties:
+    indoor: bool
+"#;
+        let initial_ir = oaip_abi::parse_odl(base).unwrap();
+        storage
+            .create(
+                "Dog",
+                "dog-1",
+                serde_json::json!({ "name": "Ada", "breed": "lab" }),
+            )
+            .await
+            .unwrap();
+        storage
+            .initialize_knowledge_version("root", &Ontology::new(), Some(&initial_ir))
+            .await
+            .unwrap();
+
+        // Narrowing the live Dog into a disjoint hierarchy is rejected before a
+        // pending proposal can exist.
+        let mut incompatible_ir = oaip_abi::parse_odl(base).unwrap();
+        incompatible_ir.disjoint_groups = vec![vec!["Dog".to_owned(), "Animal".to_owned()]];
+        let incompatible = OntologyProposal::new("make-live-dog-unsatisfiable").with_change(
+            OntologyChange::Add(Axiom::subclass(
+                ClassExpression::class(Term::new("Puppy")),
+                ClassExpression::class(Term::new("Dog")),
+            )),
+        );
+        assert!(
+            storage
+                .propose_knowledge_change("root", &incompatible, Some(&incompatible_ir))
+                .await
+                .is_err()
+        );
+        assert!(storage.list_knowledge_proposals().await.unwrap().is_empty());
+
+        // A disjoint boundary over distinct concrete types persists as DL and
+        // then removes exactly when its executable declaration disappears.
+        let mut disjoint_ir = oaip_abi::parse_odl(base).unwrap();
+        disjoint_ir.disjoint_groups = vec![vec!["Dog".to_owned(), "Cat".to_owned()]];
+        let add_disjoint = OntologyProposal::new("separate-dog-from-cat").with_change(
+            OntologyChange::Add(Axiom::subclass(
+                ClassExpression::class(Term::new("Puppy")),
+                ClassExpression::class(Term::new("Dog")),
+            )),
+        );
+        storage
+            .propose_knowledge_change("root", &add_disjoint, Some(&disjoint_ir))
+            .await
+            .unwrap();
+        storage
+            .decide_knowledge_proposal("separate-dog-from-cat", true, "alice", None)
+            .await
+            .unwrap();
+        let (_, applied) = storage
+            .apply_knowledge_proposal("separate-dog-from-cat", "v2")
+            .await
+            .unwrap();
+        assert!(
+            applied
+                .ontology
+                .axioms()
+                .contains(&Axiom::DisjointClasses(vec![
+                    ClassExpression::class(Term::new("Dog")),
+                    ClassExpression::class(Term::new("Cat"))
+                ]))
+        );
+
+        let removed_ir = oaip_abi::parse_odl(base).unwrap();
+        let remove_disjoint = OntologyProposal::new("remove-disjoint-boundary").with_change(
+            OntologyChange::Add(Axiom::subclass(
+                ClassExpression::class(Term::new("Friendly")),
+                ClassExpression::class(Term::new("Dog")),
+            )),
+        );
+        storage
+            .propose_knowledge_change("v2", &remove_disjoint, Some(&removed_ir))
+            .await
+            .unwrap();
+        storage
+            .decide_knowledge_proposal("remove-disjoint-boundary", true, "bob", None)
+            .await
+            .unwrap();
+        let (_, removed) = storage
+            .apply_knowledge_proposal("remove-disjoint-boundary", "v3")
+            .await
+            .unwrap();
+        assert!(
+            !removed
+                .ontology
+                .axioms()
+                .contains(&Axiom::DisjointClasses(vec![
+                    ClassExpression::class(Term::new("Dog")),
+                    ClassExpression::class(Term::new("Cat"))
+                ]))
+        );
+        assert_eq!(Some(removed_ir), removed.runtime_ir);
+    }
+
+    #[tokio::test]
     async fn pure_dl_evolution_validates_the_current_live_world() {
         fn named(name: &str) -> ClassExpression {
             ClassExpression::class(Term::new(name))
@@ -1545,6 +1662,8 @@ object Dog extends Animal:
                     target: target.to_owned(),
                     ..RelationDef::default()
                 }],
+                disjoint_groups: Vec::new(),
+                equivalent_groups: Vec::new(),
             }
         }
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
@@ -1640,6 +1759,8 @@ object Dog extends Animal:
                 target: "Order".to_owned(),
                 ..RelationDef::default()
             }],
+            disjoint_groups: Vec::new(),
+            equivalent_groups: Vec::new(),
         };
         storage
             .initialize_knowledge_version("root", &root(), Some(&runtime_ir))
@@ -1706,6 +1827,8 @@ object Dog extends Animal:
                 functional: true,
                 ..RelationDef::default()
             }],
+            disjoint_groups: Vec::new(),
+            equivalent_groups: Vec::new(),
         };
         storage
             .initialize_knowledge_version("root", &root(), Some(&runtime_ir))

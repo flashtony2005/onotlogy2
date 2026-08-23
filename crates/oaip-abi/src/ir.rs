@@ -277,12 +277,80 @@ pub struct OntologyIR {
     /// 全局有类型关系；action 创建的隐式边也会进入同一 DL 投影。
     #[serde(default)]
     pub relations: Vec<RelationDef>,
+    /// Named-class disjointness axioms declared directly in executable ODL.
+    #[serde(default)]
+    pub disjoint_groups: Vec<Vec<String>>,
+    /// Named-class equivalence axioms declared directly in executable ODL.
+    #[serde(default)]
+    pub equivalent_groups: Vec<Vec<String>>,
 }
 
 impl OntologyIR {
     /// 按名称查找对象类型（codegen / query 复用）。
     pub fn find(&self, name: &str) -> Option<&ObjectType> {
         self.object_types.iter().find(|o| o.name == name)
+    }
+
+    /// Validate named disjoint/equivalent class groups at both language and
+    /// governance boundaries so hand-built serialized IR cannot bypass ODL rules.
+    pub fn validate_class_groups(&self) -> Result<(), ClassGroupError> {
+        let names = self
+            .object_types
+            .iter()
+            .map(|object| object.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        Self::validate_class_group("disjoint", &self.disjoint_groups, &names)?;
+        Self::validate_class_group("equivalent", &self.equivalent_groups, &names)?;
+        Ok(())
+    }
+
+    fn validate_class_group(
+        kind: &'static str,
+        groups: &[Vec<String>],
+        names: &std::collections::BTreeSet<&str>,
+    ) -> Result<(), ClassGroupError> {
+        let mut seen_groups = std::collections::BTreeSet::new();
+        for (index, group) in groups.iter().enumerate() {
+            if group.len() < 2 {
+                return Err(ClassGroupError {
+                    index,
+                    kind,
+                    message: format!("{kind} group must contain at least two classes"),
+                });
+            }
+            let mut members = std::collections::BTreeSet::new();
+            for name in group {
+                if name.trim().is_empty() {
+                    return Err(ClassGroupError {
+                        index,
+                        kind,
+                        message: format!("{kind} group contains an empty class name"),
+                    });
+                }
+                if !names.contains(name.as_str()) {
+                    return Err(ClassGroupError {
+                        index,
+                        kind,
+                        message: format!("{kind} group references undeclared object type '{name}'"),
+                    });
+                }
+                if !members.insert(name.as_str()) {
+                    return Err(ClassGroupError {
+                        index,
+                        kind,
+                        message: format!("{kind} group repeats class '{name}'"),
+                    });
+                }
+            }
+            if !seen_groups.insert(members) {
+                return Err(ClassGroupError {
+                    index,
+                    kind,
+                    message: format!("duplicate {kind} group"),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Validate the strict executable taxonomy shared by the ODL frontend and
@@ -346,6 +414,14 @@ impl OntologyIR {
         }
         Ok(())
     }
+}
+
+/// An invalid named-class group, identified by declaration order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassGroupError {
+    pub index: usize,
+    pub kind: &'static str,
+    pub message: String,
 }
 
 /// An invalid executable-taxonomy edge, attributed to its declaring object.

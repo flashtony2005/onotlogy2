@@ -153,6 +153,12 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
             ontology.push(Axiom::FunctionalDataProperty(term));
         }
     }
+    for group in &ir.disjoint_groups {
+        ontology.push(Axiom::DisjointClasses(group.iter().map(class).collect()));
+    }
+    for group in &ir.equivalent_groups {
+        ontology.push(Axiom::EquivalentClasses(group.iter().map(class).collect()));
+    }
     for (edge, (source_name, target_name)) in relation_endpoints(ir) {
         let edge = Term::new(edge);
         ontology.push(Axiom::ObjectPropertyDomain {
@@ -269,6 +275,9 @@ pub fn validate_runtime_ir(ir: &OntologyIR) -> Result<()> {
             "object `{}`: {}",
             error.object, error.message
         )));
+    }
+    if let Err(error) = ir.validate_class_groups() {
+        return Err(KnowledgeError::Invalid(error.message));
     }
 
     let mut relation_names = BTreeSet::new();
@@ -588,6 +597,8 @@ mod tests {
     fn ir(actions: bool) -> OntologyIR {
         OntologyIR {
             relations: Vec::new(),
+            disjoint_groups: Vec::new(),
+            equivalent_groups: Vec::new(),
             object_types: vec![ObjectType {
                 name: "Customer".to_owned(),
                 extends: Vec::new(),
@@ -668,6 +679,96 @@ object Dog extends Animal:
                 .unwrap()
                 .contains(&Term::new("dog-1"))
         );
+    }
+
+    #[test]
+    fn declared_class_groups_project_and_reason_fail_closed() {
+        let ir = oaip_abi::parse_odl(
+            r#"
+object Animal:
+  properties:
+    name: string
+object Dog extends Animal:
+  properties:
+    breed: string
+object Cat extends Animal:
+  properties:
+    indoor: bool
+object Pet:
+  properties:
+    nickname: string
+object Companion:
+  properties:
+    owner_note: string
+disjoint Dog, Cat
+equivalent Pet, Companion
+"#,
+        )
+        .unwrap();
+        assert!(validate_runtime_ir(&ir).is_ok());
+        let schema = runtime_ir_to_knowledge(&ir);
+        assert!(
+            schema
+                .axioms()
+                .contains(&Axiom::DisjointClasses(vec![class("Dog"), class("Cat")]))
+        );
+        assert!(schema.axioms().contains(&Axiom::EquivalentClasses(vec![
+            class("Pet"),
+            class("Companion")
+        ])));
+
+        let pet = RuntimeObjectFact {
+            id: "pet-1".to_owned(),
+            object_type: "Pet".to_owned(),
+            data: serde_json::json!({ "nickname": "Ada" }),
+        };
+        let equivalent = runtime_world_to_knowledge(&schema, &[pet], &[]).unwrap();
+        let reasoner = Reasoner::new(&equivalent).unwrap();
+        assert!(
+            reasoner
+                .instances_of(&Term::new("Companion"))
+                .unwrap()
+                .contains(&Term::new("pet-1"))
+        );
+
+        let conflicting = Ontology::from_iter(schema.axioms().iter().cloned().chain([
+            Axiom::ClassAssertion {
+                class: class("Dog"),
+                individual: Term::new("conflict"),
+            },
+            Axiom::ClassAssertion {
+                class: class("Cat"),
+                individual: Term::new("conflict"),
+            },
+        ]));
+        let reasoner = Reasoner::new(&conflicting).unwrap();
+        assert!(!reasoner.is_consistent().unwrap());
+    }
+
+    #[test]
+    fn runtime_validation_rejects_invalid_class_groups() {
+        let mut ir = ir(false);
+        ir.object_types.push(ObjectType {
+            name: "Dog".to_owned(),
+            extends: Vec::new(),
+            properties: vec![PropertyDef {
+                name: "breed".to_owned(),
+                ty: ScalarType::String,
+                constraints: Vec::new(),
+            }],
+            actions: Vec::new(),
+        });
+        ir.disjoint_groups = vec![vec!["Dog".to_owned(), "Cat".to_owned()]];
+        assert!(matches!(
+            validate_runtime_ir(&ir),
+            Err(KnowledgeError::Invalid(message)) if message.contains("undeclared")
+        ));
+
+        ir.disjoint_groups = vec![vec!["Dog".to_owned(), "Dog".to_owned()]];
+        assert!(matches!(
+            validate_runtime_ir(&ir),
+            Err(KnowledgeError::Invalid(message)) if message.contains("repeats")
+        ));
     }
 
     #[test]

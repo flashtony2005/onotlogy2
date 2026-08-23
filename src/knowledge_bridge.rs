@@ -103,6 +103,8 @@ mod tests {
     fn ir() -> OntologyIR {
         OntologyIR {
             relations: Vec::new(),
+            disjoint_groups: Vec::new(),
+            equivalent_groups: Vec::new(),
             object_types: vec![ObjectType {
                 name: "Customer".into(),
                 extends: Vec::new(),
