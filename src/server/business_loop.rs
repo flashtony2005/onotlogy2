@@ -62,6 +62,11 @@ fn error_response(error: BusinessLoopError) -> Response {
             ApiResponse::error(400, error.to_string()),
         )
             .into_response(),
+        BusinessLoopError::Capability(error) => (
+            StatusCode::BAD_GATEWAY,
+            ApiResponse::error(5001, format!("外部能力执行失败：{error}")),
+        )
+            .into_response(),
         BusinessLoopError::Knowledge(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             ApiResponse::error(5000, format!("知识推理错误：{error}")),
@@ -164,7 +169,14 @@ pub(crate) async fn run_next(
     if let Some(response) = write_denied(&user) {
         return response;
     }
-    match run_next_best_action(&st.storage, &body.project_id, &user.username).await {
+    match run_next_best_action(
+        &st.storage,
+        &st.plugin_catalog,
+        &body.project_id,
+        &user.username,
+    )
+    .await
+    {
         Ok(result) => ApiResponse::ok(result).into_response(),
         Err(error) => error_response(error),
     }
@@ -227,7 +239,7 @@ pub(crate) async fn execute(
         Err(error) => return error_response(error.into()),
     };
     for project_id in project_ids {
-        match execute_opportunity(&st.storage, &project_id, &id).await {
+        match execute_opportunity(&st.storage, &st.plugin_catalog, &project_id, &id).await {
             Ok(result) => return ApiResponse::ok(result).into_response(),
             Err(BusinessLoopError::NotFound(_)) => continue,
             Err(error) => return error_response(error),

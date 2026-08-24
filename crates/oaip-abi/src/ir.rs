@@ -302,6 +302,12 @@ pub struct ActionPlanning {
     /// 期望执行主体；缺省是 Agent。
     #[serde(default)]
     pub actor: ActorKind,
+    /// 外部能力宿主插件；与 `capability` 成对声明。
+    #[serde(default)]
+    pub plugin: Option<String>,
+    /// 行动执行时调用的外部能力；与 `plugin` 成对声明。
+    #[serde(default)]
+    pub capability: Option<String>,
 }
 
 /// 业务结果的产生时机。

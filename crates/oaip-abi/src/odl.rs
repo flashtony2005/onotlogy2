@@ -1001,6 +1001,8 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         actor: ActorKind::Agent,
                         benefit_field: None,
                         benefit_factor: None,
+                        plugin: None,
+                        capability: None,
                     });
                     match k {
                         "cost" | "prior_confidence" => {
@@ -1051,6 +1053,18 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                                 return Err(invalid("benefit_field 不能为空".into()));
                             }
                             planning.benefit_field = Some(v.to_string());
+                        }
+                        "plugin" => {
+                            if v.trim().is_empty() {
+                                return Err(invalid("plugin 不能为空".to_string()));
+                            }
+                            planning.plugin = Some(v.to_string());
+                        }
+                        "capability" => {
+                            if v.trim().is_empty() {
+                                return Err(invalid("capability 不能为空".to_string()));
+                            }
+                            planning.capability = Some(v.to_string());
                         }
                         "benefit_factor" => {
                             let value = v.parse::<f64>().map_err(|_| {
@@ -1723,6 +1737,21 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             1,
         ));
     }
+    for object in &ir.object_types {
+        for action in &object.actions {
+            if let Some(planning) = &action.planning
+                && planning.plugin.is_some() != planning.capability.is_some()
+            {
+                return Err(OdlError::new(
+                    E_INVALID_PROPERTY_CONSTRAINT,
+                    "action planning 的 plugin 与 capability 必须成对声明",
+                    1,
+                    1,
+                ));
+            }
+        }
+    }
+
     ir.same_individual_groups = declared_same_individuals
         .iter()
         .map(|(_, group)| group.clone())

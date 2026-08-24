@@ -10,6 +10,7 @@ use crate::abi::ir::{
 use crate::abi::{DataValidationError, parse_odl, validate_object_data, value_matches_scalar};
 use crate::knowledge::{Reasoner, runtime_ir_to_knowledge, validate_data_consistency};
 use crate::knowledge_bridge::world_snapshot_to_knowledge;
+use crate::plugin::catalog::{CatalogError, PluginCatalog};
 use crate::storage::{LibSQLStorage, ProjectRecord, StorageError, WorldCommand};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -47,6 +48,8 @@ pub enum BusinessLoopError {
     Storage(#[from] StorageError),
     #[error("知识推理失败：{0}")]
     Knowledge(String),
+    #[error(transparent)]
+    Capability(#[from] CatalogError),
 }
 
 impl BusinessLoopError {
@@ -1613,9 +1616,41 @@ pub async fn decide_business_approval(
     Err(BusinessLoopError::NotFound(decision_id.to_string()))
 }
 
+fn apply_capability_output(
+    action: &ActionDef,
+    after_data: &mut Value,
+    output: Value,
+) -> Result<(), BusinessLoopError> {
+    let values = output
+        .as_object()
+        .ok_or_else(|| BusinessLoopError::invalid("外部能力输出必须是 JSON object"))?;
+    let allowed = action
+        .updates
+        .iter()
+        .map(|update| &update.field)
+        .collect::<std::collections::BTreeSet<_>>();
+    for field in values.keys() {
+        if !allowed.contains(field) {
+            return Err(BusinessLoopError::invalid(format!(
+                "外部能力返回未声明字段 {field}"
+            )));
+        }
+    }
+    if let Some(object) = after_data.as_object_mut() {
+        for update in &action.updates {
+            let value = values.get(&update.field).ok_or_else(|| {
+                BusinessLoopError::invalid(format!("外部能力缺少声明字段 {}", update.field))
+            })?;
+            object.insert(update.field.clone(), value.clone());
+        }
+    }
+    Ok(())
+}
+
 /// 执行已选动作，记录 Outcome 与 StateTransition，并推进 Opportunity/Decision 状态。
 pub async fn execute_opportunity(
     storage: &LibSQLStorage,
+    plugins: &PluginCatalog,
     project_id: &str,
     opportunity_id: &str,
 ) -> Result<Value, BusinessLoopError> {
@@ -1693,7 +1728,46 @@ pub async fn execute_opportunity(
             "业务动作 {action} 当前不可用"
         )));
     }
+    let capability = definition.planning.as_ref().and_then(|planning| {
+        let plugin = planning.plugin.as_deref()?;
+        let capability = planning.capability.as_deref()?;
+        Some((plugin, capability))
+    });
+    let capability_output = if let Some((plugin_id, capability_name)) = capability {
+        let has_evidence_fields = ontology.find("Outcome").is_some_and(|outcome| {
+            ["provider", "capability"].iter().all(|field| {
+                outcome
+                    .properties
+                    .iter()
+                    .any(|property| property.name == *field)
+            })
+        });
+        if !has_evidence_fields {
+            return Err(BusinessLoopError::invalid(
+                "外部能力动作的 Outcome 必须声明 provider 和 capability",
+            ));
+        }
+        Some(
+            plugins
+                .invoke(
+                    plugin_id,
+                    capability_name,
+                    json!({
+                        "subject": subject,
+                        "objectType": owner.name,
+                        "before": before_record.data,
+                        "params": params_value,
+                    }),
+                )
+                .await?,
+        )
+    } else {
+        None
+    };
     let mut after_data = before_record.data.clone();
+    if let Some(output) = capability_output {
+        apply_capability_output(&definition, &mut after_data, output)?;
+    }
     let mut created_object: Option<(String, String)> = None;
     for update in &definition.updates {
         {
@@ -1768,6 +1842,10 @@ pub async fn execute_opportunity(
         "metric": rule.goal_metric.clone().unwrap_or_default(),
         "stage": OUTCOME_ACTION_EXECUTED,
     });
+    if let Some((plugin_id, capability_name)) = capability {
+        action_outcome_data["provider"] = json!(plugin_id);
+        action_outcome_data["capability"] = json!(capability_name);
+    }
     if let Some((task_id, task_type)) = &created_object {
         action_outcome_data["before"] = json!(format!(r#"{{"{task_type}":null}}"#));
         action_outcome_data["after"] = json!(format!(r#"{{"{task_type}":"{task_id}"}}"#));
@@ -1810,7 +1888,7 @@ pub async fn execute_opportunity(
     .await?;
     let business_result = if planning.outcome_timing == OutcomeTiming::Immediate {
         let result_id = generated_id("outcome");
-        let result_data = json!({
+        let mut result_data = json!({
             "action": action,
             "before": before,
             "after": after,
@@ -1818,6 +1896,10 @@ pub async fn execute_opportunity(
             "metric": rule.goal_metric.clone().unwrap_or_default(),
             "stage": OUTCOME_BUSINESS_RESULT,
         });
+        if let Some((plugin_id, capability_name)) = capability {
+            result_data["provider"] = json!(plugin_id);
+            result_data["capability"] = json!(capability_name);
+        }
         validate_data(&ontology, "Outcome", &result_data)?;
         create_world_object(
             storage,
@@ -2104,6 +2186,7 @@ pub async fn settle_follow_up(
 /// 执行一轮完整再规划：发现 → 选择最优动作 → 决策 → 执行 → 目标反馈。
 pub async fn run_next_best_action(
     storage: &LibSQLStorage,
+    plugins: &PluginCatalog,
     project_id: &str,
     decided_by: &str,
 ) -> Result<BusinessLoopRun, BusinessLoopError> {
@@ -2178,7 +2261,7 @@ pub async fn run_next_best_action(
     )
     .await?;
     let execution =
-        execute_opportunity(storage, project_id, &recommendation.opportunity_id).await?;
+        execute_opportunity(storage, plugins, project_id, &recommendation.opportunity_id).await?;
     let goals = refresh_goal_progress(storage, project_id).await?;
 
     Ok(BusinessLoopRun {
@@ -2189,4 +2272,40 @@ pub async fn run_next_best_action(
         execution: Some(execution),
         goals,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::abi::ir::{FieldUpdate, PolicyDef};
+
+    fn action(field: &str) -> ActionDef {
+        ActionDef {
+            name: "Touch".into(),
+            params: Vec::new(),
+            updates: vec![FieldUpdate {
+                field: field.into(),
+                value: ValueExpr::Literal(json!(0)),
+            }],
+            creates: Vec::new(),
+            policy: PolicyDef::default(),
+            planning: None,
+        }
+    }
+
+    #[test]
+    fn capability_output_is_limited_to_declared_fields() {
+        let mut after = json!({"days": 75});
+        let error = apply_capability_output(&action("days"), &mut after, json!({"hacked": true}))
+            .expect_err("未声明字段必须拒绝");
+        assert!(error.to_string().contains("未声明字段"));
+
+        let error = apply_capability_output(&action("days"), &mut after, json!({}))
+            .expect_err("缺失声明字段必须拒绝");
+        assert!(error.to_string().contains("缺少声明字段"));
+
+        apply_capability_output(&action("days"), &mut after, json!({"days": 0}))
+            .expect("声明字段应能投影");
+        assert_eq!(after["days"], json!(0));
+    }
 }

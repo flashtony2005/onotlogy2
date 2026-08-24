@@ -13,6 +13,7 @@ use openaip_os::business_loop::{
     execute_opportunity, plan_opportunity_paths, recommend_next_actions, run_next_best_action,
     settle_follow_up, start_follow_up,
 };
+use openaip_os::plugin::catalog::PluginCatalog;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -225,9 +226,14 @@ async fn goal_metric_is_declared_and_must_agree_across_evidence_chain() {
     )
     .await
     .expect("应能决策接触动作");
-    let execution = execute_opportunity(&storage, "custom-goal", opportunity_id)
-        .await
-        .expect("应能执行接触动作");
+    let execution = execute_opportunity(
+        &storage,
+        &PluginCatalog::new(),
+        "custom-goal",
+        opportunity_id,
+    )
+    .await
+    .expect("应能执行接触动作");
     assert_eq!(
         execution["goals"][0]["targetMetric"],
         json!("qualified_reactivations")
@@ -273,9 +279,14 @@ async fn goal_metric_is_declared_and_must_agree_across_evidence_chain() {
     )
     .await
     .expect("应能决策接触动作");
-    let execution = execute_opportunity(&storage, "mismatched-goal", &opportunity_id)
-        .await
-        .expect("指标不一致不阻止执行，但不应计入目标");
+    let execution = execute_opportunity(
+        &storage,
+        &PluginCatalog::new(),
+        "mismatched-goal",
+        &opportunity_id,
+    )
+    .await
+    .expect("指标不一致不阻止执行，但不应计入目标");
     assert_eq!(
         execution["goals"][0]["currentValue"],
         json!(0.0),
@@ -319,9 +330,14 @@ async fn opportunity_cost_budget_blocks_unaffordable_actions() {
             .expect("预算应过滤不可行路径")
             .is_empty()
     );
-    let run = run_next_best_action(&storage, "budget-loop", "contract-test")
-        .await
-        .expect("没有可负担动作时应空闲");
+    let run = run_next_best_action(
+        &storage,
+        &PluginCatalog::new(),
+        "budget-loop",
+        "contract-test",
+    )
+    .await
+    .expect("没有可负担动作时应空闲");
     assert!(!run.executed);
 
     let opportunities = storage
@@ -402,9 +418,14 @@ async fn deferred_follow_up_evidence_is_declared_and_type_generic() {
     )
     .await
     .expect("应能决策 Deferred 动作");
-    let execution = execute_opportunity(&storage, "generic-follow-up", opportunity_id)
-        .await
-        .expect("应能执行创建效应");
+    let execution = execute_opportunity(
+        &storage,
+        &PluginCatalog::new(),
+        "generic-follow-up",
+        opportunity_id,
+    )
+    .await
+    .expect("应能执行创建效应");
     let created = &execution["createdObject"];
     assert_eq!(created["type"], json!("FollowUpPlan"));
     let task_id = created["id"].as_str().expect("跟进对象必须有 ID");
@@ -457,9 +478,14 @@ async fn metric_budget_is_shared_across_opportunities() {
         .await
         .expect("应发现两个共享预算机会");
     assert_eq!(discovered.len(), 2);
-    let first_run = run_next_best_action(&storage, "shared-budget", "contract-test")
-        .await
-        .expect("第一笔动作应消耗指标预算");
+    let first_run = run_next_best_action(
+        &storage,
+        &PluginCatalog::new(),
+        "shared-budget",
+        "contract-test",
+    )
+    .await
+    .expect("第一笔动作应消耗指标预算");
     let execution = first_run.execution.expect("应有执行结果");
     assert_eq!(
         execution["actionOutcome"]["data"]["cost"],
@@ -482,9 +508,14 @@ async fn metric_budget_is_shared_across_opportunities() {
             .expect("共享预算耗尽后不应规划路径")
             .is_empty()
     );
-    let idle_run = run_next_best_action(&storage, "shared-budget", "contract-test")
-        .await
-        .expect("预算耗尽后自动运行应空闲");
+    let idle_run = run_next_best_action(
+        &storage,
+        &PluginCatalog::new(),
+        "shared-budget",
+        "contract-test",
+    )
+    .await
+    .expect("预算耗尽后自动运行应空闲");
     assert!(!idle_run.executed);
 
     let opportunities = storage
@@ -1196,9 +1227,14 @@ relation changed_state:
     assert_eq!(paths[0].actions, vec!["DraftTerms", "RenewContract"]);
     assert!((paths[0].projected_net_value - 6180.0).abs() < 1e-9);
 
-    let first_run = run_next_best_action(&storage, "contract-loop", "contract-test")
-        .await
-        .expect("路径规划应驱动第一轮执行");
+    let first_run = run_next_best_action(
+        &storage,
+        &PluginCatalog::new(),
+        "contract-loop",
+        "contract-test",
+    )
+    .await
+    .expect("路径规划应驱动第一轮执行");
     assert!(first_run.executed);
     assert_eq!(
         first_run.recommendation.as_ref().expect("应有推荐").action,
@@ -1245,6 +1281,7 @@ relation changed_state:
     .expect("应能决策签约动作");
     let execution = execute_opportunity(
         &storage,
+        &PluginCatalog::new(),
         "contract-loop",
         &recommendations[0].opportunity_id,
     )
@@ -1305,9 +1342,14 @@ relation changed_state:
         .await
         .expect("预算内组合路径应保留");
     assert_eq!(paths[0].actions, vec!["DraftTerms", "RenewContract"]);
-    let run = run_next_best_action(&storage, "contract-budget", "contract-test")
-        .await
-        .expect("预算内路径应可执行");
+    let run = run_next_best_action(
+        &storage,
+        &PluginCatalog::new(),
+        "contract-budget",
+        "contract-test",
+    )
+    .await
+    .expect("预算内路径应可执行");
     assert_eq!(
         run.recommendation.expect("应有推荐").action,
         "DraftTerms",
@@ -1360,9 +1402,14 @@ async fn autonomous_run_gates_actions_by_declared_actor() {
     assert!(paths[0].requires_human);
     assert!(!paths.iter().all(|path| path.requires_human));
 
-    let run = run_next_best_action(&storage, "actor-auto", "contract-test")
-        .await
-        .expect("自动运行必须能选择 Agent 动作");
+    let run = run_next_best_action(
+        &storage,
+        &PluginCatalog::new(),
+        "actor-auto",
+        "contract-test",
+    )
+    .await
+    .expect("自动运行必须能选择 Agent 动作");
     assert!(run.executed);
     assert_eq!(
         run.recommendation.expect("应有推荐").action,
@@ -1395,9 +1442,14 @@ async fn autonomous_run_gates_actions_by_declared_actor() {
     )
     .await
     .expect("显式决策可以选择 Human 动作");
-    execute_opportunity(&storage, "actor-explicit", opportunity_id)
-        .await
-        .expect("显式执行可以执行 Human 动作");
+    execute_opportunity(
+        &storage,
+        &PluginCatalog::new(),
+        "actor-explicit",
+        opportunity_id,
+    )
+    .await
+    .expect("显式执行可以执行 Human 动作");
 }
 
 #[tokio::test]
@@ -1465,9 +1517,14 @@ async fn explicit_decision_validates_and_executes_declared_action_params() {
     )
     .await
     .expect("合法参数应能显式决策");
-    let execution = execute_opportunity(&storage, "action-params", opportunity_id)
-        .await
-        .expect("合法参数应能执行");
+    let execution = execute_opportunity(
+        &storage,
+        &PluginCatalog::new(),
+        "action-params",
+        opportunity_id,
+    )
+    .await
+    .expect("合法参数应能执行");
     assert_eq!(execution["businessResult"]["data"]["success"], json!(true));
     let customer = storage
         .get("customer:action-params-vip")
@@ -1529,9 +1586,14 @@ async fn require_approval_action_waits_for_separate_human_evidence() {
     assert_eq!(decision["data"]["status"], json!("PendingApproval"));
     assert_eq!(decision["approval"]["data"]["status"], json!("Pending"));
 
-    let early_execute = execute_opportunity(&storage, "approved-refund", opportunity_id)
-        .await
-        .expect_err("未批准动作不能执行");
+    let early_execute = execute_opportunity(
+        &storage,
+        &PluginCatalog::new(),
+        "approved-refund",
+        opportunity_id,
+    )
+    .await
+    .expect_err("未批准动作不能执行");
     assert!(early_execute.to_string().contains("机会缺少 Selected 决策"));
 
     let self_error = decide_business_approval(
@@ -1558,9 +1620,14 @@ async fn require_approval_action_waits_for_separate_human_evidence() {
     .expect("独立审批人应能放行");
     assert_eq!(reviewed["approval"]["data"]["status"], json!("Approved"));
     assert_eq!(reviewed["decision"]["data"]["status"], json!("Selected"));
-    let execution = execute_opportunity(&storage, "approved-refund", opportunity_id)
-        .await
-        .expect("Approved 审批后应能执行");
+    let execution = execute_opportunity(
+        &storage,
+        &PluginCatalog::new(),
+        "approved-refund",
+        opportunity_id,
+    )
+    .await
+    .expect("Approved 审批后应能执行");
     assert_eq!(execution["businessResult"]["data"]["success"], json!(true));
 
     seed_odl_project(
@@ -1651,7 +1718,7 @@ async fn whole_world_inconsistency_blocks_business_execution() {
         .await
         .expect("原始存储写入应成功以模拟外部漂移");
 
-    let error = execute_opportunity(&storage, "reasoning", opportunity_id)
+    let error = execute_opportunity(&storage, &PluginCatalog::new(), "reasoning", opportunity_id)
         .await
         .expect_err("不一致的整状态必须阻止行动执行");
     assert!(error.to_string().contains("企业世界状态不一致"));
@@ -1696,9 +1763,206 @@ async fn autonomous_run_skips_approval_only_candidate() {
             .expect("路径规划应成功")
             .is_empty()
     );
-    let run = run_next_best_action(&storage, "approval-only", "agent")
+    let run = run_next_best_action(&storage, &PluginCatalog::new(), "approval-only", "agent")
         .await
         .expect("自动运行必须安全跳过审批动作");
     assert!(!run.executed);
     assert!(run.decision.is_none());
+}
+
+struct CapturingPlugin {
+    manifest: openaip_os::plugin::PluginManifest,
+    input: Arc<tokio::sync::Mutex<Option<Value>>>,
+}
+
+#[async_trait::async_trait]
+impl openaip_os::plugin::AsyncPlugin for CapturingPlugin {
+    fn manifest(&self) -> &openaip_os::plugin::PluginManifest {
+        &self.manifest
+    }
+
+    async fn execute_async(
+        &self,
+        _capability: &str,
+        input: Value,
+    ) -> Result<Value, openaip_os::plugin::PluginError> {
+        *self.input.lock().await = Some(input);
+        Ok(json!({ "days_since_last_contact": 0 }))
+    }
+}
+
+#[tokio::test]
+async fn declared_capability_invokes_plugin_and_projects_declared_output() {
+    let ontology = r#"
+object Customer:
+  properties:
+    name: string
+    level: string
+    balance: float
+    days_since_last_contact: int
+  opportunities:
+    Reactivation:
+      subject_type: Customer
+      estimated_value: 10000
+      urgency_field: days_since_last_contact
+      urgency_horizon: 90
+      link_edge: targets
+      goal_metric: monthly_reactivations
+      evidence: "客户已 {days_since_last_contact} 天未联系"
+      when:
+        - field: self.level
+          op: eq
+          value: "VIP"
+  actions:
+    TouchCustomer:
+      planning:
+        cost: 100
+        prior_confidence: 0.9
+        outcome_timing: immediate
+        goal_metric: monthly_reactivations
+        plugin: crm-plugin
+        capability: touch_customer
+      updates:
+        - field: days_since_last_contact
+          value: 0
+
+object BusinessGoal:
+  properties:
+    target_metric: string
+    baseline_value: float
+    target_value: float
+    current_value: float
+    status: string
+
+object Opportunity:
+  properties:
+    subject: string
+    opportunity_type: string
+    status: string
+    estimated_value: float
+    evidence: string
+
+object Decision:
+  properties:
+    opportunity: string
+    action: string
+    reason: string
+    alternatives: string
+    decided_by: string
+    status: string
+
+object Outcome:
+  properties:
+    action: string
+    before: string
+    after: string
+    success: bool
+    cost: float
+    metric: string
+    stage: string
+    provider: string
+    capability: string
+
+object StateTransition:
+  properties:
+    subject: string
+    before_data: string
+    after_data: string
+    at_action: string
+
+relation targets:
+  source: Opportunity
+  target: Customer
+
+relation decided_from:
+  source: Decision
+  target: Opportunity
+
+relation produced_outcome:
+  source: Decision
+  target: Outcome
+
+relation changed_state:
+  source: StateTransition
+  target: Customer
+"#;
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let mut plugins = PluginCatalog::new();
+    let captured = Arc::new(tokio::sync::Mutex::new(None));
+    let mut manifest = openaip_os::plugin::PluginManifest::new(
+        "crm-plugin",
+        "CRM",
+        "1",
+        openaip_os::plugin::RuntimeType::Local,
+    );
+    manifest = manifest.with_capability("touch_customer");
+    plugins
+        .register_async(
+            Box::new(CapturingPlugin {
+                manifest,
+                input: captured.clone(),
+            }),
+            |capabilities| {
+                capabilities.declare(openaip_os::plugin::capability::CapabilityContract {
+                    capability: "touch_customer".into(),
+                    input_schema: json!({}),
+                    output_schema: json!({}),
+                    effects: Vec::new(),
+                });
+            },
+        )
+        .expect("应能注册外部能力插件");
+    let customer_id = seed_odl_project(
+        &storage,
+        "capability-loop",
+        ontology,
+        "monthly_reactivations",
+    )
+    .await;
+    let discovered = discover_opportunities(&storage, "capability-loop")
+        .await
+        .expect("应能发现机会");
+    let opportunity_id = discovered[0]["id"].as_str().expect("机会必须有 ID");
+    decide_opportunity(
+        &storage,
+        "capability-loop",
+        opportunity_id,
+        "contract-test",
+        DecisionOptions {
+            action: Some("TouchCustomer"),
+            reason: None,
+            alternatives: None,
+            params: None,
+        },
+    )
+    .await
+    .expect("应能决策外部能力动作");
+
+    let execution = execute_opportunity(&storage, &plugins, "capability-loop", opportunity_id)
+        .await
+        .expect("外部能力调用和状态投影应成功");
+    assert_eq!(
+        execution["actionOutcome"]["data"]["provider"],
+        json!("crm-plugin")
+    );
+    assert_eq!(
+        execution["actionOutcome"]["data"]["capability"],
+        json!("touch_customer")
+    );
+    assert_eq!(
+        execution["businessResult"]["data"]["provider"],
+        json!("crm-plugin")
+    );
+    let input = captured.lock().await.clone().expect("插件应被调用");
+    assert_eq!(input["subject"], json!(customer_id));
+    assert_eq!(input["objectType"], json!("Customer"));
+    assert_eq!(input["params"], json!({}));
+    let customer = storage
+        .get(&customer_id)
+        .await
+        .expect("查询客户失败")
+        .expect("客户应存在");
+    assert_eq!(customer.data["days_since_last_contact"], json!(0));
 }
