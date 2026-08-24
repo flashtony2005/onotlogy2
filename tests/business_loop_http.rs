@@ -9,8 +9,9 @@ mod common;
 use openaip_os::abi::ir::ActorKind;
 use openaip_os::abi::odl::parse_odl;
 use openaip_os::business_loop::{
-    decide_opportunity, discover_opportunities, execute_opportunity, plan_opportunity_paths,
-    recommend_next_actions, run_next_best_action, settle_follow_up, start_follow_up,
+    DecisionOptions, decide_opportunity, discover_opportunities, execute_opportunity,
+    plan_opportunity_paths, recommend_next_actions, run_next_best_action, settle_follow_up,
+    start_follow_up,
 };
 use openaip_os::storage::{LibSQLStorage, ObjectEngine};
 use serde_json::{Value, json};
@@ -170,14 +171,17 @@ async fn odl_planning_metadata_drives_action_catalog() {
         &storage,
         "odl-base",
         &baseline[0].opportunity_id,
-        Some("refund"),
         "contract-test",
-        None,
-        None,
+        DecisionOptions {
+            action: Some("refund"),
+            reason: None,
+            alternatives: None,
+            params: None,
+        },
     )
     .await
-    .expect_err("没有 planning 元数据的 refund 不能进入业务规划");
-    assert!(error.to_string().contains("不支持的业务动作 refund"));
+    .expect_err("声明参数的动作不能缺少输入");
+    assert!(error.to_string().contains("动作 refund 缺少参数 amount"));
 }
 
 #[tokio::test]
@@ -209,10 +213,13 @@ async fn goal_metric_is_declared_and_must_agree_across_evidence_chain() {
         &storage,
         "custom-goal",
         opportunity_id,
-        Some("ContactCustomer"),
         "contract-test",
-        None,
-        None,
+        DecisionOptions {
+            action: Some("ContactCustomer"),
+            reason: None,
+            alternatives: None,
+            params: None,
+        },
     )
     .await
     .expect("应能决策接触动作");
@@ -254,10 +261,13 @@ async fn goal_metric_is_declared_and_must_agree_across_evidence_chain() {
         &storage,
         "mismatched-goal",
         &opportunity_id,
-        Some("ContactCustomer"),
         "contract-test",
-        None,
-        None,
+        DecisionOptions {
+            action: Some("ContactCustomer"),
+            reason: None,
+            alternatives: None,
+            params: None,
+        },
     )
     .await
     .expect("应能决策接触动作");
@@ -318,10 +328,13 @@ async fn opportunity_cost_budget_blocks_unaffordable_actions() {
         &storage,
         "budget-loop",
         &opportunities[0].id,
-        Some("ContactCustomer"),
         "contract-test",
-        None,
-        None,
+        DecisionOptions {
+            action: Some("ContactCustomer"),
+            reason: None,
+            alternatives: None,
+            params: None,
+        },
     )
     .await
     .expect_err("超过预算的动作必须拒绝决策");
@@ -375,10 +388,13 @@ async fn deferred_follow_up_evidence_is_declared_and_type_generic() {
         &storage,
         "generic-follow-up",
         opportunity_id,
-        Some("RetainCustomer"),
         "contract-test",
-        None,
-        None,
+        DecisionOptions {
+            action: Some("RetainCustomer"),
+            reason: None,
+            alternatives: None,
+            params: None,
+        },
     )
     .await
     .expect("应能决策 Deferred 动作");
@@ -479,10 +495,13 @@ async fn metric_budget_is_shared_across_opportunities() {
         &storage,
         "shared-budget",
         &second.id,
-        Some("ContactCustomer"),
         "contract-test",
-        None,
-        None,
+        DecisionOptions {
+            action: Some("ContactCustomer"),
+            reason: None,
+            alternatives: None,
+            params: None,
+        },
     )
     .await
     .expect_err("显式决策不能绕过共享预算");
@@ -1210,10 +1229,13 @@ relation changed_state:
         &storage,
         "contract-loop",
         &recommendations[0].opportunity_id,
-        Some(&recommendations[0].action),
         "contract-test",
-        None,
-        None,
+        DecisionOptions {
+            action: Some(&recommendations[0].action),
+            reason: None,
+            alternatives: None,
+            params: None,
+        },
     )
     .await
     .expect("应能决策签约动作");
@@ -1359,14 +1381,94 @@ async fn autonomous_run_gates_actions_by_declared_actor() {
         &storage,
         "actor-explicit",
         opportunity_id,
-        Some("ContactCustomer"),
         "contract-test",
-        None,
-        None,
+        DecisionOptions {
+            action: Some("ContactCustomer"),
+            reason: None,
+            alternatives: None,
+            params: None,
+        },
     )
     .await
     .expect("显式决策可以选择 Human 动作");
     execute_opportunity(&storage, "actor-explicit", opportunity_id)
         .await
         .expect("显式执行可以执行 Human 动作");
+}
+
+#[tokio::test]
+async fn explicit_decision_validates_and_executes_declared_action_params() {
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let pack_ontology = std::fs::read_to_string("domain-packs/crm-retention/ontology.odl")
+        .expect("业务包 ODL 应存在");
+    // 参数执行契约与审批网关相互独立；这里关闭审批只为了隔离测试参数求值。
+    let ontology = pack_ontology.replace("require_approval: true", "require_approval: false");
+    assert_ne!(ontology, pack_ontology, "契约测试必须修改成功");
+    seed_odl_project(
+        &storage,
+        "action-params",
+        &ontology,
+        "monthly_reactivations",
+    )
+    .await;
+    let discovered = discover_opportunities(&storage, "action-params")
+        .await
+        .expect("应能发现机会");
+    let opportunity_id = discovered[0]["id"].as_str().expect("机会必须有 ID");
+
+    for (params, expected) in [
+        (None, "缺少参数 amount"),
+        (Some(json!({"amount": "250"})), "参数 amount 类型不匹配"),
+        (Some(json!({"amount": 1001})), "当前不可用"),
+        (
+            Some(json!({"amount": 250, "unexpected": 1})),
+            "不支持参数 unexpected",
+        ),
+    ] {
+        let error = decide_opportunity(
+            &storage,
+            "action-params",
+            opportunity_id,
+            "contract-test",
+            DecisionOptions {
+                action: Some("refund"),
+                reason: None,
+                alternatives: None,
+                params,
+            },
+        )
+        .await
+        .expect_err("非法动作输入必须 fail-closed");
+        assert!(
+            error.to_string().contains(expected),
+            "expected={expected} error={error}"
+        );
+    }
+
+    decide_opportunity(
+        &storage,
+        "action-params",
+        opportunity_id,
+        "contract-test",
+        DecisionOptions {
+            action: Some("refund"),
+            reason: None,
+            alternatives: None,
+            params: Some(json!({"amount": 250})),
+        },
+    )
+    .await
+    .expect("合法参数应能显式决策");
+    let execution = execute_opportunity(&storage, "action-params", opportunity_id)
+        .await
+        .expect("合法参数应能执行");
+    assert_eq!(execution["businessResult"]["data"]["success"], json!(true));
+    let customer = storage
+        .get("customer:action-params-vip")
+        .await
+        .expect("应能查询客户")
+        .expect("客户应存在");
+    assert_eq!(customer.data["balance"], json!(250));
 }

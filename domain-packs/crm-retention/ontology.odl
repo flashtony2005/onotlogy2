@@ -68,6 +68,10 @@ object Customer:
     refund:
       params:
         amount: float
+      planning:
+        cost: 100
+        prior_confidence: 0.9
+        outcome_timing: immediate
       updates:
         - field: balance
           value: amount
@@ -163,6 +167,7 @@ object Decision:
     action: string
     reason: string
     alternatives: string
+    params: string
     decided_by: string
     status: string
 

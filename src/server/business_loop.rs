@@ -33,6 +33,7 @@ pub(crate) struct GoalQuery {
 pub(crate) struct DecideBody {
     pub action: Option<String>,
     pub reason: Option<String>,
+    pub params: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -180,10 +181,13 @@ pub(crate) async fn decide(
             &st.storage,
             &project_id,
             &id,
-            body.action.as_deref(),
             &user.username,
-            body.reason.as_deref(),
-            None,
+            crate::business_loop::DecisionOptions {
+                action: body.action.as_deref(),
+                reason: body.reason.as_deref(),
+                alternatives: None,
+                params: body.params.clone(),
+            },
         )
         .await
         {

@@ -7,7 +7,7 @@ use crate::abi::ir::{
     ActionDef, ActionPlanning, ActorKind, CompareOp, OntologyIR, OpportunityRule, OutcomeTiming,
     ValueExpr,
 };
-use crate::abi::{DataValidationError, parse_odl, validate_object_data};
+use crate::abi::{DataValidationError, parse_odl, validate_object_data, value_matches_scalar};
 use crate::storage::{LibSQLStorage, ProjectRecord, StorageError, WorldCommand};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -57,6 +57,15 @@ pub struct GoalGap {
     pub current_value: f64,
     pub gap: f64,
     pub status: String,
+}
+
+/// 显式决策的输入与解释；自动路径只填充候选比较。
+#[derive(Debug, Default)]
+pub struct DecisionOptions<'a> {
+    pub action: Option<&'a str>,
+    pub reason: Option<&'a str>,
+    pub alternatives: Option<Value>,
+    pub params: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -210,27 +219,82 @@ fn expected_benefit(
 }
 
 fn action_available(action: &ActionDef, subject: &Value) -> Result<bool, BusinessLoopError> {
-    let Some(_) = action.planning.as_ref() else {
-        return Ok(false);
-    };
-    if action.policy.require_approval || !action.params.is_empty() {
+    Ok(action.params.is_empty() && action_executable(action, subject, &json!({}))?)
+}
+
+fn action_executable(
+    action: &ActionDef,
+    subject: &Value,
+    params: &Value,
+) -> Result<bool, BusinessLoopError> {
+    if action.planning.is_none() || action.policy.require_approval {
         return Ok(false);
     }
-    path_precondition_satisfied(action, subject)
+    for clause in &action.policy.precondition {
+        let left = if let Some(field) = clause.field.strip_prefix("self.") {
+            subject.get(field)
+        } else if action.params.iter().any(|param| param.name == clause.field) {
+            params.get(&clause.field)
+        } else {
+            None
+        };
+        let Some(left) = left else {
+            return Ok(false);
+        };
+        if !compare_values(left, clause.op, condition_literal(&clause.value)?)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn validate_action_params(
+    action: &ActionDef,
+    params: Option<&Value>,
+) -> Result<String, BusinessLoopError> {
+    let params = params.cloned().unwrap_or_else(|| json!({}));
+    let object = params.as_object().ok_or_else(|| {
+        BusinessLoopError::invalid(format!("动作 {} 参数必须是 JSON object", action.name))
+    })?;
+    for definition in &action.params {
+        let value = object.get(&definition.name).ok_or_else(|| {
+            BusinessLoopError::invalid(format!("动作 {} 缺少参数 {}", action.name, definition.name))
+        })?;
+        if !value_matches_scalar(value, definition.ty) {
+            return Err(BusinessLoopError::invalid(format!(
+                "动作 {} 参数 {} 类型不匹配",
+                action.name, definition.name
+            )));
+        }
+    }
+    for name in object.keys() {
+        if action
+            .params
+            .iter()
+            .all(|definition| definition.name != *name)
+        {
+            return Err(BusinessLoopError::invalid(format!(
+                "动作 {} 不支持参数 {name}",
+                action.name
+            )));
+        }
+    }
+    serde_json::to_string(&params).map_err(|error| BusinessLoopError::invalid(error.to_string()))
 }
 
 fn evaluate_value(
     expression: &ValueExpr,
     subject: &str,
     subject_data: &Value,
+    params: &Value,
 ) -> Result<Value, BusinessLoopError> {
     match expression {
         ValueExpr::Literal(value) => Ok(value.clone()),
         ValueExpr::SelfId => Ok(json!(subject)),
         ValueExpr::SelfField(field) => Ok(subject_data.get(field).cloned().unwrap_or(Value::Null)),
-        ValueExpr::Param(name) => Err(BusinessLoopError::invalid(format!(
-            "Business Loop 尚未提供动作参数 {name}"
-        ))),
+        ValueExpr::Param(name) => params.get(name).cloned().ok_or_else(|| {
+            BusinessLoopError::invalid(format!("Decision 缺少已验证的动作参数 {name}"))
+        }),
     }
 }
 
@@ -830,7 +894,7 @@ fn validate_path_creates(
     for (field, expression) in &effect.data {
         object_data.insert(
             field.clone(),
-            evaluate_value(expression, context.subject_id, subject_data)?,
+            evaluate_value(expression, context.subject_id, subject_data, &json!({}))?,
         );
     }
     validate_data(
@@ -1229,10 +1293,8 @@ pub async fn decide_opportunity(
     storage: &LibSQLStorage,
     project_id: &str,
     opportunity_id: &str,
-    requested_action: Option<&str>,
     decided_by: &str,
-    reason: Option<&str>,
-    alternatives: Option<Value>,
+    options: DecisionOptions<'_>,
 ) -> Result<Value, BusinessLoopError> {
     let (_, ontology) = project_ontology(storage, project_id).await?;
     let opportunities = storage
@@ -1246,7 +1308,7 @@ pub async fn decide_opportunity(
     let opportunity_type = text(&opportunity.data, "opportunity_type")?;
     let (owner, rule) = subject_rule(&ontology, opportunity_type)?;
     let actions = planning_actions_for(&ontology, &owner.name)?;
-    let action = requested_action.unwrap_or(actions[0].name.as_str());
+    let action = options.action.unwrap_or(actions[0].name.as_str());
     let Some(definition) = find_action(&actions, action) else {
         return Err(BusinessLoopError::invalid(format!(
             "不支持的业务动作 {action}"
@@ -1265,22 +1327,29 @@ pub async fn decide_opportunity(
     let Some(subject_record) = find_record(&subjects, &subject, &owner.name) else {
         return Err(BusinessLoopError::NotFound(subject));
     };
-    if !action_available(definition, &subject_record.data)? {
+    let params = validate_action_params(definition, options.params.as_ref())?;
+    let params_value: Value = serde_json::from_str(&params)
+        .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
+    if !action_executable(definition, &subject_record.data, &params_value)? {
         return Err(BusinessLoopError::invalid(format!(
             "业务动作 {action} 当前不可用"
         )));
     }
 
     let decision_id = generated_id("decision");
-    let alternatives = alternatives
+    let alternatives = options
+        .alternatives
         .map(|value| serde_json::to_string(&value))
         .transpose()
         .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
     let decision_data = json!({
         "opportunity": opportunity.id,
         "action": action,
-        "reason": reason.unwrap_or("选择净价值最优业务动作以关闭目标差距"),
+        "reason": options
+            .reason
+            .unwrap_or("选择净价值最优业务动作以关闭目标差距"),
         "alternatives": alternatives.unwrap_or_else(|| json!([]).to_string()),
+        "params": params,
         "decided_by": decided_by,
         "status": DECISION_SELECTED
     });
@@ -1367,7 +1436,10 @@ pub async fn execute_opportunity(
     let before_record = find_record(&subjects, &subject, &owner.name)
         .ok_or_else(|| BusinessLoopError::NotFound(subject.clone()))?
         .clone();
-    if !action_available(&definition, &before_record.data)? {
+    let params_value = serde_json::from_str::<Value>(text(&decision.data, "params")?)
+        .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
+    validate_action_params(&definition, Some(&params_value))?;
+    if !action_executable(&definition, &before_record.data, &params_value)? {
         return Err(BusinessLoopError::invalid(format!(
             "业务动作 {action} 当前不可用"
         )));
@@ -1379,7 +1451,8 @@ pub async fn execute_opportunity(
             let after_object = after_data.as_object_mut().ok_or_else(|| {
                 BusinessLoopError::invalid(format!("{} 数据必须是 JSON object", owner.name))
             })?;
-            let value = evaluate_value(&update.value, &subject, &before_record.data)?;
+            let value =
+                evaluate_value(&update.value, &subject, &before_record.data, &params_value)?;
             after_object.insert(update.field.clone(), value);
         }
     }
@@ -1398,7 +1471,7 @@ pub async fn execute_opportunity(
         }
         let mut object_data = serde_json::Map::new();
         for (field, expression) in &effect.data {
-            let value = evaluate_value(expression, &subject, &before_record.data)?;
+            let value = evaluate_value(expression, &subject, &before_record.data, &params_value)?;
             object_data.insert(field.clone(), value);
         }
         let task_data = Value::Object(object_data);
@@ -1837,10 +1910,13 @@ pub async fn run_next_best_action(
         storage,
         project_id,
         &recommendation.opportunity_id,
-        Some(&recommendation.action),
         decided_by,
-        Some(&recommendation.reason),
-        serde_json::to_value(recommendation.candidates.clone()).ok(),
+        DecisionOptions {
+            action: Some(&recommendation.action),
+            reason: Some(&recommendation.reason),
+            alternatives: serde_json::to_value(recommendation.candidates.clone()).ok(),
+            params: None,
+        },
     )
     .await?;
     let execution =

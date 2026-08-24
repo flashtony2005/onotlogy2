@@ -738,6 +738,11 @@ fn matches_scalar(value: &Value, ty: ScalarType) -> bool {
     }
 }
 
+/// Validate an ad-hoc action input against an ODL scalar type.
+pub fn value_matches_scalar(value: &Value, ty: ScalarType) -> bool {
+    matches_scalar(value, ty)
+}
+
 fn json_type(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
