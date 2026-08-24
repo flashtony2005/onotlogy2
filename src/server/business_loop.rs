@@ -3,7 +3,8 @@
 use crate::auth::AuthUser;
 use crate::business_loop::{
     BusinessLoopError, decide_opportunity, discover_opportunities, execute_opportunity, goal_gaps,
-    recommend_next_actions, run_next_best_action, settle_retention_task, start_retention_task,
+    plan_opportunity_paths, recommend_next_actions, run_next_best_action, settle_retention_task,
+    start_retention_task,
 };
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -124,6 +125,20 @@ pub(crate) async fn recommendations(
     }
     match recommend_next_actions(&st.storage, &query.project_id).await {
         Ok(recommendations) => ApiResponse::ok(recommendations).into_response(),
+        Err(error) => error_response(error),
+    }
+}
+
+pub(crate) async fn opportunity_paths(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Query(query): Query<ProjectScope>,
+) -> Response {
+    if !user.can_read_evaluation() {
+        return forbidden("当前角色无权读取业务路径（需 Operator 及以上）").into_response();
+    }
+    match plan_opportunity_paths(&st.storage, &query.project_id).await {
+        Ok(paths) => ApiResponse::ok(paths).into_response(),
         Err(error) => error_response(error),
     }
 }

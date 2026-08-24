@@ -23,6 +23,7 @@ const TASK_PENDING: &str = "Pending";
 const TASK_IN_PROGRESS: &str = "InProgress";
 const TASK_SETTLED_SUCCESS: &str = "Completed";
 const TASK_SETTLED_FAILURE: &str = "Failed";
+const PATH_MAX_STEPS: usize = 3;
 
 #[derive(Debug, Error)]
 pub enum BusinessLoopError {
@@ -80,6 +81,21 @@ pub struct ActionCandidate {
     pub confidence: f64,
     #[serde(rename = "netValue")]
     pub net_value: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OpportunityPath {
+    #[serde(rename = "projectId")]
+    pub project_id: String,
+    #[serde(rename = "opportunityId")]
+    pub opportunity_id: String,
+    pub subject: String,
+    pub actions: Vec<String>,
+    #[serde(rename = "projectedNetValue")]
+    pub projected_net_value: f64,
+    pub confidence: f64,
+    pub score: f64,
+    pub reason: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -183,6 +199,16 @@ fn expected_benefit(
         return Ok(estimated_value);
     };
     Ok(number(subject, field)?.max(0.0) * factor)
+}
+
+fn action_available(action: &ActionDef, subject: &Value) -> Result<bool, BusinessLoopError> {
+    let Some(_) = action.planning.as_ref() else {
+        return Ok(false);
+    };
+    if action.policy.require_approval || !action.params.is_empty() {
+        return Ok(false);
+    }
+    path_precondition_satisfied(action, subject)
 }
 
 fn evaluate_value(
@@ -653,6 +679,260 @@ pub async fn recommend_next_actions(
     Ok(recommendations)
 }
 
+/// 有界路径搜索只解释可直接落地的状态更新；创建效应和参数化动作留给执行层扩展。
+// ponytail: 只搜 3 步直接更新；需要资源约束/组合优化时再换显式规划器。
+#[derive(Debug, Clone)]
+struct ScoredPath {
+    actions: Vec<String>,
+    benefit: f64,
+    cost: f64,
+    net_value: f64,
+    confidence: f64,
+    score: f64,
+}
+
+fn path_precondition_satisfied(
+    action: &ActionDef,
+    state: &Value,
+) -> Result<bool, BusinessLoopError> {
+    for clause in &action.policy.precondition {
+        let Some(field) = clause.field.strip_prefix("self.") else {
+            return Ok(false);
+        };
+        let Some(left) = state.get(field) else {
+            return Ok(false);
+        };
+        if !compare_values(left, clause.op, condition_literal(&clause.value)?)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn apply_path_action(
+    ontology: &OntologyIR,
+    owner_type: &str,
+    action: &ActionDef,
+    state: &mut Value,
+) -> Result<(), BusinessLoopError> {
+    let object = state.as_object_mut().ok_or_else(|| {
+        BusinessLoopError::invalid(format!("{} 主体数据必须是 JSON object", owner_type))
+    })?;
+    for update in &action.updates {
+        let ValueExpr::Literal(value) = &update.value else {
+            return Err(BusinessLoopError::invalid(format!(
+                "动作 {} 的路径效应必须是字面量",
+                action.name
+            )));
+        };
+        object.insert(update.field.clone(), value.clone());
+    }
+    validate_data(ontology, owner_type, state)
+}
+
+struct PathContext<'a> {
+    ontology: &'a OntologyIR,
+    owner_type: &'a str,
+    actions: &'a [&'a ActionDef],
+    opportunity_type: &'a str,
+    estimated_value: f64,
+    urgency: f64,
+    goals: &'a [crate::storage::ObjectRecord],
+    outcomes: &'a [crate::storage::ObjectRecord],
+}
+
+fn search_paths<'a>(
+    context: &PathContext<'a>,
+    state: &Value,
+    used: &[String],
+    visited: &mut std::collections::BTreeSet<String>,
+    depth: usize,
+) -> Result<Vec<ScoredPath>, BusinessLoopError> {
+    let PathContext {
+        ontology,
+        owner_type,
+        actions,
+        opportunity_type,
+        estimated_value,
+        urgency,
+        goals,
+        outcomes,
+    } = *context;
+    if depth >= PATH_MAX_STEPS {
+        return Ok(Vec::new());
+    }
+
+    let mut paths = Vec::new();
+    for action in actions {
+        // 路径规划先覆盖最常用的确定性状态迁移；创建类流程仍由单步推荐执行。
+        let Some(planning) = action.planning.as_ref() else {
+            continue;
+        };
+        if !action.params.is_empty()
+            || !action.creates.is_empty()
+            || action.policy.require_approval
+            || used.iter().any(|name| name == &action.name)
+            || action
+                .updates
+                .iter()
+                .any(|update| !matches!(update.value, ValueExpr::Literal(_)))
+            || !path_precondition_satisfied(action, state)?
+        {
+            continue;
+        }
+
+        let mut next_state = state.clone();
+        apply_path_action(ontology, owner_type, action, &mut next_state)?;
+        let state_key = serde_json::to_string(&next_state)
+            .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
+        if !visited.insert(state_key.clone()) {
+            continue;
+        }
+        let mut next_used = used.to_vec();
+        next_used.push(action.name.clone());
+        let step_confidence = action_confidence(action, outcomes)?;
+        let benefit = if let Some((field, factor)) = planning
+            .benefit_field
+            .as_deref()
+            .zip(planning.benefit_factor)
+        {
+            number(&next_state, field)?.max(0.0) * factor
+        } else if planning.outcome_timing == OutcomeTiming::Immediate
+            && shared_goal_metric(ontology, opportunity_type, action).is_some()
+        {
+            estimated_value
+        } else {
+            0.0
+        };
+
+        let mut candidate = ScoredPath {
+            actions: next_used.clone(),
+            benefit: f64::NAN,
+            cost: f64::NAN,
+            net_value: f64::NAN,
+            confidence: step_confidence,
+            score: f64::NAN,
+        };
+        // 汇总值在递归返回后统一折算，避免中间步骤把机会价值重复计入。
+        let children = search_paths(context, &next_state, &next_used, visited, depth + 1)?;
+        if children.is_empty() {
+            candidate.benefit = benefit;
+            candidate.cost = planning.cost;
+            candidate.net_value = benefit * step_confidence - planning.cost;
+            candidate.confidence = step_confidence;
+            candidate.score = candidate.net_value.max(0.0)
+                * (0.6 + 0.4 * urgency)
+                * goal_alignment(
+                    actions,
+                    &action.name,
+                    active_goal_gap(goals, actions, ontology, opportunity_type, &action.name)?
+                        .map_or(0.0, |(_, gap)| gap),
+                );
+            paths.push(candidate);
+        } else {
+            for mut child in children {
+                child.confidence *= step_confidence;
+                child.benefit += benefit;
+                child.cost += planning.cost;
+                child.net_value = child.benefit * child.confidence - child.cost;
+                child.score = child.net_value.max(0.0)
+                    * (0.6 + 0.4 * urgency)
+                    * goal_alignment(
+                        actions,
+                        &action.name,
+                        active_goal_gap(goals, actions, ontology, opportunity_type, &action.name)?
+                            .map_or(0.0, |(_, gap)| gap),
+                    );
+                paths.push(child);
+            }
+        }
+        visited.remove(&state_key);
+    }
+
+    Ok(paths)
+}
+
+pub async fn plan_opportunity_paths(
+    storage: &LibSQLStorage,
+    project_id: &str,
+) -> Result<Vec<OpportunityPath>, BusinessLoopError> {
+    let (_, ontology) = project_ontology(storage, project_id).await?;
+    let goals = storage
+        .list_objects_for_project(project_id, "BusinessGoal")
+        .await?;
+    let opportunities = storage
+        .list_objects_for_project(project_id, "Opportunity")
+        .await?;
+    let outcomes = storage
+        .list_objects_for_project(project_id, "Outcome")
+        .await?;
+
+    let mut plans = Vec::new();
+    for opportunity in opportunities {
+        if text(&opportunity.data, "status")? != OPPORTUNITY_OPEN {
+            continue;
+        }
+        let subject = text(&opportunity.data, "subject")?.to_string();
+        let opportunity_type = text(&opportunity.data, "opportunity_type")?;
+        let (owner, rule) = subject_rule(&ontology, opportunity_type)?;
+        let actions = planning_actions_for(&ontology, &owner.name)?;
+        let subjects = storage
+            .list_objects_for_project(project_id, &owner.name)
+            .await?;
+        let subject_record = find_record(&subjects, &subject, &owner.name)
+            .ok_or_else(|| BusinessLoopError::NotFound(subject.clone()))?;
+        let urgency_value = number(&subject_record.data, &rule.urgency_field)?.max(0.0);
+        let urgency = (urgency_value.min(rule.urgency_horizon) / rule.urgency_horizon).max(0.1);
+        let initial_key = serde_json::to_string(&subject_record.data)
+            .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
+        let mut visited = std::collections::BTreeSet::from([initial_key]);
+        let context = PathContext {
+            ontology: &ontology,
+            owner_type: &owner.name,
+            actions: &actions,
+            opportunity_type,
+            estimated_value: number(&opportunity.data, "estimated_value")?,
+            urgency,
+            goals: &goals,
+            outcomes: &outcomes,
+        };
+        let mut scored = search_paths(&context, &subject_record.data, &[], &mut visited, 0)?;
+        scored.retain(|path| path.net_value > 0.0);
+        scored.sort_by(|left, right| {
+            right
+                .score
+                .total_cmp(&left.score)
+                .then_with(|| left.actions.cmp(&right.actions))
+        });
+        plans.extend(scored.into_iter().take(5).map(|path| {
+            let reason = format!(
+                "{}；净值 {:.0}；置信度 {:.2}",
+                path.actions.join(" → "),
+                path.net_value,
+                path.confidence
+            );
+            OpportunityPath {
+                project_id: project_id.to_string(),
+                opportunity_id: opportunity.id.clone(),
+                subject: subject.clone(),
+                actions: path.actions,
+                projected_net_value: path.net_value,
+                confidence: path.confidence,
+                score: path.score,
+                reason,
+            }
+        }));
+    }
+
+    plans.sort_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| left.opportunity_id.cmp(&right.opportunity_id))
+    });
+    Ok(plans)
+}
+
 fn action_confidence(
     definition: &ActionDef,
     outcomes: &[crate::storage::ObjectRecord],
@@ -685,6 +965,9 @@ fn evaluate_candidates(
     actions
         .iter()
         .filter_map(|definition| {
+            if !action_available(definition, customer).ok()? {
+                return None;
+            }
             let confidence = action_confidence(definition, outcomes).ok()?;
             let benefit = expected_benefit(definition, estimated_value, customer).ok()?;
             let cost = action_planning(definition).ok()?.cost;
@@ -786,18 +1069,23 @@ pub async fn decide_opportunity(
     let (owner, _) = subject_rule(&ontology, opportunity_type)?;
     let actions = planning_actions_for(&ontology, &owner.name)?;
     let action = requested_action.unwrap_or(actions[0].name.as_str());
-    if find_action(&actions, action).is_none() {
+    let Some(definition) = find_action(&actions, action) else {
         return Err(BusinessLoopError::invalid(format!(
             "不支持的业务动作 {action}"
         )));
-    }
+    };
 
     let subject = text(&opportunity.data, "subject")?.to_string();
     let subjects = storage
         .list_objects_for_project(project_id, &owner.name)
         .await?;
-    if find_record(&subjects, &subject, &owner.name).is_none() {
+    let Some(subject_record) = find_record(&subjects, &subject, &owner.name) else {
         return Err(BusinessLoopError::NotFound(subject));
+    };
+    if !action_available(definition, &subject_record.data)? {
+        return Err(BusinessLoopError::invalid(format!(
+            "业务动作 {action} 当前不可用"
+        )));
     }
 
     let decision_id = generated_id("decision");
@@ -891,6 +1179,11 @@ pub async fn execute_opportunity(
     let before_record = find_record(&subjects, &subject, &owner.name)
         .ok_or_else(|| BusinessLoopError::NotFound(subject.clone()))?
         .clone();
+    if !action_available(&definition, &before_record.data)? {
+        return Err(BusinessLoopError::invalid(format!(
+            "业务动作 {action} 当前不可用"
+        )));
+    }
     let mut after_data = before_record.data.clone();
     let mut retention_task_id = None;
     for update in &definition.updates {

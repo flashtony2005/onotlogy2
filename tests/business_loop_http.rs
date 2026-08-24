@@ -7,7 +7,8 @@
 mod common;
 
 use openaip_os::business_loop::{
-    decide_opportunity, discover_opportunities, execute_opportunity, recommend_next_actions,
+    decide_opportunity, discover_opportunities, execute_opportunity, plan_opportunity_paths,
+    recommend_next_actions,
 };
 use openaip_os::storage::{LibSQLStorage, ObjectEngine};
 use serde_json::{Value, json};
@@ -322,6 +323,17 @@ async fn business_loop_discovers_decides_executes_and_replans() {
         opportunities[0]["data"]["opportunity_type"],
         json!("Reactivation")
     );
+
+    let (status, body) = common::http_call(
+        addr,
+        "GET",
+        "/api/v1/business/opportunity-paths?projectId=crm-retention",
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "应能读取机会路径：{body}");
+    let paths = data(&body).await.as_array().cloned().unwrap_or_default();
+    assert_eq!(paths[0]["actions"], json!(["ContactCustomer"]));
 
     let (_, repeat_body) = common::http_call(
         addr,
@@ -753,7 +765,7 @@ async fn generic_opportunity_engine_supports_non_customer_subjects() {
 object Contract:
   properties:
     title: string
-    status: string one_of [Expiring,Active]
+    status: string one_of [Expiring,Negotiated,Active]
     days_to_expiry: int
   opportunities:
     RenewalDue:
@@ -768,8 +780,33 @@ object Contract:
         - field: self.status
           op: eq
           value: "Expiring"
+    ReadyToRenew:
+      subject_type: Contract
+      estimated_value: 12000
+      urgency_field: days_to_expiry
+      urgency_horizon: 30
+      link_edge: targets_contract
+      goal_metric: contract_renewals
+      evidence: "合同 {title} 已完成谈判，可以签约"
+      when:
+        - field: self.status
+          op: eq
+          value: "Negotiated"
   actions:
+    DraftTerms:
+      planning:
+        cost: 500
+        prior_confidence: 0.8
+        outcome_timing: deferred
+      updates:
+        - field: status
+          value: "Negotiated"
     RenewContract:
+      policy:
+        precondition:
+          - field: self.status
+            op: eq
+            value: "Negotiated"
       planning:
         cost: 1000
         prior_confidence: 0.8
@@ -880,23 +917,63 @@ relation changed_state:
         .await
         .expect("应能推荐合同动作");
     assert_eq!(recommendations.len(), 1);
-    assert_eq!(recommendations[0].action, "RenewContract");
+    assert_eq!(recommendations[0].action, "DraftTerms");
     assert!(recommendations[0].reason.contains("days_to_expiry=20"));
+
+    let paths = plan_opportunity_paths(&storage, "contract-loop")
+        .await
+        .expect("应能规划合同动作路径");
+    assert_eq!(paths.len(), 1);
+    assert_eq!(paths[0].actions, vec!["DraftTerms", "RenewContract"]);
+    assert!((paths[0].projected_net_value - 6180.0).abs() < 1e-9);
 
     decide_opportunity(
         &storage,
         "contract-loop",
         opportunity_id,
-        None,
+        Some("DraftTerms"),
         "contract-test",
         None,
         None,
     )
     .await
-    .expect("应能决策默认合同动作");
-    let execution = execute_opportunity(&storage, "contract-loop", opportunity_id)
+    .expect("应能决策谈判动作");
+    execute_opportunity(&storage, "contract-loop", opportunity_id)
         .await
-        .expect("应能执行合同续约");
+        .expect("应能执行谈判动作");
+    let contract = storage
+        .get("contract:acme")
+        .await
+        .expect("应能查询合同")
+        .expect("合同应存在");
+    assert_eq!(contract.data["status"], json!("Negotiated"));
+
+    discover_opportunities(&storage, "contract-loop")
+        .await
+        .expect("状态变化后应再次发现机会");
+    let recommendations = recommend_next_actions(&storage, "contract-loop")
+        .await
+        .expect("应能为新状态推荐动作");
+    assert_eq!(recommendations.len(), 1);
+    assert_eq!(recommendations[0].action, "RenewContract");
+    decide_opportunity(
+        &storage,
+        "contract-loop",
+        &recommendations[0].opportunity_id,
+        Some(&recommendations[0].action),
+        "contract-test",
+        None,
+        None,
+    )
+    .await
+    .expect("应能决策签约动作");
+    let execution = execute_opportunity(
+        &storage,
+        "contract-loop",
+        &recommendations[0].opportunity_id,
+    )
+    .await
+    .expect("应能执行签约动作");
     let contract = storage
         .get("contract:acme")
         .await

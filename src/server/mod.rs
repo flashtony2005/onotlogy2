@@ -401,6 +401,10 @@ fn router() -> Router<Arc<AppState>> {
         // ── Business Loop v1：状态 → 机会 → 决策 → 结果 → 状态变化 ──
         .route("/api/v1/business/goals", get(list_goal_gaps))
         .route("/api/v1/business/recommendations", get(recommendations))
+        .route(
+            "/api/v1/business/opportunity-paths",
+            get(business_loop::opportunity_paths),
+        )
         .route("/api/v1/business/discover-opportunities", post(discover))
         .route("/api/v1/business/run-next", post(run_next))
         .route(
