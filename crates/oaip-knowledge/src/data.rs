@@ -770,12 +770,14 @@ pub(crate) fn materialize_data_domain_assertions(ontology: &Ontology) -> Ontolog
 
 /// Reusable indexes for the deterministic asserted-data fragment.
 ///
-/// A completed state is immutable in the cache.  Appending data assertions can
-/// clone that state and touch only the affected buckets; any other axiom kind
-/// falls back to a fresh full scan so a prefix hit can never hide a TBox change.
+/// A completed state is immutable in the cache.  Appending assertions and the
+/// supported TBox constraints reuse that state; unsupported changes fall back
+/// to a fresh full scan so a prefix hit can never hide a semantic delta.
 #[derive(Debug, Clone, Default)]
 struct DataConsistencyState {
     aliases: BTreeMap<Term, Term>,
+    raw_positives: Vec<DataFact>,
+    raw_negatives: Vec<DataFact>,
     functional: BTreeSet<Term>,
     disjoint: BTreeSet<(Term, Term)>,
     ranges: BTreeMap<Term, BTreeSet<Datatype>>,
@@ -794,8 +796,8 @@ struct DataConsistencyState {
 impl DataConsistencyState {
     fn from_ontology(ontology: &Ontology) -> Result<Self> {
         let mut state = Self::default();
-        let mut raw_positive = Vec::new();
-        let mut raw_negative = Vec::new();
+        let mut raw_positives = Vec::new();
+        let mut raw_negatives = Vec::new();
         let mut restriction_count = 0usize;
 
         for axiom in ontology.axioms() {
@@ -809,7 +811,7 @@ impl DataConsistencyState {
                     property,
                     individual,
                     value,
-                } => raw_positive.push(DataFact {
+                } => raw_positives.push(DataFact {
                     individual: individual.clone(),
                     property: property.clone(),
                     value: value.clone(),
@@ -818,7 +820,7 @@ impl DataConsistencyState {
                     property,
                     individual,
                     value,
-                } => raw_negative.push(DataFact {
+                } => raw_negatives.push(DataFact {
                     individual: individual.clone(),
                     property: property.clone(),
                     value: value.clone(),
@@ -893,8 +895,10 @@ impl DataConsistencyState {
         // deterministic checks below.  Both polarities propagate upward: if
         // `work-email ⊑ email`, then positive/negative facts about `work-email`
         // entail the same polarity about `email`.
-        state.negatives = state.expand_all(&raw_negative);
-        state.positives = state.expand_all(&raw_positive);
+        state.raw_negatives = raw_negatives;
+        state.raw_positives = raw_positives;
+        state.negatives = state.expand_all(&state.raw_negatives);
+        state.positives = state.expand_all(&state.raw_positives);
 
         // Negatives are indexed first so the first positive insertion observes
         // exactly the same closed snapshot as the previous full validator.
@@ -924,6 +928,99 @@ impl DataConsistencyState {
                     .map(move |property| self.expand_one(fact, property))
             })
             .collect()
+    }
+
+    /// Re-expand retained assertions after an appended sub-property edge.
+    /// Raw facts are kept separately because the indexed positives/negatives
+    /// contain prior hierarchy entailments and must not be expanded twice.
+    fn rebuild_expanded_assertions(&mut self) -> Result<()> {
+        let negatives = self.expand_all(&self.raw_negatives);
+        let positives = self.expand_all(&self.raw_positives);
+        self.negatives = negatives;
+        self.positives = positives;
+        self.positive_index.clear();
+        self.negative_index.clear();
+        self.properties_by_individual.clear();
+        self.functional_values.clear();
+
+        for fact in std::mem::take(&mut self.negatives) {
+            self.insert_negative(fact)?;
+        }
+        for fact in std::mem::take(&mut self.positives) {
+            self.insert_positive(fact)?;
+        }
+        Ok(())
+    }
+
+    fn apply_subproperty_delta(&mut self, sub: &Term, sup: &Term) -> Result<()> {
+        self.sub_data_properties.insert(sub.clone(), sup.clone());
+        self.rebuild_expanded_assertions()
+    }
+
+    /// Identify the raw assertions whose expansion intersects a removal patch.
+    /// The exact expanded multiset must agree before either raw list is edited,
+    /// so a stale hierarchy mapping can only cause a safe full rebuild.
+    fn matching_raw_assertions(
+        &self,
+        raw: &[DataFact],
+        removed: &[DataFact],
+    ) -> Option<Vec<DataFact>> {
+        if removed.is_empty() {
+            return Some(Vec::new());
+        }
+        let selected = raw
+            .iter()
+            .filter(|fact| {
+                self.expand_all(std::slice::from_ref(fact))
+                    .iter()
+                    .any(|expanded| removed.contains(expanded))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let expected = self.expand_all(&selected);
+        let mut expected_keys = expected
+            .iter()
+            .map(|fact| assertion_key(AssertionPolarity::Positive, fact))
+            .collect::<Vec<_>>();
+        let mut removed_keys = removed
+            .iter()
+            .map(|fact| assertion_key(AssertionPolarity::Positive, fact))
+            .collect::<Vec<_>>();
+        expected_keys.sort();
+        removed_keys.sort();
+        (expected_keys == removed_keys).then_some(selected)
+    }
+
+    fn forget_removed_raw_assertions(&mut self, patch: &AssertionPatch) -> Option<()> {
+        let positive_removals = self.expand_all(&patch.remove_positive);
+        let negative_removals = self.expand_all(&patch.remove_negative);
+        let positives = self.matching_raw_assertions(&self.raw_positives, &positive_removals)?;
+        let negatives = self.matching_raw_assertions(&self.raw_negatives, &negative_removals)?;
+        for fact in positives {
+            let position = self.raw_positives.iter().position(|raw| raw == &fact)?;
+            self.raw_positives.swap_remove(position);
+        }
+        for fact in negatives {
+            let position = self.raw_negatives.iter().position(|raw| raw == &fact)?;
+            self.raw_negatives.swap_remove(position);
+        }
+        Some(())
+    }
+
+    fn insert_added_positive(&mut self, fact: DataFact) -> Result<()> {
+        self.raw_positives.push(fact.clone());
+        for expanded in self.expand_all(std::slice::from_ref(&fact)) {
+            self.insert_positive(expanded)?;
+        }
+        Ok(())
+    }
+
+    fn insert_added_negative(&mut self, fact: DataFact) -> Result<()> {
+        self.raw_negatives.push(fact.clone());
+        for expanded in self.expand_all(std::slice::from_ref(&fact)) {
+            self.insert_negative(expanded)?;
+        }
+        Ok(())
     }
 
     fn canonical_individual(&self, individual: &Term) -> Term {
@@ -1318,8 +1415,7 @@ impl DataConsistencyState {
     }
 
     /// Apply an appended constraint whose semantics affect only schema buckets
-    /// and positive-fact admission.  Sub-property changes are excluded: they
-    /// can change the ancestor expansion of every retained assertion.
+    /// and positive-fact admission.
     fn apply_tbox_delta(&mut self, axiom: &Axiom) -> Result<()> {
         match axiom {
             Axiom::DataPropertyDomain { .. } => Ok(()),
@@ -1398,6 +1494,7 @@ impl DataConsistencyState {
     fn insert_delta(&mut self, axiom: &Axiom) -> Result<()> {
         match axiom {
             Axiom::SameIndividuals(terms) if terms.len() >= 2 => self.merge_same_individuals(terms),
+            Axiom::SubDataPropertyOf { sub, sup } => self.apply_subproperty_delta(sub, sup),
             Axiom::DataPropertyDomain { .. }
             | Axiom::DataPropertyRange { .. }
             | Axiom::DataPropertyOneOf { .. }
@@ -1409,32 +1506,20 @@ impl DataConsistencyState {
                 property,
                 individual,
                 value,
-            } => {
-                let fact = DataFact {
-                    individual: individual.clone(),
-                    property: property.clone(),
-                    value: value.clone(),
-                };
-                for fact in self.expand_all(std::slice::from_ref(&fact)) {
-                    self.insert_positive(fact)?;
-                }
-                Ok(())
-            }
+            } => self.insert_added_positive(DataFact {
+                individual: individual.clone(),
+                property: property.clone(),
+                value: value.clone(),
+            }),
             Axiom::NegativeDataPropertyAssertion {
                 property,
                 individual,
                 value,
-            } => {
-                let fact = DataFact {
-                    individual: individual.clone(),
-                    property: property.clone(),
-                    value: value.clone(),
-                };
-                for fact in self.expand_all(std::slice::from_ref(&fact)) {
-                    self.insert_negative(fact)?;
-                }
-                Ok(())
-            }
+            } => self.insert_added_negative(DataFact {
+                individual: individual.clone(),
+                property: property.clone(),
+                value: value.clone(),
+            }),
             _ => Err(KnowledgeError::Invalid(
                 "data consistency delta supports only appended data-property assertions".to_owned(),
             )),
@@ -1480,6 +1565,7 @@ fn is_incremental_tbox_axiom(axiom: &Axiom) -> bool {
             | Axiom::DataPropertyDataRange { .. }
             | Axiom::FunctionalDataProperty(_)
             | Axiom::DisjointDataProperties(_)
+            | Axiom::SubDataPropertyOf { .. }
     )
 }
 
@@ -1766,7 +1852,7 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
             }
         });
 
-        if removable {
+        if removable && delta_state.forget_removed_raw_assertions(&patch).is_some() {
             let mut outcome = Ok(());
             for (negative, fact) in removals {
                 let removed = if negative {
@@ -1779,7 +1865,7 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
                 }
             }
             for fact in patch.add_positive {
-                if let Err(error) = delta_state.insert_positive(fact) {
+                if let Err(error) = delta_state.insert_added_positive(fact) {
                     outcome = Err(error);
                     break;
                 }
@@ -1787,7 +1873,7 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
             }
             if outcome.is_ok() {
                 for fact in patch.add_negative {
-                    if let Err(error) = delta_state.insert_negative(fact) {
+                    if let Err(error) = delta_state.insert_added_negative(fact) {
                         outcome = Err(error);
                         break;
                     }
@@ -2104,6 +2190,142 @@ mod tests {
                 ]))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn appended_subproperty_tbox_revalidates_retained_assertions() {
+        let sub = Axiom::SubDataPropertyOf {
+            sub: term("delta-sub-work"),
+            sup: term("delta-sub-email"),
+        };
+        let base = Ontology::new()
+            .with_axiom(Axiom::DisjointDataProperties(vec![
+                term("delta-sub-email"),
+                term("delta-sub-phone"),
+            ]))
+            .with_axiom(fact(
+                "delta-sub-person",
+                "delta-sub-work",
+                Literal::String("one".into()),
+            ))
+            .with_axiom(fact(
+                "delta-sub-person",
+                "delta-sub-phone",
+                Literal::String("555-1000".into()),
+            ));
+
+        assert!(is_incremental_tbox_axiom(&sub));
+        let mut state = DataConsistencyState::from_ontology(&base).unwrap();
+        assert!(state.insert_delta(&sub).is_err());
+
+        let extended = base.with_axiom(sub);
+        assert!(validate_data_consistency(&extended).is_err());
+    }
+
+    #[test]
+    fn assertion_patch_additions_participate_in_later_tbox_expansion() {
+        let property = term("patch-add-work");
+        let schema = Ontology::new().with_axiom(Axiom::FunctionalDataProperty(property.clone()));
+        let base = schema.clone().with_axiom(fact(
+            "patch-add-person",
+            "patch-add-work",
+            Literal::String("old".into()),
+        ));
+        let next = schema.clone().with_axiom(fact(
+            "patch-add-person",
+            "patch-add-work",
+            Literal::String("new".into()),
+        ));
+
+        let mut state = DataConsistencyState::from_ontology(&base).unwrap();
+        let patch = assertion_delta(&base, &next).unwrap();
+        for fact in state.expand_all(&patch.remove_positive) {
+            assert!(state.remove_positive(&fact).is_some());
+        }
+        assert!(state.forget_removed_raw_assertions(&patch).is_some());
+        assert!(
+            state
+                .insert_added_positive(DataFact {
+                    individual: term("patch-add-person"),
+                    property,
+                    value: Literal::String("new".into()),
+                })
+                .is_ok()
+        );
+        assert_eq!(1, state.raw_positives.len());
+
+        for axiom in [
+            Axiom::SubDataPropertyOf {
+                sub: term("patch-add-work"),
+                sup: term("patch-add-email"),
+            },
+            Axiom::SubDataPropertyOf {
+                sub: term("patch-add-email"),
+                sup: term("patch-add-contact"),
+            },
+        ] {
+            assert!(state.insert_delta(&axiom).is_ok());
+        }
+        assert!(
+            state
+                .positives
+                .iter()
+                .any(|fact| fact.property == term("patch-add-contact"))
+        );
+
+        let range = Axiom::DataPropertyDataRange {
+            property: term("patch-add-contact"),
+            range: DataRange::Datatype(Datatype::Integer),
+        };
+        assert!(state.insert_delta(&range).is_err());
+    }
+
+    #[test]
+    fn assertion_patches_forget_hierarchy_derived_facts() {
+        let schema = Ontology::new()
+            .with_axiom(Axiom::SubDataPropertyOf {
+                sub: term("patch-raw-work"),
+                sup: term("patch-raw-email"),
+            })
+            .with_axiom(Axiom::FunctionalDataProperty(term("patch-raw-email")));
+        let base = schema.clone().with_axiom(fact(
+            "patch-raw-person",
+            "patch-raw-work",
+            Literal::String("same".into()),
+        ));
+        let removed = schema.clone();
+        let negated = schema.clone().with_axiom(negative(
+            "patch-raw-person",
+            "patch-raw-email",
+            Literal::String("same".into()),
+        ));
+
+        let mut state = DataConsistencyState::from_ontology(&base).unwrap();
+        let patch = assertion_delta(&base, &removed).unwrap();
+        let expanded = state.expand_all(&state.raw_positives.clone());
+        assert_eq!(2, expanded.len());
+        assert!(state.forget_removed_raw_assertions(&patch).is_some());
+        for fact in expanded {
+            assert!(state.remove_positive(&fact).is_some());
+        }
+        assert!(state.raw_positives.is_empty());
+        assert!(
+            state
+                .insert_negative(DataFact {
+                    individual: term("patch-raw-person"),
+                    property: term("patch-raw-email"),
+                    value: Literal::String("same".into()),
+                })
+                .is_ok()
+        );
+
+        // Exercise the same cache transition end-to-end so a retained raw fact
+        // cannot survive the removal and falsely reject its later negation.
+        assert!(validate_data_consistency(&base).is_ok());
+        let with_subproperty = base;
+        assert!(validate_data_consistency(&with_subproperty).is_ok());
+        assert!(validate_data_consistency(&removed).is_ok());
+        assert!(validate_data_consistency(&negated).is_ok());
     }
 
     #[test]

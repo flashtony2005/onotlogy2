@@ -610,7 +610,8 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 
 1. 继续按真实业务需要扩展更多 DL 结构到 ODL 直接表达面，进一步减少手写 proposal JSON。
 2. 在真实业务需要时继续扩展 XSD 构造（如自定义 datatype 定义），保持保守语义。
-3. 在 update/delete 和 append-only SameIndividuals 已支持增量复用后，继续处理
-   TBox 变更的增量一致性。长生命快照已接入存储执行路径并具备缓存命中率可观测性。
+3. 在 update/delete、append-only SameIndividuals、数据属性约束和
+   `SubDataPropertyOf` 已支持增量复用后，继续处理其余 TBox 变更。
+   长生命快照已接入存储执行路径并具备缓存命中率可观测性。
 4. 在已有短并发、append-only 和 replace-chain 缓存基线之上，继续增加长时并发、恢复、内存和推理延迟基准。
 5. 在能力矩阵继续扩展时同步刷新本文档。
