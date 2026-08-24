@@ -7,7 +7,9 @@
 //! - Audit write: one append-only event and hash-chain node per iteration.
 
 use std::cell::RefCell;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use criterion::{
     BatchSize, Criterion, SamplingMode, Throughput, black_box, criterion_group, criterion_main,
@@ -15,7 +17,8 @@ use criterion::{
 use openaip_os::abi::{codegen, parse_odl};
 use openaip_os::kernel::{Kernel, Scope};
 use openaip_os::knowledge::{
-    Axiom, ClassExpression, Literal, Ontology, Reasoner, Term, validate_data_consistency,
+    Axiom, ClassExpression, Literal, Ontology, OntologyChange, OntologyProposal, Reasoner, Term,
+    validate_data_consistency,
 };
 use openaip_os::projection::Projection;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine};
@@ -27,8 +30,11 @@ const REASONER_CLASSES: usize = 24;
 const DATA_FACTS: usize = 1_000;
 const CONCURRENT_THREADS: usize = 8;
 const CONCURRENT_CALLS_PER_THREAD: usize = 128;
+const SUSTAINED_CONCURRENCY_ROUNDS: usize = 4;
+const CACHE_EVICTION_PROBES: usize = 40;
 const PROJECTION_EVENTS: usize = 1_000;
 const QUERY_OBJECTS: usize = 500;
+const INDEX_SIZES: &[usize] = &[250, 500, 1_000, 2_000];
 
 fn benchmark_odl() -> String {
     let mut odl = String::new();
@@ -67,14 +73,29 @@ fn benchmark_ontology() -> Ontology {
 
 /// A fixed functional-property ABox that exercises indexed conflict detection.
 fn benchmark_data_ontology() -> Ontology {
+    data_ontology_with_assertions(DATA_FACTS)
+}
+
+/// Parameterized form of the fixed ABox used by index-scaling probes.
+fn data_ontology_with_assertions(assertions: usize) -> Ontology {
     let ontology = Ontology::new().with_axiom(Axiom::FunctionalDataProperty(Term::new("status")));
-    (0..DATA_FACTS).fold(ontology, |ontology, index| {
+    (0..assertions).fold(ontology, |ontology, index| {
         ontology.with_axiom(Axiom::DataPropertyAssertion {
             property: Term::new("status"),
             individual: Term::new(format!("individual-{index}")),
             value: Literal::String("active".into()),
         })
     })
+}
+
+/// A unique, data-relevant but semantically inert marker.  One-term
+/// `SameIndividuals` creates no alias, so it forces a fresh cache entry while
+/// retaining the same deterministic constraint workload.
+fn cold_data_snapshot(base: &Ontology, sequence: u64, label: &str) -> Ontology {
+    base.clone()
+        .with_axiom(Axiom::SameIndividuals(vec![Term::new(format!(
+            "{label}-{sequence}"
+        ))]))
 }
 
 /// Replace exactly one asserted fact while retaining the fixed 1,000-fact ABox
@@ -177,6 +198,153 @@ fn audit_event(sequence: u64) -> TraceEvent {
         confidence: None,
         timestamp: openaip_os::trace::now_ts(),
     }
+}
+
+fn recovery_db_path() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "oaip-knowledge-recovery-{}-{}.db",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos()
+    ))
+}
+
+fn remove_recovery_db(path: &Path) {
+    for suffix in ["", "-wal", "-shm"] {
+        let mut candidate = path.to_path_buf().into_os_string();
+        candidate.push(suffix);
+        let _ = std::fs::remove_file(PathBuf::from(candidate));
+    }
+}
+
+async fn seed_recovery_db(path: &Path, ontology: &Ontology) {
+    let storage = LibSQLStorage::open(path.to_str().expect("UTF-8 recovery path"))
+        .await
+        .expect("create recovery database");
+    storage
+        .initialize_knowledge_version("root", ontology, None)
+        .await
+        .expect("initialize recovery ontology");
+    let proposal =
+        OntologyProposal::new("recovery-probe").with_change(OntologyChange::Add(Axiom::subclass(
+            ClassExpression::class(Term::new("Recovered")),
+            ClassExpression::Thing,
+        )));
+    storage
+        .propose_knowledge_change("root", &proposal, None)
+        .await
+        .expect("stage recovery proposal");
+    drop(storage);
+}
+
+/// Latency and bounded-index scenarios beyond the original short ABox burst.
+fn knowledge_durability_performance(c: &mut Criterion) {
+    let mut durability = c.benchmark_group("knowledge_durability");
+    durability.sample_size(10);
+    durability.sampling_mode(SamplingMode::Flat);
+
+    // Full TBox/ABox consistency latency, including OWL conversion and the
+    // mature tableau call.  Unique assertions prevent the shared snapshot LRU
+    // from turning this into a cache-latency measurement.
+    let cold_iteration = AtomicU64::new(0);
+    durability.throughput(Throughput::Elements(REASONER_CLASSES as u64));
+    durability.bench_function("reasoner_consistency_new_24_classes", |b| {
+        b.iter(|| {
+            let sequence = cold_iteration.fetch_add(1, Ordering::Relaxed);
+            let ontology = benchmark_ontology().with_axiom(Axiom::ClassAssertion {
+                class: ClassExpression::Thing,
+                individual: Term::new(format!("cold-consistency-{sequence}")),
+            });
+            let reasoner = Reasoner::new(black_box(&ontology)).expect("create reasoner");
+            black_box(reasoner.is_consistent().expect("cold consistency"))
+        })
+    });
+    let ontology = benchmark_ontology();
+    let reasoner = Reasoner::new(&ontology).expect("warm reasoner");
+    assert!(reasoner.is_consistent().expect("warm consistency"));
+    durability.bench_function("reasoner_consistency_cached_24_classes", |b| {
+        b.iter(|| black_box(reasoner.is_consistent().expect("cached consistency")))
+    });
+
+    // Force a complete data-index rebuild after the bounded LRU has evicted the
+    // target entry.  This is the recovery cost paid by a long-lived snapshot
+    // after unrelated live snapshots churn the process-local cache.
+    let base_data = benchmark_data_ontology();
+    let probe_iteration = AtomicU64::new(0);
+    durability.throughput(Throughput::Elements(DATA_FACTS as u64));
+    durability.bench_function("data_consistency_eviction_recovery_1000", |b| {
+        b.iter_batched(
+            || {
+                assert!(validate_data_consistency(&base_data).is_ok());
+                for _ in 0..CACHE_EVICTION_PROBES {
+                    let sequence = probe_iteration.fetch_add(1, Ordering::Relaxed);
+                    let probe = cold_data_snapshot(&base_data, sequence, "eviction");
+                    assert!(validate_data_consistency(&probe).is_ok());
+                }
+            },
+            |_| black_box(validate_data_consistency(black_box(&base_data)).is_ok()),
+            BatchSize::PerIteration,
+        )
+    });
+
+    // Reopen a real file-backed store containing one committed version and one
+    // pending governed proposal.  Unlike an in-memory smoke check, this measures
+    // schema/migration startup plus persisted ontology/proposal rehydration.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("recovery Tokio runtime");
+    let db_path = recovery_db_path();
+    remove_recovery_db(&db_path);
+    runtime.block_on(seed_recovery_db(&db_path, &benchmark_ontology()));
+    durability.throughput(Throughput::Elements(2));
+    durability.bench_function("persisted_pending_proposal_reopen", |b| {
+        b.iter(|| {
+            let storage = runtime
+                .block_on(LibSQLStorage::open(
+                    db_path.to_str().expect("UTF-8 recovery path"),
+                ))
+                .expect("reopen persisted knowledge store");
+            let version = runtime
+                .block_on(storage.current_knowledge_version())
+                .expect("recover knowledge version");
+            let proposals = runtime
+                .block_on(storage.list_knowledge_proposals())
+                .expect("recover knowledge proposals");
+            black_box(version.map(|version| version.id));
+            black_box(proposals.len());
+            drop(storage);
+        })
+    });
+    drop(runtime);
+    remove_recovery_db(&db_path);
+    durability.finish();
+
+    // Time scaling of cold index construction across fixed ABox sizes.  The
+    // HTTP load baseline records actual process RSS; these curves expose the
+    // CPU/index-growth trend that must accompany that memory sample.
+    let mut scaling = c.benchmark_group("knowledge_index_scaling");
+    scaling.sample_size(10);
+    scaling.sampling_mode(SamplingMode::Flat);
+    scaling.warm_up_time(Duration::from_millis(500));
+    let scaling_iteration = AtomicU64::new(0);
+    for assertions in INDEX_SIZES {
+        let ontology = data_ontology_with_assertions(*assertions);
+        scaling.throughput(Throughput::Elements(*assertions as u64));
+        scaling.bench_function(format!("cold_rebuild_{assertions}_assertions"), |b| {
+            b.iter_batched(
+                || {
+                    let sequence = scaling_iteration.fetch_add(1, Ordering::Relaxed);
+                    cold_data_snapshot(&ontology, sequence, "scaling")
+                },
+                |snapshot| black_box(validate_data_consistency(black_box(&snapshot)).is_ok()),
+                BatchSize::PerIteration,
+            )
+        });
+    }
+    scaling.finish();
 }
 
 fn core_performance(c: &mut Criterion) {
@@ -285,6 +453,7 @@ fn knowledge_abox_performance(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("knowledge_abox");
     group.sample_size(10);
+    group.sampling_mode(SamplingMode::Flat);
     group.throughput(Throughput::Elements(DATA_FACTS as u64));
     group.bench_function("data_consistency_1000_assertions", |b| {
         b.iter_batched(
@@ -388,8 +557,44 @@ fn knowledge_abox_performance(c: &mut Criterion) {
             }
         })
     });
+
+    // Repeat the burst long enough to observe steady mutex/cache behavior and
+    // catch late degradation that a single 128-call burst cannot expose.
+    let sustained_calls =
+        CONCURRENT_THREADS * CONCURRENT_CALLS_PER_THREAD * SUSTAINED_CONCURRENCY_ROUNDS;
+    group.throughput(Throughput::Elements(sustained_calls as u64));
+    group.bench_function("data_consistency_sustained_concurrent_8x128x4", |b| {
+        b.iter(|| {
+            for _ in 0..SUSTAINED_CONCURRENCY_ROUNDS {
+                let results = std::thread::scope(|scope| {
+                    (0..CONCURRENT_THREADS)
+                        .map(|_| {
+                            scope.spawn(|| {
+                                (0..CONCURRENT_CALLS_PER_THREAD).all(|_| {
+                                    black_box(
+                                        validate_data_consistency(black_box(&ontology)).is_ok(),
+                                    )
+                                })
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .map(|handle| handle.join().expect("sustained consistency worker"))
+                        .collect::<Vec<_>>()
+                });
+                for result in results {
+                    black_box(result);
+                }
+            }
+        })
+    });
     group.finish();
 }
 
-criterion_group!(benches, core_performance, knowledge_abox_performance);
+criterion_group!(
+    benches,
+    core_performance,
+    knowledge_abox_performance,
+    knowledge_durability_performance
+);
 criterion_main!(benches);

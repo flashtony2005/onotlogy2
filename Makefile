@@ -3,6 +3,9 @@
 # 需 nightly（见 rust-toolchain.toml）；若 PATH 无 cargo，用 rustup 工具链 bin。
 
 CARGO ?= cargo
+LOAD_REQUESTS ?= 10
+LOAD_CONCURRENCY ?= 5
+LOAD_WS_CLIENTS ?= 3
 export PATH := $(HOME)/.rustup/toolchains/nightly-2026-07-17-aarch64-apple-darwin/bin:$(HOME)/.cargo/bin:$(PATH)
 
 fmt:
@@ -64,7 +67,8 @@ bench:
 load-baseline:
 	$(CARGO) build --release --bin oaip
 	./scripts/performance-load.py --binary target/release/oaip --odl examples/crm.odl \
-		--requests 10 --concurrency 5 --ws-clients 3 --output target/performance-load.json
+		--requests $(LOAD_REQUESTS) --concurrency $(LOAD_CONCURRENCY) \
+		--ws-clients $(LOAD_WS_CLIENTS) --output target/performance-load.json
 
 # CI 主门禁
 check: fmt-check clippy test unwrap-budget

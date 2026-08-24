@@ -516,6 +516,14 @@ exact hits、prefix hits、rebuilds 和 delta assertions，用于验证治理流
 需要修改时先 clone。并发回归覆盖多个 worker 同时验证各自 valid 与 conflicting ontology 的
 场景，防止 exact/prefix 候选跨 snapshot 串用。
 
+在短 burst 之外，固定 durability 基准继续覆盖 4 轮 ×（8 线程 × 128 次）的持续并发；
+bounded LRU 驱逐后目标 snapshot 的完整索引恢复；以及包含 schema 初始化、已提交版本和
+pending proposal 的 file-backed storage 真实重开。推理延迟覆盖新建 immutable snapshot 后的
+full TBox/ABox consistency 与同 snapshot 命中 `OnceLock` 的 cached consistency。索引扩展基准
+测量 250/500/1,000/2,000 assertion 的 cold rebuild 时间趋势；进程 RSS 由真实 HTTP/WS 负载脚本
+周期采样并写入 `memory_rss_kb`。这些是本机开发环境基线，不把时间趋势等同生产内存审计，
+也不替代目标硬件上的长周期 soak。
+
 ### 5.6 明确限制
 
 - 不宣称完整 OWL 2 DL entailment。
@@ -616,5 +624,7 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 3. 在 update/delete、append-only SameIndividuals、数据属性约束和
    `SubDataPropertyOf` 已支持增量复用后，继续处理其余 TBox 变更。
    长生命快照已接入存储执行路径并具备缓存命中率可观测性。
-4. 在已有短并发、append-only 和 replace-chain 缓存基线之上，继续增加长时并发、恢复、内存和推理延迟基准。
+4. 已增加持续并发、缓存驱逐恢复、持久化 pending proposal 重开、推理一致性和固定规模索引
+   扩展基准；HTTP 负载现在采样进程 RSS。仍需在目标硬件上完成长周期生产化 soak、内存增长
+   和灾难恢复演练基线。
 5. 在能力矩阵继续扩展时同步刷新本文档。

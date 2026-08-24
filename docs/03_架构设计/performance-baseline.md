@@ -2,14 +2,16 @@
 
 ## 基本信息
 
-- 记录日期：2026-08-22
+- 记录日期：2026-08-24
 - 版本：V0.14.0 候选
 - 场景：Local-First 单进程，嵌入式 libSQL `:memory:`
 - 微基准方法：`cargo bench --bench performance`（Criterion；`core_paths` 30 个样本，
-  `knowledge_abox` 10 个样本；默认 3 秒预热 / 5 秒测量）
+  `knowledge_abox`、`knowledge_durability` 和 `knowledge_index_scaling` 10 个样本；
+  默认 3 秒预热 / 5 秒测量，index scaling 保留 500 ms 快速预热）
 - 环境：Apple M4；10 CPU；16 GiB 内存；macOS 27.0.0；arm64
-- 基线更新：2026-08-24 更新 Knowledge ABox consistency、新增 append-only delta chain 和
-  8 线程 cached burst；其余数字记录于 2026-08-22。
+- 基线更新：2026-08-24 新增 sustained concurrency、cache eviction recovery、persisted
+  proposal reopen、reasoner consistency latency、index scaling 与 RSS sampling；其余数字记录于
+  2026-08-22。
 
 ## 固定负载
 
@@ -20,8 +22,13 @@
 | World query | 500 个持久化对象 |
 | Audit write | 每次迭代写 1 条事件 + 1 个哈希链节点 |
 | Reasoner classification | 24 个 named class 的固定继承链；对比新建 Reasoner 和同一不可变快照重复查询 |
+| Reasoner consistency | 同一 24-class 固定链路；对比新建 immutable snapshot 和同 snapshot cached result |
 | Knowledge ABox consistency | 1,000 条 functional data property 断言；对比全量重建、exact-result 缓存和固定 append-only delta chain |
 | Knowledge ABox concurrency | 同一 warmed 1,000-fact snapshot 上，8 线程 × 128 次 cached validation；包含线程创建/join |
+| Sustained ABox concurrency | 上述 burst 连续执行 4 轮，共 4,096 次验证 |
+| Cache eviction recovery | 先写入 40 个唯一 snapshot 驱逐目标，再重建 1,000-fact 索引 |
+| Persisted knowledge recovery | 重开 file-backed DB 并读取 1 个已提交版本 + 1 个 pending proposal |
+| Index scaling | 250/500/1,000/2,000 条 functional assertion 的 cold rebuild |
 | HTTP/WS load | 10 次并发 submit/approve（并发 5），3 个 WebSocket 客户端，真实 release 二进制 |
 
 ## 基线结果
@@ -34,30 +41,43 @@
 | Audit append + hash chain | 27.961 µs | 27.985 µs | 约 35,764 writes/s | 无既有目标；建立基线 | 已建档 |
 | Reasoner classification (new) | 1.358 ms | 约 1.358 ms | 约 17,678 classes/s | 无既有目标；建立基线 | 已建档 |
 | Reasoner classification (snapshot cache) | 9.401 µs | 约 9.401 µs | 约 2,553,100 classes/s | 无既有目标；建立基线 | 已建档 |
+| Reasoner consistency (new) | 159.80 µs | 约 159.80 µs | 约 150,190 classes/s | 无既有目标；建立基线 | 已建档 |
+| Reasoner consistency (snapshot cache) | 1.300 ns | 约 1.300 ns | 约 18,466 Melem/s | 无既有目标；建立基线 | `OnceLock` 命中，接近计时下限 |
 | Knowledge ABox consistency (cold rebuild) | 972.585 µs | 964.734 µs | 约 1,028,200 assertions/s | 无既有目标；建立基线 | 已建档 |
 | Knowledge ABox consistency (exact-result cache) | 34.745 µs | 34.518 µs | 约 28,780,000 assertions/s | 无既有目标；建立基线 | 已建档 |
 | Knowledge ABox consistency (append-only delta chain) | 191.292 µs | 189.999 µs | 约 5,228 appends/s | 无既有目标；建立基线 | 约为全量耗时 19.7% |
 | Knowledge ABox concurrent cached validation (8×128) | 18.568 ms / burst | 约 18.568 ms / burst | 约 55,149 snapshot validations/s | 无既有目标；建立基线 | 已建档；含线程与锁开销 |
+| Knowledge ABox sustained validation (8×128×4) | 57.831 ms | 约 57.831 ms | 约 70,827 validations/s | 无既有目标；建立基线 | 4 轮无迟滞放大 |
+| Knowledge ABox eviction recovery (1,000 facts) | 1.215 ms | 约 1.215 ms | 约 823,000 assertions/s | 无既有目标；建立基线 | 完整重建恢复 |
+| Persisted pending proposal reopen | 1.653 ms | 约 1.653 ms | 约 1,210 records/s | 无既有目标；建立基线 | 含 SQLite 打开/迁移与版本/proposal 读取 |
+| Index cold rebuild @250/@500/@1,000/@2,000 | 250.8 µs / 528.3 µs / 1.133 ms / 2.436 ms | — | 997K / 946K / 883K / 821K assertions/s | 无既有目标；建立基线 | 近线性扩展，大 ABox 吞吐缓降 |
 
 推理分类缓存只绑定单个不可变 `Reasoner` snapshot；本体版本变化会新建 reasoner，因此不跨版本复用。
 
-Knowledge ABox 并发数字是短 burst 基线：每轮启动并 join 8 个 OS 线程，共享进程内
-data-consistency cache 由 mutex 序列化缓存访问。它不是纯推理延迟，也不能替代长时 soak、
-内存增长或恢复测试。
+Knowledge ABox 并发数字包含每轮启动并 join 8 个 OS 线程的开销；共享进程内 data-consistency
+cache 由 mutex 序列化缓存访问。sustained baseline 覆盖连续 4 轮的稳态行为，但仍不是生产 soak。
+Reasoner consistency new 包含 OWL conversion、data fragment 检查和 mature tableau 调用；cached
+result 只测量 immutable snapshot 上的 `OnceLock` 读取。eviction recovery 测量 bounded LRU 驱逐后
+的完整索引重建。persisted reopen 是真实 file-backed storage 的版本和 pending proposal 恢复延迟。
+
+HTTP/WS 负载脚本现在按固定间隔采样 server RSS。默认基线记录到 first≈32 KiB（fork 后立即采样）、
+peak/final≈78.9 MiB、4 个样本；first 值反映 exec 前窗口，容量评估应以 peak/final 为准。
+该采样是开发环境冒烟证据，不是长期内存增长证明。
 
 ### HTTP/WS 并发基线（S4b）
 
 负载为真实 release 二进制中的 `fabric submit → approval approve`，审批后执行最小
 shell 命令；同时保持 3 个 WebSocket 订阅。10/10 请求成功、0 失败，6 类 fabric
-事件各收到 30 次。结果如下：
+事件各收到 30 次。2026-08-24 结果如下：
 
 | 指标 | 数值 |
 |------|------|
-| Wall time | 0.035347 s |
-| Throughput | 282.911 submit/approve per second |
-| P50 latency | 16.651 ms |
-| P95 latency | 17.986 ms |
-| P99 latency | 17.986 ms |
+| Wall time | 0.050886 s |
+| Throughput | 196.518 submit/approve per second |
+| P50 latency | 24.121 ms |
+| P95 latency | 25.639 ms |
+| P99 latency | 25.639 ms |
+| RSS first / peak / final | 32 KiB / 80,816 KiB / 80,816 KiB（4 个样本） |
 
 该延迟覆盖 HTTP 提交、治理挂起、人工式 API 审批、子进程调度与终局返回；不是纯
 数据库写入耗时。

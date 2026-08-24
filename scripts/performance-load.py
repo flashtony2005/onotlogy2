@@ -129,6 +129,24 @@ def percentile(values: list[float], percent: float) -> float:
     return ordered[rank]
 
 
+def rss_kb(pid: int) -> int | None:
+    """Read resident set size in KiB on Linux or via the common BSD ``ps`` API."""
+    try:
+        for line in Path(f"/proc/{pid}/status").read_text(encoding="utf-8").splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1])
+    except (FileNotFoundError, PermissionError, ValueError):
+        pass
+    try:
+        output = subprocess.check_output(["ps", "-o", "rss=", "-p", str(pid)], text=True)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    try:
+        return int(output.strip().splitlines()[0])
+    except (IndexError, ValueError):
+        return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", required=True)
@@ -137,6 +155,7 @@ def main() -> int:
     parser.add_argument("--requests", type=int, default=10)
     parser.add_argument("--concurrency", type=int, default=5)
     parser.add_argument("--ws-clients", type=int, default=3)
+    parser.add_argument("--rss-sample-interval", type=float, default=0.25)
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
@@ -179,6 +198,17 @@ def main() -> int:
     stop = threading.Event()
     threads: list[threading.Thread] = []
     result: dict[str, Any]
+
+    memory_samples = [rss_kb(process.pid)]
+
+    def sample_memory() -> None:
+        while not stop.wait(args.rss_sample_interval):
+            if (sample := rss_kb(process.pid)) is not None:
+                memory_samples.append(sample)
+
+    memory_thread = threading.Thread(target=sample_memory, name="rss-sampler", daemon=True)
+    memory_thread.start()
+
     try:
         for _ in range(100):
             if process.poll() is not None:
@@ -261,6 +291,7 @@ def main() -> int:
             for kind, count in client.events.items():
                 combined_events[kind] = combined_events.get(kind, 0) + count
 
+        rss_readings = [sample for sample in memory_samples if sample is not None]
         result = {
             "schema_version": 1,
             "scenario": "concurrent_fabric_submit_approve_stream",
@@ -278,6 +309,12 @@ def main() -> int:
                 "p99": round(percentile(latencies, 99) * 1000, 3),
             },
             "ws_event_counts": dict(sorted(combined_events.items())),
+            "memory_rss_kb": {
+                "start": rss_readings[0] if rss_readings else None,
+                "peak": max(rss_readings) if rss_readings else None,
+                "final": rss_readings[-1] if rss_readings else None,
+                "samples": len(rss_readings),
+            },
         }
         if errors or len(latencies) != args.requests:
             raise RuntimeError(json.dumps(result, ensure_ascii=False))
@@ -292,6 +329,9 @@ def main() -> int:
         stop.set()
         for client in clients:
             client.close()
+        for thread in threads:
+            thread.join(timeout=1)
+        memory_thread.join(timeout=1)
         if process.poll() is None:
             process.terminate()
             try:
