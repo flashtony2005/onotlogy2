@@ -70,6 +70,7 @@ fn action_planning_requires_complete_metadata() {
             "        cost: 100",
             "        prior_confidence: 0.5",
             "        outcome_timing: immediate",
+            "        resource: hours=2",
         ]
         .as_slice(),
     ]
@@ -82,6 +83,23 @@ fn action_planning_requires_complete_metadata() {
         .expect("完整声明必须生成 planning 元数据");
     assert_eq!(planning.cost, 100.0);
     assert_eq!(planning.prior_confidence, 0.5);
+    assert_eq!(planning.resources.get("hours"), Some(&2.0));
+
+    let duplicate = [
+        prefix.as_slice(),
+        [
+            "        cost: 100",
+            "        prior_confidence: 0.5",
+            "        outcome_timing: immediate",
+            "        resource: hours=1",
+            "        resource: hours=2",
+        ]
+        .as_slice(),
+    ]
+    .concat()
+    .join("\n");
+    let error = parse_odl(&duplicate).expect_err("重复资源必须解析失败");
+    assert!(error.to_string().contains("资源 hours 重复声明"));
 }
 
 #[test]
@@ -105,6 +123,7 @@ fn opportunity_rule_requires_complete_and_typed_metadata() {
         "      urgency_horizon: 90",
         "      cost_budget: 25000",
         "      metric_budget: 80000",
+        "      resource_budget: sales=3",
         "      link_edge: targets",
         "      when:",
         "        - field: self.level",
@@ -160,6 +179,7 @@ fn opportunity_rule_requires_complete_and_typed_metadata() {
     assert_eq!(rule.urgency_horizon, 90.0);
     assert_eq!(rule.cost_budget, Some(25_000.0));
     assert_eq!(rule.metric_budget, Some(80_000.0));
+    assert_eq!(rule.resource_budgets.get("sales"), Some(&3.0));
     assert_eq!(rule.link_edge, "targets");
 
     let negative = base
@@ -177,6 +197,14 @@ fn opportunity_rule_requires_complete_and_typed_metadata() {
         .join("\n");
     let error = parse_odl(&negative_metric).expect_err("负数指标预算必须解析失败");
     assert!(error.to_string().contains("metric_budget 不能为负或无限"));
+
+    let negative_resource = base
+        .iter()
+        .map(|line| line.replace("resource_budget: sales=3", "resource_budget: sales=-1"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let error = parse_odl(&negative_resource).expect_err("负数资源预算必须解析失败");
+    assert!(error.to_string().contains("资源量不能为负或无限"));
     assert_eq!(rule.when.len(), 2);
 }
 

@@ -1355,6 +1355,104 @@ relation changed_state:
         "DraftTerms",
         "超过预算的快捷路径必须让位给低成本组合"
     );
+
+    let resource_ontology = ontology
+        .replace("cost: 4000", "cost: 4000\n        resource: labor=6")
+        .replace("cost: 500", "cost: 500\n        resource: labor=2")
+        .replace("cost: 1000", "cost: 1000\n        resource: labor=3")
+        .replacen(
+            "link_edge: targets_contract",
+            "resource_budget: labor=5\n      link_edge: targets_contract",
+            2,
+        );
+    storage
+        .create_project(
+            "contract-resource",
+            "资源预算合同闭环",
+            "命名资源约束",
+            &resource_ontology,
+        )
+        .await
+        .expect("应能创建资源预算项目");
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+            object_type: "Contract".into(),
+            id: "contract:delta".into(),
+            data: json!({
+                "title": "DELTA 年度合同",
+                "status": "Expiring",
+                "days_to_expiry": 20
+            }),
+            project_id: Some("contract-resource".into()),
+        })
+        .await
+        .expect("应能写入资源预算合同状态");
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+            object_type: "BusinessGoal".into(),
+            id: "business-goal:contract-resource".into(),
+            data: json!({
+                "target_metric": "contract_renewals",
+                "baseline_value": 0.0,
+                "target_value": 1.0,
+                "current_value": 0.0,
+                "status": "active"
+            }),
+            project_id: Some("contract-resource".into()),
+        })
+        .await
+        .expect("应能写入资源预算目标");
+    let discovered = discover_opportunities(&storage, "contract-resource")
+        .await
+        .expect("资源预算项目应能发现机会");
+    let recommendations = recommend_next_actions(&storage, "contract-resource")
+        .await
+        .expect("资源预算应过滤不可负担候选");
+    assert_eq!(recommendations.len(), 1);
+    assert_eq!(recommendations[0].action, "DraftTerms");
+    let candidate = &recommendations[0].candidates[0];
+    assert_eq!(candidate.resources.get("labor"), Some(&2.0));
+    assert!(
+        !recommendations[0]
+            .candidates
+            .iter()
+            .any(|candidate| candidate.action == "QuickClose")
+    );
+
+    let error = decide_opportunity(
+        &storage,
+        "contract-resource",
+        discovered[0]["id"].as_str().expect("机会必须有 ID"),
+        "contract-test",
+        DecisionOptions {
+            action: Some("QuickClose"),
+            reason: None,
+            alternatives: None,
+            params: None,
+        },
+    )
+    .await
+    .expect_err("超资源动作必须拒绝决策");
+    assert!(error.to_string().contains("超出机会资源 labor"));
+
+    let paths = plan_opportunity_paths(&storage, "contract-resource")
+        .await
+        .expect("资源内路径应保留");
+    assert_eq!(paths[0].actions, vec!["DraftTerms", "RenewContract"]);
+    let run = run_next_best_action(
+        &storage,
+        &PluginCatalog::new(),
+        "contract-resource",
+        "contract-test",
+    )
+    .await
+    .expect("资源预算内路径应可执行");
+    assert!(run.executed);
+    assert_eq!(
+        run.recommendation.expect("应有推荐").action,
+        "DraftTerms",
+        "超资源的快捷路径必须让位给低资源组合"
+    );
 }
 
 #[tokio::test]

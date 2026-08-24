@@ -35,6 +35,7 @@ use crate::ir::{
     PropertyDef, PropertyFacet, RelationDef, RelationHierarchy, ScalarType, ValueExpr,
 };
 use crate::validation::validate_property_constraints;
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 /// ODL 解析错误：结构化、含行列号与错误码，绝不 panic。
@@ -752,6 +753,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                             urgency_horizon: 0.0,
                             cost_budget: None,
                             metric_budget: None,
+                            resource_budgets: BTreeMap::new(),
                             link_edge: String::new(),
                         },
                     ));
@@ -999,12 +1001,19 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         outcome_timing: OutcomeTiming::Immediate,
                         goal_metric: None,
                         actor: ActorKind::Agent,
+                        resources: BTreeMap::new(),
                         benefit_field: None,
                         benefit_factor: None,
                         plugin: None,
                         capability: None,
                     });
                     match k {
+                        "resource" => {
+                            let (name, amount) = parse_resource(v).map_err(&invalid)?;
+                            if planning.resources.insert(name.clone(), amount).is_some() {
+                                return Err(invalid(format!("资源 {name} 重复声明")));
+                            }
+                        }
                         "cost" | "prior_confidence" => {
                             let value = v
                                 .parse::<f64>()
@@ -1168,6 +1177,12 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                                 return Err(invalid("metric_budget 不能为负或无限".into()));
                             }
                             rule.metric_budget = Some(value);
+                        }
+                        "resource_budget" => {
+                            let (name, amount) = parse_resource(v).map_err(&invalid)?;
+                            if rule.resource_budgets.insert(name.clone(), amount).is_some() {
+                                return Err(invalid(format!("资源预算 {name} 重复声明")));
+                            }
                         }
                         "link_edge" => {
                             if v.trim().is_empty() {
@@ -2031,6 +2046,25 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     }
 
     Ok(ir)
+}
+
+/// 解析 `name=非负数值` 资源声明。
+fn parse_resource(source: &str) -> Result<(String, f64), String> {
+    let (name, amount) = source
+        .split_once('=')
+        .ok_or_else(|| "资源声明必须是 name=amount".to_string())?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("资源名不能为空".to_string());
+    }
+    let amount = amount
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| format!("资源量必须是有限数值，得到 `{amount}`"))?;
+    if !amount.is_finite() || amount < 0.0 {
+        return Err("资源量不能为负或无限".to_string());
+    }
+    Ok((name.to_string(), amount))
 }
 
 /// 解析块头：仅当 `word:` 且无值、无空格时返回头名。

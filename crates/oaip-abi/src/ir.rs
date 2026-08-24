@@ -1,6 +1,7 @@
 //! Ontology IR —— 语言无关的中间表示（对应 REQ-001 / REQ-002）
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
@@ -302,6 +303,9 @@ pub struct ActionPlanning {
     /// 期望执行主体；缺省是 Agent。
     #[serde(default)]
     pub actor: ActorKind,
+    /// 除货币成本外的资源消耗；键是本体声明的预算维度。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub resources: BTreeMap<String, f64>,
     /// 外部能力宿主插件；与 `capability` 成对声明。
     #[serde(default)]
     pub plugin: Option<String>,
@@ -367,6 +371,9 @@ pub struct OpportunityRule {
     /// 同一 goal_metric 下所有机会共享的成本上限；未声明表示不限制。
     #[serde(default)]
     pub metric_budget: Option<f64>,
+    /// 单个机会的命名资源预算；未声明的动作资源不限制。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub resource_budgets: BTreeMap<String, f64>,
     /// Opportunity 指向主体的关系边。
     pub link_edge: String,
 }

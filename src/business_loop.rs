@@ -14,6 +14,7 @@ use crate::plugin::catalog::{CatalogError, PluginCatalog};
 use crate::storage::{LibSQLStorage, ProjectRecord, StorageError, WorldCommand};
 use serde::Serialize;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use thiserror::Error;
 
 const OPPORTUNITY_OPEN: &str = "Open";
@@ -108,6 +109,9 @@ pub struct ActionCandidate {
     pub confidence: f64,
     #[serde(rename = "netValue")]
     pub net_value: f64,
+    /// 除货币外的资源需求；空表示只消耗货币。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub resources: BTreeMap<String, f64>,
     /// 声明的外部能力宿主；本地动作缺省不展示。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin: Option<String>,
@@ -443,20 +447,81 @@ fn action_goal_metric(action: &ActionDef) -> Option<String> {
         .and_then(|planning| planning.goal_metric.clone())
 }
 
+/// 当前机会可用的货币与命名资源预算；`None` 表示对应货币维度无上限。
+#[derive(Debug, Clone, Default)]
+struct AvailableBudget {
+    money: Option<f64>,
+    resources: BTreeMap<String, f64>,
+}
+
+fn budget_admits(planning: &ActionPlanning, budget: &AvailableBudget) -> bool {
+    planning.cost <= budget.money.unwrap_or(f64::INFINITY)
+        && planning.resources.iter().all(|(name, amount)| {
+            *amount <= budget.resources.get(name).copied().unwrap_or(f64::INFINITY)
+        })
+}
+
+fn subtract_budget(planning: &ActionPlanning, budget: &AvailableBudget) -> AvailableBudget {
+    let mut resources = budget.resources.clone();
+    for (name, amount) in &planning.resources {
+        if let Some(left) = resources.get_mut(name) {
+            *left -= amount;
+        }
+    }
+    AvailableBudget {
+        money: budget.money.map(|left| left - planning.cost),
+        resources,
+    }
+}
+
 fn validate_action_budget(
     rule: &OpportunityRule,
     action: &ActionDef,
 ) -> Result<(), BusinessLoopError> {
-    let Some(budget) = rule.cost_budget else {
-        return Ok(());
-    };
-    if action_planning(action)?.cost <= budget {
-        return Ok(());
+    let planning = action_planning(action)?;
+    if planning.cost > rule.cost_budget.unwrap_or(f64::INFINITY) {
+        return Err(BusinessLoopError::invalid(format!(
+            "业务动作 {} 超出机会成本预算 {}",
+            action.name,
+            rule.cost_budget.unwrap_or(f64::INFINITY)
+        )));
     }
-    Err(BusinessLoopError::invalid(format!(
-        "业务动作 {} 超出机会成本预算 {budget}",
-        action.name
-    )))
+    for (name, amount) in &planning.resources {
+        if *amount
+            > rule
+                .resource_budgets
+                .get(name)
+                .copied()
+                .unwrap_or(f64::INFINITY)
+        {
+            return Err(BusinessLoopError::invalid(format!(
+                "业务动作 {} 超出机会资源 {name} 预算 {}",
+                action.name,
+                rule.resource_budgets
+                    .get(name)
+                    .copied()
+                    .unwrap_or(f64::INFINITY)
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn available_budget(
+    rule: &OpportunityRule,
+    outcomes: &[crate::storage::ObjectRecord],
+) -> AvailableBudget {
+    let metric_budget = metric_budget_remaining(rule, outcomes);
+    let money = match (rule.cost_budget, metric_budget) {
+        (Some(cost), Some(metric)) => Some(cost.min(metric)),
+        (Some(cost), None) => Some(cost),
+        (None, Some(metric)) => Some(metric),
+        (None, None) => None,
+    };
+    AvailableBudget {
+        money,
+        resources: rule.resource_budgets.clone(),
+    }
 }
 
 fn metric_budget_remaining(
@@ -793,17 +858,12 @@ pub async fn recommend_next_actions(
         let estimated_value = number(&opportunity.data, "estimated_value")?;
         let urgency_value = urgency_value.max(0.0);
         let urgency = (urgency_value.min(rule.urgency_horizon) / rule.urgency_horizon).max(0.1);
-        let metric_budget = metric_budget_remaining(rule, &outcomes);
-        let available_budget = rule
-            .cost_budget
-            .into_iter()
-            .chain(metric_budget)
-            .fold(f64::INFINITY, f64::min);
+        let available = available_budget(rule, &outcomes);
         let mut candidates = evaluate_candidates(
             &actions,
             &subject_record.data,
             estimated_value,
-            Some(available_budget),
+            &available,
             &outcomes,
         );
         if candidates.is_empty() {
@@ -976,7 +1036,7 @@ fn search_paths<'a>(
     state: &Value,
     used: &[String],
     visited: &mut std::collections::BTreeSet<String>,
-    budget_left: Option<f64>,
+    budget_left: Option<&AvailableBudget>,
     depth: usize,
 ) -> Result<Vec<ScoredPath>, BusinessLoopError> {
     let PathContext {
@@ -1011,7 +1071,7 @@ fn search_paths<'a>(
             continue;
         }
         if let Some(budget_left) = budget_left
-            && planning.cost > budget_left
+            && !budget_admits(planning, budget_left)
         {
             continue;
         }
@@ -1114,13 +1174,13 @@ fn search_paths<'a>(
                     .map_or(0.0, |(_, gap)| gap),
             );
         paths.push(candidate);
-        let child_budget = budget_left.map(|left| left - planning.cost);
+        let child_budget = budget_left.map(|left| subtract_budget(planning, left));
         let children = search_paths(
             context,
             &next_state,
             &next_used,
             visited,
-            child_budget,
+            child_budget.as_ref(),
             depth + 1,
         )?;
         for mut child in children {
@@ -1177,12 +1237,7 @@ pub async fn plan_opportunity_paths(
         let outcomes = storage
             .list_objects_for_project(project_id, "Outcome")
             .await?;
-        let metric_budget = metric_budget_remaining(rule, &outcomes);
-        let path_budget = rule
-            .cost_budget
-            .into_iter()
-            .chain(metric_budget)
-            .fold(f64::INFINITY, f64::min);
+        let path_budget = available_budget(rule, &outcomes);
         let initial_key = serde_json::to_string(&subject_record.data)
             .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
         let mut visited = std::collections::BTreeSet::from([initial_key]);
@@ -1202,7 +1257,7 @@ pub async fn plan_opportunity_paths(
             &subject_record.data,
             &[],
             &mut visited,
-            Some(path_budget),
+            Some(&path_budget),
             0,
         )?;
         scored.retain(|path| path.net_value > 0.0);
@@ -1270,7 +1325,7 @@ fn evaluate_candidates(
     actions: &[&ActionDef],
     customer: &Value,
     estimated_value: f64,
-    budget: Option<f64>,
+    budget: &AvailableBudget,
     outcomes: &[crate::storage::ObjectRecord],
 ) -> Vec<ActionCandidate> {
     actions
@@ -1282,13 +1337,13 @@ fn evaluate_candidates(
             {
                 return None;
             }
-            let cost = action_planning(definition).ok()?.cost;
-            if cost > budget.unwrap_or(f64::INFINITY) {
+            let planning = action_planning(definition).ok()?;
+            let cost = planning.cost;
+            if !budget_admits(planning, budget) {
                 return None;
             }
             let confidence = action_confidence(definition, outcomes).ok()?;
             let benefit = expected_benefit(definition, estimated_value, customer).ok()?;
-            let planning = action_planning(definition).ok()?;
             Some(ActionCandidate {
                 action: definition.name.to_string(),
                 actor: planning.actor,
@@ -1298,6 +1353,7 @@ fn evaluate_candidates(
                 cost,
                 confidence,
                 net_value: benefit * confidence - cost,
+                resources: planning.resources.clone(),
                 plugin: planning.plugin.clone(),
                 capability: planning.capability.clone(),
             })
