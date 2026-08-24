@@ -668,7 +668,7 @@ impl LibSQLStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{LibSQLStorage, ObjectEngine, WorldCommand};
+    use crate::{LibSQLStorage, ObjectEngine, RelationEngine, WorldCommand};
     use oaip_abi::ir::{ObjectType, PropertyDef, RelationDef, ScalarType};
     use oaip_knowledge::{
         Axiom, ClassExpression, DataFacet, DataRange, Datatype, FacetValue, Literal, Term,
@@ -812,6 +812,7 @@ mod tests {
                 equivalent_groups: Vec::new(),
                 relation_hierarchy: Vec::new(),
                 disjoint_relation_groups: Vec::new(),
+                equivalent_relation_groups: Vec::new(),
                 data_property_hierarchy: Vec::new(),
                 disjoint_data_property_groups: Vec::new(),
                 object_types: vec![ObjectType {
@@ -1317,6 +1318,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn odl_equivalent_relations_gate_live_world_evolution() {
+        let storage = LibSQLStorage::open(":memory:").await.unwrap();
+        let root =
+            Ontology::new().with_axiom(Axiom::subclass(class("Person"), ClassExpression::Thing));
+        let ir = oaip_abi::parse_odl(
+            r#"object Person:
+  properties:
+    name: string
+
+relation primary_contact:
+  source: Person
+  target: Person
+
+relation contact:
+  source: Person
+  target: Person
+
+equivalent_relation primary_contact, contact
+"#,
+        )
+        .unwrap();
+        storage
+            .initialize_knowledge_version("root", &root, Some(&ir))
+            .await
+            .unwrap();
+        for (id, name) in [("alice", "Alice"), ("bob", "Bob")] {
+            storage
+                .create("Person", id, json!({ "name": name }))
+                .await
+                .unwrap();
+        }
+        storage
+            .link("alice", "primary_contact", "bob", None)
+            .await
+            .unwrap();
+
+        // A reviewed replacement keeps the executable equivalence and adds an
+        // independent taxonomy axiom; both spellings remain live-world valid.
+        let proposal = OntologyProposal::new("keep-equivalent-contacts").with_change(
+            OntologyChange::Add(Axiom::subclass(class("Preferred"), class("Person"))),
+        );
+        storage
+            .propose_knowledge_change("root", &proposal, Some(&ir.clone()))
+            .await
+            .unwrap();
+        storage
+            .decide_knowledge_proposal("keep-equivalent-contacts", true, "alice", None)
+            .await
+            .unwrap();
+        let (_, applied) = storage
+            .apply_knowledge_proposal("keep-equivalent-contacts", "v2")
+            .await
+            .unwrap();
+        assert_eq!(Some(ir), applied.runtime_ir);
+
+        for (id, name) in [("carol", "Carol"), ("dave", "Dave")] {
+            storage
+                .create("Person", id, json!({ "name": name }))
+                .await
+                .unwrap();
+        }
+        storage
+            .link("carol", "contact", "dave", None)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn data_property_enumeration_gates_live_world_evolution() {
         fn one_of(values: &[&str]) -> Axiom {
             Axiom::DataPropertyOneOf {
@@ -1397,6 +1466,7 @@ mod tests {
             equivalent_groups: Vec::new(),
             relation_hierarchy: Vec::new(),
             disjoint_relation_groups: Vec::new(),
+            equivalent_relation_groups: Vec::new(),
             data_property_hierarchy: Vec::new(),
             disjoint_data_property_groups: Vec::new(),
             object_types: vec![ObjectType {
@@ -1455,6 +1525,7 @@ mod tests {
             equivalent_groups: Vec::new(),
             relation_hierarchy: Vec::new(),
             disjoint_relation_groups: Vec::new(),
+            equivalent_relation_groups: Vec::new(),
             data_property_hierarchy: Vec::new(),
             disjoint_data_property_groups: Vec::new(),
             object_types: vec![ObjectType {
@@ -1522,6 +1593,7 @@ mod tests {
             equivalent_groups: Vec::new(),
             relation_hierarchy: Vec::new(),
             disjoint_relation_groups: Vec::new(),
+            equivalent_relation_groups: Vec::new(),
             data_property_hierarchy: Vec::new(),
             disjoint_data_property_groups: Vec::new(),
             object_types: vec![ObjectType {
@@ -2098,6 +2170,7 @@ object Cat extends Animal:
                 equivalent_groups: Vec::new(),
                 relation_hierarchy: Vec::new(),
                 disjoint_relation_groups: Vec::new(),
+                equivalent_relation_groups: Vec::new(),
                 data_property_hierarchy: Vec::new(),
                 disjoint_data_property_groups: Vec::new(),
             }
@@ -2199,6 +2272,7 @@ object Cat extends Animal:
             equivalent_groups: Vec::new(),
             relation_hierarchy: Vec::new(),
             disjoint_relation_groups: Vec::new(),
+            equivalent_relation_groups: Vec::new(),
             data_property_hierarchy: Vec::new(),
             disjoint_data_property_groups: Vec::new(),
         };
@@ -2271,6 +2345,7 @@ object Cat extends Animal:
             equivalent_groups: Vec::new(),
             relation_hierarchy: Vec::new(),
             disjoint_relation_groups: Vec::new(),
+            equivalent_relation_groups: Vec::new(),
             data_property_hierarchy: Vec::new(),
             disjoint_data_property_groups: Vec::new(),
         };

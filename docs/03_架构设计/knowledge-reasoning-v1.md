@@ -232,9 +232,9 @@ relation has_grandparent:
 - ODL 解析和手工构造 / 反序列化 Runtime IR 的 governance boundary 都会拒绝未声明属性或单元素链；
 - super relation 自身仍必须声明 typed source/target，其 domain/range 和关系特征照常投影。
 
-### 4.8 ODL relation hierarchy and disjointness
+### 4.8 ODL relation hierarchy, disjointness, and equivalence
 
-Executable relation 可以直接声明对象属性包含和不相交性：
+Executable relation 可以直接声明对象属性包含、不相交性和等价性：
 
 ```odl
 relation biological_parent:
@@ -249,12 +249,18 @@ relation parent:
   source: Person
   target: Person
 
+relation guardian:
+  source: Person
+  target: Person
+
 sub_relation biological_parent, parent
 disjoint_relation biological_parent, legal_parent
+equivalent_relation parent, guardian
 ```
 
-两条顶层声明分别投影为 `SubObjectPropertyOf` 和 `DisjointObjectProperties`。因此
-`biological_parent(a,b)` 会蕴含 `parent(a,b)`；同一 individual pair 同时出现
+三类顶层声明分别投影为 `SubObjectPropertyOf`、`DisjointObjectProperties`，以及等价组内
+所有有序对的 `SubObjectPropertyOf`。因此 `biological_parent(a,b)` 会蕴含 `parent(a,b)`，
+`parent(a,b)` 与 `guardian(a,b)` 互相蕴含；同一 individual pair 同时出现
 `biological_parent` 和 `legal_parent` 时会进入 mature-reasoner 一致性失败，并被
 live-world evolution gate 拒绝。
 
@@ -262,6 +268,7 @@ live-world evolution gate 拒绝。
 
 - `sub_relation` 恰好接受两个已声明显式 relation，且子关系不能等于父关系；
 - `disjoint_relation` 至少接受两个已声明显式 relation，组内不重复、同一语义组不可重复声明；
+- `equivalent_relation` 至少接受两个已声明显式 relation，组内不重复、同一语义组不可重复声明；
 - 层级允许跨不同 typed endpoints，由此引发的 domain/range 冲突由 canonical ontology 的
   consistency gate fail-closed，而不是在语言层静默丢弃；
 - 手工构造或反序列化 Runtime IR 必须通过同一 validation boundary；
@@ -601,7 +608,7 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 
 ## 9. 已知下一步
 
-1. 继续扩展更多 DL 结构到 ODL 直接表达面（如跨 datatype composable range），进一步减少手写 proposal JSON。
+1. 继续按真实业务需要扩展更多 DL 结构到 ODL 直接表达面，进一步减少手写 proposal JSON。
 2. 在真实业务需要时继续扩展 XSD 构造（如自定义 datatype 定义），保持保守语义。
 3. 在 update/delete 和 append-only SameIndividuals 已支持增量复用后，继续处理
    TBox 变更的增量一致性。长生命快照已接入存储执行路径并具备缓存命中率可观测性。

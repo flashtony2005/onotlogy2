@@ -105,6 +105,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     let mut declared_equivalent: Vec<(u32, Vec<String>)> = Vec::new();
     let mut declared_sub_relations: Vec<(u32, (String, String))> = Vec::new();
     let mut declared_disjoint_relations: Vec<(u32, Vec<String>)> = Vec::new();
+    let mut declared_equivalent_relations: Vec<(u32, Vec<String>)> = Vec::new();
     let mut declared_sub_data_properties: Vec<(u32, (String, String))> = Vec::new();
     let mut declared_disjoint_data_properties: Vec<(u32, Vec<String>)> = Vec::new();
 
@@ -205,8 +206,12 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             continue 'line;
         }
 
-        // Relation-property DL 组声明：常见对象属性层级和不相交性无需手写 proposal。
-        for (keyword, is_hierarchy) in [("sub_relation ", true), ("disjoint_relation ", false)] {
+        // Relation-property DL 组声明：常见对象属性公理无需手写 proposal。
+        for (keyword, kind) in [
+            ("sub_relation ", "hierarchy"),
+            ("disjoint_relation ", "disjoint"),
+            ("equivalent_relation ", "equivalent"),
+        ] {
             let Some(rest) = line.strip_prefix(keyword) else {
                 continue;
             };
@@ -226,7 +231,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                 .filter(|name| !name.is_empty())
                 .map(str::to_string)
                 .collect::<Vec<_>>();
-            if is_hierarchy {
+            if kind == "hierarchy" {
                 if group.len() != 2 {
                     return Err(OdlError::new(
                         E_INVALID_PROPERTY_CONSTRAINT,
@@ -236,6 +241,16 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                     ));
                 }
                 declared_sub_relations.push((line_no, (group[0].clone(), group[1].clone())));
+            } else if kind == "equivalent" {
+                if group.len() < 2 {
+                    return Err(OdlError::new(
+                        E_INVALID_PROPERTY_CONSTRAINT,
+                        "equivalent_relation declaration needs at least two relations",
+                        line_no,
+                        1,
+                    ));
+                }
+                declared_equivalent_relations.push((line_no, group));
             } else {
                 if group.len() < 2 {
                     return Err(OdlError::new(
@@ -821,6 +836,10 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
         .iter()
         .map(|(_, group)| group.clone())
         .collect();
+    ir.equivalent_relation_groups = declared_equivalent_relations
+        .iter()
+        .map(|(_, group)| group.clone())
+        .collect();
     ir.data_property_hierarchy = declared_sub_data_properties
         .iter()
         .map(|(_, (sub, sup))| DataPropertyHierarchy {
@@ -850,6 +869,17 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             E_INVALID_PROPERTY_CONSTRAINT,
             error.message,
             line.unwrap_or(1),
+            1,
+        ));
+    }
+    if let Err(error) = ir.validate_equivalent_relation_groups(&relation_names) {
+        return Err(OdlError::new(
+            E_INVALID_PROPERTY_CONSTRAINT,
+            error.message,
+            declared_equivalent_relations
+                .get(error.index)
+                .map(|(line, _)| *line)
+                .unwrap_or(1),
             1,
         ));
     }

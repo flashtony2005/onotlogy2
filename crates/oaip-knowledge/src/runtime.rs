@@ -313,6 +313,21 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
             group.iter().map(Term::new).collect(),
         ));
     }
+    // Equivalence is projected through existing ordered inclusions so the
+    // canonical axiom set and mature reasoner path remain unchanged.
+    for group in &ir.equivalent_relation_groups {
+        for sub in group {
+            for sup in group {
+                if sub == sup {
+                    continue;
+                }
+                ontology.push(Axiom::SubObjectPropertyOf {
+                    sub: Term::new(sub),
+                    sup: Term::new(sup),
+                });
+            }
+        }
+    }
     for hierarchy in &ir.data_property_hierarchy {
         ontology.push(Axiom::SubDataPropertyOf {
             sub: Term::new(&hierarchy.sub_property),
@@ -513,6 +528,9 @@ pub fn validate_runtime_ir(ir: &OntologyIR) -> Result<()> {
 
     let relation_names = relation_names.iter().copied().collect();
     if let Err(error) = ir.validate_relation_property_groups(&relation_names) {
+        return Err(KnowledgeError::Invalid(error.message));
+    }
+    if let Err(error) = ir.validate_equivalent_relation_groups(&relation_names) {
         return Err(KnowledgeError::Invalid(error.message));
     }
 
@@ -1148,6 +1166,7 @@ mod tests {
             equivalent_groups: Vec::new(),
             relation_hierarchy: Vec::new(),
             disjoint_relation_groups: Vec::new(),
+            equivalent_relation_groups: Vec::new(),
             data_property_hierarchy: Vec::new(),
             disjoint_data_property_groups: Vec::new(),
             object_types: vec![ObjectType {
@@ -1855,6 +1874,7 @@ equivalent Pet, Companion
             relation("biological_parent"),
             relation("legal_parent"),
             relation("parent"),
+            relation("guardian"),
         ];
         schema.relation_hierarchy = vec![RelationHierarchy {
             sub_relation: "biological_parent".to_owned(),
@@ -1864,6 +1884,7 @@ equivalent Pet, Companion
             "biological_parent".to_owned(),
             "legal_parent".to_owned(),
         ]];
+        schema.equivalent_relation_groups = vec![vec!["parent".to_owned(), "guardian".to_owned()]];
 
         assert!(validate_runtime_ir(&schema).is_ok());
         let ontology = runtime_ir_to_knowledge(&schema);
@@ -1879,6 +1900,12 @@ equivalent Pet, Companion
                     Term::new("legal_parent"),
                 ]))
         );
+        for (sub, sup) in [("parent", "guardian"), ("guardian", "parent")] {
+            assert!(ontology.axioms().contains(&Axiom::SubObjectPropertyOf {
+                sub: Term::new(sub),
+                sup: Term::new(sup),
+            }));
+        }
 
         let objects = [
             RuntimeObjectFact {
@@ -1911,6 +1938,19 @@ equivalent Pet, Companion
                 )
                 .unwrap()
         );
+        assert!(
+            reasoner
+                .entails_object_property(
+                    &Term::new("guardian"),
+                    &Term::new("person-a"),
+                    &Term::new("person-b")
+                )
+                .unwrap()
+        );
+
+        let mut invalid = schema.clone();
+        invalid.equivalent_relation_groups = vec![vec!["parent".to_owned(), "missing".to_owned()]];
+        assert!(validate_runtime_ir(&invalid).is_err());
 
         let conflicting = [
             biological,

@@ -200,6 +200,57 @@ fn tc001h_parse_relation_hierarchy_and_disjointness() {
 }
 
 #[test]
+fn tc001j_parse_equivalent_relation_group() {
+    let odl = [
+        "object Person:",
+        "  properties:",
+        "    name: string",
+        "relation primary_contact:",
+        "  source: Person",
+        "  target: Person",
+        "relation contact:",
+        "  source: Person",
+        "  target: Person",
+        "equivalent_relation primary_contact, contact",
+    ]
+    .join("\n");
+    let ir = parse_odl(&odl).unwrap();
+    assert_eq!(
+        vec![vec!["primary_contact", "contact"]],
+        ir.equivalent_relation_groups
+    );
+    assert!(codegen::roundtrip_ok(&ir).unwrap());
+
+    let unknown = [
+        "object Person:",
+        "  properties:",
+        "    name: string",
+        "relation contact:",
+        "  source: Person",
+        "  target: Person",
+        "equivalent_relation primary_contact, contact",
+    ]
+    .join("\n");
+    let error = parse_odl(&unknown).unwrap_err();
+    assert_eq!(1011, error.code);
+    assert_eq!(7, error.line);
+
+    let singleton = [
+        "object Person:",
+        "  properties:",
+        "    name: string",
+        "relation contact:",
+        "  source: Person",
+        "  target: Person",
+        "equivalent_relation contact",
+    ]
+    .join("\n");
+    let error = parse_odl(&singleton).unwrap_err();
+    assert_eq!(1011, error.code);
+    assert_eq!(7, error.line);
+}
+
+#[test]
 fn tc001i_parse_data_property_hierarchy_and_disjointness() {
     let odl = [
         "object Person:",

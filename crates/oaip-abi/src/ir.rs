@@ -385,6 +385,9 @@ pub struct OntologyIR {
     /// Named relation disjointness groups declared directly in executable ODL.
     #[serde(default)]
     pub disjoint_relation_groups: Vec<Vec<String>>,
+    /// Named relation equivalence groups declared directly in executable ODL.
+    #[serde(default)]
+    pub equivalent_relation_groups: Vec<Vec<String>>,
     /// Data-property inclusions declared directly between executable properties.
     #[serde(default)]
     pub data_property_hierarchy: Vec<DataPropertyHierarchy>,
@@ -467,6 +470,55 @@ impl OntologyIR {
         }
 
         Self::validate_disjoint_relation_group(&self.disjoint_relation_groups, relation_names)
+    }
+
+    /// Validate relation equivalence groups at both language and governance
+    /// boundaries so hand-built serialized IR cannot bypass ODL rules.
+    pub fn validate_equivalent_relation_groups(
+        &self,
+        relation_names: &std::collections::BTreeSet<&str>,
+    ) -> Result<(), RelationPropertyGroupError> {
+        let mut seen_groups = std::collections::BTreeSet::new();
+        for (index, group) in self.equivalent_relation_groups.iter().enumerate() {
+            if group.len() < 2 {
+                return Err(RelationPropertyGroupError {
+                    index,
+                    message: "equivalent_relation group must contain at least two relations"
+                        .to_owned(),
+                });
+            }
+            let mut members = std::collections::BTreeSet::new();
+            for name in group {
+                if name.trim().is_empty() {
+                    return Err(RelationPropertyGroupError {
+                        index,
+                        message: "equivalent_relation group contains an empty relation name"
+                            .to_owned(),
+                    });
+                }
+                if !relation_names.contains(name.as_str()) {
+                    return Err(RelationPropertyGroupError {
+                        index,
+                        message: format!(
+                            "equivalent_relation group references undeclared relation '{name}'"
+                        ),
+                    });
+                }
+                if !members.insert(name.as_str()) {
+                    return Err(RelationPropertyGroupError {
+                        index,
+                        message: format!("equivalent_relation group repeats relation '{name}'"),
+                    });
+                }
+            }
+            if !seen_groups.insert(members) {
+                return Err(RelationPropertyGroupError {
+                    index,
+                    message: "duplicate equivalent_relation group".to_owned(),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Validate data-property hierarchy and disjointness at both language and
