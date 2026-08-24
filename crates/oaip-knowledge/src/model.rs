@@ -171,6 +171,11 @@ pub enum ClassExpression {
         property: Term,
         value: Box<ClassExpression>,
     },
+    ObjectExactCardinality {
+        cardinality: u32,
+        property: Term,
+        value: Box<ClassExpression>,
+    },
     DataSomeValuesFrom {
         property: Term,
         range: DataRange,
@@ -189,6 +194,11 @@ pub enum ClassExpression {
         range: DataRange,
     },
     DataMaxCardinality {
+        cardinality: u32,
+        property: Term,
+        range: DataRange,
+    },
+    DataExactCardinality {
         cardinality: u32,
         property: Term,
         range: DataRange,
@@ -295,6 +305,26 @@ impl ClassExpression {
         }
     }
 
+    pub fn exact_cardinality(
+        cardinality: u32,
+        property: impl Into<Term>,
+        value: ClassExpression,
+    ) -> Self {
+        Self::ObjectExactCardinality {
+            cardinality,
+            property: property.into(),
+            value: Box::new(value),
+        }
+    }
+
+    pub fn exact_data(property: impl Into<Term>, datatype: Datatype, cardinality: u32) -> Self {
+        Self::DataExactCardinality {
+            cardinality,
+            property: property.into(),
+            range: DataRange::Datatype(datatype),
+        }
+    }
+
     /// All named classes syntactically mentioned by this expression.
     ///
     /// The reasoner uses this as a safe conservative seed.  It deliberately does
@@ -320,14 +350,16 @@ impl ClassExpression {
             | Self::ObjectSomeValuesFrom { value: item, .. }
             | Self::ObjectAllValuesFrom { value: item, .. }
             | Self::ObjectMinCardinality { value: item, .. }
-            | Self::ObjectMaxCardinality { value: item, .. } => item.push_named_classes(out),
+            | Self::ObjectMaxCardinality { value: item, .. }
+            | Self::ObjectExactCardinality { value: item, .. } => item.push_named_classes(out),
             Self::ObjectHasValue { .. }
             | Self::ObjectOneOf(_)
             | Self::DataSomeValuesFrom { .. }
             | Self::DataAllValuesFrom { .. }
             | Self::DataHasValue { .. }
             | Self::DataMinCardinality { .. }
-            | Self::DataMaxCardinality { .. } => {}
+            | Self::DataMaxCardinality { .. }
+            | Self::DataExactCardinality { .. } => {}
         }
     }
 }

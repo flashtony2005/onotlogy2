@@ -287,7 +287,10 @@ impl Reasoner {
     /// than reporting an unsound "consistent" result.
     pub fn is_consistent(&self) -> Result<bool> {
         let cached = self.snapshot.consistency.get_or_init(|| {
-            if crate::data::validate_data_consistency(&self.snapshot.ontology).is_err() {
+            if crate::data::validate_data_consistency(&self.snapshot.ontology).is_err()
+                || crate::data::validate_asserted_cardinality_consistency(&self.snapshot.ontology)
+                    .is_err()
+            {
                 return Ok(false);
             }
             reasoner(|| owl_dl_reasoner::is_consistent(&self.snapshot.owl))
@@ -575,7 +578,8 @@ fn public_terms(ontology: &Ontology) -> TermAliases {
             ClassExpression::ObjectSomeValuesFrom { value, .. }
             | ClassExpression::ObjectAllValuesFrom { value, .. }
             | ClassExpression::ObjectMinCardinality { value, .. }
-            | ClassExpression::ObjectMaxCardinality { value, .. } => {
+            | ClassExpression::ObjectMaxCardinality { value, .. }
+            | ClassExpression::ObjectExactCardinality { value, .. } => {
                 class_terms(value, aliases);
             }
             ClassExpression::ObjectHasValue { individual, .. } => insert(aliases, individual),
@@ -588,7 +592,8 @@ fn public_terms(ontology: &Ontology) -> TermAliases {
             | ClassExpression::DataAllValuesFrom { .. }
             | ClassExpression::DataHasValue { .. }
             | ClassExpression::DataMinCardinality { .. }
-            | ClassExpression::DataMaxCardinality { .. } => {}
+            | ClassExpression::DataMaxCardinality { .. }
+            | ClassExpression::DataExactCardinality { .. } => {}
         }
     }
 
@@ -1056,6 +1061,18 @@ fn class_expression(
                 bce: Box::new(class_expression(value, build, out)),
             }
         }
+        ClassExpression::ObjectExactCardinality {
+            cardinality,
+            property,
+            value,
+        } => {
+            declare_property(build, out, property);
+            OwlClassExpression::ObjectExactCardinality {
+                n: *cardinality,
+                ope: property_expression(build, property),
+                bce: Box::new(class_expression(value, build, out)),
+            }
+        }
         ClassExpression::DataSomeValuesFrom { property, range } => {
             declare_data_property(build, out, property);
             OwlClassExpression::DataSomeValuesFrom {
@@ -1096,6 +1113,18 @@ fn class_expression(
         } => {
             declare_data_property(build, out, property);
             OwlClassExpression::DataMaxCardinality {
+                n: *cardinality,
+                dp: build.data_property(term_iri(property)),
+                dr: owl_data_range(build, range),
+            }
+        }
+        ClassExpression::DataExactCardinality {
+            cardinality,
+            property,
+            range,
+        } => {
+            declare_data_property(build, out, property);
+            OwlClassExpression::DataExactCardinality {
                 n: *cardinality,
                 dp: build.data_property(term_iri(property)),
                 dr: owl_data_range(build, range),
@@ -1374,6 +1403,89 @@ mod tests {
             property: Term::new("identifier"),
             individual: Term::new("b"),
             value: crate::model::Literal::String("ABC-1234".into()),
+        });
+        assert!(
+            !Reasoner::new(&inconsistent)
+                .unwrap()
+                .is_consistent()
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn exact_object_cardinality_participates_in_mature_consistency() {
+        let base = Ontology::new()
+            .with_axiom(Axiom::subclass(
+                class("Customer"),
+                ClassExpression::exact_cardinality(1, "parent", class("Person")),
+            ))
+            .with_axiom(Axiom::ClassAssertion {
+                class: class("Customer"),
+                individual: term("alice"),
+            })
+            .with_axiom(Axiom::ObjectPropertyAssertion {
+                property: Term::new("parent"),
+                subject: term("alice"),
+                object: term("bob"),
+            });
+        assert!(Reasoner::new(&base).unwrap().is_consistent().unwrap());
+
+        let two_named_witnesses = base
+            .with_axiom(Axiom::ObjectPropertyAssertion {
+                property: Term::new("parent"),
+                subject: term("alice"),
+                object: term("carol"),
+            })
+            .with_axiom(Axiom::ClassAssertion {
+                class: class("Person"),
+                individual: term("bob"),
+            })
+            .with_axiom(Axiom::ClassAssertion {
+                class: class("Person"),
+                individual: term("carol"),
+            });
+        // OWL does not assume distinct constants without a DifferentIndividuals axiom.
+        assert!(
+            Reasoner::new(&two_named_witnesses)
+                .unwrap()
+                .is_consistent()
+                .unwrap()
+        );
+
+        let inconsistent = two_named_witnesses.with_axiom(Axiom::DifferentIndividuals(vec![
+            term("bob"),
+            term("carol"),
+        ]));
+        assert!(
+            !Reasoner::new(&inconsistent)
+                .unwrap()
+                .is_consistent()
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn exact_data_cardinality_participates_in_mature_consistency() {
+        let base = Ontology::new()
+            .with_axiom(Axiom::subclass(
+                class("Customer"),
+                ClassExpression::exact_data("email", Datatype::String, 1),
+            ))
+            .with_axiom(Axiom::ClassAssertion {
+                class: class("Customer"),
+                individual: term("alice"),
+            })
+            .with_axiom(Axiom::DataPropertyAssertion {
+                property: Term::new("email"),
+                individual: term("alice"),
+                value: Literal::String("one@example.com".into()),
+            });
+        assert!(Reasoner::new(&base).unwrap().is_consistent().unwrap());
+
+        let inconsistent = base.with_axiom(Axiom::DataPropertyAssertion {
+            property: Term::new("email"),
+            individual: term("alice"),
+            value: Literal::String("two@example.com".into()),
         });
         assert!(
             !Reasoner::new(&inconsistent)

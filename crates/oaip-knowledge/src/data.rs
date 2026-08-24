@@ -768,6 +768,244 @@ pub(crate) fn materialize_data_domain_assertions(ontology: &Ontology) -> Ontolog
     materialized
 }
 
+/// Check asserted cardinality conflicts that the selected mature reasoner does
+/// not yet cover completely.
+///
+/// This is an open-world check: absent values never violate a minimum, and
+/// named individuals are merged only when `SameIndividuals` forces them
+/// together. An upper-bound clash requires necessarily distinct witnesses, so
+/// every rejection is a real OWL inconsistency even though the scan is
+/// deliberately incomplete for inferred types and complex fillers.
+pub(crate) fn validate_asserted_cardinality_consistency(ontology: &Ontology) -> Result<()> {
+    let mut aliases = BTreeMap::new();
+    let mut class_edges = BTreeMap::<Term, BTreeSet<Term>>::new();
+    let mut object_bounds = BTreeMap::<(Term, Term, Term), (u32, u32)>::new();
+    let mut data_bounds = BTreeMap::<(Term, Term, Datatype), (u32, u32)>::new();
+
+    let intersect_bound = |bounds: &mut (u32, u32), bound: (u32, u32)| {
+        bounds.0 = bounds.0.max(bound.0);
+        bounds.1 = bounds.1.min(bound.1);
+    };
+
+    for axiom in ontology.axioms() {
+        match axiom {
+            Axiom::SameIndividuals(terms) if terms.len() >= 2 => {
+                for pair in terms.windows(2) {
+                    union(&mut aliases, &pair[0], &pair[1]);
+                }
+            }
+            Axiom::SubClassOf { sub, sup } => {
+                let ClassExpression::Class(source) = sub else {
+                    continue;
+                };
+                match sup {
+                    ClassExpression::Class(parent) => {
+                        class_edges
+                            .entry(source.clone())
+                            .or_default()
+                            .insert(parent.clone());
+                    }
+                    ClassExpression::ObjectMaxCardinality {
+                        cardinality,
+                        property,
+                        value,
+                    }
+                    | ClassExpression::ObjectExactCardinality {
+                        cardinality,
+                        property,
+                        value,
+                    } => {
+                        let ClassExpression::Class(target) = value.as_ref() else {
+                            continue;
+                        };
+                        intersect_bound(
+                            object_bounds
+                                .entry((source.clone(), property.clone(), target.clone()))
+                                .or_insert((0, u32::MAX)),
+                            (0, *cardinality),
+                        );
+                    }
+                    ClassExpression::DataMaxCardinality {
+                        cardinality,
+                        property,
+                        range: DataRange::Datatype(datatype),
+                    }
+                    | ClassExpression::DataExactCardinality {
+                        cardinality,
+                        property,
+                        range: DataRange::Datatype(datatype),
+                    } => intersect_bound(
+                        data_bounds
+                            .entry((source.clone(), property.clone(), *datatype))
+                            .or_insert((0, u32::MAX)),
+                        (0, *cardinality),
+                    ),
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut types_by_individual = BTreeMap::<Term, BTreeSet<Term>>::new();
+    for axiom in ontology.axioms() {
+        let Axiom::ClassAssertion { class, individual } = axiom else {
+            continue;
+        };
+        let ClassExpression::Class(source) = class else {
+            continue;
+        };
+        types_by_individual
+            .entry(canonical_alias(&aliases, individual))
+            .or_default()
+            .insert(source.clone());
+    }
+    for types in types_by_individual.values_mut() {
+        let direct = types.iter().cloned().collect::<Vec<_>>();
+        for source in direct {
+            let mut pending = vec![source];
+            while let Some(current) = pending.pop() {
+                for parent in class_edges.get(&current).into_iter().flatten() {
+                    if types.insert(parent.clone()) {
+                        pending.push(parent.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    let mut object_facts = BTreeMap::<(Term, Term), BTreeSet<Term>>::new();
+    let mut data_facts = BTreeMap::<(Term, Term), Vec<Literal>>::new();
+    for axiom in ontology.axioms() {
+        match axiom {
+            Axiom::ObjectPropertyAssertion {
+                property,
+                subject,
+                object,
+            } => {
+                let key = (canonical_alias(&aliases, subject), property.clone());
+                object_facts.entry(key).or_default().insert(object.clone());
+            }
+            Axiom::DataPropertyAssertion {
+                property,
+                individual,
+                value,
+            } => {
+                let key = (canonical_alias(&aliases, individual), property.clone());
+                data_facts.entry(key).or_default().push(value.clone());
+            }
+            _ => {}
+        }
+    }
+
+    for ((source, property, target), (_, max)) in object_bounds {
+        for (individual, types) in &types_by_individual {
+            if !types.contains(&source) {
+                continue;
+            }
+            let witnesses = object_facts
+                .get(&(individual.clone(), property.clone()))
+                .into_iter()
+                .flatten()
+                .filter(|object| instance_of_named_class_term(object, &target, &class_edges))
+                .map(|object| canonical_alias(&aliases, object))
+                .collect::<BTreeSet<_>>();
+            if witnesses.len() > max as usize {
+                return Err(KnowledgeError::Invalid(format!(
+                    "class `{source}` allows at most {max} `{property}` edges to `{target}`, \
+                     but `{individual}` has {} distinct witnesses",
+                    witnesses.len()
+                )));
+            }
+        }
+    }
+
+    for ((source, property, datatype), (_, max)) in data_bounds {
+        for (individual, types) in &types_by_individual {
+            if !types.contains(&source) {
+                continue;
+            }
+            let asserted = data_facts
+                .get(&(individual.clone(), property.clone()))
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let mut distinct_values = Vec::new();
+            for value in asserted {
+                if value.datatype() != datatype {
+                    continue;
+                }
+                if distinct_values
+                    .iter()
+                    .all(|existing| literals_are_necessarily_distinct(existing, value))
+                {
+                    distinct_values.push(value.clone());
+                }
+            }
+            if distinct_values.len() > max as usize {
+                return Err(KnowledgeError::Invalid(format!(
+                    "class `{source}` allows at most {max} `{property}` values of type \
+                     `{datatype:?}`, but `{individual}` has {} distinct values",
+                    distinct_values.len()
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn canonical_alias(aliases: &BTreeMap<Term, Term>, term: &Term) -> Term {
+    let mut current = term.clone();
+    while let Some(next) = aliases.get(&current) {
+        if *next == current {
+            break;
+        }
+        current = next.clone();
+    }
+    current
+}
+
+fn instance_of_named_class_term(
+    individual: &Term,
+    declared: &Term,
+    edges: &BTreeMap<Term, BTreeSet<Term>>,
+) -> bool {
+    let mut visited = BTreeSet::from([individual.clone()]);
+    let mut pending = vec![individual.clone()];
+    while let Some(current) = pending.pop() {
+        if *declared == current {
+            return true;
+        }
+        for parent in edges.get(&current).into_iter().flatten() {
+            if visited.insert(parent.clone()) {
+                pending.push(parent.clone());
+            }
+        }
+    }
+    false
+}
+
+fn literals_are_necessarily_distinct(left: &Literal, right: &Literal) -> bool {
+    let ordering = compare_literals(left, right);
+    match (left, right) {
+        (Literal::Boolean(left), Literal::Boolean(right)) => left != right,
+        (Literal::Integer(left), Literal::Integer(right)) => left != right,
+        (Literal::String(left), Literal::String(right)) => left != right,
+        (Literal::Double(_), Literal::Double(_)) => {
+            ordering.is_some_and(|ordering| ordering != std::cmp::Ordering::Equal)
+        }
+        (Literal::Decimal(_), Literal::Decimal(_)) => {
+            ordering.is_some_and(|ordering| ordering != std::cmp::Ordering::Equal)
+        }
+        (Literal::Date(_), Literal::Date(_)) => {
+            ordering.is_some_and(|ordering| ordering != std::cmp::Ordering::Equal)
+        }
+        (Literal::DateTime(_), Literal::DateTime(_)) => {
+            ordering.is_some_and(|ordering| ordering != std::cmp::Ordering::Equal)
+        }
+        _ => false,
+    }
+}
 /// Reusable indexes for the deterministic asserted-data fragment.
 ///
 /// A completed state is immutable in the cache.  Appending assertions and the

@@ -261,6 +261,13 @@ fn class_expression(expression: &OwlClassExpression) -> Result<ClassExpression> 
                 value: Box::new(class_expression(bce)?),
             })
         }
+        OwlClassExpression::ObjectExactCardinality { n, ope, bce } => {
+            Ok(ClassExpression::ObjectExactCardinality {
+                cardinality: *n,
+                property: object_property(ope)?,
+                value: Box::new(class_expression(bce)?),
+            })
+        }
         OwlClassExpression::DataSomeValuesFrom { dp, dr } => {
             Ok(ClassExpression::DataSomeValuesFrom {
                 property: data_property(dp),
@@ -291,10 +298,15 @@ fn class_expression(expression: &OwlClassExpression) -> Result<ClassExpression> 
                 range: data_range(dr)?,
             })
         }
-        OwlClassExpression::ObjectHasSelf(_)
-        | OwlClassExpression::ObjectExactCardinality { .. }
-        | OwlClassExpression::DataExactCardinality { .. } => Err(invalid(
-            "self restrictions and exact cardinalities are outside the kernel class language",
+        OwlClassExpression::DataExactCardinality { n, dp, dr } => {
+            Ok(ClassExpression::DataExactCardinality {
+                cardinality: *n,
+                property: data_property(dp),
+                range: data_range(dr)?,
+            })
+        }
+        OwlClassExpression::ObjectHasSelf(_) => Err(invalid(
+            "self restrictions are outside the kernel class language",
         )),
     }
 }
@@ -593,6 +605,26 @@ mod tests {
     }
 
     #[test]
+    fn owl_functional_syntax_round_trips_exact_cardinalities() {
+        let ontology = Ontology::new()
+            .with_axiom(Axiom::subclass(
+                ClassExpression::class("Customer"),
+                ClassExpression::exact_cardinality(1, "parent", ClassExpression::class("Person")),
+            ))
+            .with_axiom(Axiom::subclass(
+                ClassExpression::class("Customer"),
+                ClassExpression::exact_data("email", Datatype::String, 1),
+            ));
+
+        let parsed = from_owl_ofn(&to_owl_ofn(&ontology).unwrap()).unwrap();
+        assert_eq!(parsed.len(), ontology.len());
+        for axiom in ontology.axioms() {
+            assert!(parsed.axioms().contains(axiom));
+        }
+        assert!(Reasoner::new(&parsed).unwrap().is_consistent().unwrap());
+    }
+
+    #[test]
     fn owl_functional_syntax_round_trips_kernel_ontology() {
         let ontology = sample();
         let syntax = to_owl_ofn(&ontology).unwrap();
@@ -637,7 +669,7 @@ Ontology(
     Declaration(Class(:A))
     Declaration(Class(:B))
     Declaration(ObjectProperty(:p))
-    SubClassOf(:A ObjectExactCardinality(1 :p :B))
+    SubClassOf(:A ObjectHasSelf(:p))
 )"#;
         let result = from_owl_ofn(source);
         assert!(matches!(

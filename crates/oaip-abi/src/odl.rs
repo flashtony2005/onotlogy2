@@ -897,12 +897,12 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                     }
                     let Some((kind, filler)) = v.split_once(char::is_whitespace) else {
                         return Err(invalid(
-                            "restriction needs `relation: some Class`, `relation: only Class`, `relation: value individual`, `relation: min N Class`, or `relation: max N Class`"
+                            "restriction needs `relation: some Class`, `relation: only Class`, `relation: value individual`, `relation: min N Class`, `relation: max N Class`, or `relation: exact N Class`"
                                 .to_owned(),
                         ));
                     };
                     let filler = filler.trim();
-                    let is_cardinality = kind == "min" || kind == "max";
+                    let is_cardinality = matches!(kind, "min" | "max" | "exact");
                     if filler.is_empty()
                         || (!is_cardinality && filler.contains(char::is_whitespace))
                     {
@@ -920,7 +920,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         "value" => ObjectRestrictionKind::Value {
                             individual: filler.to_string(),
                         },
-                        "min" | "max" => {
+                        "min" | "max" | "exact" => {
                             let (num, class) =
                                 filler.split_once(char::is_whitespace).ok_or_else(|| {
                                     invalid(format!(
@@ -942,8 +942,13 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                                     cardinality,
                                     class: class.to_string(),
                                 }
-                            } else {
+                            } else if kind == "max" {
                                 ObjectRestrictionKind::Max {
+                                    cardinality,
+                                    class: class.to_string(),
+                                }
+                            } else {
+                                ObjectRestrictionKind::Exact {
                                     cardinality,
                                     class: class.to_string(),
                                 }
@@ -951,7 +956,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         }
                         _ => {
                             return Err(invalid(format!(
-                                "unknown restriction constructor '{kind}'; expected some, only, value, min, or max"
+                                "unknown restriction constructor '{kind}'; expected some, only, value, min, max, or exact"
                             )));
                         }
                     };
@@ -975,7 +980,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                     }
                     let Some((kind, filler)) = v.split_once(char::is_whitespace) else {
                         return Err(invalid(
-                            "data restriction needs `property: some type`, `property: only type`, `property: min N type`, `property: max N type`, or `property: value literal`"
+                            "data restriction needs `property: some type`, `property: only type`, `property: min N type`, `property: max N type`, `property: exact N type`, or `property: value literal`"
                                 .to_owned(),
                         ));
                     };
@@ -1001,7 +1006,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                             let datatype = ScalarType::from_str(filler).map_err(invalid)?;
                             DataRestrictionKind::Only { datatype }
                         }
-                        "min" | "max" => {
+                        "min" | "max" | "exact" => {
                             let (num, datatype) =
                                 filler.split_once(char::is_whitespace).ok_or_else(|| {
                                     invalid(format!(
@@ -1024,8 +1029,13 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                                     cardinality,
                                     datatype,
                                 }
-                            } else {
+                            } else if kind == "max" {
                                 DataRestrictionKind::Max {
+                                    cardinality,
+                                    datatype,
+                                }
+                            } else {
+                                DataRestrictionKind::Exact {
                                     cardinality,
                                     datatype,
                                 }
@@ -1043,7 +1053,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         }
                         _ => {
                             return Err(invalid(format!(
-                                "unknown data restriction constructor '{kind}'; expected some, only, min, max, or value"
+                                "unknown data restriction constructor '{kind}'; expected some, only, min, max, exact, or value"
                             )));
                         }
                     };

@@ -406,6 +406,8 @@ pub enum ObjectRestrictionKind {
     Min { cardinality: u32, class: String },
     /// `relation: max N Class`
     Max { cardinality: u32, class: String },
+    /// `relation: exact N Class`
+    Exact { cardinality: u32, class: String },
 }
 
 /// A named-class necessary condition over a declared scalar property.
@@ -429,6 +431,11 @@ pub enum DataRestrictionKind {
     },
     /// `property: max N string`
     Max {
+        cardinality: u32,
+        datatype: ScalarType,
+    },
+    /// `property: exact N string`
+    Exact {
         cardinality: u32,
         datatype: ScalarType,
     },
@@ -545,7 +552,8 @@ impl OntologyIR {
                 }
                 match &restriction.kind {
                     ObjectRestrictionKind::Min { cardinality: 0, .. }
-                    | ObjectRestrictionKind::Max { cardinality: 0, .. } => {
+                    | ObjectRestrictionKind::Max { cardinality: 0, .. }
+                    | ObjectRestrictionKind::Exact { cardinality: 0, .. } => {
                         return Err(ObjectRestrictionError {
                             index,
                             object: object.name.clone(),
@@ -555,7 +563,8 @@ impl OntologyIR {
                     ObjectRestrictionKind::Some { class }
                     | ObjectRestrictionKind::Only { class }
                     | ObjectRestrictionKind::Min { class, .. }
-                    | ObjectRestrictionKind::Max { class, .. } => {
+                    | ObjectRestrictionKind::Max { class, .. }
+                    | ObjectRestrictionKind::Exact { class, .. } => {
                         Self::validate_restriction_filler(class, &classes, &mut |message| {
                             ObjectRestrictionError {
                                 index,
@@ -613,6 +622,7 @@ impl OntologyIR {
                 match &restriction.kind {
                     DataRestrictionKind::Min { cardinality, .. }
                     | DataRestrictionKind::Max { cardinality, .. }
+                    | DataRestrictionKind::Exact { cardinality, .. }
                         if *cardinality > 1 =>
                     {
                         return Err(DataRestrictionError {
@@ -624,7 +634,8 @@ impl OntologyIR {
                     DataRestrictionKind::Some { datatype }
                     | DataRestrictionKind::Only { datatype }
                     | DataRestrictionKind::Min { datatype, .. }
-                    | DataRestrictionKind::Max { datatype, .. } => {
+                    | DataRestrictionKind::Max { datatype, .. }
+                    | DataRestrictionKind::Exact { datatype, .. } => {
                         if *datatype != declared {
                             return Err(DataRestrictionError {
                                 index,

@@ -370,6 +370,14 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
                     restriction.relation.as_str(),
                     class(filler),
                 ),
+                ObjectRestrictionKind::Exact {
+                    cardinality,
+                    class: filler,
+                } => ClassExpression::exact_cardinality(
+                    *cardinality,
+                    restriction.relation.as_str(),
+                    class(filler),
+                ),
             };
             ontology.push(Axiom::subclass(source.clone(), expression));
         }
@@ -395,6 +403,14 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
                     cardinality,
                     datatype,
                 } => ClassExpression::DataMaxCardinality {
+                    cardinality: *cardinality,
+                    property: Term::new(restriction.property.as_str()),
+                    range: ModelDataRange::Datatype(scalar_datatype(*datatype)),
+                },
+                DataRestrictionKind::Exact {
+                    cardinality,
+                    datatype,
+                } => ClassExpression::DataExactCardinality {
                     cardinality: *cardinality,
                     property: Term::new(restriction.property.as_str()),
                     range: ModelDataRange::Datatype(scalar_datatype(*datatype)),
@@ -1207,6 +1223,11 @@ pub fn declared_data_cardinality_violations(
                 property,
                 range: ModelDataRange::Datatype(datatype),
             } => (property, datatype, (0, *cardinality)),
+            ClassExpression::DataExactCardinality {
+                cardinality,
+                property,
+                range: ModelDataRange::Datatype(datatype),
+            } => (property, datatype, (*cardinality, *cardinality)),
             _ => continue,
         };
         let key = (source.0.clone(), property.0.clone(), *datatype);
@@ -1959,6 +1980,128 @@ object Person:
 "#,
         );
         assert!(excessive.is_err());
+
+        let excessive_exact = oaip_abi::parse_odl(
+            r#"
+object Person:
+  properties:
+    age: int
+  data_restrictions:
+    age: exact 2 int
+"#,
+        );
+        assert!(excessive_exact.is_err());
+    }
+
+    #[test]
+    fn odl_exact_restrictions_project_reason_and_gate_world_facts() {
+        let ir = oaip_abi::parse_odl(
+            r#"
+object Person:
+  properties:
+    name: string
+
+object Parent extends Person:
+  properties:
+    note: string
+  restrictions:
+    parent: exact 1 Person
+
+object Customer extends Person:
+  properties:
+    email: string
+  data_restrictions:
+    email: exact 1 string
+
+relation parent:
+  source: Person
+  target: Person
+"#,
+        )
+        .unwrap();
+        validate_runtime_ir(&ir).unwrap();
+        let schema = runtime_ir_to_knowledge(&ir);
+        assert!(schema.axioms().contains(&Axiom::subclass(
+            class("Parent"),
+            ClassExpression::ObjectExactCardinality {
+                cardinality: 1,
+                property: Term::new("parent"),
+                value: Box::new(class("Person")),
+            }
+        )));
+        assert!(schema.axioms().contains(&Axiom::subclass(
+            class("Customer"),
+            ClassExpression::DataExactCardinality {
+                cardinality: 1,
+                property: Term::new("email"),
+                range: ModelDataRange::Datatype(Datatype::String),
+            }
+        )));
+
+        let object = |id: &str, ty: &str, email: Option<&str>| RuntimeObjectFact {
+            id: id.to_owned(),
+            object_type: ty.to_owned(),
+            data: match email {
+                Some(value) => serde_json::json!({ "name": id, "email": value }),
+                None => serde_json::json!({ "name": id }),
+            },
+        };
+        let objects = [
+            object("parent-1", "Parent", None),
+            object("person-1", "Person", None),
+            object("customer-1", "Customer", Some("one@example.com")),
+        ];
+        let relations = [RuntimeRelationFact {
+            source: "parent-1".to_owned(),
+            relation: "parent".to_owned(),
+            target: "person-1".to_owned(),
+        }];
+        let world = runtime_world_to_knowledge(&schema, &objects, &relations).unwrap();
+        assert!(Reasoner::new(&world).unwrap().is_consistent().unwrap());
+        assert!(declared_data_cardinality_violations(&schema, &objects).is_empty());
+
+        // Closed-world admission catches the missing side of an exact bound;
+        // the mature open-world reasoner sees the same fact through two edges.
+        let missing_email = object("customer-2", "Customer", None);
+        let violations =
+            declared_data_cardinality_violations(&schema, std::slice::from_ref(&missing_email));
+        assert_eq!(1, violations.len());
+        assert_eq!(
+            ("email", 1, 1),
+            (
+                violations[0].property.as_str(),
+                violations[0].min,
+                violations[0].max
+            )
+        );
+
+        let extra_parent = Ontology::from_iter(schema.axioms().iter().cloned().chain([
+            Axiom::ClassAssertion {
+                class: class("Parent"),
+                individual: Term::new("parent-1"),
+            },
+            Axiom::ClassAssertion {
+                class: class("Person"),
+                individual: Term::new("person-2"),
+            },
+            Axiom::DifferentIndividuals(vec![Term::new("person-1"), Term::new("person-2")]),
+            Axiom::ObjectPropertyAssertion {
+                property: Term::new("parent"),
+                subject: Term::new("parent-1"),
+                object: Term::new("person-1"),
+            },
+            Axiom::ObjectPropertyAssertion {
+                property: Term::new("parent"),
+                subject: Term::new("parent-1"),
+                object: Term::new("person-2"),
+            },
+        ]));
+        assert!(
+            !Reasoner::new(&extra_parent)
+                .unwrap()
+                .is_consistent()
+                .unwrap()
+        );
     }
 
     #[test]

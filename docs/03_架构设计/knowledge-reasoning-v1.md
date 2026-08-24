@@ -222,15 +222,18 @@ object Parent extends Person:
     guardian: value alice
     child: min 2 Person
     contact: max 1 Person
+    parent: exact 1 Person
 ```
 
-五条声明分别投影为 `SubClassOf(Parent, ObjectSomeValuesFrom(child, Person))`、
+六条声明分别投影为 `SubClassOf(Parent, ObjectSomeValuesFrom(child, Person))`、
 `SubClassOf(Parent, ObjectAllValuesFrom(contact, Person))`、
 `SubClassOf(Parent, ObjectHasValue(guardian, alice))`、
-`SubClassOf(Parent, ObjectMinCardinality(2, child, Person))` 和
-`SubClassOf(Parent, ObjectMaxCardinality(1, contact, Person))`。relation 必须是已声明显式 relation
+`SubClassOf(Parent, ObjectMinCardinality(2, child, Person))`、
+`SubClassOf(Parent, ObjectMaxCardinality(1, contact, Person))` 和
+`SubClassOf(Parent, ObjectExactCardinality(1, parent, Person))`。relation 必须是已声明显式 relation
 或 action link edge；filler 类必须是已声明 object，cardinality 至少为 1。这些限制参与
-classification、live-world 一致性、诊断和演化影响分析。
+classification、live-world 一致性、诊断和演化影响分析。开放世界一致性只拒绝有必然不同 witness
+证据的上界冲突；缺失下界仍由 executable closed-world admission 判定。
 
 对象类型同样可以在 `data_restrictions:` 块直接声明 data-property 必要条件：
 
@@ -244,13 +247,15 @@ object TaggedPerson extends Person:
     note: only string
     note: min 1 string
     status: max 0 string
+    email: exact 1 string
     status: value "active"
 ```
 
-五条声明分别投影为 `DataSomeValuesFrom`、`DataAllValuesFrom`、`DataMinCardinality`、
-`DataMaxCardinality` 和 `DataHasValue` 的 `SubClassOf` 必要条件。property 必须是本对象已声明
-的标量属性；datatype 和 literal 必须与属性声明类型一致。可执行世界事实使用单值 JSON 属性，
-因此 `min` / `max` 基数沿用内联标量约束的保守边界，只能为 0 或 1。这些限制参与
+六条声明分别投影为 `DataSomeValuesFrom`、`DataAllValuesFrom`、`DataMinCardinality`、
+`DataMaxCardinality`、`DataExactCardinality` 和 `DataHasValue` 的 `SubClassOf` 必要条件。
+property 必须是本对象已声明的标量属性；datatype 和 literal 必须与属性声明类型一致。
+可执行世界事实使用单值 JSON 属性，因此 `min` / `max` / `exact` 基数沿用内联标量约束的保守边界，
+只能为 0 或 1。这些限制参与
 classification、live-world 一致性、诊断和演化影响分析；移除后 replace-exactly 会同步清除投影公理。
 
 ### 4.5 ODL property constraints
@@ -535,9 +540,11 @@ object Customer:
 
 ### 5.1 一致性
 
-`Reasoner::is_consistent` 先执行 kernel 的 deterministic data consistency checks，再把剩余问题交给
-`owl-dl-reasoner`。这样 mature tableau 未覆盖的 functional data conflict、range mismatch、facet
-violation、enumeration conflict、subproperty polarity conflict 不会误报 consistent。
+`Reasoner::is_consistent` 先执行 kernel 的 deterministic data consistency checks 和 asserted
+object/data cardinality checks，再把剩余问题交给 `owl-dl-reasoner`。这样 mature tableau 未覆盖的
+functional data conflict、range mismatch、facet violation、enumeration conflict、subproperty polarity
+conflict，以及基于必然不同 witness 的 cardinality 上界冲突不会误报 consistent。该基数补充检查保持
+OWL 开放世界语义：不把缺失观察当作下界冲突，也不在缺少 distinct 证据时假设命名个体不同。
 
 ### 5.2 查询
 
@@ -745,7 +752,8 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 
 1. 继续按真实业务需要扩展更多 DL 结构到 ODL 直接表达面，进一步减少手写 proposal JSON。
    `disjoint_union`、object-property `some` / `only` / `value` 限制、data-property
-   `some` / `only` / `min` / `max` / `value` 限制、`one_of` 个体枚举以及
+   `some` / `only` / `min` / `max` / `exact` / `value` 限制、object-property `min` / `max` /
+   `exact` 限制、`one_of` 个体枚举以及
    same/different individuals 已经直接进入 ODL。
 2. 在真实业务需要时继续扩展更多 XSD 构造，保持保守语义。基础 named datatype definition
    已可在 ODL 中复用受限 composable range，但尚不宣称完整 XSD derivation/union 语义。
