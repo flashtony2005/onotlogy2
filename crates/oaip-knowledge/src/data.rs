@@ -1531,17 +1531,9 @@ fn data_consistency_relevant(axiom: &Axiom) -> bool {
     matches!(
         axiom,
         Axiom::SameIndividuals(_)
-            | Axiom::SubDataPropertyOf { .. }
-            | Axiom::DisjointDataProperties(_)
-            | Axiom::DataPropertyDomain { .. }
-            | Axiom::DataPropertyRange { .. }
-            | Axiom::DataPropertyOneOf { .. }
-            | Axiom::DataPropertyRangeRestriction { .. }
-            | Axiom::DataPropertyDataRange { .. }
-            | Axiom::FunctionalDataProperty(_)
             | Axiom::DataPropertyAssertion { .. }
             | Axiom::NegativeDataPropertyAssertion { .. }
-    )
+    ) || is_incremental_tbox_axiom(axiom)
 }
 
 fn is_incremental_data_assertion(axiom: &Axiom) -> bool {

@@ -744,9 +744,10 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
    same/different individuals 已经直接进入 ODL。
 2. 在真实业务需要时继续扩展更多 XSD 构造，保持保守语义。基础 named datatype definition
    已可在 ODL 中复用受限 composable range，但尚不宣称完整 XSD derivation/union 语义。
-3. 在 update/delete、append-only SameIndividuals、数据属性约束和
-   `SubDataPropertyOf` 已支持增量复用后，继续处理其余 TBox 变更。
-   长生命快照已接入存储执行路径并具备缓存命中率可观测性。
+3. update/delete、append-only SameIndividuals 和确定性 data-consistency fragment 的全部
+   TBox axiom（subproperty、domain、range、oneOf、restriction、dataRange、functional、
+   disjoint）均已支持增量复用。对象属性等非 data-relevant 变更不进入该缓存，由 immutable
+   full-reasoner snapshot 处理。长生命快照已接入存储执行路径并具备缓存命中率可观测性。
 4. 已增加持续并发、缓存驱逐恢复、持久化 pending proposal 重开、推理一致性和固定规模索引
    扩展基准；HTTP 负载现在采样进程 RSS。`make soak-baseline` 已补齐知识推理、受控演化、
    RSS 增长拟合与 Pending proposal SIGKILL 重启校验的统一演练入口；仍需在目标硬件上执行并
