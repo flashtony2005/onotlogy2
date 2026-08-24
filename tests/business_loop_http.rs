@@ -1456,6 +1456,180 @@ relation changed_state:
 }
 
 #[tokio::test]
+async fn shared_resource_budget_spans_opportunities() {
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let ontology = r#"
+object Customer:
+  properties:
+    name: string
+    level: string
+    days_since_last_contact: int
+  opportunities:
+    Reactivation:
+      subject_type: Customer
+      estimated_value: 10000
+      urgency_field: days_since_last_contact
+      urgency_horizon: 90
+      link_edge: targets
+      goal_metric: monthly_reactivations
+      shared_resource_budget: labor=6
+      evidence: "客户已 {days_since_last_contact} 天未联系"
+      when:
+        - field: self.level
+          op: eq
+          value: "VIP"
+  actions:
+    TouchCustomer:
+      planning:
+        cost: 100
+        prior_confidence: 0.9
+        outcome_timing: immediate
+        goal_metric: monthly_reactivations
+        resource: labor=6
+      updates:
+        - field: days_since_last_contact
+          value: 0
+
+object BusinessGoal:
+  properties:
+    target_metric: string
+    baseline_value: float
+    target_value: float
+    current_value: float
+    status: string
+
+object Opportunity:
+  properties:
+    subject: string
+    opportunity_type: string
+    status: string
+    estimated_value: float
+    evidence: string
+
+object Decision:
+  properties:
+    opportunity: string
+    action: string
+    reason: string
+    alternatives: string
+    decided_by: string
+    status: string
+
+object Outcome:
+  properties:
+    action: string
+    before: string
+    after: string
+    success: bool
+    cost: float
+    metric: string
+    stage: string
+
+object StateTransition:
+  properties:
+    subject: string
+    before_data: string
+    after_data: string
+    at_action: string
+
+relation targets:
+  source: Opportunity
+  target: Customer
+
+relation decided_from:
+  source: Decision
+  target: Opportunity
+
+relation produced_outcome:
+  source: Decision
+  target: Outcome
+
+relation changed_state:
+  source: StateTransition
+  target: Customer
+"#;
+    storage
+        .create_project("shared-resource", "共享资源闭环", "跨机会资源池", ontology)
+        .await
+        .expect("应能创建共享资源项目");
+    for suffix in ["one", "two"] {
+        storage
+            .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+                object_type: "Customer".into(),
+                id: format!("customer:{suffix}"),
+                data: json!({
+                    "name": format!("VIP {suffix}"),
+                    "level": "VIP",
+                    "days_since_last_contact": 75
+                }),
+                project_id: Some("shared-resource".into()),
+            })
+            .await
+            .expect("应能写入客户状态");
+    }
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+            object_type: "BusinessGoal".into(),
+            id: "business-goal:shared-resource".into(),
+            data: json!({
+                "target_metric": "monthly_reactivations",
+                "baseline_value": 0.0,
+                "target_value": 2.0,
+                "current_value": 0.0,
+                "status": "active"
+            }),
+            project_id: Some("shared-resource".into()),
+        })
+        .await
+        .expect("应能写入经营目标");
+
+    let discovered = discover_opportunities(&storage, "shared-resource")
+        .await
+        .expect("应发现两个机会");
+    assert_eq!(discovered.len(), 2);
+    let first = run_next_best_action(&storage, &PluginCatalog::new(), "shared-resource", "agent")
+        .await
+        .expect("第一笔机会应消耗共享资源");
+    assert!(first.executed);
+
+    let second = run_next_best_action(&storage, &PluginCatalog::new(), "shared-resource", "agent")
+        .await
+        .expect("第二笔机会必须看到共享资源账本");
+    assert!(!second.executed);
+    assert!(second.recommendation.is_none());
+
+    let remaining = discover_opportunities(&storage, "shared-resource")
+        .await
+        .expect("第二次发现不应覆盖已有机会");
+    assert!(remaining.is_empty());
+    let opportunities = storage
+        .list_objects_for_project("shared-resource", "Opportunity")
+        .await
+        .expect("应能查询机会");
+    let open = opportunities
+        .iter()
+        .find(|item| item.data["status"] == json!("Open"))
+        .expect("应保留未执行机会");
+    let error = decide_opportunity(
+        &storage,
+        "shared-resource",
+        &open.id,
+        "agent",
+        DecisionOptions {
+            action: Some("TouchCustomer"),
+            reason: None,
+            alternatives: None,
+            params: None,
+        },
+    )
+    .await
+    .expect_err("共享资源耗尽后显式决策必须拒绝");
+    assert!(error.to_string().contains("超出共享资源 labor"));
+}
+
+#[tokio::test]
 async fn autonomous_run_gates_actions_by_declared_actor() {
     let storage = LibSQLStorage::open(":memory:")
         .await

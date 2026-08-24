@@ -475,8 +475,10 @@ fn subtract_budget(planning: &ActionPlanning, budget: &AvailableBudget) -> Avail
 }
 
 fn validate_action_budget(
+    ontology: &OntologyIR,
     rule: &OpportunityRule,
     action: &ActionDef,
+    outcomes: &[crate::storage::ObjectRecord],
 ) -> Result<(), BusinessLoopError> {
     let planning = action_planning(action)?;
     if planning.cost > rule.cost_budget.unwrap_or(f64::INFINITY) {
@@ -487,30 +489,77 @@ fn validate_action_budget(
         )));
     }
     for (name, amount) in &planning.resources {
-        if *amount
-            > rule
-                .resource_budgets
-                .get(name)
-                .copied()
-                .unwrap_or(f64::INFINITY)
-        {
+        let opportunity_limit = rule
+            .resource_budgets
+            .get(name)
+            .copied()
+            .unwrap_or(f64::INFINITY);
+        if *amount > opportunity_limit {
             return Err(BusinessLoopError::invalid(format!(
-                "业务动作 {} 超出机会资源 {name} 预算 {}",
-                action.name,
-                rule.resource_budgets
-                    .get(name)
-                    .copied()
-                    .unwrap_or(f64::INFINITY)
+                "业务动作 {} 超出机会资源 {name} 预算 {opportunity_limit}",
+                action.name
             )));
+        }
+    }
+    let shared = shared_resource_limits(ontology);
+    let spent = consumed_shared_resources(ontology, outcomes)?;
+    for (name, amount) in &planning.resources {
+        if let Some(limit) = shared.get(name) {
+            let remaining = (limit - spent.get(name).copied().unwrap_or_default()).max(0.0);
+            if *amount > remaining {
+                return Err(BusinessLoopError::invalid(format!(
+                    "业务动作 {} 超出共享资源 {name} 剩余预算 {remaining:.0}",
+                    action.name
+                )));
+            }
         }
     }
     Ok(())
 }
 
+/// 收集项目级共享资源上限；ODL 编译期已保证同名维度上限一致。
+fn shared_resource_limits(ontology: &OntologyIR) -> BTreeMap<String, f64> {
+    ontology
+        .object_types
+        .iter()
+        .flat_map(|object| object.opportunity_rules.iter())
+        .flat_map(|rule| rule.shared_resource_budgets.iter())
+        .map(|(name, limit)| (name.clone(), *limit))
+        .collect()
+}
+
+/// 从不可变 ActionExecuted 账本重建已消耗共享资源。
+fn consumed_shared_resources(
+    ontology: &OntologyIR,
+    outcomes: &[crate::storage::ObjectRecord],
+) -> Result<BTreeMap<String, f64>, BusinessLoopError> {
+    let mut spent = BTreeMap::new();
+    for outcome in outcomes.iter().filter(|outcome| {
+        text(&outcome.data, "stage").is_ok_and(|stage| stage == OUTCOME_ACTION_EXECUTED)
+    }) {
+        let action_name = text(&outcome.data, "action")?;
+        let action = ontology
+            .object_types
+            .iter()
+            .flat_map(|object| object.actions.iter())
+            .find(|action| action.name == action_name)
+            .ok_or_else(|| {
+                BusinessLoopError::invalid(format!("Outcome 引用未知业务动作 {action_name}"))
+            })?;
+        if let Some(planning) = &action.planning {
+            for (name, amount) in &planning.resources {
+                *spent.entry(name.clone()).or_default() += amount;
+            }
+        }
+    }
+    Ok(spent)
+}
+
 fn available_budget(
+    ontology: &OntologyIR,
     rule: &OpportunityRule,
     outcomes: &[crate::storage::ObjectRecord],
-) -> AvailableBudget {
+) -> Result<AvailableBudget, BusinessLoopError> {
     let metric_budget = metric_budget_remaining(rule, outcomes);
     let money = match (rule.cost_budget, metric_budget) {
         (Some(cost), Some(metric)) => Some(cost.min(metric)),
@@ -518,10 +567,19 @@ fn available_budget(
         (None, Some(metric)) => Some(metric),
         (None, None) => None,
     };
-    AvailableBudget {
-        money,
-        resources: rule.resource_budgets.clone(),
+    let mut resources = rule.resource_budgets.clone();
+    let shared_limits = shared_resource_limits(ontology);
+    if !shared_limits.is_empty() {
+        let spent = consumed_shared_resources(ontology, outcomes)?;
+        for (name, limit) in shared_limits {
+            let remaining = (limit - spent.get(&name).copied().unwrap_or_default()).max(0.0);
+            resources
+                .entry(name)
+                .and_modify(|left| *left = left.min(remaining))
+                .or_insert(remaining);
+        }
     }
+    Ok(AvailableBudget { money, resources })
 }
 
 fn metric_budget_remaining(
@@ -858,7 +916,7 @@ pub async fn recommend_next_actions(
         let estimated_value = number(&opportunity.data, "estimated_value")?;
         let urgency_value = urgency_value.max(0.0);
         let urgency = (urgency_value.min(rule.urgency_horizon) / rule.urgency_horizon).max(0.1);
-        let available = available_budget(rule, &outcomes);
+        let available = available_budget(&ontology, rule, &outcomes)?;
         let mut candidates = evaluate_candidates(
             &actions,
             &subject_record.data,
@@ -1237,7 +1295,7 @@ pub async fn plan_opportunity_paths(
         let outcomes = storage
             .list_objects_for_project(project_id, "Outcome")
             .await?;
-        let path_budget = available_budget(rule, &outcomes);
+        let path_budget = available_budget(&ontology, rule, &outcomes)?;
         let initial_key = serde_json::to_string(&subject_record.data)
             .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
         let mut visited = std::collections::BTreeSet::from([initial_key]);
@@ -1452,10 +1510,10 @@ pub async fn decide_opportunity(
             "不支持的业务动作 {action}"
         )));
     };
-    validate_action_budget(rule, definition)?;
     let outcomes = storage
         .list_objects_for_project(project_id, "Outcome")
         .await?;
+    validate_action_budget(&ontology, rule, definition, &outcomes)?;
     validate_metric_budget(definition, metric_budget_remaining(rule, &outcomes))?;
 
     let subject = text(&opportunity.data, "subject")?.to_string();
@@ -1751,11 +1809,11 @@ pub async fn execute_opportunity(
     let definition = find_action(&actions, &action)
         .cloned()
         .ok_or_else(|| BusinessLoopError::invalid(format!("不支持的业务动作 {action}")))?;
-    validate_action_budget(rule, &definition)?;
     let planning = action_planning(&definition)?;
     let outcomes = storage
         .list_objects_for_project(project_id, "Outcome")
         .await?;
+    validate_action_budget(&ontology, rule, &definition, &outcomes)?;
     validate_metric_budget(&definition, metric_budget_remaining(rule, &outcomes))?;
     if definition.policy.require_approval {
         let relations = storage.list_all_relations().await?;

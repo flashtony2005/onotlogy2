@@ -374,6 +374,9 @@ pub struct OpportunityRule {
     /// 单个机会的命名资源预算；未声明的动作资源不限制。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub resource_budgets: BTreeMap<String, f64>,
+    /// 项目内共享的命名资源预算；同名维度必须声明相同上限。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub shared_resource_budgets: BTreeMap<String, f64>,
     /// Opportunity 指向主体的关系边。
     pub link_edge: String,
 }

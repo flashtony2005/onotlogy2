@@ -124,6 +124,7 @@ fn opportunity_rule_requires_complete_and_typed_metadata() {
         "      cost_budget: 25000",
         "      metric_budget: 80000",
         "      resource_budget: sales=3",
+        "      shared_resource_budget: labor=10",
         "      link_edge: targets",
         "      when:",
         "        - field: self.level",
@@ -180,6 +181,7 @@ fn opportunity_rule_requires_complete_and_typed_metadata() {
     assert_eq!(rule.cost_budget, Some(25_000.0));
     assert_eq!(rule.metric_budget, Some(80_000.0));
     assert_eq!(rule.resource_budgets.get("sales"), Some(&3.0));
+    assert_eq!(rule.shared_resource_budgets.get("labor"), Some(&10.0));
     assert_eq!(rule.link_edge, "targets");
 
     let negative = base
@@ -197,6 +199,32 @@ fn opportunity_rule_requires_complete_and_typed_metadata() {
         .join("\n");
     let error = parse_odl(&negative_metric).expect_err("负数指标预算必须解析失败");
     assert!(error.to_string().contains("metric_budget 不能为负或无限"));
+
+    let rule_start = base
+        .iter()
+        .position(|line| line.contains("Reactivation:"))
+        .expect("base 必须包含机会规则");
+    let rule_end = base
+        .iter()
+        .position(|line| line.starts_with("object Opportunity:"))
+        .expect("base 必须包含 Opportunity 对象");
+    let mut conflicting: Vec<String> = base[..rule_start]
+        .iter()
+        .map(|line| line.to_string())
+        .collect();
+    conflicting.extend(base[rule_start..rule_end].iter().map(|line| {
+        line.replace("Reactivation:", "ReadyToRenew:").replace(
+            "shared_resource_budget: labor=10",
+            "shared_resource_budget: labor=20",
+        )
+    }));
+    conflicting.extend(base[rule_start..].iter().map(|line| line.to_string()));
+    let error = parse_odl(&conflicting.join("\n")).expect_err("共享资源上限冲突必须解析失败");
+    assert!(
+        error
+            .to_string()
+            .contains("共享资源预算 labor 在所有机会中必须相同")
+    );
 
     let negative_resource = base
         .iter()

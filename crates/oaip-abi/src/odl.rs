@@ -754,6 +754,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                             cost_budget: None,
                             metric_budget: None,
                             resource_budgets: BTreeMap::new(),
+                            shared_resource_budgets: BTreeMap::new(),
                             link_edge: String::new(),
                         },
                     ));
@@ -1184,6 +1185,16 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                                 return Err(invalid(format!("资源预算 {name} 重复声明")));
                             }
                         }
+                        "shared_resource_budget" => {
+                            let (name, amount) = parse_resource(v).map_err(&invalid)?;
+                            if rule
+                                .shared_resource_budgets
+                                .insert(name.clone(), amount)
+                                .is_some()
+                            {
+                                return Err(invalid(format!("共享资源预算 {name} 重复声明")));
+                            }
+                        }
                         "link_edge" => {
                             if v.trim().is_empty() {
                                 return Err(invalid("link_edge 不能为空".into()));
@@ -1475,6 +1486,24 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     }
 
     let mut seen_opportunities = std::collections::BTreeSet::new();
+    let mut shared_resource_limits = std::collections::BTreeMap::new();
+    for (line_no, object) in &declared {
+        for rule in &object.opportunity_rules {
+            for (name, limit) in &rule.shared_resource_budgets {
+                if shared_resource_limits
+                    .insert(name.as_str(), (*limit, *line_no))
+                    .is_some_and(|(expected, _)| expected != *limit)
+                {
+                    return Err(OdlError::new(
+                        E_INVALID_PROPERTY_CONSTRAINT,
+                        format!("共享资源预算 {name} 在所有机会中必须相同"),
+                        *line_no,
+                        1,
+                    ));
+                }
+            }
+        }
+    }
     ir.relations = declared_relations.iter().map(|(_, r)| r.clone()).collect();
     for object in &ir.object_types {
         let relation_matches = |name: &str, source: &str, target: &str| {
