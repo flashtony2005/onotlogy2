@@ -22,7 +22,7 @@
         "name": "示例 VIP 客户",
         "level": "VIP",
         "balance": 0,
-        "days_since_last_contact": 45
+        "days_since_last_contact": 46
       }
     },
     {
@@ -43,10 +43,21 @@
         "status": "active",
         "amount": 1000
       }
+    },
+    {
+      "id": "business-goal:monthly-reactivation",
+      "type": "BusinessGoal",
+      "data": {
+        "target_metric": "monthly_reactivations",
+        "target_value": 20,
+        "current_value": 12,
+        "status": "active"
+      }
     }
   ],
   "relations": [
     {"source": "company:acme", "relation": "contains", "target": "department:sales"},
+    {"source": "company:acme", "relation": "has_goal", "target": "business-goal:monthly-reactivation"},
     {"source": "employee:manager-001", "relation": "belongs_to", "target": "department:sales"},
     {"source": "employee:manager-001", "relation": "manages", "target": "customer:demo-vip"},
     {"source": "employee:manager-001", "relation": "manages", "target": "customer:demo-normal"}

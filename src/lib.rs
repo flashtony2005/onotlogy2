@@ -15,6 +15,7 @@
 
 pub mod auth;
 pub mod automation;
+pub mod business_loop;
 pub mod cognitive;
 pub mod compose;
 pub mod diagnosis;

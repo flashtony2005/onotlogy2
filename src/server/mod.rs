@@ -7,6 +7,7 @@
 pub mod approvals;
 pub mod auth;
 pub mod automation;
+pub mod business_loop;
 pub mod domain_packs;
 pub mod facade;
 pub mod graph;
@@ -52,6 +53,7 @@ use auth::auth_rotate_key;
 use automation::{
     cancel_job, get_job, get_pack_status, list_jobs, run_operation, run_pack, scan_pack,
 };
+use business_loop::{discover, list_goal_gaps};
 use facade::{
     facade_audit_query, facade_fabric_cancel, facade_fabric_submit, facade_project_create,
     facade_project_deps, facade_project_event, facade_project_list, facade_project_seed,
@@ -396,6 +398,17 @@ fn router() -> Router<Arc<AppState>> {
         .route("/api/v1/facade/project/seed", post(facade_project_seed))
         .route("/api/v1/facade/project/event", post(facade_project_event))
         .route("/api/v1/facade/project/deps", post(facade_project_deps))
+        // ── Business Loop v1：状态 → 机会 → 决策 → 结果 → 状态变化 ──
+        .route("/api/v1/business/goals", get(list_goal_gaps))
+        .route("/api/v1/business/discover-opportunities", post(discover))
+        .route(
+            "/api/v1/business/opportunities/:id/decide",
+            post(business_loop::decide),
+        )
+        .route(
+            "/api/v1/business/opportunities/:id/execute",
+            post(business_loop::execute),
+        )
         // ── Phase 2.3 业务包管理 ──
         .route("/api/v1/domain-packs", get(domain_packs::list_domain_packs))
         .route(

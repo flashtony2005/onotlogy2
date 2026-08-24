@@ -22,6 +22,10 @@ object Customer:
     balance: float
     days_since_last_contact: int
   actions:
+    contact:
+      updates:
+        - field: days_since_last_contact
+          value: 0
     retain:
       creates:
         - type: RetentionTask
@@ -97,3 +101,60 @@ object Approval:
     subject: string
     status: string
     amount: float
+
+object BusinessGoal:
+  properties:
+    target_metric: string
+    target_value: float
+    current_value: float
+    status: string
+
+object Opportunity:
+  properties:
+    subject: string
+    opportunity_type: string
+    status: string
+    estimated_value: float
+    evidence: string
+
+object Decision:
+  properties:
+    opportunity: string
+    action: string
+    reason: string
+    decided_by: string
+    status: string
+
+object Outcome:
+  properties:
+    action: string
+    before: string
+    after: string
+    success: bool
+
+object StateTransition:
+  properties:
+    subject: string
+    before_data: string
+    after_data: string
+    at_action: string
+
+relation has_goal:
+  source: Company
+  target: BusinessGoal
+
+relation targets:
+  source: Opportunity
+  target: Customer
+
+relation decided_from:
+  source: Decision
+  target: Opportunity
+
+relation produced_outcome:
+  source: Decision
+  target: Outcome
+
+relation changed_state:
+  source: StateTransition
+  target: Customer
