@@ -62,6 +62,11 @@ fn error_response(error: BusinessLoopError) -> Response {
             ApiResponse::error(400, error.to_string()),
         )
             .into_response(),
+        BusinessLoopError::Knowledge(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ApiResponse::error(5000, format!("知识推理错误：{error}")),
+        )
+            .into_response(),
         BusinessLoopError::Odl(_) | BusinessLoopError::Storage(_) => {
             ApiResponse::error(5000, "业务闭环存储错误").into_response()
         }

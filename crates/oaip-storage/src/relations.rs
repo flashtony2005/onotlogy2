@@ -9,6 +9,27 @@ fn is_unique_violation(e: &libsql::Error) -> bool {
     e.to_string().contains("UNIQUE constraint failed")
 }
 
+impl LibSQLStorage {
+    /// 列出项目内全部活跃关系边，供项目级 DL ABox 快照使用。
+    pub async fn list_project_relations(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<RelationRecord>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, relation, source, target, data FROM wb_relation_edge WHERE project_id=?1 AND is_delete=0 ORDER BY id",
+                params![project_id],
+            )
+            .await?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            out.push(row_to_relation(&row)?);
+        }
+        Ok(out)
+    }
+}
+
 #[async_trait]
 impl RelationEngine for LibSQLStorage {
     async fn link(

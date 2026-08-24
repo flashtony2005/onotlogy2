@@ -2054,7 +2054,7 @@ equivalent_relation primary_contact, contact
         let initialized = storage.knowledge_version("root").await.unwrap().unwrap();
         assert!(initialized.ontology.axioms().iter().any(|axiom| matches!(
             axiom,
-            Axiom::DataPropertyOneOf { property, .. } if property.as_str() == "status"
+            Axiom::DataPropertyOneOf { property, .. } if property.as_str() == "Customer.status"
         )));
     }
 

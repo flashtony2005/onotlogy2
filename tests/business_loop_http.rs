@@ -1603,6 +1603,61 @@ async fn require_approval_action_waits_for_separate_human_evidence() {
 }
 
 #[tokio::test]
+async fn whole_world_inconsistency_blocks_business_execution() {
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let pack_ontology = std::fs::read_to_string("domain-packs/crm-retention/ontology.odl")
+        .expect("业务包 ODL 应存在");
+    seed_odl_project(
+        &storage,
+        "reasoning",
+        &pack_ontology,
+        "monthly_reactivations",
+    )
+    .await;
+    let discovered = discover_opportunities(&storage, "reasoning")
+        .await
+        .expect("尚未冲突的世界应能发现机会");
+    let opportunity_id = discovered[0]["id"].as_str().expect("机会必须有 ID");
+    decide_opportunity(
+        &storage,
+        "reasoning",
+        opportunity_id,
+        "contract-test",
+        DecisionOptions {
+            action: Some("ContactCustomer"),
+            reason: None,
+            alternatives: None,
+            params: None,
+        },
+    )
+    .await
+    .expect("显式决策应能创建 Selected 决策");
+
+    // 直接注入绕过业务门禁的非法世界行，证明执行前仍会做整状态推理。
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+            object_type: "RetentionTask".into(),
+            id: "task:invalid-world".into(),
+            data: json!({
+                "title": "非法状态",
+                "customer": "customer:reasoning-vip",
+                "status": "INVALID",
+                "priority": "MEDIUM"
+            }),
+            project_id: Some("reasoning".into()),
+        })
+        .await
+        .expect("原始存储写入应成功以模拟外部漂移");
+
+    let error = execute_opportunity(&storage, "reasoning", opportunity_id)
+        .await
+        .expect_err("不一致的整状态必须阻止行动执行");
+    assert!(error.to_string().contains("企业世界状态不一致"));
+}
+
+#[tokio::test]
 async fn autonomous_run_skips_approval_only_candidate() {
     let storage = LibSQLStorage::open(":memory:")
         .await

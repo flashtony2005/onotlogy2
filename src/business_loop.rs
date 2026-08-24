@@ -8,6 +8,8 @@ use crate::abi::ir::{
     ParamDef, ValueExpr,
 };
 use crate::abi::{DataValidationError, parse_odl, validate_object_data, value_matches_scalar};
+use crate::knowledge::{Reasoner, runtime_ir_to_knowledge, validate_data_consistency};
+use crate::knowledge_bridge::world_snapshot_to_knowledge;
 use crate::storage::{LibSQLStorage, ProjectRecord, StorageError, WorldCommand};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -43,6 +45,8 @@ pub enum BusinessLoopError {
     Data(#[from] DataValidationError),
     #[error(transparent)]
     Storage(#[from] StorageError),
+    #[error("知识推理失败：{0}")]
+    Knowledge(String),
 }
 
 impl BusinessLoopError {
@@ -155,6 +159,34 @@ async fn project_ontology(
         .ok_or_else(|| BusinessLoopError::NotFound(project_id.to_string()))?;
     let ir = parse_odl(&project.ontology)?;
     Ok((project, ir))
+}
+
+/// 项目世界必须先通过整状态 DL 一致性检查，才能驱动发现或执行。
+async fn ensure_project_consistent(
+    storage: &LibSQLStorage,
+    project_id: &str,
+    ontology: &OntologyIR,
+) -> Result<(), BusinessLoopError> {
+    let schema = runtime_ir_to_knowledge(ontology);
+    let objects = storage.list_project_objects(project_id).await?;
+    let relations = storage.list_project_relations(project_id).await?;
+    let knowledge_base = world_snapshot_to_knowledge(&schema, &objects, &relations)
+        .map_err(|error| BusinessLoopError::Knowledge(error.to_string()))?;
+    if let Err(error) = validate_data_consistency(&knowledge_base) {
+        return Err(BusinessLoopError::invalid(format!(
+            "企业世界状态不一致：{error}"
+        )));
+    }
+    let consistent = Reasoner::new(&knowledge_base)
+        .map_err(|error| BusinessLoopError::Knowledge(error.to_string()))?
+        .is_consistent()
+        .map_err(|error| BusinessLoopError::Knowledge(error.to_string()))?;
+    if !consistent {
+        return Err(BusinessLoopError::invalid(
+            "企业世界状态不一致，已阻止业务推理",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_data(
@@ -548,6 +580,7 @@ pub async fn discover_opportunities(
     project_id: &str,
 ) -> Result<Vec<Value>, BusinessLoopError> {
     let (_, ontology) = project_ontology(storage, project_id).await?;
+    ensure_project_consistent(storage, project_id, &ontology).await?;
     validate_data(
         &ontology,
         "Opportunity",
@@ -1333,6 +1366,7 @@ pub async fn decide_opportunity(
     options: DecisionOptions<'_>,
 ) -> Result<Value, BusinessLoopError> {
     let (_, ontology) = project_ontology(storage, project_id).await?;
+    ensure_project_consistent(storage, project_id, &ontology).await?;
     let opportunities = storage
         .list_objects_for_project(project_id, "Opportunity")
         .await?;
@@ -1586,6 +1620,7 @@ pub async fn execute_opportunity(
     opportunity_id: &str,
 ) -> Result<Value, BusinessLoopError> {
     let (_, ontology) = project_ontology(storage, project_id).await?;
+    ensure_project_consistent(storage, project_id, &ontology).await?;
     let opportunities = storage
         .list_objects_for_project(project_id, "Opportunity")
         .await?;

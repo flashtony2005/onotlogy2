@@ -40,7 +40,25 @@ impl LibSQLStorage {
         Ok(out)
     }
 
-    /// 列出全部活跃关系边，供世界模型与 DL ABox 快照使用。
+    /// 列出项目内全部活跃对象，供项目级 DL ABox 快照使用。
+    pub async fn list_project_objects(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<ObjectRecord>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, type, data, version FROM wb_ontology_object WHERE project_id=?1 AND is_delete=0 ORDER BY id",
+                params![project_id],
+            )
+            .await?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            out.push(row_to_object(&row)?);
+        }
+        Ok(out)
+    }
+
     ///
     /// 快照必须完整：静默截断会让第 N 条之后的事实绕过推理和演化校验。
     pub async fn list_all_relations(&self) -> Result<Vec<RelationRecord>, StorageError> {

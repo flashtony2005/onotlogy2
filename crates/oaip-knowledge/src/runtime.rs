@@ -277,8 +277,17 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
                     .map(|value| json_literal("one_of", value, Some(scalar_datatype(property.ty))))
                     .collect::<std::result::Result<Vec<_>, KnowledgeError>>()
                     .expect("validated runtime IR enumeration values project as OWL literals");
+                // Enumerations are class-scoped through a projected shadow
+                // property.  A flat DataPropertyOneOf intersects every class's
+                // range and rejects unrelated fields sharing a generic name.
+                let scoped = Term::new(format!("{}.{}", object_type.name, property.name));
+                ontology.push(Axiom::DataPropertyRange {
+                    property: scoped.clone(),
+                    datatype: scalar_datatype(property.ty),
+                });
+                ontology.push(Axiom::FunctionalDataProperty(scoped.clone()));
                 ontology.push(Axiom::DataPropertyOneOf {
-                    property: term.clone(),
+                    property: scoped,
                     values: literals,
                 });
             }
@@ -971,6 +980,7 @@ fn json_literal_with_expected_types(
 fn runtime_object_axioms(
     fact: &RuntimeObjectFact,
     ranges: &BTreeMap<Term, BTreeSet<Datatype>>,
+    enumerated: &BTreeSet<Term>,
 ) -> Result<Vec<Axiom>> {
     let mut axioms = vec![Axiom::ClassAssertion {
         class: class(&fact.object_type),
@@ -992,11 +1002,20 @@ fn runtime_object_axioms(
             .get(&Term::new(field.clone()))
             .cloned()
             .unwrap_or_default();
+        let literal = json_literal_with_expected_types(field, value, &expected)?;
         axioms.push(Axiom::DataPropertyAssertion {
             property: Term::new(field.clone()),
             individual: Term::new(&fact.id),
-            value: json_literal_with_expected_types(field, value, &expected)?,
+            value: literal.clone(),
         });
+        let scoped = Term::new(format!("{}.{}", fact.object_type, field));
+        if enumerated.contains(&scoped) {
+            axioms.push(Axiom::DataPropertyAssertion {
+                property: scoped,
+                individual: Term::new(&fact.id),
+                value: literal,
+            });
+        }
     }
     Ok(axioms)
 }
@@ -1008,9 +1027,17 @@ pub fn runtime_world_to_knowledge(
     relations: &[RuntimeRelationFact],
 ) -> Result<Ontology> {
     let ranges = data_property_ranges(ontology);
+    let enumerated = ontology
+        .axioms()
+        .iter()
+        .filter_map(|axiom| match axiom {
+            Axiom::DataPropertyOneOf { property, .. } => Some(property.clone()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
     let mut knowledge_base = ontology.clone();
     for object in objects {
-        for axiom in runtime_object_axioms(object, &ranges)? {
+        for axiom in runtime_object_axioms(object, &ranges, &enumerated)? {
             knowledge_base.push(axiom);
         }
     }
@@ -1325,6 +1352,7 @@ pub fn validate_canonical_ontology_with_world(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::validate_data_consistency;
     use oaip_abi::ir::{
         ActionDef, CreateEffect, DataPropertyHierarchy, DisjointUnionGroup,
         ObjectPropertyRestriction, ObjectRestrictionKind, ObjectType, PropertyDef, PropertyFacet,
@@ -3148,7 +3176,7 @@ object Customer:
         assert!(validate_runtime_ir(&ir).is_ok());
         let schema = runtime_ir_to_knowledge(&ir);
         assert!(schema.axioms().contains(&Axiom::DataPropertyOneOf {
-            property: Term::new("status"),
+            property: Term::new("Customer.status"),
             values: vec![
                 Literal::String("Active".into()),
                 Literal::String("Pending".into())
@@ -3167,6 +3195,7 @@ object Customer:
                 .is_consistent()
                 .unwrap()
         );
+        assert!(validate_data_consistency(&knowledge_base).is_err());
     }
 
     #[test]
