@@ -668,6 +668,23 @@ fn to_horned_owl(ontology: &Ontology) -> Result<SetOntology<ArcStr>> {
                 );
                 out.insert(SubObjectPropertyOf { sup, sub });
             }
+            Axiom::SubObjectPropertyChainOf {
+                properties,
+                super_property,
+            } if properties.len() >= 2 => {
+                declare_property(&build, &mut out, super_property);
+                for property in properties {
+                    declare_property(&build, &mut out, property);
+                }
+                let sub = SubObjectPropertyExpression::ObjectPropertyChain(
+                    properties
+                        .iter()
+                        .map(|property| property_expression(&build, property))
+                        .collect(),
+                );
+                let sup = property_expression(&build, super_property);
+                out.insert(SubObjectPropertyOf { sup, sub });
+            }
             Axiom::TransitiveObjectProperty(property) => {
                 declare_property(&build, &mut out, property);
                 out.insert(TransitiveObjectProperty(property_expression(
@@ -872,6 +889,7 @@ fn to_horned_owl(ontology: &Ontology) -> Result<SetOntology<ArcStr>> {
             Axiom::EquivalentClasses(_)
             | Axiom::DisjointClasses(_)
             | Axiom::DisjointDataProperties(_)
+            | Axiom::SubObjectPropertyChainOf { .. }
             | Axiom::SameIndividuals(_)
             | Axiom::DifferentIndividuals(_) => {
                 return Err(KnowledgeError::Invalid(format!(
@@ -1617,6 +1635,35 @@ mod tests {
             });
         assert!(!Reasoner::new(&ontology).unwrap().is_consistent().unwrap());
     }
+
+    #[test]
+    fn property_chain_entails_composed_object_property() {
+        let has_parent = term("hasParent");
+        let has_grandparent = term("hasGrandparent");
+        let ontology = Ontology::new()
+            .with_axiom(Axiom::SubObjectPropertyChainOf {
+                properties: vec![has_parent.clone(), has_parent.clone()],
+                super_property: has_grandparent.clone(),
+            })
+            .with_axiom(Axiom::ObjectPropertyAssertion {
+                property: has_parent.clone(),
+                subject: term("alice"),
+                object: term("bob"),
+            })
+            .with_axiom(Axiom::ObjectPropertyAssertion {
+                property: has_parent.clone(),
+                subject: term("bob"),
+                object: term("carol"),
+            });
+
+        let reasoner = Reasoner::new(&ontology).unwrap();
+        assert!(reasoner.is_consistent().unwrap());
+        assert!(
+            reasoner
+                .entails_object_property(&has_grandparent, &term("alice"), &term("carol"))
+                .unwrap()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1905,4 +1952,5 @@ mod data_negative_tests {
             .expect("sub-property entailment should be explainable");
         assert_eq!(justification.axioms.len(), 2);
     }
+
 }

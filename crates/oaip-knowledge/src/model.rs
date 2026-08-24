@@ -421,6 +421,11 @@ pub enum Axiom {
         sub: Term,
         sup: Term,
     },
+    /// OWL 2 property chain inclusion: `p1 ∘ p2 ⊑ super`.
+    SubObjectPropertyChainOf {
+        properties: Vec<Term>,
+        super_property: Term,
+    },
     TransitiveObjectProperty(Term),
     SymmetricObjectProperty(Term),
     FunctionalObjectProperty(Term),

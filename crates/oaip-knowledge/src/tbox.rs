@@ -106,6 +106,7 @@ impl TBox {
                 }
                 Axiom::ClassAssertion { .. }
                 | Axiom::ObjectPropertyAssertion { .. }
+                | Axiom::SubObjectPropertyChainOf { .. }
                 | Axiom::NegativeObjectPropertyAssertion { .. }
                 | Axiom::SameIndividuals(_)
                 | Axiom::DifferentIndividuals(_)
