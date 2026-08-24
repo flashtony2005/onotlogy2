@@ -8,7 +8,7 @@ mod common;
 
 use openaip_os::business_loop::{
     decide_opportunity, discover_opportunities, execute_opportunity, plan_opportunity_paths,
-    recommend_next_actions,
+    recommend_next_actions, run_next_best_action,
 };
 use openaip_os::storage::{LibSQLStorage, ObjectEngine};
 use serde_json::{Value, json};
@@ -334,7 +334,6 @@ async fn business_loop_discovers_decides_executes_and_replans() {
     assert_eq!(status, 200, "应能读取机会路径：{body}");
     let paths = data(&body).await.as_array().cloned().unwrap_or_default();
     assert_eq!(paths[0]["actions"], json!(["ContactCustomer"]));
-
     let (_, repeat_body) = common::http_call(
         addr,
         "POST",
@@ -513,6 +512,21 @@ async fn business_loop_discovers_decides_executes_and_replans() {
         rich_recommendation["candidates"][1]["action"],
         json!("ContactCustomer")
     );
+
+    let (status, body) = common::http_call(
+        addr,
+        "GET",
+        "/api/v1/business/opportunity-paths?projectId=crm-retention",
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "应能读取创建类流程路径：{body}");
+    let paths = data(&body).await.as_array().cloned().unwrap_or_default();
+    let rich_path = paths
+        .iter()
+        .find(|path| path["subject"] == json!("customer:demo-vip-rich"))
+        .unwrap_or_else(|| panic!("缺少高余额客户路径：{paths:?}"));
+    assert_eq!(rich_path["actions"], json!(["RetainCustomer"]));
 
     let (status, body) = common::http_call(
         addr,
@@ -793,6 +807,15 @@ object Contract:
           op: eq
           value: "Negotiated"
   actions:
+    QuickClose:
+      planning:
+        cost: 4000
+        prior_confidence: 0.5
+        outcome_timing: immediate
+        goal_metric: contract_renewals
+      updates:
+        - field: status
+          value: "Active"
     DraftTerms:
       planning:
         cost: 500
@@ -911,36 +934,41 @@ relation changed_state:
         .expect("应能发现合同机会");
     assert_eq!(discovered.len(), 1);
     assert_eq!(discovered[0]["data"]["subject"], json!("contract:acme"));
-    let opportunity_id = discovered[0]["id"].as_str().expect("机会必须有 ID");
+    let _opportunity_id = discovered[0]["id"].as_str().expect("机会必须有 ID");
 
     let recommendations = recommend_next_actions(&storage, "contract-loop")
         .await
         .expect("应能推荐合同动作");
     assert_eq!(recommendations.len(), 1);
-    assert_eq!(recommendations[0].action, "DraftTerms");
+    assert_eq!(recommendations[0].action, "QuickClose");
     assert!(recommendations[0].reason.contains("days_to_expiry=20"));
 
     let paths = plan_opportunity_paths(&storage, "contract-loop")
         .await
         .expect("应能规划合同动作路径");
-    assert_eq!(paths.len(), 1);
+    assert!(paths.len() > 1);
+    assert!(paths.iter().any(|path| path.actions == vec!["QuickClose"]));
     assert_eq!(paths[0].actions, vec!["DraftTerms", "RenewContract"]);
     assert!((paths[0].projected_net_value - 6180.0).abs() < 1e-9);
 
-    decide_opportunity(
-        &storage,
-        "contract-loop",
-        opportunity_id,
-        Some("DraftTerms"),
-        "contract-test",
-        None,
-        None,
-    )
-    .await
-    .expect("应能决策谈判动作");
-    execute_opportunity(&storage, "contract-loop", opportunity_id)
+    let first_run = run_next_best_action(&storage, "contract-loop", "contract-test")
         .await
-        .expect("应能执行谈判动作");
+        .expect("路径规划应驱动第一轮执行");
+    assert!(first_run.executed);
+    assert_eq!(
+        first_run.recommendation.as_ref().expect("应有推荐").action,
+        "DraftTerms",
+        "两步路径应优于贪心快捷关闭"
+    );
+    assert_eq!(
+        first_run.decision.expect("应有决策")["data"]["action"],
+        json!("DraftTerms")
+    );
+    assert_eq!(
+        first_run.execution.expect("应有执行")["businessResult"],
+        json!(null),
+        "谈判是前置步骤，不能虚构终局结果"
+    );
     let contract = storage
         .get("contract:acme")
         .await

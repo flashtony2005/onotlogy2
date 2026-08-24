@@ -196,6 +196,9 @@ fn expected_benefit(
         .as_deref()
         .zip(planning.benefit_factor)
     else {
+        if planning.outcome_timing != OutcomeTiming::Immediate {
+            return Ok(0.0);
+        }
         return Ok(estimated_value);
     };
     Ok(number(subject, field)?.max(0.0) * factor)
@@ -733,12 +736,38 @@ fn apply_path_action(
 struct PathContext<'a> {
     ontology: &'a OntologyIR,
     owner_type: &'a str,
+    subject_id: &'a str,
     actions: &'a [&'a ActionDef],
     opportunity_type: &'a str,
     estimated_value: f64,
     urgency: f64,
     goals: &'a [crate::storage::ObjectRecord],
     outcomes: &'a [crate::storage::ObjectRecord],
+}
+
+fn validate_path_creates(
+    context: &PathContext,
+    action: &ActionDef,
+    subject_data: &Value,
+) -> Result<(), BusinessLoopError> {
+    if action.creates.len() != 1 {
+        return Err(BusinessLoopError::invalid(
+            "路径中的动作最多支持一个创建效应",
+        ));
+    }
+    let effect = &action.creates[0];
+    let mut object_data = serde_json::Map::new();
+    for (field, expression) in &effect.data {
+        object_data.insert(
+            field.clone(),
+            evaluate_value(expression, context.subject_id, subject_data)?,
+        );
+    }
+    validate_data(
+        context.ontology,
+        &effect.object_type,
+        &Value::Object(object_data),
+    )
 }
 
 fn search_paths<'a>(
@@ -751,6 +780,7 @@ fn search_paths<'a>(
     let PathContext {
         ontology,
         owner_type,
+        subject_id: _,
         actions,
         opportunity_type,
         estimated_value,
@@ -764,12 +794,10 @@ fn search_paths<'a>(
 
     let mut paths = Vec::new();
     for action in actions {
-        // 路径规划先覆盖最常用的确定性状态迁移；创建类流程仍由单步推荐执行。
         let Some(planning) = action.planning.as_ref() else {
             continue;
         };
         if !action.params.is_empty()
-            || !action.creates.is_empty()
             || action.policy.require_approval
             || used.iter().any(|name| name == &action.name)
             || action
@@ -783,11 +811,6 @@ fn search_paths<'a>(
 
         let mut next_state = state.clone();
         apply_path_action(ontology, owner_type, action, &mut next_state)?;
-        let state_key = serde_json::to_string(&next_state)
-            .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
-        if !visited.insert(state_key.clone()) {
-            continue;
-        }
         let mut next_used = used.to_vec();
         next_used.push(action.name.clone());
         let step_confidence = action_confidence(action, outcomes)?;
@@ -804,7 +827,57 @@ fn search_paths<'a>(
         } else {
             0.0
         };
+        let contributes_to_goal = planning.outcome_timing == OutcomeTiming::Immediate
+            && shared_goal_metric(ontology, opportunity_type, action).is_some();
 
+        // 创建效应是流程终点：其后续结果必须等真实终局证据，不能虚构对象内部状态。
+        if !action.creates.is_empty() {
+            validate_path_creates(context, action, &next_state)?;
+            paths.push(ScoredPath {
+                actions: next_used.clone(),
+                benefit,
+                cost: planning.cost,
+                net_value: benefit * step_confidence - planning.cost,
+                confidence: step_confidence,
+                score: f64::NAN,
+            });
+            if let Some(path) = paths.last_mut() {
+                path.score = path.net_value.max(0.0)
+                    * (0.6 + 0.4 * urgency)
+                    * goal_alignment(
+                        actions,
+                        &action.name,
+                        active_goal_gap(goals, actions, ontology, opportunity_type, &action.name)?
+                            .map_or(0.0, |(_, gap)| gap),
+                    );
+            }
+            continue;
+        }
+        // 一个机会只消费一次；能直接产生目标结果的动作是互斥路线终点，不能继续叠加同机会奖励。
+        if contributes_to_goal {
+            let net_value = benefit * step_confidence - planning.cost;
+            paths.push(ScoredPath {
+                actions: next_used.clone(),
+                benefit,
+                cost: planning.cost,
+                net_value,
+                confidence: step_confidence,
+                score: net_value.max(0.0)
+                    * (0.6 + 0.4 * urgency)
+                    * goal_alignment(
+                        actions,
+                        &action.name,
+                        active_goal_gap(goals, actions, ontology, opportunity_type, &action.name)?
+                            .map_or(0.0, |(_, gap)| gap),
+                    ),
+            });
+            continue;
+        }
+        let state_key = serde_json::to_string(&next_state)
+            .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
+        if !visited.insert(state_key.clone()) {
+            continue;
+        }
         let mut candidate = ScoredPath {
             actions: next_used.clone(),
             benefit: f64::NAN,
@@ -813,14 +886,26 @@ fn search_paths<'a>(
             confidence: step_confidence,
             score: f64::NAN,
         };
-        // 汇总值在递归返回后统一折算，避免中间步骤把机会价值重复计入。
+        // 每个可执行前缀本身也是完整路径；继续递归只用于比较更长的替代路线。
+        candidate.benefit = benefit;
+        candidate.cost = planning.cost;
+        candidate.net_value = benefit * step_confidence - planning.cost;
+        candidate.score = candidate.net_value.max(0.0)
+            * (0.6 + 0.4 * urgency)
+            * goal_alignment(
+                actions,
+                &action.name,
+                active_goal_gap(goals, actions, ontology, opportunity_type, &action.name)?
+                    .map_or(0.0, |(_, gap)| gap),
+            );
+        paths.push(candidate);
         let children = search_paths(context, &next_state, &next_used, visited, depth + 1)?;
-        if children.is_empty() {
-            candidate.benefit = benefit;
-            candidate.cost = planning.cost;
-            candidate.net_value = benefit * step_confidence - planning.cost;
-            candidate.confidence = step_confidence;
-            candidate.score = candidate.net_value.max(0.0)
+        for mut child in children {
+            child.confidence *= step_confidence;
+            child.benefit += benefit;
+            child.cost += planning.cost;
+            child.net_value = child.benefit * child.confidence - child.cost;
+            child.score = child.net_value.max(0.0)
                 * (0.6 + 0.4 * urgency)
                 * goal_alignment(
                     actions,
@@ -828,23 +913,7 @@ fn search_paths<'a>(
                     active_goal_gap(goals, actions, ontology, opportunity_type, &action.name)?
                         .map_or(0.0, |(_, gap)| gap),
                 );
-            paths.push(candidate);
-        } else {
-            for mut child in children {
-                child.confidence *= step_confidence;
-                child.benefit += benefit;
-                child.cost += planning.cost;
-                child.net_value = child.benefit * child.confidence - child.cost;
-                child.score = child.net_value.max(0.0)
-                    * (0.6 + 0.4 * urgency)
-                    * goal_alignment(
-                        actions,
-                        &action.name,
-                        active_goal_gap(goals, actions, ontology, opportunity_type, &action.name)?
-                            .map_or(0.0, |(_, gap)| gap),
-                    );
-                paths.push(child);
-            }
+            paths.push(child);
         }
         visited.remove(&state_key);
     }
@@ -889,6 +958,7 @@ pub async fn plan_opportunity_paths(
         let context = PathContext {
             ontology: &ontology,
             owner_type: &owner.name,
+            subject_id: &subject,
             actions: &actions,
             opportunity_type,
             estimated_value: number(&opportunity.data, "estimated_value")?,
@@ -1552,10 +1622,30 @@ pub async fn run_next_best_action(
 ) -> Result<BusinessLoopRun, BusinessLoopError> {
     discover_opportunities(storage, project_id).await?;
     let goals = refresh_goal_progress(storage, project_id).await?;
-    let recommendation = recommend_next_actions(storage, project_id)
-        .await?
-        .into_iter()
-        .next();
+    let recommendations = recommend_next_actions(storage, project_id).await?;
+    let paths = plan_opportunity_paths(storage, project_id).await?;
+    let path_choice = paths.first().and_then(|path| {
+        let first_action = path.actions.first()?;
+        recommendations.iter().find_map(|recommendation| {
+            if recommendation.opportunity_id != path.opportunity_id {
+                return None;
+            }
+            let candidate = recommendation
+                .candidates
+                .iter()
+                .find(|candidate| candidate.action.as_str() == first_action.as_str())?;
+            let mut selected = recommendation.clone();
+            selected.action = candidate.action.clone();
+            selected.confidence = candidate.confidence;
+            Some(selected)
+        })
+    });
+    let mut recommendation = path_choice.or_else(|| recommendations.into_iter().next());
+    if let Some((recommendation, path)) = recommendation.as_mut().zip(paths.first())
+        && recommendation.opportunity_id == path.opportunity_id
+    {
+        recommendation.reason = format!("{}；路径：{}", recommendation.reason, path.reason);
+    }
 
     let Some(recommendation) = recommendation else {
         return Ok(BusinessLoopRun {
