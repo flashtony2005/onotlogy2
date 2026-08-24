@@ -189,6 +189,7 @@ mod tests {
                 ],
                 actions: Vec::new(),
                 restrictions: Vec::new(),
+                data_restrictions: Vec::new(),
             }],
         }
     }
@@ -344,6 +345,7 @@ mod storage_tests {
             }],
             actions: Vec::new(),
             restrictions: Vec::new(),
+            data_restrictions: Vec::new(),
         });
         let schema = runtime_ir_to_knowledge(&ir);
         let knowledge_base = storage_world_snapshot_to_knowledge(&schema, &storage)

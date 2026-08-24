@@ -3,8 +3,9 @@
 
 use openaip_os::abi::codegen;
 use openaip_os::abi::ir::{
-    DataPropertyHierarchy, DisjointUnionGroup, ObjectPropertyRestriction, ObjectRestrictionKind,
-    OntologyIR, PropertyDef, RelationHierarchy, ScalarType,
+    DataLiteral, DataPropertyHierarchy, DataPropertyRestriction, DataRestrictionKind,
+    DisjointUnionGroup, ObjectPropertyRestriction, ObjectRestrictionKind, OntologyIR, PropertyDef,
+    RelationHierarchy, ScalarType,
 };
 use openaip_os::abi::odl::parse_odl;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine, ObjectRecord, StorageError};
@@ -627,6 +628,89 @@ fn tc001k_parse_object_property_restrictions() {
     )
     .unwrap_err();
     assert_eq!(1015, invalid_constructor.code);
+}
+
+#[test]
+fn tc001l_parse_data_property_restrictions() {
+    let odl = [
+        "object Person:",
+        "  properties:",
+        "    name: string",
+        "    age: int",
+        "object TaggedPerson extends Person:",
+        "  properties:",
+        "    note: string",
+        "    status: string",
+        "  data_restrictions:",
+        "    note: some string",
+        "    note: only string",
+        "    status: value \"active\"",
+    ]
+    .join("\n");
+    let ir = parse_odl(&odl).unwrap();
+    let expected = vec![
+        DataPropertyRestriction {
+            property: "note".to_owned(),
+            kind: DataRestrictionKind::Some {
+                datatype: ScalarType::String,
+            },
+        },
+        DataPropertyRestriction {
+            property: "note".to_owned(),
+            kind: DataRestrictionKind::Only {
+                datatype: ScalarType::String,
+            },
+        },
+        DataPropertyRestriction {
+            property: "status".to_owned(),
+            kind: DataRestrictionKind::Value {
+                literal: DataLiteral::String("active".to_owned()),
+            },
+        },
+    ];
+    assert_eq!(expected, ir.find("TaggedPerson").unwrap().data_restrictions);
+    assert!(codegen::roundtrip_ok(&ir).unwrap());
+
+    let undeclared_property = parse_odl(
+        "object Person:\n  properties:\n    name: string\n  data_restrictions:\n    missing: some string\n",
+    )
+    .unwrap_err();
+    assert_eq!(1016, undeclared_property.code);
+    assert_eq!(5, undeclared_property.line);
+    assert!(undeclared_property.message.contains("undeclared property"));
+
+    let datatype_mismatch = parse_odl(
+        "object Person:\n  properties:\n    name: string\n  data_restrictions:\n    name: some int\n",
+    )
+    .unwrap_err();
+    assert_eq!(1016, datatype_mismatch.code);
+    assert!(
+        datatype_mismatch
+            .message
+            .contains("does not match declared type")
+    );
+
+    let literal_type_mismatch = parse_odl(
+        "object Person:\n  properties:\n    name: string\n  data_restrictions:\n    name: value 42\n",
+    )
+    .unwrap_err();
+    assert_eq!(1016, literal_type_mismatch.code);
+    assert!(
+        literal_type_mismatch
+            .message
+            .contains("literal does not match declared type")
+    );
+
+    let invalid_constructor = parse_odl(
+        "object Person:\n  properties:\n    name: string\n  data_restrictions:\n    name: maybe string\n",
+    )
+    .unwrap_err();
+    assert_eq!(1016, invalid_constructor.code);
+    assert!(
+        invalid_constructor
+            .message
+            .contains("unknown data restriction constructor")
+    );
 }
 
 // ── TC-002：IR 保真（REQ-002） ───────────────────────────────────────────

@@ -300,6 +300,9 @@ pub struct ObjectType {
     /// Necessary object-property conditions declared directly on this class.
     #[serde(default)]
     pub restrictions: Vec<ObjectPropertyRestriction>,
+    /// Necessary data-property conditions declared directly on this class.
+    #[serde(default)]
+    pub data_restrictions: Vec<DataPropertyRestriction>,
 }
 
 /// 有类型关系边及其 OWL 对象属性特征（对应 ODL `relation X:`）。
@@ -392,6 +395,33 @@ pub enum ObjectRestrictionKind {
     Only { class: String },
     /// `relation: value individual`
     Value { individual: String },
+}
+
+/// A named-class necessary condition over a declared scalar property.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DataPropertyRestriction {
+    pub property: String,
+    pub kind: DataRestrictionKind,
+}
+
+/// The supported data-property restriction constructors.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum DataRestrictionKind {
+    /// `property: some integer`
+    Some { datatype: ScalarType },
+    /// `property: only string`
+    Only { datatype: ScalarType },
+    /// `property: value "active"`
+    Value { literal: DataLiteral },
+}
+
+/// A typed literal used by `value` data-property restrictions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum DataLiteral {
+    Boolean(bool),
+    Integer(i64),
+    Double(f64),
+    String(String),
 }
 
 /// 整份 ODL 解析出的 IR。
@@ -500,6 +530,75 @@ impl OntologyIR {
                                 index,
                                 object: object.name.clone(),
                                 message: "has-value individual is empty".to_owned(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate that direct data-property restrictions refer to declared
+    /// scalar properties with compatible types. Hand-built serialized IR cannot
+    /// bypass the ODL grammar.
+    pub fn validate_data_restrictions(&self) -> Result<(), DataRestrictionError> {
+        let mut restriction_index = 0usize;
+        for object in &self.object_types {
+            let properties: std::collections::BTreeMap<&str, ScalarType> = object
+                .properties
+                .iter()
+                .map(|property| (property.name.as_str(), property.ty))
+                .collect();
+            for restriction in &object.data_restrictions {
+                let index = restriction_index;
+                restriction_index += 1;
+                if restriction.property.trim().is_empty() {
+                    return Err(DataRestrictionError {
+                        index,
+                        object: object.name.clone(),
+                        message: "data restriction property is empty".to_owned(),
+                    });
+                }
+                let Some(&declared) = properties.get(restriction.property.as_str()) else {
+                    return Err(DataRestrictionError {
+                        index,
+                        object: object.name.clone(),
+                        message: format!(
+                            "data restriction references undeclared property `{}`",
+                            restriction.property
+                        ),
+                    });
+                };
+                match &restriction.kind {
+                    DataRestrictionKind::Some { datatype }
+                    | DataRestrictionKind::Only { datatype } => {
+                        if *datatype != declared {
+                            return Err(DataRestrictionError {
+                                index,
+                                object: object.name.clone(),
+                                message: format!(
+                                    "data restriction datatype `{datatype:?}` does not match declared type `{declared:?}` for property `{}`",
+                                    restriction.property
+                                ),
+                            });
+                        }
+                    }
+                    DataRestrictionKind::Value { literal } => {
+                        let literal_type = match literal {
+                            DataLiteral::Boolean(_) => ScalarType::Bool,
+                            DataLiteral::Integer(_) => ScalarType::Int,
+                            DataLiteral::Double(_) => ScalarType::Float,
+                            DataLiteral::String(_) => ScalarType::String,
+                        };
+                        if literal_type != declared {
+                            return Err(DataRestrictionError {
+                                index,
+                                object: object.name.clone(),
+                                message: format!(
+                                    "data restriction literal does not match declared type `{declared:?}` for property `{}`",
+                                    restriction.property
+                                ),
                             });
                         }
                     }
@@ -1104,6 +1203,14 @@ pub struct DisjointUnionError {
 /// An invalid direct object-property restriction, attributed to its class.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectRestrictionError {
+    pub index: usize,
+    pub object: String,
+    pub message: String,
+}
+
+/// An invalid direct data-property restriction, attributed to its class.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataRestrictionError {
     pub index: usize,
     pub object: String,
     pub message: String,

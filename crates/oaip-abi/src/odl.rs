@@ -27,10 +27,10 @@
 
 use crate::data_range::parse_data_range;
 use crate::ir::{
-    ActionDef, Clause, CompareOp, CreateEffect, DataPropertyHierarchy, DisjointUnionGroup,
-    FieldUpdate, ObjectPropertyRestriction, ObjectRestrictionKind, ObjectType, OntologyIR,
-    ParamDef, PolicyDef, PropertyDef, PropertyFacet, RelationDef, RelationHierarchy, ScalarType,
-    ValueExpr,
+    ActionDef, Clause, CompareOp, CreateEffect, DataLiteral, DataPropertyHierarchy,
+    DataPropertyRestriction, DataRestrictionKind, DisjointUnionGroup, FieldUpdate,
+    ObjectPropertyRestriction, ObjectRestrictionKind, ObjectType, OntologyIR, ParamDef, PolicyDef,
+    PropertyDef, PropertyFacet, RelationDef, RelationHierarchy, ScalarType, ValueExpr,
 };
 use crate::validation::validate_property_constraints;
 use std::str::FromStr;
@@ -72,6 +72,7 @@ const E_INVALID_OBJECT_HIERARCHY: u32 = 1012; // object extends 引用无效或�
 const E_INVALID_CLASS_GROUP: u32 = 1013; // disjoint/equivalent 类组声明无效
 const E_INVALID_DISJOINT_UNION: u32 = 1014; // disjoint_union 类定义无效
 const E_INVALID_OBJECT_RESTRICTION: u32 = 1015; // 对象属性限制引用无效
+const E_INVALID_DATA_RESTRICTION: u32 = 1016; // 数据属性限制引用无效或类型不匹配
 
 /// 解析上下文中的块（基于缩进的简易状态机）。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -88,6 +89,7 @@ enum Section {
     ActionPolicy,
     ActionPrecondition,
     ObjectRestrictions,
+    DataRestrictions,
     Relation,
 }
 
@@ -109,6 +111,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     let mut declared_equivalent: Vec<(u32, Vec<String>)> = Vec::new();
     let mut declared_disjoint_unions: Vec<(u32, DisjointUnionGroup)> = Vec::new();
     let mut declared_restrictions: Vec<(u32, String, ObjectPropertyRestriction)> = Vec::new();
+    let mut declared_data_restrictions: Vec<(u32, String, DataPropertyRestriction)> = Vec::new();
     let mut declared_sub_relations: Vec<(u32, (String, String))> = Vec::new();
     let mut declared_disjoint_relations: Vec<(u32, Vec<String>)> = Vec::new();
     let mut declared_equivalent_relations: Vec<(u32, Vec<String>)> = Vec::new();
@@ -418,6 +421,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                     properties: Vec::new(),
                     actions: Vec::new(),
                     restrictions: Vec::new(),
+                    data_restrictions: Vec::new(),
                 },
             ));
             section = vec![(Section::Object, indent)];
@@ -512,6 +516,9 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                 (Section::Object, "properties") => section.push((Section::Properties, indent)),
                 (Section::Object, "restrictions") => {
                     section.push((Section::ObjectRestrictions, indent))
+                }
+                (Section::Object, "data_restrictions") => {
+                    section.push((Section::DataRestrictions, indent))
                 }
                 (Section::Object, "actions") => section.push((Section::Actions, indent)),
                 (Section::Actions, name) => {
@@ -777,6 +784,55 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         obj.restrictions.push(restriction.clone());
                     }
                     declared_restrictions.push((line_no, k.to_string(), restriction));
+                }
+                Section::DataRestrictions => {
+                    let invalid = |message: String| {
+                        OdlError::new(E_INVALID_DATA_RESTRICTION, message, line_no, 1)
+                    };
+                    if k.is_empty() || k.contains(char::is_whitespace) {
+                        return Err(invalid(
+                            "data restriction contains an empty or invalid property".to_owned(),
+                        ));
+                    }
+                    let Some((kind, filler)) = v.split_once(char::is_whitespace) else {
+                        return Err(invalid(
+                            "data restriction needs `property: some type`, `property: only type`, or `property: value literal`"
+                                .to_owned(),
+                        ));
+                    };
+                    let filler = filler.trim();
+                    if filler.is_empty() || filler.contains(char::is_whitespace) {
+                        return Err(invalid(
+                            "data restriction filler is empty or contains whitespace".to_owned(),
+                        ));
+                    }
+                    let kind = match kind {
+                        "some" => {
+                            let datatype = ScalarType::from_str(filler).map_err(invalid)?;
+                            DataRestrictionKind::Some { datatype }
+                        }
+                        "only" => {
+                            let datatype = ScalarType::from_str(filler).map_err(invalid)?;
+                            DataRestrictionKind::Only { datatype }
+                        }
+                        "value" => {
+                            let literal = parse_data_literal(filler).map_err(&invalid)?;
+                            DataRestrictionKind::Value { literal }
+                        }
+                        _ => {
+                            return Err(invalid(format!(
+                                "unknown data restriction constructor '{kind}'; expected some, only, or value"
+                            )));
+                        }
+                    };
+                    let restriction = DataPropertyRestriction {
+                        property: k.to_string(),
+                        kind,
+                    };
+                    if let Some((_, obj)) = current.as_mut() {
+                        obj.data_restrictions.push(restriction.clone());
+                    }
+                    declared_data_restrictions.push((line_no, k.to_string(), restriction));
                 }
                 _ => {
                     return Err(OdlError::new(
@@ -1077,6 +1133,18 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             1,
         ));
     }
+    if let Err(error) = ir.validate_data_restrictions() {
+        let line = declared_data_restrictions
+            .get(error.index)
+            .map(|(line, _, _)| *line)
+            .unwrap_or(1);
+        return Err(OdlError::new(
+            E_INVALID_DATA_RESTRICTION,
+            format!("object '{}': {}", error.object, error.message),
+            line,
+            1,
+        ));
+    }
     for object in &ir.object_types {
         for action in &object.actions {
             for created in &action.creates {
@@ -1132,6 +1200,29 @@ fn parse_header(line: &str) -> Option<&str> {
         return None;
     }
     Some(k)
+}
+
+/// Parse a typed literal for data-property `value` restrictions.
+fn parse_data_literal(raw: &str) -> Result<DataLiteral, String> {
+    if (raw.starts_with('"') && raw.ends_with('"') && raw.len() >= 2)
+        || (raw.starts_with('\'') && raw.ends_with('\'') && raw.len() >= 2)
+    {
+        return Ok(DataLiteral::String(raw[1..raw.len() - 1].to_owned()));
+    }
+    match raw {
+        "true" => return Ok(DataLiteral::Boolean(true)),
+        "false" => return Ok(DataLiteral::Boolean(false)),
+        _ => {}
+    }
+    if let Ok(value) = raw.parse::<i64>() {
+        return Ok(DataLiteral::Integer(value));
+    }
+    if let Ok(value) = raw.parse::<f64>() {
+        return Ok(DataLiteral::Double(value));
+    }
+    Err(format!(
+        "cannot parse '{raw}' as a data restriction literal; expected quoted string, true/false, integer, or number"
+    ))
 }
 
 /// 列表项 key 匹配：`- <key>: <value>` → 返回 value（key 不匹配 / 无冒号 → None）。

@@ -16,7 +16,10 @@ use chrono::{NaiveDate, SecondsFormat, Utc};
 use oaip_abi::data_range::range_has_extra_base;
 use oaip_abi::{
     canonical_decimal,
-    ir::{ObjectRestrictionKind, OntologyIR, PropertyDataRange, PropertyFacet, ScalarType},
+    ir::{
+        DataLiteral as AbiDataLiteral, DataRestrictionKind, ObjectRestrictionKind, OntologyIR,
+        PropertyDataRange, PropertyFacet, ScalarType,
+    },
     property_cardinality_bounds, property_one_of_json_values, validate_property_constraints,
 };
 use serde::{Deserialize, Serialize};
@@ -25,6 +28,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 fn class(name: impl Into<String>) -> ClassExpression {
     ClassExpression::class(Term::new(name))
+}
+
+fn data_literal(literal: &AbiDataLiteral) -> Literal {
+    match literal {
+        AbiDataLiteral::Boolean(value) => Literal::Boolean(*value),
+        AbiDataLiteral::Integer(value) => Literal::Integer(*value),
+        AbiDataLiteral::Double(value) => Literal::Double(*value),
+        AbiDataLiteral::String(value) => Literal::String(value.clone()),
+    }
 }
 
 fn scalar_datatype(ty: ScalarType) -> Datatype {
@@ -327,6 +339,22 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
             };
             ontology.push(Axiom::subclass(source.clone(), expression));
         }
+        for restriction in &object_type.data_restrictions {
+            let expression = match &restriction.kind {
+                DataRestrictionKind::Some { datatype } => ClassExpression::some_data(
+                    restriction.property.as_str(),
+                    scalar_datatype(*datatype),
+                ),
+                DataRestrictionKind::Only { datatype } => ClassExpression::all_data(
+                    restriction.property.as_str(),
+                    scalar_datatype(*datatype),
+                ),
+                DataRestrictionKind::Value { literal } => {
+                    ClassExpression::has_data(restriction.property.as_str(), data_literal(literal))
+                }
+            };
+            ontology.push(Axiom::subclass(source.clone(), expression));
+        }
     }
     for hierarchy in &ir.relation_hierarchy {
         ontology.push(Axiom::SubObjectPropertyOf {
@@ -541,6 +569,12 @@ pub fn validate_runtime_ir(ir: &OntologyIR) -> Result<()> {
         return Err(KnowledgeError::Invalid(error.message));
     }
     if let Err(error) = ir.validate_object_restrictions() {
+        return Err(KnowledgeError::Invalid(format!(
+            "object `{}`: {}",
+            error.object, error.message
+        )));
+    }
+    if let Err(error) = ir.validate_data_restrictions() {
         return Err(KnowledgeError::Invalid(format!(
             "object `{}`: {}",
             error.object, error.message
@@ -1257,6 +1291,7 @@ mod tests {
                     Vec::new()
                 },
                 restrictions: Vec::new(),
+                data_restrictions: Vec::new(),
             }],
         }
     }
@@ -1450,6 +1485,7 @@ disjoint_union Vehicle = Car, Boat
             }],
             actions: Vec::new(),
             restrictions: Vec::new(),
+            data_restrictions: Vec::new(),
         });
         ir.disjoint_groups = vec![vec!["Dog".to_owned(), "Cat".to_owned()]];
         assert!(matches!(
@@ -1630,6 +1666,106 @@ relation guardian:
     }
 
     #[test]
+    fn declared_data_restrictions_project_and_gate_world_facts() {
+        let ir = oaip_abi::parse_odl(
+            r#"
+object Person:
+  properties:
+    name: string
+    age: int
+
+object TaggedPerson extends Person:
+  properties:
+    note: string
+  data_restrictions:
+    note: some string
+
+object StrictPerson extends Person:
+  properties:
+    note: string
+  data_restrictions:
+    note: only string
+
+object ActivePerson extends Person:
+  properties:
+    status: string
+  data_restrictions:
+    status: value "active"
+"#,
+        )
+        .unwrap();
+        assert!(validate_runtime_ir(&ir).is_ok());
+        let schema = runtime_ir_to_knowledge(&ir);
+        assert!(schema.axioms().contains(&Axiom::subclass(
+            class("TaggedPerson"),
+            ClassExpression::some_data("note", Datatype::String)
+        )));
+        assert!(schema.axioms().contains(&Axiom::subclass(
+            class("StrictPerson"),
+            ClassExpression::all_data("note", Datatype::String)
+        )));
+        assert!(schema.axioms().contains(&Axiom::subclass(
+            class("ActivePerson"),
+            ClassExpression::has_data("status", Literal::String("active".to_owned()))
+        )));
+
+        let object = |id: &str, ty: &str| RuntimeObjectFact {
+            id: id.to_owned(),
+            object_type: ty.to_owned(),
+            data: serde_json::json!({ "name": id, "age": 30 }),
+        };
+        let objects = [
+            {
+                let mut o = object("tagged-1", "TaggedPerson");
+                o.data["note"] = serde_json::json!("hello");
+                o
+            },
+            object("strict-1", "StrictPerson"),
+            {
+                let mut o = object("active-1", "ActivePerson");
+                o.data["status"] = serde_json::json!("active");
+                o
+            },
+        ];
+        let world = runtime_world_to_knowledge(&schema, &objects, &[]).unwrap();
+        assert!(validate_canonical_ontology_with_world(&schema, &objects, &[]).is_ok());
+        let reasoner = Reasoner::new(&world).unwrap();
+        for id in ["tagged-1", "strict-1", "active-1"] {
+            assert!(
+                reasoner
+                    .instances_of(&Term::new("Person"))
+                    .unwrap()
+                    .contains(&Term::new(id)),
+                "{id} should be inferred as a Person"
+            );
+        }
+
+        // The parser rejects an undeclared property reference (fail-closed).
+        let bad = oaip_abi::parse_odl(
+            r#"
+object Person:
+  properties:
+    name: string
+  data_restrictions:
+    missing: some string
+"#,
+        );
+        assert!(bad.is_err());
+
+        // The parser rejects a datatype mismatch.
+        let mismatched = oaip_abi::parse_odl(
+            r#"
+object Person:
+  properties:
+    name: string
+  data_restrictions:
+    name: some int
+"#,
+        );
+        assert!(mismatched.is_err());
+    }
+
+    #[test]
     fn runtime_validation_rejects_undeclared_and_cyclic_extends() {
         let mut ir = ir(false);
         ir.object_types.push(ObjectType {
@@ -1642,6 +1778,7 @@ relation guardian:
             }],
             actions: Vec::new(),
             restrictions: Vec::new(),
+            data_restrictions: Vec::new(),
         });
         assert!(validate_runtime_ir(&ir).is_err());
 

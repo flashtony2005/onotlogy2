@@ -197,6 +197,26 @@ object Parent extends Person:
 action link edge；`some` / `only` 的 filler 必须是已声明类，`value` 的 individual 在 TBox 层保持
 开放世界语义。这些限制参与 classification、live-world 一致性、诊断和演化影响分析。
 
+对象类型同样可以在 `data_restrictions:` 块直接声明 data-property 必要条件：
+
+```odl
+object TaggedPerson extends Person:
+  properties:
+    note: string
+    status: string
+  data_restrictions:
+    note: some string
+    note: only string
+    status: value "active"
+```
+
+三条声明分别投影为 `SubClassOf(TaggedPerson, DataSomeValuesFrom(note, xsd:string))`、
+`SubClassOf(TaggedPerson, DataAllValuesFrom(note, xsd:string))` 和
+`SubClassOf(TaggedPerson, DataHasValue(status, "active"))`。property 必须是本对象已声明的
+标量属性；`some` / `only` 的 datatype 必须与属性声明类型一致，`value` 的 literal 类型也必须
+匹配。这些限制参与 classification、live-world 一致性、诊断和演化影响分析；移除后
+replace-exactly 会同步清除投影公理。
+
 ### 4.5 ODL property constraints
 
 Executable ODL 属性现在可以在标量类型后直接声明保守约束：
@@ -670,7 +690,8 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 ## 9. 已知下一步
 
 1. 继续按真实业务需要扩展更多 DL 结构到 ODL 直接表达面，进一步减少手写 proposal JSON。
-   `disjoint_union` 与 object-property `some` / `only` / `value` 限制已经直接进入 ODL。
+   `disjoint_union`、object-property `some` / `only` / `value` 限制和 data-property
+   `some` / `only` / `value` 限制已经直接进入 ODL。
 2. 在真实业务需要时继续扩展 XSD 构造（如自定义 datatype 定义），保持保守语义。
 3. 在 update/delete、append-only SameIndividuals、数据属性约束和
    `SubDataPropertyOf` 已支持增量复用后，继续处理其余 TBox 变更。

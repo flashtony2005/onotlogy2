@@ -823,6 +823,7 @@ mod tests {
                     properties,
                     actions: Vec::new(),
                     restrictions: Vec::new(),
+                    data_restrictions: Vec::new(),
                 }],
             }
         }
@@ -1484,6 +1485,7 @@ equivalent_relation primary_contact, contact
                 }],
                 actions: Vec::new(),
                 restrictions: Vec::new(),
+                data_restrictions: Vec::new(),
             }],
         };
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
@@ -1546,6 +1548,7 @@ equivalent_relation primary_contact, contact
                 }],
                 actions: Vec::new(),
                 restrictions: Vec::new(),
+                data_restrictions: Vec::new(),
             }],
         };
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
@@ -1617,6 +1620,7 @@ equivalent_relation primary_contact, contact
                 }],
                 actions: Vec::new(),
                 restrictions: Vec::new(),
+                data_restrictions: Vec::new(),
             }],
         };
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
@@ -2181,6 +2185,123 @@ relation guardian:
     }
 
     #[tokio::test]
+    async fn odl_data_restrictions_evolve_and_replace_exactly() {
+        let storage = LibSQLStorage::open(":memory:").await.unwrap();
+        let base = r#"
+object Person:
+  properties:
+    name: string
+    age: int
+
+object TaggedPerson extends Person:
+  properties:
+    note: string
+    status: string
+  data_restrictions:
+    note: some string
+    status: value "active"
+"#;
+        let initial_ir = oaip_abi::parse_odl(base).unwrap();
+        storage
+            .create(
+                "Person",
+                "alice",
+                serde_json::json!({ "name": "Alice", "age": 30 }),
+            )
+            .await
+            .unwrap();
+        storage
+            .create(
+                "TaggedPerson",
+                "tagged-1",
+                serde_json::json!({ "name": "Tagged", "age": 25, "note": "hello", "status": "active" }),
+            )
+            .await
+            .unwrap();
+        storage
+            .initialize_knowledge_version("root", &Ontology::new(), Some(&initial_ir))
+            .await
+            .unwrap();
+
+        let independent = OntologyProposal::new("add-friendly-class").with_change(
+            OntologyChange::Add(Axiom::subclass(
+                ClassExpression::class(Term::new("Friendly")),
+                ClassExpression::class(Term::new("Person")),
+            )),
+        );
+        storage
+            .propose_knowledge_change("root", &independent, Some(&initial_ir.clone()))
+            .await
+            .unwrap();
+        storage
+            .decide_knowledge_proposal("add-friendly-class", true, "alice", None)
+            .await
+            .unwrap();
+        let (_, applied) = storage
+            .apply_knowledge_proposal("add-friendly-class", "v2")
+            .await
+            .unwrap();
+        assert!(applied.ontology.axioms().contains(&Axiom::subclass(
+            ClassExpression::class(Term::new("TaggedPerson")),
+            ClassExpression::DataSomeValuesFrom {
+                property: Term::new("note"),
+                datatype: Datatype::String,
+            }
+        )));
+        assert!(applied.ontology.axioms().contains(&Axiom::subclass(
+            ClassExpression::class(Term::new("TaggedPerson")),
+            ClassExpression::DataHasValue {
+                property: Term::new("status"),
+                value: Literal::String("active".to_owned()),
+            }
+        )));
+        assert_eq!(Some(initial_ir), applied.runtime_ir);
+
+        let removed_ir = oaip_abi::parse_odl(
+            r#"
+object Person:
+  properties:
+    name: string
+    age: int
+
+object TaggedPerson extends Person:
+  properties:
+    note: string
+    status: string
+"#,
+        )
+        .unwrap();
+        let remove = OntologyProposal::new("remove-tagged-restrictions").with_change(
+            OntologyChange::Add(Axiom::subclass(
+                ClassExpression::class(Term::new("Friendly")),
+                ClassExpression::class(Term::new("Person")),
+            )),
+        );
+        storage
+            .propose_knowledge_change("v2", &remove, Some(&removed_ir.clone()))
+            .await
+            .unwrap();
+        storage
+            .decide_knowledge_proposal("remove-tagged-restrictions", true, "bob", None)
+            .await
+            .unwrap();
+        let (_, removed) = storage
+            .apply_knowledge_proposal("remove-tagged-restrictions", "v3")
+            .await
+            .unwrap();
+        assert!(!removed.ontology.axioms().iter().any(|axiom| matches!(
+            axiom,
+            Axiom::SubClassOf { sup, .. }
+                if matches!(
+                    sup,
+                    ClassExpression::DataSomeValuesFrom { .. }
+                        | ClassExpression::DataHasValue { .. }
+                )
+        )));
+        assert_eq!(Some(removed_ir), removed.runtime_ir);
+    }
+
+    #[tokio::test]
     async fn pure_dl_evolution_validates_the_current_live_world() {
         fn named(name: &str) -> ClassExpression {
             ClassExpression::class(Term::new(name))
@@ -2284,6 +2405,7 @@ relation guardian:
                 }],
                 actions: Vec::new(),
                 restrictions: Vec::new(),
+                data_restrictions: Vec::new(),
             };
             OntologyIR {
                 object_types: vec![object("Customer"), object("Order")],
@@ -2387,6 +2509,7 @@ relation guardian:
                 }],
                 actions: Vec::new(),
                 restrictions: Vec::new(),
+                data_restrictions: Vec::new(),
             }
         }
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
@@ -2464,6 +2587,7 @@ relation guardian:
             }],
             actions: Vec::new(),
             restrictions: Vec::new(),
+            data_restrictions: Vec::new(),
         };
         let runtime_ir = OntologyIR {
             object_types: vec![object("Customer"), object("Order")],
