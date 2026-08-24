@@ -5,6 +5,7 @@ pub mod evolution;
 pub mod explanation;
 pub mod fact;
 pub mod model;
+pub mod owl_io;
 pub mod reasoner;
 pub mod runtime;
 pub mod tbox;

@@ -105,7 +105,7 @@ fn term_iri(term: &Term) -> String {
     }
 }
 
-fn display_term(iri: impl AsRef<str>) -> Term {
+pub(crate) fn display_term(iri: impl AsRef<str>) -> Term {
     let iri = iri.as_ref();
     Term::new(iri.strip_prefix(LOCAL_NAME_BASE).unwrap_or(iri))
 }
@@ -635,7 +635,7 @@ fn reasoner<T>(
     query().map_err(|error| KnowledgeError::Reasoner(error.to_string()))
 }
 
-fn to_horned_owl(ontology: &Ontology) -> Result<SetOntology<ArcStr>> {
+pub(crate) fn to_horned_owl(ontology: &Ontology) -> Result<SetOntology<ArcStr>> {
     let build = Build::new_arc();
     let mut out = SetOntology::new();
 
