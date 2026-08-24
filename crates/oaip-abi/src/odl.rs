@@ -27,8 +27,9 @@
 
 use crate::data_range::parse_data_range;
 use crate::ir::{
-    ActionDef, Clause, CompareOp, CreateEffect, FieldUpdate, ObjectType, OntologyIR, ParamDef,
-    PolicyDef, PropertyDef, PropertyFacet, RelationDef, RelationHierarchy, ScalarType, ValueExpr,
+    ActionDef, Clause, CompareOp, CreateEffect, DataPropertyHierarchy, FieldUpdate, ObjectType,
+    OntologyIR, ParamDef, PolicyDef, PropertyDef, PropertyFacet, RelationDef, RelationHierarchy,
+    ScalarType, ValueExpr,
 };
 use crate::validation::validate_property_constraints;
 use std::str::FromStr;
@@ -104,6 +105,8 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     let mut declared_equivalent: Vec<(u32, Vec<String>)> = Vec::new();
     let mut declared_sub_relations: Vec<(u32, (String, String))> = Vec::new();
     let mut declared_disjoint_relations: Vec<(u32, Vec<String>)> = Vec::new();
+    let mut declared_sub_data_properties: Vec<(u32, (String, String))> = Vec::new();
+    let mut declared_disjoint_data_properties: Vec<(u32, Vec<String>)> = Vec::new();
 
     let indent_of = |raw: &str| raw.len() - raw.trim_start().len();
 
@@ -148,6 +151,55 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                 declared_disjoint.push((line_no, group));
             } else {
                 declared_equivalent.push((line_no, group));
+            }
+            section = vec![(Section::Top, 0)];
+            continue 'line;
+        }
+
+        // Scalar-property DL 组声明：常见数据属性层级和不相交性无需手写 proposal。
+        for (keyword, is_hierarchy) in [
+            ("sub_data_property ", true),
+            ("disjoint_data_property ", false),
+        ] {
+            let Some(rest) = line.strip_prefix(keyword) else {
+                continue;
+            };
+            flush_update(&mut cur_update, &mut cur_action);
+            flush_create(&mut cur_create, &mut cur_action);
+            flush_action(&mut cur_action, &mut current);
+            if let Some(obj) = current.take() {
+                declared.push(obj);
+            }
+            if let Some(relation) = current_relation.take() {
+                declared_relations.push(relation);
+            }
+            let group = rest
+                .trim()
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            if is_hierarchy {
+                if group.len() != 2 {
+                    return Err(OdlError::new(
+                        E_INVALID_PROPERTY_CONSTRAINT,
+                        "sub_data_property declaration needs exactly two properties",
+                        line_no,
+                        1,
+                    ));
+                }
+                declared_sub_data_properties.push((line_no, (group[0].clone(), group[1].clone())));
+            } else {
+                if group.len() < 2 {
+                    return Err(OdlError::new(
+                        E_INVALID_PROPERTY_CONSTRAINT,
+                        "disjoint_data_property declaration needs at least two properties",
+                        line_no,
+                        1,
+                    ));
+                }
+                declared_disjoint_data_properties.push((line_no, group));
             }
             section = vec![(Section::Top, 0)];
             continue 'line;
@@ -769,6 +821,17 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
         .iter()
         .map(|(_, group)| group.clone())
         .collect();
+    ir.data_property_hierarchy = declared_sub_data_properties
+        .iter()
+        .map(|(_, (sub, sup))| DataPropertyHierarchy {
+            sub_property: sub.clone(),
+            super_property: sup.clone(),
+        })
+        .collect();
+    ir.disjoint_data_property_groups = declared_disjoint_data_properties
+        .iter()
+        .map(|(_, group)| group.clone())
+        .collect();
     let relation_names = declared_relations
         .iter()
         .map(|(_, relation)| relation.name.as_str())
@@ -780,6 +843,33 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                 .map(|(line, _)| *line)
         } else {
             declared_sub_relations
+                .get(error.index)
+                .map(|(line, _)| *line)
+        };
+        return Err(OdlError::new(
+            E_INVALID_PROPERTY_CONSTRAINT,
+            error.message,
+            line.unwrap_or(1),
+            1,
+        ));
+    }
+    let property_names = ir
+        .object_types
+        .iter()
+        .flat_map(|object| {
+            object
+                .properties
+                .iter()
+                .map(|property| property.name.as_str())
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    if let Err(error) = ir.validate_data_property_groups(&property_names) {
+        let line = if error.message.starts_with("disjoint_data_property") {
+            declared_disjoint_data_properties
+                .get(error.index)
+                .map(|(line, _)| *line)
+        } else {
+            declared_sub_data_properties
                 .get(error.index)
                 .map(|(line, _)| *line)
         };

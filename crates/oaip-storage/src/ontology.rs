@@ -812,6 +812,8 @@ mod tests {
                 equivalent_groups: Vec::new(),
                 relation_hierarchy: Vec::new(),
                 disjoint_relation_groups: Vec::new(),
+                data_property_hierarchy: Vec::new(),
+                disjoint_data_property_groups: Vec::new(),
                 object_types: vec![ObjectType {
                     name: "Customer".to_owned(),
                     extends: Vec::new(),
@@ -1338,6 +1340,8 @@ mod tests {
             equivalent_groups: Vec::new(),
             relation_hierarchy: Vec::new(),
             disjoint_relation_groups: Vec::new(),
+            data_property_hierarchy: Vec::new(),
+            disjoint_data_property_groups: Vec::new(),
             object_types: vec![ObjectType {
                 name: "Event".to_owned(),
                 extends: Vec::new(),
@@ -1394,6 +1398,8 @@ mod tests {
             equivalent_groups: Vec::new(),
             relation_hierarchy: Vec::new(),
             disjoint_relation_groups: Vec::new(),
+            data_property_hierarchy: Vec::new(),
+            disjoint_data_property_groups: Vec::new(),
             object_types: vec![ObjectType {
                 name: "Person".to_owned(),
                 extends: Vec::new(),
@@ -1459,6 +1465,8 @@ mod tests {
             equivalent_groups: Vec::new(),
             relation_hierarchy: Vec::new(),
             disjoint_relation_groups: Vec::new(),
+            data_property_hierarchy: Vec::new(),
+            disjoint_data_property_groups: Vec::new(),
             object_types: vec![ObjectType {
                 name: "Account".to_owned(),
                 extends: Vec::new(),
@@ -2033,6 +2041,8 @@ object Cat extends Animal:
                 equivalent_groups: Vec::new(),
                 relation_hierarchy: Vec::new(),
                 disjoint_relation_groups: Vec::new(),
+                data_property_hierarchy: Vec::new(),
+                disjoint_data_property_groups: Vec::new(),
             }
         }
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
@@ -2132,6 +2142,8 @@ object Cat extends Animal:
             equivalent_groups: Vec::new(),
             relation_hierarchy: Vec::new(),
             disjoint_relation_groups: Vec::new(),
+            data_property_hierarchy: Vec::new(),
+            disjoint_data_property_groups: Vec::new(),
         };
         storage
             .initialize_knowledge_version("root", &root(), Some(&runtime_ir))
@@ -2202,6 +2214,8 @@ object Cat extends Animal:
             equivalent_groups: Vec::new(),
             relation_hierarchy: Vec::new(),
             disjoint_relation_groups: Vec::new(),
+            data_property_hierarchy: Vec::new(),
+            disjoint_data_property_groups: Vec::new(),
         };
         storage
             .initialize_knowledge_version("root", &root(), Some(&runtime_ir))

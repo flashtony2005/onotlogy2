@@ -267,7 +267,36 @@ live-world evolution gate 拒绝。
 - 手工构造或反序列化 Runtime IR 必须通过同一 validation boundary；
 - 新 axiom 参与 entailment、explanation、OWL Functional Syntax 往返和演化影响分析。
 
-### 4.9 Composable data ranges
+### 4.9 ODL data-property hierarchy and disjointness
+
+Executable scalar properties can declare the common data-property DL axioms directly:
+
+```odl
+object Person:
+  properties:
+    email: string
+    work_email: string
+    mobile: string
+    landline: string
+
+sub_data_property work_email, email
+disjoint_data_property mobile, landline
+```
+
+The two top-level declarations project to `SubDataPropertyOf` and `DisjointDataProperties`.
+Therefore a value asserted on `work_email` entails the same value on `email`; one individual
+with both `mobile` and `landline` values makes the canonical knowledge base inconsistent and
+is rejected by the live-world evolution gate.
+
+语义边界：
+
+- `sub_data_property` 恰好接受两个已声明的 executable scalar property，且子属性不能等于父属性；
+- `disjoint_data_property` 至少接受两个已声明 scalar property，组内不重复、同一语义组不可重复声明；
+- 属性名解析为 data-property 命名空间，不会把显式 relation 当作合法成员；
+- 手工构造或反序列化 Runtime IR 必须通过同一 validation boundary；
+- 新 axiom 参与 entailment、explanation、OWL Functional Syntax 往返和演化影响分析。
+
+### 4.10 Composable data ranges
 
 Governed DL proposal 可以使用通用 `DataPropertyDataRange` 表达属性值域：
 
@@ -328,7 +357,7 @@ object Customer:
   使用同一条 nested range 语义；
 - 多个普通 range/restriction 公理仍按交集处理。
 
-### 4.10 Datatype facet matrix
+### 4.11 Datatype facet matrix
 
 | Base datatype | 支持的 facet |
 |---------------|--------------|

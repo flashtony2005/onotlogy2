@@ -157,6 +157,8 @@ mod tests {
             equivalent_groups: Vec::new(),
             relation_hierarchy: Vec::new(),
             disjoint_relation_groups: Vec::new(),
+            data_property_hierarchy: Vec::new(),
+            disjoint_data_property_groups: Vec::new(),
             object_types: vec![ObjectType {
                 name: "Customer".into(),
                 extends: Vec::new(),

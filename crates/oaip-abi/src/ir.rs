@@ -356,6 +356,13 @@ pub struct RelationHierarchy {
     pub super_relation: String,
 }
 
+/// A declared data-property inclusion between executable scalar properties.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DataPropertyHierarchy {
+    pub sub_property: String,
+    pub super_property: String,
+}
+
 /// 整份 ODL 解析出的 IR。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct OntologyIR {
@@ -375,6 +382,12 @@ pub struct OntologyIR {
     /// Named relation disjointness groups declared directly in executable ODL.
     #[serde(default)]
     pub disjoint_relation_groups: Vec<Vec<String>>,
+    /// Data-property inclusions declared directly between executable properties.
+    #[serde(default)]
+    pub data_property_hierarchy: Vec<DataPropertyHierarchy>,
+    /// Named data-property disjointness groups declared directly in executable ODL.
+    #[serde(default)]
+    pub disjoint_data_property_groups: Vec<Vec<String>>,
 }
 
 impl OntologyIR {
@@ -451,6 +464,104 @@ impl OntologyIR {
         }
 
         Self::validate_disjoint_relation_group(&self.disjoint_relation_groups, relation_names)
+    }
+
+    /// Validate data-property hierarchy and disjointness at both language and
+    /// governance boundaries so hand-built serialized IR cannot bypass ODL rules.
+    pub fn validate_data_property_groups(
+        &self,
+        property_names: &std::collections::BTreeSet<&str>,
+    ) -> Result<(), DataPropertyGroupError> {
+        let mut seen_edges = std::collections::BTreeSet::new();
+        for (index, edge) in self.data_property_hierarchy.iter().enumerate() {
+            if edge.sub_property.trim().is_empty() || edge.super_property.trim().is_empty() {
+                return Err(DataPropertyGroupError {
+                    index,
+                    message: "data_property hierarchy contains an empty property name".to_owned(),
+                });
+            }
+            if !property_names.contains(edge.sub_property.as_str())
+                || !property_names.contains(edge.super_property.as_str())
+            {
+                return Err(DataPropertyGroupError {
+                    index,
+                    message: format!(
+                        "data_property hierarchy references undeclared property '{} -> {}'",
+                        edge.sub_property, edge.super_property
+                    ),
+                });
+            }
+            if edge.sub_property == edge.super_property {
+                return Err(DataPropertyGroupError {
+                    index,
+                    message: format!(
+                        "property '{}' cannot be its own sub-property",
+                        edge.sub_property
+                    ),
+                });
+            }
+            if !seen_edges.insert((edge.sub_property.as_str(), edge.super_property.as_str())) {
+                return Err(DataPropertyGroupError {
+                    index,
+                    message: format!(
+                        "duplicate data_property hierarchy '{} -> {}'",
+                        edge.sub_property, edge.super_property
+                    ),
+                });
+            }
+        }
+
+        Self::validate_disjoint_data_property_group(
+            &self.disjoint_data_property_groups,
+            property_names,
+        )
+    }
+
+    fn validate_disjoint_data_property_group(
+        groups: &[Vec<String>],
+        property_names: &std::collections::BTreeSet<&str>,
+    ) -> Result<(), DataPropertyGroupError> {
+        let mut seen_groups = std::collections::BTreeSet::new();
+        for (index, group) in groups.iter().enumerate() {
+            if group.len() < 2 {
+                return Err(DataPropertyGroupError {
+                    index,
+                    message: "disjoint_data_property group must contain at least two properties"
+                        .to_owned(),
+                });
+            }
+            let mut members = std::collections::BTreeSet::new();
+            for name in group {
+                if name.trim().is_empty() {
+                    return Err(DataPropertyGroupError {
+                        index,
+                        message: "disjoint_data_property group contains an empty property name"
+                            .to_owned(),
+                    });
+                }
+                if !property_names.contains(name.as_str()) {
+                    return Err(DataPropertyGroupError {
+                        index,
+                        message: format!(
+                            "disjoint_data_property group references undeclared property '{name}'"
+                        ),
+                    });
+                }
+                if !members.insert(name.as_str()) {
+                    return Err(DataPropertyGroupError {
+                        index,
+                        message: format!("disjoint_data_property group repeats property '{name}'"),
+                    });
+                }
+            }
+            if !seen_groups.insert(members) {
+                return Err(DataPropertyGroupError {
+                    index,
+                    message: "duplicate disjoint_data_property group".to_owned(),
+                });
+            }
+        }
+        Ok(())
     }
 
     fn validate_disjoint_relation_group(
@@ -623,6 +734,13 @@ pub struct ClassGroupError {
 /// An invalid relation property hierarchy/group, identified by declaration order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelationPropertyGroupError {
+    pub index: usize,
+    pub message: String,
+}
+
+/// An invalid data-property hierarchy/group, identified by declaration order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataPropertyGroupError {
     pub index: usize,
     pub message: String,
 }

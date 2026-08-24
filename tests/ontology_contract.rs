@@ -2,7 +2,9 @@
 //! 一条用例定义一个能力的边界（Red→Green）。
 
 use openaip_os::abi::codegen;
-use openaip_os::abi::ir::{OntologyIR, PropertyDef, RelationHierarchy, ScalarType};
+use openaip_os::abi::ir::{
+    DataPropertyHierarchy, OntologyIR, PropertyDef, RelationHierarchy, ScalarType,
+};
 use openaip_os::abi::odl::parse_odl;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine, ObjectRecord, StorageError};
 use openaip_os::trace::{TraceEvent, TraceKind};
@@ -192,6 +194,54 @@ fn tc001h_parse_relation_hierarchy_and_disjointness() {
         "  source: Person",
         "  target: Person",
         "disjoint_relation parent",
+    ]
+    .join("\n");
+    assert_eq!(1011, parse_odl(&singleton).unwrap_err().code);
+}
+
+#[test]
+fn tc001i_parse_data_property_hierarchy_and_disjointness() {
+    let odl = [
+        "object Person:",
+        "  properties:",
+        "    email: string",
+        "    work_email: string",
+        "    mobile: string",
+        "    landline: string",
+        "sub_data_property work_email, email",
+        "disjoint_data_property mobile, landline",
+    ]
+    .join("\n");
+    let ir = parse_odl(&odl).unwrap();
+    assert_eq!(
+        vec![DataPropertyHierarchy {
+            sub_property: "work_email".into(),
+            super_property: "email".into(),
+        }],
+        ir.data_property_hierarchy
+    );
+    assert_eq!(
+        vec![vec!["mobile", "landline"]],
+        ir.disjoint_data_property_groups
+    );
+    assert!(codegen::roundtrip_ok(&ir).unwrap());
+
+    let unknown = [
+        "object Person:",
+        "  properties:",
+        "    email: string",
+        "sub_data_property work_email, email",
+    ]
+    .join("\n");
+    let error = parse_odl(&unknown).unwrap_err();
+    assert_eq!(1011, error.code);
+    assert_eq!(4, error.line);
+
+    let singleton = [
+        "object Person:",
+        "  properties:",
+        "    email: string",
+        "disjoint_data_property email",
     ]
     .join("\n");
     assert_eq!(1011, parse_odl(&singleton).unwrap_err().code);

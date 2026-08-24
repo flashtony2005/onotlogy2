@@ -288,6 +288,17 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
             group.iter().map(Term::new).collect(),
         ));
     }
+    for hierarchy in &ir.data_property_hierarchy {
+        ontology.push(Axiom::SubDataPropertyOf {
+            sub: Term::new(&hierarchy.sub_property),
+            sup: Term::new(&hierarchy.super_property),
+        });
+    }
+    for group in &ir.disjoint_data_property_groups {
+        ontology.push(Axiom::DisjointDataProperties(
+            group.iter().map(Term::new).collect(),
+        ));
+    }
     let cardinalities = ir
         .relations
         .iter()
@@ -477,6 +488,20 @@ pub fn validate_runtime_ir(ir: &OntologyIR) -> Result<()> {
 
     let relation_names = relation_names.iter().copied().collect();
     if let Err(error) = ir.validate_relation_property_groups(&relation_names) {
+        return Err(KnowledgeError::Invalid(error.message));
+    }
+
+    let data_property_names = ir
+        .object_types
+        .iter()
+        .flat_map(|object| {
+            object
+                .properties
+                .iter()
+                .map(|property| property.name.as_str())
+        })
+        .collect::<BTreeSet<_>>();
+    if let Err(error) = ir.validate_data_property_groups(&data_property_names) {
         return Err(KnowledgeError::Invalid(error.message));
     }
 
@@ -1054,8 +1079,8 @@ pub fn validate_canonical_ontology_with_world(
 mod tests {
     use super::*;
     use oaip_abi::ir::{
-        ActionDef, CreateEffect, ObjectType, PropertyDef, PropertyFacet, RelationDef,
-        RelationHierarchy,
+        ActionDef, CreateEffect, DataPropertyHierarchy, ObjectType, PropertyDef, PropertyFacet,
+        RelationDef, RelationHierarchy,
     };
 
     fn ir(actions: bool) -> OntologyIR {
@@ -1065,6 +1090,8 @@ mod tests {
             equivalent_groups: Vec::new(),
             relation_hierarchy: Vec::new(),
             disjoint_relation_groups: Vec::new(),
+            data_property_hierarchy: Vec::new(),
+            disjoint_data_property_groups: Vec::new(),
             object_types: vec![ObjectType {
                 name: "Customer".to_owned(),
                 extends: Vec::new(),
@@ -1768,6 +1795,110 @@ equivalent Pet, Companion
             },
         ];
         assert!(validate_canonical_ontology_with_world(&ontology, &objects, &conflicting).is_err());
+    }
+
+    #[test]
+    fn declared_data_property_groups_reason_and_gate_world_facts() {
+        let mut schema = ir(false);
+        schema.object_types[0].properties.extend([
+            PropertyDef {
+                name: "email".to_owned(),
+                ty: ScalarType::String,
+                constraints: Vec::new(),
+            },
+            PropertyDef {
+                name: "work_email".to_owned(),
+                ty: ScalarType::String,
+                constraints: Vec::new(),
+            },
+            PropertyDef {
+                name: "mobile".to_owned(),
+                ty: ScalarType::String,
+                constraints: Vec::new(),
+            },
+            PropertyDef {
+                name: "landline".to_owned(),
+                ty: ScalarType::String,
+                constraints: Vec::new(),
+            },
+        ]);
+        schema.data_property_hierarchy = vec![DataPropertyHierarchy {
+            sub_property: "work_email".to_owned(),
+            super_property: "email".to_owned(),
+        }];
+        schema.disjoint_data_property_groups =
+            vec![vec!["mobile".to_owned(), "landline".to_owned()]];
+
+        assert!(validate_runtime_ir(&schema).is_ok());
+        let ontology = runtime_ir_to_knowledge(&schema);
+        assert!(ontology.axioms().contains(&Axiom::SubDataPropertyOf {
+            sub: Term::new("work_email"),
+            sup: Term::new("email"),
+        }));
+        assert!(
+            ontology
+                .axioms()
+                .contains(&Axiom::DisjointDataProperties(vec![
+                    Term::new("mobile"),
+                    Term::new("landline"),
+                ]))
+        );
+
+        let customer = |data: serde_json::Value| RuntimeObjectFact {
+            id: "customer-1".to_owned(),
+            object_type: "Customer".to_owned(),
+            data,
+        };
+        let valid_world = runtime_world_to_knowledge(
+            &ontology,
+            &[customer(serde_json::json!({
+                "name": "Alice",
+                "work_email": "alice@work.test",
+                "mobile": "+8610000000000",
+            }))],
+            &[],
+        )
+        .unwrap();
+        let reasoner = Reasoner::new(&valid_world).unwrap();
+        assert!(reasoner.is_consistent().unwrap());
+        assert!(
+            reasoner
+                .entails_data_property(
+                    &Term::new("email"),
+                    &Term::new("customer-1"),
+                    &Literal::String("alice@work.test".into())
+                )
+                .unwrap()
+        );
+
+        let conflicting_world = runtime_world_to_knowledge(
+            &ontology,
+            &[customer(serde_json::json!({
+                "name": "Alice",
+                "mobile": "+8610000000000",
+                "landline": "+8620000000000",
+            }))],
+            &[],
+        )
+        .unwrap();
+        assert!(
+            !Reasoner::new(&conflicting_world)
+                .unwrap()
+                .is_consistent()
+                .unwrap()
+        );
+        assert!(
+            validate_canonical_ontology_with_world(
+                &ontology,
+                &[customer(serde_json::json!({
+                    "name": "Alice",
+                    "mobile": "+8610000000000",
+                    "landline": "+8620000000000",
+                }))],
+                &[],
+            )
+            .is_err()
+        );
     }
 
     #[test]
