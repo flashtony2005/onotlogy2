@@ -74,7 +74,7 @@ object RetentionTask:
   properties:
     title: string
     customer: string
-    status: string
+    status: string one_of [Pending,InProgress,Completed,Failed]
     priority: string
   actions:
     start:
@@ -90,6 +90,15 @@ object RetentionTask:
       updates:
         - field: status
           value: "Completed"
+      policy:
+        precondition:
+          - field: self.status
+            op: eq
+            value: "InProgress"
+    fail:
+      updates:
+        - field: status
+          value: "Failed"
       policy:
         precondition:
           - field: self.status
@@ -133,6 +142,7 @@ object Outcome:
     before: string
     after: string
     success: bool
+    stage: string one_of [ActionExecuted,BusinessResult]
 
 object StateTransition:
   properties:
@@ -156,6 +166,10 @@ relation decided_from:
 relation produced_outcome:
   source: Decision
   target: Outcome
+
+relation produced_task:
+  source: Decision
+  target: RetentionTask
 
 relation changed_state:
   source: StateTransition

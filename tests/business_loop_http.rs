@@ -16,6 +16,23 @@ async fn data(body: &str) -> Value {
     value["data"].clone()
 }
 
+async fn insert_rich_vip(storage: &LibSQLStorage, id: &str) {
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+            object_type: "Customer".into(),
+            id: id.into(),
+            data: json!({
+                "name": "高余额超期 VIP 客户",
+                "level": "VIP",
+                "balance": 2_000_000.0,
+                "days_since_last_contact": 75
+            }),
+            project_id: Some("crm-retention".into()),
+        })
+        .await
+        .expect("应能写入高余额客户状态");
+}
+
 #[tokio::test]
 async fn business_loop_discovers_decides_executes_and_replans() {
     let storage = Arc::new(LibSQLStorage::open(":memory:").await.unwrap());
@@ -103,12 +120,27 @@ async fn business_loop_discovers_decides_executes_and_replans() {
     let result = data(&body).await;
     assert_eq!(result["decision"]["data"]["status"], json!("Executed"));
     let decision_id = result["decision"]["id"].as_str().unwrap().to_string();
-    let outcome_id = result["outcome"]["id"].as_str().unwrap().to_string();
+    let action_outcome_id = result["actionOutcome"]["id"]
+        .as_str()
+        .expect("接触动作应有执行证据")
+        .to_string();
+    let business_result_id = result["businessResult"]["id"]
+        .as_str()
+        .expect("直接业务结果应立即产生")
+        .to_string();
     let transition_id = result["stateTransition"]["id"]
         .as_str()
         .unwrap()
         .to_string();
-    assert_eq!(result["outcome"]["data"]["success"], json!(true));
+    assert_eq!(
+        result["actionOutcome"]["data"]["stage"],
+        json!("ActionExecuted")
+    );
+    assert_eq!(
+        result["businessResult"]["data"]["stage"],
+        json!("BusinessResult")
+    );
+    assert_eq!(result["businessResult"]["data"]["success"], json!(true));
     assert_eq!(
         result["stateTransition"]["data"]["subject"],
         json!("customer:demo-vip")
@@ -144,7 +176,16 @@ async fn business_loop_discovers_decides_executes_and_replans() {
     };
     assert!(has_edge("customer:demo-vip", "targets", &opportunity_id));
     assert!(has_edge(&decision_id, "decided_from", &opportunity_id));
-    assert!(has_edge(&decision_id, "produced_outcome", &outcome_id));
+    assert!(has_edge(
+        &decision_id,
+        "produced_outcome",
+        &action_outcome_id
+    ));
+    assert!(has_edge(
+        &decision_id,
+        "produced_outcome",
+        &business_result_id
+    ));
     assert!(has_edge(
         &transition_id,
         "changed_state",
@@ -179,20 +220,7 @@ async fn business_loop_discovers_decides_executes_and_replans() {
         })
         .await
         .expect("应能写入新企业状态");
-    storage
-        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
-            object_type: "Customer".into(),
-            id: "customer:demo-vip-rich".into(),
-            data: json!({
-                "name": "高余额超期 VIP 客户",
-                "level": "VIP",
-                "balance": 2_000_000.0,
-                "days_since_last_contact": 75
-            }),
-            project_id: Some("crm-retention".into()),
-        })
-        .await
-        .expect("应能写入高余额客户状态");
+    insert_rich_vip(&storage, "customer:demo-vip-rich").await;
 
     let run_next_body = json!({ "projectId": "crm-retention" }).to_string();
     let (status, body) = common::http_call(
@@ -223,6 +251,7 @@ async fn business_loop_discovers_decides_executes_and_replans() {
     };
     let low_recommendation = recommendation_for("customer:demo-vip-late");
     let rich_recommendation = recommendation_for("customer:demo-vip-rich");
+    assert_eq!(rich_recommendation["confidence"], json!(0.6));
     assert_eq!(low_recommendation["action"], json!("ContactCustomer"));
     assert_eq!(
         low_recommendation["candidates"][0]["action"],
@@ -263,8 +292,13 @@ async fn business_loop_discovers_decides_executes_and_replans() {
         .expect("挽留动作应创建 RetentionTask")
         .to_string();
     assert_eq!(
-        result["execution"]["outcome"]["data"]["success"],
-        json!(true)
+        result["execution"]["actionOutcome"]["data"]["stage"],
+        json!("ActionExecuted")
+    );
+    assert_eq!(
+        result["execution"]["businessResult"],
+        json!(null),
+        "创建挽留任务只是执行证据，不是客户被留住的业务结果"
     );
     assert_eq!(
         result["goals"][0]["currentValue"],
@@ -287,6 +321,33 @@ async fn business_loop_discovers_decides_executes_and_replans() {
             && relation.target == task_id
     }));
 
+    // 挽留结果必须经历显式生命周期；只有终局才成为可学习 BusinessResult。
+    let start_path = format!("/api/v1/business/retention-tasks/{task_id}/start");
+    let (status, body) = common::http_call(addr, "POST", &start_path, Some("{}")).await;
+    assert_eq!(status, 200, "应能启动挽留任务：{body}");
+    assert_eq!(data(&body).await["data"]["status"], json!("InProgress"));
+
+    let retention_decision_id = result["decision"]["id"].as_str().unwrap().to_string();
+    let result_path = format!("/api/v1/business/retention-tasks/{task_id}/result");
+    let (status, body) =
+        common::http_call(addr, "POST", &result_path, Some(r#"{"success":true}"#)).await;
+    assert_eq!(status, 200, "应能记录挽留终局：{body}");
+    let settled = data(&body).await;
+    assert_eq!(settled["task"]["data"]["status"], json!("Completed"));
+    assert_eq!(settled["outcome"]["data"]["stage"], json!("BusinessResult"));
+    assert_eq!(settled["outcome"]["data"]["success"], json!(true));
+    assert_eq!(
+        settled["goals"][0]["currentValue"],
+        json!(13.0),
+        "挽留成功也不误报为复购指标"
+    );
+    let current_relations = storage.list_all_relations().await.unwrap();
+    assert!(current_relations.iter().any(|relation| {
+        relation.source == retention_decision_id
+            && relation.relation == "produced_task"
+            && relation.target == task_id
+    }));
+
     // 高净值路径执行完后，低余额机会仍应由接触动作闭环并推进目标。
     let (status, body) = common::http_call(
         addr,
@@ -304,7 +365,11 @@ async fn business_loop_discovers_decides_executes_and_replans() {
     );
     assert_eq!(result["recommendation"]["action"], json!("ContactCustomer"));
     assert_eq!(
-        result["execution"]["outcome"]["data"]["success"],
+        result["execution"]["businessResult"]["data"]["stage"],
+        json!("BusinessResult")
+    );
+    assert_eq!(
+        result["execution"]["businessResult"]["data"]["success"],
         json!(true)
     );
     assert_eq!(result["goals"][0]["currentValue"], json!(14.0));
@@ -323,6 +388,115 @@ async fn business_loop_discovers_decides_executes_and_replans() {
         .expect("应能读取高余额客户")
         .expect("高余额客户仍存在");
     assert_eq!(rich_vip.data["days_since_last_contact"], json!(75));
+
+    // 失败终局也是学习样本：第二次挽留沿用成功置信度，失败后概率回到 1/2。
+    insert_rich_vip(&storage, "customer:demo-vip-rich2").await;
+    common::http_call(
+        addr,
+        "POST",
+        "/api/v1/business/discover-opportunities",
+        Some(&run_next_body),
+    )
+    .await;
+    let (status, body) = common::http_call(
+        addr,
+        "GET",
+        "/api/v1/business/recommendations?projectId=crm-retention",
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "应能读取失败前推荐：{body}");
+    let retry = data(&body)
+        .await
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .find(|item| item["subject"] == json!("customer:demo-vip-rich2"))
+        .unwrap_or_else(|| panic!("缺少第二位高余额客户的推荐"));
+    assert_eq!(
+        retry["confidence"],
+        json!(1.0),
+        "只有 BusinessResult 参与学习"
+    );
+
+    let (status, body) = common::http_call(
+        addr,
+        "POST",
+        "/api/v1/business/run-next",
+        Some(&run_next_body),
+    )
+    .await;
+    assert_eq!(status, 200, "应能执行第二位高余额客户的动作：{body}");
+    let result = data(&body).await;
+    assert_eq!(
+        result["recommendation"]["subject"],
+        json!("customer:demo-vip-rich2")
+    );
+    let second_task_id = result["execution"]["createdObject"]["id"]
+        .as_str()
+        .expect("第二次挽留也应创建任务")
+        .to_string();
+    common::http_call(
+        addr,
+        "POST",
+        &format!("/api/v1/business/retention-tasks/{second_task_id}/start"),
+        Some("{}"),
+    )
+    .await;
+    let (status, body) = common::http_call(
+        addr,
+        "POST",
+        &format!("/api/v1/business/retention-tasks/{second_task_id}/result"),
+        Some(r#"{"success":false}"#),
+    )
+    .await;
+    assert_eq!(status, 200, "应能记录挽留失败：{body}");
+    let failed = data(&body).await;
+    assert_eq!(failed["task"]["data"]["status"], json!("Failed"));
+    assert_eq!(failed["outcome"]["data"]["success"], json!(false));
+
+    insert_rich_vip(&storage, "customer:demo-vip-rich3").await;
+    common::http_call(
+        addr,
+        "POST",
+        "/api/v1/business/discover-opportunities",
+        Some(&run_next_body),
+    )
+    .await;
+    let (status, body) = common::http_call(
+        addr,
+        "GET",
+        "/api/v1/business/recommendations?projectId=crm-retention",
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "应能读取失败后推荐：{body}");
+    let learned = data(&body)
+        .await
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .find(|item| item["subject"] == json!("customer:demo-vip-rich3"))
+        .unwrap_or_else(|| panic!("缺少第三位高余额客户的推荐"));
+    assert_eq!(learned["confidence"], json!(0.5), "负样本应降低置信度");
+
+    let (status, body) = common::http_call(
+        addr,
+        "POST",
+        "/api/v1/business/run-next",
+        Some(&run_next_body),
+    )
+    .await;
+    assert_eq!(status, 200, "应能执行降低置信度后的推荐：{body}");
+    let result = data(&body).await;
+    assert_eq!(result["executed"], json!(true));
+    assert_eq!(
+        result["recommendation"]["subject"],
+        json!("customer:demo-vip-rich3")
+    );
+    assert_eq!(result["execution"]["businessResult"], json!(null));
 
     let (status, body) = common::http_call(
         addr,

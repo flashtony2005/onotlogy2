@@ -3,7 +3,7 @@
 use crate::auth::AuthUser;
 use crate::business_loop::{
     BusinessLoopError, decide_opportunity, discover_opportunities, execute_opportunity, goal_gaps,
-    recommend_next_actions, run_next_best_action,
+    recommend_next_actions, run_next_best_action, settle_retention_task, start_retention_task,
 };
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -32,6 +32,12 @@ pub(crate) struct GoalQuery {
 pub(crate) struct DecideBody {
     pub action: Option<String>,
     pub reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RetentionResultBody {
+    pub success: Option<bool>,
 }
 
 fn error_response(error: BusinessLoopError) -> Response {
@@ -191,6 +197,59 @@ pub(crate) async fn execute(
     };
     for project_id in project_ids {
         match execute_opportunity(&st.storage, &project_id, &id).await {
+            Ok(result) => return ApiResponse::ok(result).into_response(),
+            Err(BusinessLoopError::NotFound(_)) => continue,
+            Err(error) => return error_response(error),
+        }
+    }
+    error_response(BusinessLoopError::NotFound(id))
+}
+
+pub(crate) async fn start_retention(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(id): Path<String>,
+) -> Response {
+    if let Some(response) = write_denied(&user) {
+        return response;
+    }
+    let project_ids = match st.storage.list_projects().await {
+        Ok(projects) => projects
+            .into_iter()
+            .map(|project| project.id)
+            .collect::<Vec<_>>(),
+        Err(error) => return error_response(error.into()),
+    };
+    for project_id in project_ids {
+        match start_retention_task(&st.storage, &project_id, &id).await {
+            Ok(result) => return ApiResponse::ok(result).into_response(),
+            Err(BusinessLoopError::NotFound(_)) => continue,
+            Err(error) => return error_response(error),
+        }
+    }
+    error_response(BusinessLoopError::NotFound(id))
+}
+
+pub(crate) async fn settle_retention(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(id): Path<String>,
+    Json(body): Json<RetentionResultBody>,
+) -> Response {
+    if let Some(response) = write_denied(&user) {
+        return response;
+    }
+    let project_ids = match st.storage.list_projects().await {
+        Ok(projects) => projects
+            .into_iter()
+            .map(|project| project.id)
+            .collect::<Vec<_>>(),
+        Err(error) => return error_response(error.into()),
+    };
+    for project_id in project_ids {
+        match settle_retention_task(&st.storage, &project_id, &id, body.success.unwrap_or(true))
+            .await
+        {
             Ok(result) => return ApiResponse::ok(result).into_response(),
             Err(BusinessLoopError::NotFound(_)) => continue,
             Err(error) => return error_response(error),

@@ -411,6 +411,14 @@ fn router() -> Router<Arc<AppState>> {
             "/api/v1/business/opportunities/:id/execute",
             post(business_loop::execute),
         )
+        .route(
+            "/api/v1/business/retention-tasks/:id/start",
+            post(business_loop::start_retention),
+        )
+        .route(
+            "/api/v1/business/retention-tasks/:id/result",
+            post(business_loop::settle_retention),
+        )
         // ── Phase 2.3 业务包管理 ──
         .route("/api/v1/domain-packs", get(domain_packs::list_domain_packs))
         .route(

@@ -1,4 +1,4 @@
-//! Business Loop v3：企业状态 → 机会 → 候选动作比较 → 行动结果 → 目标反馈与再规划。
+//! Business Loop v4：企业状态 → 机会 → 候选动作比较 → 执行证据 → 业务结果反馈与再规划。
 //!
 //! 闭环对象都是普通世界对象；所有事实写入都经 `WorldCommand`，因此天然获得
 //! 项目归属、事件溯源和审计链。机会规则集中在本模块，Kernel 不感知具体业务。
@@ -15,6 +15,12 @@ const OPPORTUNITY_DECIDED: &str = "Decided";
 const OPPORTUNITY_EXECUTED: &str = "Executed";
 const DECISION_SELECTED: &str = "Selected";
 const DECISION_EXECUTED: &str = "Executed";
+const OUTCOME_ACTION_EXECUTED: &str = "ActionExecuted";
+const OUTCOME_BUSINESS_RESULT: &str = "BusinessResult";
+const TASK_PENDING: &str = "Pending";
+const TASK_IN_PROGRESS: &str = "InProgress";
+const TASK_SETTLED_SUCCESS: &str = "Completed";
+const TASK_SETTLED_FAILURE: &str = "Failed";
 
 /// 可比较的业务动作目录。新增动作先扩展这张表，再由引擎和规划器解释执行，
 /// 避免在 handler 或多个业务函数中散落 `match object_type` 规则。
@@ -372,6 +378,7 @@ fn outcome_snapshot_days(outcome: &Value, field: &str) -> Option<i64> {
 fn is_counted_reactivation(outcome: &Value) -> bool {
     outcome.get("success").and_then(Value::as_bool) == Some(true)
         && outcome.get("action").and_then(Value::as_str) == Some("ContactCustomer")
+        && outcome.get("stage").and_then(Value::as_str) == Some(OUTCOME_BUSINESS_RESULT)
         && outcome_snapshot_days(outcome, "before").is_some_and(|days| days > 45)
         && outcome_snapshot_days(outcome, "after") == Some(0)
 }
@@ -477,7 +484,10 @@ fn action_confidence(action: &str, outcomes: &[crate::storage::ObjectRecord]) ->
         .expect("注册表中的动作必然存在");
     let relevant = outcomes
         .iter()
-        .filter(|item| text(&item.data, "action").is_ok_and(|name| name == action))
+        .filter(|item| {
+            text(&item.data, "action").is_ok_and(|name| name == action)
+                && text(&item.data, "stage").is_ok_and(|stage| stage == OUTCOME_BUSINESS_RESULT)
+        })
         .collect::<Vec<_>>();
     if relevant.is_empty() {
         return definition.prior_confidence;
@@ -697,6 +707,14 @@ pub async fn execute_opportunity(
                 task_id.clone(),
             )
             .await?;
+            link_world(
+                storage,
+                project_id,
+                decision.id.clone(),
+                "produced_task",
+                task_id.clone(),
+            )
+            .await?;
             retention_task_id = Some(task_id);
         }
     }
@@ -705,33 +723,45 @@ pub async fn execute_opportunity(
         .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
     let after = serde_json::to_string(&after_data)
         .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
-    let outcome_id = generated_id("outcome");
+    let action_outcome_id = generated_id("outcome");
     let transition_id = generated_id("state-transition");
-    let outcome_data =
-        json!({ "action": action, "before": before, "after": after, "success": true });
+    let mut action_outcome_data = json!({
+        "action": action,
+        "before": before,
+        "after": after,
+        "success": true,
+        "stage": OUTCOME_ACTION_EXECUTED,
+    });
+    if let Some(task_id) = &retention_task_id {
+        action_outcome_data["before"] = json!(r#"{"RetentionTask":null}"#);
+        action_outcome_data["after"] = json!(format!(r#"{{"RetentionTask":"{task_id}"}}"#));
+    }
     let transition_data = json!({
         "subject": subject,
         "before_data": before,
         "after_data": after,
         "at_action": action
     });
-    validate_data(&ontology, "Outcome", &outcome_data)?;
+    validate_data(&ontology, "Outcome", &action_outcome_data)?;
     validate_data(&ontology, "StateTransition", &transition_data)?;
 
     // 先提交事实变更，再写闭环证据和状态推进；任一后续命令失败时审计链能定位中断点。
-    storage
-        .apply_world(WorldCommand::UpdateObject {
-            id: subject.clone(),
-            data: after_data.clone(),
-            project_id: Some(project_id.to_string()),
-        })
-        .await?;
+    if matches!(definition.effect, ActionEffect::Update { .. }) {
+        storage
+            .apply_world(WorldCommand::UpdateObject {
+                id: subject.clone(),
+                data: after_data.clone(),
+                project_id: Some(project_id.to_string()),
+            })
+            .await?;
+    }
+
     create_world_object(
         storage,
         project_id,
         "Outcome",
-        outcome_id.clone(),
-        outcome_data.clone(),
+        action_outcome_id.clone(),
+        action_outcome_data.clone(),
     )
     .await?;
     link_world(
@@ -739,9 +769,39 @@ pub async fn execute_opportunity(
         project_id,
         decision.id.clone(),
         "produced_outcome",
-        outcome_id.clone(),
+        action_outcome_id.clone(),
     )
     .await?;
+    let business_result = if action == "ContactCustomer" {
+        let result_id = generated_id("outcome");
+        let result_data = json!({
+            "action": action,
+            "before": before,
+            "after": after,
+            "success": true,
+            "stage": OUTCOME_BUSINESS_RESULT,
+        });
+        validate_data(&ontology, "Outcome", &result_data)?;
+        create_world_object(
+            storage,
+            project_id,
+            "Outcome",
+            result_id.clone(),
+            result_data.clone(),
+        )
+        .await?;
+        link_world(
+            storage,
+            project_id,
+            decision.id.clone(),
+            "produced_outcome",
+            result_id.clone(),
+        )
+        .await?;
+        Some(json!({ "id": result_id, "data": result_data }))
+    } else {
+        None
+    };
     create_world_object(
         storage,
         project_id,
@@ -796,7 +856,8 @@ pub async fn execute_opportunity(
     let mut result = json!({
         "opportunity": { "id": opportunity.id, "data": set_status(opportunity.data, OPPORTUNITY_EXECUTED) },
         "decision": { "id": decision.id, "data": set_status(decision.data, DECISION_EXECUTED) },
-        "outcome": { "id": outcome_id, "data": outcome_data },
+        "actionOutcome": { "id": action_outcome_id, "data": action_outcome_data },
+        "businessResult": business_result,
         "stateTransition": { "id": transition_id, "data": transition_data },
         "goals": goals,
     });
@@ -804,6 +865,144 @@ pub async fn execute_opportunity(
         result["createdObject"] = json!({ "id": task_id, "type": "RetentionTask" });
     }
     Ok(result)
+}
+
+async fn retention_task(
+    storage: &LibSQLStorage,
+    project_id: &str,
+    task_id: &str,
+) -> Result<crate::storage::ObjectRecord, BusinessLoopError> {
+    let tasks = storage
+        .list_objects_for_project(project_id, "RetentionTask")
+        .await?;
+    find_record(&tasks, task_id, "RetentionTask")
+        .ok_or_else(|| BusinessLoopError::NotFound(task_id.to_string()))
+        .cloned()
+}
+
+/// 启动挽留任务。业务结果必须等到终局状态，执行动作本身不等于客户被留住。
+pub async fn start_retention_task(
+    storage: &LibSQLStorage,
+    project_id: &str,
+    task_id: &str,
+) -> Result<Value, BusinessLoopError> {
+    let (_, ontology) = project_ontology(storage, project_id).await?;
+    let mut task = retention_task(storage, project_id, task_id).await?;
+    if text(&task.data, "status")? != TASK_PENDING {
+        return Err(BusinessLoopError::invalid(
+            "只有 Pending 状态的挽留任务可以启动",
+        ));
+    }
+
+    task.data = set_status(task.data.clone(), TASK_IN_PROGRESS);
+    validate_data(&ontology, "RetentionTask", &task.data)?;
+    storage
+        .apply_world(WorldCommand::UpdateObject {
+            id: task.id.clone(),
+            data: task.data.clone(),
+            project_id: Some(project_id.to_string()),
+        })
+        .await?;
+
+    Ok(json!({ "id": task.id, "type": task.r#type, "data": task.data }))
+}
+
+/// 记录挽留终局。成功与失败都会成为 BusinessResult，避免只拿成功样本学习。
+pub async fn settle_retention_task(
+    storage: &LibSQLStorage,
+    project_id: &str,
+    task_id: &str,
+    success: bool,
+) -> Result<Value, BusinessLoopError> {
+    let (_, ontology) = project_ontology(storage, project_id).await?;
+    let task = retention_task(storage, project_id, task_id).await?;
+    if text(&task.data, "status")? != TASK_IN_PROGRESS {
+        return Err(BusinessLoopError::invalid(
+            "只有 InProgress 状态的挽留任务可以记录终局",
+        ));
+    }
+
+    let relations = storage.list_all_relations().await?;
+    let subject = relations
+        .iter()
+        .find(|relation| relation.relation == "needs_retention" && relation.target == task.id)
+        .map(|relation| relation.source.clone())
+        .ok_or_else(|| BusinessLoopError::invalid("挽留任务缺少 Customer 关系"))?;
+    if text(&task.data, "customer")? != subject {
+        return Err(BusinessLoopError::invalid(
+            "挽留任务的 Customer 关系与任务数据不一致",
+        ));
+    }
+    let decision_links = relations
+        .iter()
+        .filter(|relation| relation.relation == "produced_task" && relation.target == task.id)
+        .map(|relation| relation.source.as_str())
+        .collect::<Vec<_>>();
+    let decisions = storage
+        .list_objects_for_project(project_id, "Decision")
+        .await?;
+    let decision = decisions
+        .iter()
+        .filter(|item| {
+            decision_links.contains(&item.id.as_str())
+                && text(&item.data, "action").is_ok_and(|action| action == "RetainCustomer")
+        })
+        .max_by(|left, right| left.id.cmp(&right.id))
+        .ok_or_else(|| BusinessLoopError::invalid("挽留任务缺少 RetainCustomer 决策"))?
+        .clone();
+
+    let settled_status = if success {
+        TASK_SETTLED_SUCCESS
+    } else {
+        TASK_SETTLED_FAILURE
+    };
+    let before = serde_json::to_string(&task.data)
+        .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
+    let settled_data = set_status(task.data.clone(), settled_status);
+    validate_data(&ontology, "RetentionTask", &settled_data)?;
+    let after = serde_json::to_string(&settled_data)
+        .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
+    storage
+        .apply_world(WorldCommand::UpdateObject {
+            id: task.id.clone(),
+            data: settled_data.clone(),
+            project_id: Some(project_id.to_string()),
+        })
+        .await?;
+
+    let outcome_id = generated_id("outcome");
+    let outcome_data = json!({
+        "action": "RetainCustomer",
+        "before": before,
+        "after": after,
+        "success": success,
+        "stage": OUTCOME_BUSINESS_RESULT,
+    });
+    validate_data(&ontology, "Outcome", &outcome_data)?;
+    create_world_object(
+        storage,
+        project_id,
+        "Outcome",
+        outcome_id.clone(),
+        outcome_data.clone(),
+    )
+    .await?;
+    link_world(
+        storage,
+        project_id,
+        decision.id.clone(),
+        "produced_outcome",
+        outcome_id.clone(),
+    )
+    .await?;
+    let goals = refresh_goal_progress(storage, project_id).await?;
+
+    Ok(json!({
+        "task": { "id": task.id, "data": settled_data },
+        "decision": { "id": decision.id, "data": decision.data },
+        "outcome": { "id": outcome_id, "data": outcome_data },
+        "goals": goals,
+    }))
 }
 
 /// 执行一轮完整再规划：发现 → 选择最优动作 → 决策 → 执行 → 目标反馈。
