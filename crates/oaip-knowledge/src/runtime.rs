@@ -331,6 +331,16 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
             ),
         ]));
     }
+    for group in &ir.same_individual_groups {
+        ontology.push(Axiom::SameIndividuals(
+            group.iter().map(Term::new).collect(),
+        ));
+    }
+    for group in &ir.different_individual_groups {
+        ontology.push(Axiom::DifferentIndividuals(
+            group.iter().map(Term::new).collect(),
+        ));
+    }
     for object_type in &ir.object_types {
         let source = class(&object_type.name);
         for restriction in &object_type.restrictions {
@@ -609,6 +619,9 @@ pub fn validate_runtime_ir(ir: &OntologyIR) -> Result<()> {
         return Err(KnowledgeError::Invalid(error.message));
     }
     if let Err(error) = ir.validate_object_one_ofs() {
+        return Err(KnowledgeError::Invalid(error.message));
+    }
+    if let Err(error) = ir.validate_individual_groups() {
         return Err(KnowledgeError::Invalid(error.message));
     }
     if let Err(error) = ir.validate_object_restrictions() {
@@ -1311,6 +1324,8 @@ mod tests {
             data_property_hierarchy: Vec::new(),
             disjoint_data_property_groups: Vec::new(),
             equivalent_data_property_groups: Vec::new(),
+            same_individual_groups: Vec::new(),
+            different_individual_groups: Vec::new(),
             object_types: vec![ObjectType {
                 name: "Customer".to_owned(),
                 extends: Vec::new(),
@@ -2350,6 +2365,67 @@ object Customer:
 
         let wrong_datatype = fact(json!("user@example.com"), json!(true));
         assert!(runtime_world_to_knowledge(&schema, &[wrong_datatype], &[]).is_err());
+    }
+
+    #[test]
+    fn odl_individual_groups_project_reason_and_gate_world_facts() {
+        let source = r#"object Customer:
+  properties:
+    name: string
+
+same_individuals alice, bob
+different_individuals alice, bob
+"#;
+        let ir = oaip_abi::parse_odl(source).unwrap();
+        validate_runtime_ir(&ir).unwrap();
+        let schema = runtime_ir_to_knowledge(&ir);
+        assert!(schema.axioms().contains(&Axiom::SameIndividuals(vec![
+            Term::new("alice"),
+            Term::new("bob")
+        ])));
+        assert!(schema.axioms().contains(&Axiom::DifferentIndividuals(vec![
+            Term::new("alice"),
+            Term::new("bob")
+        ])));
+        assert!(!Reasoner::new(&schema).unwrap().is_consistent().unwrap());
+
+        // Two storage rows are naturally distinct; a declared same-individual
+        // axiom must therefore expose conflicting scalar values fail-closed.
+        let identity = oaip_abi::parse_odl(
+            r#"object Customer:
+  properties:
+    name: string
+
+same_individuals customer-1, customer-2
+"#,
+        )
+        .unwrap();
+        let facts = [
+            RuntimeObjectFact {
+                id: "customer-1".to_owned(),
+                object_type: "Customer".to_owned(),
+                data: serde_json::json!({ "name": "Ada" }),
+            },
+            RuntimeObjectFact {
+                id: "customer-2".to_owned(),
+                object_type: "Customer".to_owned(),
+                data: serde_json::json!({ "name": "Bob" }),
+            },
+        ];
+        let identity_schema = runtime_ir_to_knowledge(&identity);
+        let world = runtime_world_to_knowledge(&identity_schema, &facts, &[]).unwrap();
+        assert!(!Reasoner::new(&world).unwrap().is_consistent().unwrap());
+        assert!(validate_canonical_ontology_with_world(&identity_schema, &facts, &[]).is_err());
+
+        let mut invalid = oaip_abi::parse_odl(
+            r#"object Customer:
+  properties:
+    name: string
+"#,
+        )
+        .unwrap();
+        invalid.same_individual_groups = vec![vec!["alice".to_owned(), "alice".to_owned()]];
+        assert!(validate_runtime_ir(&invalid).is_err());
     }
 
     #[test]

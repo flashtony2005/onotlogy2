@@ -818,6 +818,8 @@ mod tests {
                 data_property_hierarchy: Vec::new(),
                 disjoint_data_property_groups: Vec::new(),
                 equivalent_data_property_groups: Vec::new(),
+                same_individual_groups: Vec::new(),
+                different_individual_groups: Vec::new(),
                 object_types: vec![ObjectType {
                     name: "Customer".to_owned(),
                     extends: Vec::new(),
@@ -1385,6 +1387,90 @@ object Customer:
     }
 
     #[tokio::test]
+    async fn odl_individual_groups_evolve_and_replace_exactly() {
+        let storage = LibSQLStorage::open(":memory:").await.unwrap();
+        let root =
+            Ontology::new().with_axiom(Axiom::subclass(class("Person"), ClassExpression::Thing));
+        let initial_ir = oaip_abi::parse_odl(
+            r#"object Person:
+  properties:
+    name: string
+
+same_individuals alice, bob
+different_individuals bob, carol
+"#,
+        )
+        .unwrap();
+        storage
+            .initialize_knowledge_version("root", &root, Some(&initial_ir))
+            .await
+            .unwrap();
+
+        let proposal = OntologyProposal::new("add-friendly-person").with_change(
+            OntologyChange::Add(Axiom::subclass(class("Friendly"), class("Person"))),
+        );
+        storage
+            .propose_knowledge_change("root", &proposal, Some(&initial_ir.clone()))
+            .await
+            .unwrap();
+        storage
+            .decide_knowledge_proposal("add-friendly-person", true, "alice", None)
+            .await
+            .unwrap();
+        let (_, applied) = storage
+            .apply_knowledge_proposal("add-friendly-person", "v2")
+            .await
+            .unwrap();
+        assert_eq!(Some(initial_ir.clone()), applied.runtime_ir);
+        assert!(
+            applied
+                .ontology
+                .axioms()
+                .contains(&Axiom::SameIndividuals(vec![
+                    Term::new("alice"),
+                    Term::new("bob")
+                ]))
+        );
+        assert!(
+            applied
+                .ontology
+                .axioms()
+                .contains(&Axiom::DifferentIndividuals(vec![
+                    Term::new("bob"),
+                    Term::new("carol")
+                ]))
+        );
+
+        let removed_ir = oaip_abi::parse_odl(
+            r#"object Person:
+  properties:
+    name: string
+"#,
+        )
+        .unwrap();
+        let remove = OntologyProposal::new("remove-individual-boundaries").with_change(
+            OntologyChange::Add(Axiom::subclass(class("Guest"), class("Person"))),
+        );
+        storage
+            .propose_knowledge_change("v2", &remove, Some(&removed_ir.clone()))
+            .await
+            .unwrap();
+        storage
+            .decide_knowledge_proposal("remove-individual-boundaries", true, "bob", None)
+            .await
+            .unwrap();
+        let (_, removed) = storage
+            .apply_knowledge_proposal("remove-individual-boundaries", "v3")
+            .await
+            .unwrap();
+        assert_eq!(Some(removed_ir), removed.runtime_ir);
+        assert!(!removed.ontology.axioms().iter().any(|axiom| matches!(
+            axiom,
+            Axiom::SameIndividuals(_) | Axiom::DifferentIndividuals(_)
+        )));
+    }
+
+    #[tokio::test]
     async fn odl_equivalent_relations_gate_live_world_evolution() {
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
         let root =
@@ -1539,6 +1625,8 @@ equivalent_relation primary_contact, contact
             data_property_hierarchy: Vec::new(),
             disjoint_data_property_groups: Vec::new(),
             equivalent_data_property_groups: Vec::new(),
+            same_individual_groups: Vec::new(),
+            different_individual_groups: Vec::new(),
             object_types: vec![ObjectType {
                 name: "Event".to_owned(),
                 extends: Vec::new(),
@@ -1603,6 +1691,8 @@ equivalent_relation primary_contact, contact
             data_property_hierarchy: Vec::new(),
             disjoint_data_property_groups: Vec::new(),
             equivalent_data_property_groups: Vec::new(),
+            same_individual_groups: Vec::new(),
+            different_individual_groups: Vec::new(),
             object_types: vec![ObjectType {
                 name: "Person".to_owned(),
                 extends: Vec::new(),
@@ -1676,6 +1766,8 @@ equivalent_relation primary_contact, contact
             data_property_hierarchy: Vec::new(),
             disjoint_data_property_groups: Vec::new(),
             equivalent_data_property_groups: Vec::new(),
+            same_individual_groups: Vec::new(),
+            different_individual_groups: Vec::new(),
             object_types: vec![ObjectType {
                 name: "Account".to_owned(),
                 extends: Vec::new(),
@@ -2606,6 +2698,8 @@ object Planet:
                 data_property_hierarchy: Vec::new(),
                 disjoint_data_property_groups: Vec::new(),
                 equivalent_data_property_groups: Vec::new(),
+                same_individual_groups: Vec::new(),
+                different_individual_groups: Vec::new(),
             }
         }
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
@@ -2713,6 +2807,8 @@ object Planet:
             data_property_hierarchy: Vec::new(),
             disjoint_data_property_groups: Vec::new(),
             equivalent_data_property_groups: Vec::new(),
+            same_individual_groups: Vec::new(),
+            different_individual_groups: Vec::new(),
         };
         storage
             .initialize_knowledge_version("root", &root(), Some(&runtime_ir))
@@ -2791,6 +2887,8 @@ object Planet:
             data_property_hierarchy: Vec::new(),
             disjoint_data_property_groups: Vec::new(),
             equivalent_data_property_groups: Vec::new(),
+            same_individual_groups: Vec::new(),
+            different_individual_groups: Vec::new(),
         };
         storage
             .initialize_knowledge_version("root", &root(), Some(&runtime_ir))

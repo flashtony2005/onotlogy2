@@ -482,6 +482,12 @@ pub struct OntologyIR {
     /// Named data-property equivalence groups declared directly in executable ODL.
     #[serde(default)]
     pub equivalent_data_property_groups: Vec<Vec<String>>,
+    /// Same-individual groups declared directly in executable ODL.
+    #[serde(default)]
+    pub same_individual_groups: Vec<Vec<String>>,
+    /// Different-individual groups declared directly in executable ODL.
+    #[serde(default)]
+    pub different_individual_groups: Vec<Vec<String>>,
 }
 
 impl OntologyIR {
@@ -874,6 +880,57 @@ impl OntologyIR {
                         message: format!("one_of repeats individual '{name}'"),
                     });
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate direct same/different individual groups at both language and
+    /// governance boundaries so hand-built serialized IR cannot bypass ODL rules.
+    pub fn validate_individual_groups(&self) -> Result<(), ClassGroupError> {
+        Self::validate_individual_group("same", &self.same_individual_groups)?;
+        Self::validate_individual_group("different", &self.different_individual_groups)?;
+        Ok(())
+    }
+
+    fn validate_individual_group(
+        kind: &'static str,
+        groups: &[Vec<String>],
+    ) -> Result<(), ClassGroupError> {
+        let mut seen_groups = std::collections::BTreeSet::new();
+        for (index, group) in groups.iter().enumerate() {
+            if group.len() < 2 {
+                return Err(ClassGroupError {
+                    index,
+                    kind,
+                    message: format!(
+                        "{kind} individual group must contain at least two individuals"
+                    ),
+                });
+            }
+            let mut members = std::collections::BTreeSet::new();
+            for name in group {
+                if name.trim().is_empty() {
+                    return Err(ClassGroupError {
+                        index,
+                        kind,
+                        message: format!("{kind} individual group contains an empty name"),
+                    });
+                }
+                if !members.insert(name.as_str()) {
+                    return Err(ClassGroupError {
+                        index,
+                        kind,
+                        message: format!("{kind} individual group repeats '{name}'"),
+                    });
+                }
+            }
+            if !seen_groups.insert(members) {
+                return Err(ClassGroupError {
+                    index,
+                    kind,
+                    message: format!("duplicate {kind} individual group"),
+                });
             }
         }
         Ok(())

@@ -77,6 +77,7 @@ const E_INVALID_OBJECT_RESTRICTION: u32 = 1015; // 对象属性限制引用无�
 const E_INVALID_DATA_RESTRICTION: u32 = 1016; // 数据属性限制引用无效或类型不匹配
 const E_INVALID_OBJECT_ONE_OF: u32 = 1017; // one_of 类个体枚举定义无效
 const E_INVALID_DATATYPE: u32 = 1018; // 自定义 datatype 定义无效或重复
+const E_INVALID_INDIVIDUAL_GROUP: u32 = 1019; // same/different individual 组声明无效
 
 /// 解析上下文中的块（基于缩进的简易状态机）。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -123,6 +124,8 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     let mut declared_sub_data_properties: Vec<(u32, (String, String))> = Vec::new();
     let mut declared_disjoint_data_properties: Vec<(u32, Vec<String>)> = Vec::new();
     let mut declared_equivalent_data_properties: Vec<(u32, Vec<String>)> = Vec::new();
+    let mut declared_same_individuals: Vec<(u32, Vec<String>)> = Vec::new();
+    let mut declared_different_individuals: Vec<(u32, Vec<String>)> = Vec::new();
     let mut declared_datatypes: std::collections::BTreeMap<
         String,
         (ScalarType, PropertyDataRange),
@@ -276,6 +279,49 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
         }
 
         // Named-class DL 组声明：让常见 TBox 约束无需手写 proposal JSON。
+        for (keyword, is_same) in [
+            ("same_individuals ", true),
+            ("different_individuals ", false),
+        ] {
+            let Some(mut rest) = line.strip_prefix(keyword) else {
+                continue;
+            };
+            flush_update(&mut cur_update, &mut cur_action);
+            flush_create(&mut cur_create, &mut cur_action);
+            flush_action(&mut cur_action, &mut current);
+            if let Some(obj) = current.take() {
+                declared.push(obj);
+            }
+            if let Some(relation) = current_relation.take() {
+                declared_relations.push(relation);
+            }
+            rest = rest.trim();
+            let group = rest
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            if group.len() < 2 {
+                return Err(OdlError::new(
+                    E_INVALID_INDIVIDUAL_GROUP,
+                    format!(
+                        "{} declaration needs at least two individuals",
+                        keyword.trim()
+                    ),
+                    line_no,
+                    1,
+                ));
+            }
+            if is_same {
+                declared_same_individuals.push((line_no, group));
+            } else {
+                declared_different_individuals.push((line_no, group));
+            }
+            section = vec![(Section::Top, 0)];
+            continue 'line;
+        }
+
         for (keyword, is_disjoint) in [("disjoint ", true), ("equivalent ", false)] {
             let Some(mut rest) = line.strip_prefix(keyword) else {
                 continue;
@@ -1116,6 +1162,28 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             .unwrap_or(1);
         return Err(OdlError::new(
             E_INVALID_OBJECT_ONE_OF,
+            error.message,
+            line,
+            1,
+        ));
+    }
+    ir.same_individual_groups = declared_same_individuals
+        .iter()
+        .map(|(_, group)| group.clone())
+        .collect();
+    ir.different_individual_groups = declared_different_individuals
+        .iter()
+        .map(|(_, group)| group.clone())
+        .collect();
+    if let Err(error) = ir.validate_individual_groups() {
+        let lines = if error.kind == "same" {
+            &declared_same_individuals
+        } else {
+            &declared_different_individuals
+        };
+        let line = lines.get(error.index).map(|(line, _)| *line).unwrap_or(1);
+        return Err(OdlError::new(
+            E_INVALID_INDIVIDUAL_GROUP,
             error.message,
             line,
             1,

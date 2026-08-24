@@ -1120,6 +1120,56 @@ object Customer:
     }
 
     #[test]
+    fn parses_individual_groups_fail_closed() {
+        let ir = parse_odl(
+            r#"object Customer:
+  properties:
+    name: string
+
+same_individuals alice, bob, carol
+different_individuals mallory, eve
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            vec![vec![
+                "alice".to_owned(),
+                "bob".to_owned(),
+                "carol".to_owned()
+            ]],
+            ir.same_individual_groups
+        );
+        assert_eq!(
+            vec![vec!["mallory".to_owned(), "eve".to_owned()]],
+            ir.different_individual_groups
+        );
+
+        for source in [
+            r#"object Customer:
+  properties:
+    name: string
+
+same_individuals alice
+"#,
+            r#"object Customer:
+  properties:
+    name: string
+
+same_individuals alice, alice
+"#,
+            r#"object Customer:
+  properties:
+    name: string
+
+different_individuals ,eve
+"#,
+        ] {
+            let error = parse_odl(source).unwrap_err();
+            assert_eq!(1019, error.code);
+        }
+    }
+
+    #[test]
     fn scalar_cardinality_gates_presence_in_closed_object_data() {
         let current = object(
             r#"object Customer:

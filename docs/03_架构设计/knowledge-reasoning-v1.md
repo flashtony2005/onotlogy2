@@ -193,6 +193,18 @@ one_of Planet = Mercury, Venus, Earth
 已声明 object；个体至少一个且不重复，开放世界语义下未声明 distinct 的个体仍可被推理为同一。
 移除后 replace-exactly 会同步清除投影公理。
 
+已知个体身份也可以直接声明，不再需要为常见 Same/Different Individuals 手写 proposal JSON：
+
+```odl
+same_individuals agent-1, primary-contact
+different_individuals customer-a, customer-b
+```
+
+两条声明分别投影为 `SameIndividuals` 和 `DifferentIndividuals`。每组至少两个个体且成员不重复；
+同一语义组不可重复声明。这些公理参与 mature reasoner 一致性、live-world gate、诊断和演化影响
+分析；例如把两个不同 storage ID 声明为 same 后，二者的 functional scalar 冲突会在持久化前失败。
+移除后 replace-exactly 会同步清除投影公理。
+
 对象类型还可以在 `restrictions:` 块直接声明 object-property 必要条件：
 
 ```odl
@@ -728,7 +740,8 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 
 1. 继续按真实业务需要扩展更多 DL 结构到 ODL 直接表达面，进一步减少手写 proposal JSON。
    `disjoint_union`、object-property `some` / `only` / `value` 限制、data-property
-   `some` / `only` / `min` / `max` / `value` 限制和 `one_of` 个体枚举已经直接进入 ODL。
+   `some` / `only` / `min` / `max` / `value` 限制、`one_of` 个体枚举以及
+   same/different individuals 已经直接进入 ODL。
 2. 在真实业务需要时继续扩展更多 XSD 构造，保持保守语义。基础 named datatype definition
    已可在 ODL 中复用受限 composable range，但尚不宣称完整 XSD derivation/union 语义。
 3. 在 update/delete、append-only SameIndividuals、数据属性约束和
