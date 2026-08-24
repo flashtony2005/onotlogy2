@@ -29,8 +29,9 @@ use crate::data_range::parse_data_range;
 use crate::ir::{
     ActionDef, Clause, CompareOp, CreateEffect, DataLiteral, DataPropertyHierarchy,
     DataPropertyRestriction, DataRestrictionKind, DisjointUnionGroup, FieldUpdate,
-    ObjectPropertyRestriction, ObjectRestrictionKind, ObjectType, OntologyIR, ParamDef, PolicyDef,
-    PropertyDef, PropertyFacet, RelationDef, RelationHierarchy, ScalarType, ValueExpr,
+    ObjectOneOfGroup, ObjectPropertyRestriction, ObjectRestrictionKind, ObjectType, OntologyIR,
+    ParamDef, PolicyDef, PropertyDef, PropertyFacet, RelationDef, RelationHierarchy, ScalarType,
+    ValueExpr,
 };
 use crate::validation::validate_property_constraints;
 use std::str::FromStr;
@@ -73,6 +74,7 @@ const E_INVALID_CLASS_GROUP: u32 = 1013; // disjoint/equivalent 类组声明无�
 const E_INVALID_DISJOINT_UNION: u32 = 1014; // disjoint_union 类定义无效
 const E_INVALID_OBJECT_RESTRICTION: u32 = 1015; // 对象属性限制引用无效
 const E_INVALID_DATA_RESTRICTION: u32 = 1016; // 数据属性限制引用无效或类型不匹配
+const E_INVALID_OBJECT_ONE_OF: u32 = 1017; // one_of 类个体枚举定义无效
 
 /// 解析上下文中的块（基于缩进的简易状态机）。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -110,6 +112,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     let mut declared_disjoint: Vec<(u32, Vec<String>)> = Vec::new();
     let mut declared_equivalent: Vec<(u32, Vec<String>)> = Vec::new();
     let mut declared_disjoint_unions: Vec<(u32, DisjointUnionGroup)> = Vec::new();
+    let mut declared_object_one_ofs: Vec<(u32, ObjectOneOfGroup)> = Vec::new();
     let mut declared_restrictions: Vec<(u32, String, ObjectPropertyRestriction)> = Vec::new();
     let mut declared_data_restrictions: Vec<(u32, String, DataPropertyRestriction)> = Vec::new();
     let mut declared_sub_relations: Vec<(u32, (String, String))> = Vec::new();
@@ -169,6 +172,51 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                 DisjointUnionGroup {
                     class: class.to_string(),
                     members,
+                },
+            ));
+            section = vec![(Section::Top, 0)];
+            continue 'line;
+        }
+
+        // Named individual-enumeration: one named class contains exactly these individuals.
+        if let Some(rest) = line.strip_prefix("one_of ") {
+            flush_update(&mut cur_update, &mut cur_action);
+            flush_create(&mut cur_create, &mut cur_action);
+            flush_action(&mut cur_action, &mut current);
+            if let Some(obj) = current.take() {
+                declared.push(obj);
+            }
+            if let Some(relation) = current_relation.take() {
+                declared_relations.push(relation);
+            }
+
+            let invalid =
+                |message: String| OdlError::new(E_INVALID_OBJECT_ONE_OF, message, line_no, 1);
+            let (class, individuals_source) = rest.split_once('=').ok_or_else(|| {
+                invalid("one_of declaration needs `Class = Individual, ...`".to_owned())
+            })?;
+            let class = class.trim();
+            if class.is_empty() || class.contains(char::is_whitespace) {
+                return Err(invalid(
+                    "one_of contains an empty or invalid class name".to_owned(),
+                ));
+            }
+            let individuals = individuals_source
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            if individuals.is_empty() {
+                return Err(invalid(
+                    "one_of must contain at least one individual".to_owned(),
+                ));
+            }
+            declared_object_one_ofs.push((
+                line_no,
+                ObjectOneOfGroup {
+                    class: class.to_string(),
+                    individuals,
                 },
             ));
             section = vec![(Section::Top, 0)];
@@ -924,6 +972,22 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             .unwrap_or(1);
         return Err(OdlError::new(
             E_INVALID_DISJOINT_UNION,
+            error.message,
+            line,
+            1,
+        ));
+    }
+    ir.object_one_ofs = declared_object_one_ofs
+        .iter()
+        .map(|(_, group)| group.clone())
+        .collect();
+    if let Err(error) = ir.validate_object_one_ofs() {
+        let line = declared_object_one_ofs
+            .get(error.index)
+            .map(|(line, _)| *line)
+            .unwrap_or(1);
+        return Err(OdlError::new(
+            E_INVALID_OBJECT_ONE_OF,
             error.message,
             line,
             1,

@@ -156,6 +156,7 @@ mod tests {
             disjoint_groups: Vec::new(),
             equivalent_groups: Vec::new(),
             disjoint_unions: Vec::new(),
+            object_one_ofs: Vec::new(),
             relation_hierarchy: Vec::new(),
             disjoint_relation_groups: Vec::new(),
             equivalent_relation_groups: Vec::new(),

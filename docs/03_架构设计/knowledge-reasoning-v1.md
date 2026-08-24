@@ -179,6 +179,20 @@ disjoint_union Vehicle = Car, Boat
 包含目标类。同一目标类只能定义一次。ODL 解析、手工构造 Runtime IR 和持久化治理边界使用同一条
 校验语义；结果参与一致性、classification、entailment、诊断和演化影响分析。
 
+命名类也可以通过个体枚举直接定义（OWL 2 `ObjectOneOf`）：
+
+```odl
+object Planet:
+  properties:
+    name: string
+
+one_of Planet = Mercury, Venus, Earth
+```
+
+该声明投影为 `EquivalentClasses(Planet, ObjectOneOf(Mercury, Venus, Earth))`。目标类必须是
+已声明 object；个体至少一个且不重复，开放世界语义下未声明 distinct 的个体仍可被推理为同一。
+移除后 replace-exactly 会同步清除投影公理。
+
 对象类型还可以在 `restrictions:` 块直接声明 object-property 必要条件：
 
 ```odl
@@ -690,8 +704,8 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 ## 9. 已知下一步
 
 1. 继续按真实业务需要扩展更多 DL 结构到 ODL 直接表达面，进一步减少手写 proposal JSON。
-   `disjoint_union`、object-property `some` / `only` / `value` 限制和 data-property
-   `some` / `only` / `value` 限制已经直接进入 ODL。
+   `disjoint_union`、object-property `some` / `only` / `value` 限制、data-property
+   `some` / `only` / `value` 限制和 `one_of` 个体枚举已经直接进入 ODL。
 2. 在真实业务需要时继续扩展 XSD 构造（如自定义 datatype 定义），保持保守语义。
 3. 在 update/delete、append-only SameIndividuals、数据属性约束和
    `SubDataPropertyOf` 已支持增量复用后，继续处理其余 TBox 变更。

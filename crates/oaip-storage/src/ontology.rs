@@ -811,6 +811,7 @@ mod tests {
                 disjoint_groups: Vec::new(),
                 equivalent_groups: Vec::new(),
                 disjoint_unions: Vec::new(),
+                object_one_ofs: Vec::new(),
                 relation_hierarchy: Vec::new(),
                 disjoint_relation_groups: Vec::new(),
                 equivalent_relation_groups: Vec::new(),
@@ -1469,6 +1470,7 @@ equivalent_relation primary_contact, contact
             disjoint_groups: Vec::new(),
             equivalent_groups: Vec::new(),
             disjoint_unions: Vec::new(),
+            object_one_ofs: Vec::new(),
             relation_hierarchy: Vec::new(),
             disjoint_relation_groups: Vec::new(),
             equivalent_relation_groups: Vec::new(),
@@ -1532,6 +1534,7 @@ equivalent_relation primary_contact, contact
             disjoint_groups: Vec::new(),
             equivalent_groups: Vec::new(),
             disjoint_unions: Vec::new(),
+            object_one_ofs: Vec::new(),
             relation_hierarchy: Vec::new(),
             disjoint_relation_groups: Vec::new(),
             equivalent_relation_groups: Vec::new(),
@@ -1604,6 +1607,7 @@ equivalent_relation primary_contact, contact
             disjoint_groups: Vec::new(),
             equivalent_groups: Vec::new(),
             disjoint_unions: Vec::new(),
+            object_one_ofs: Vec::new(),
             relation_hierarchy: Vec::new(),
             disjoint_relation_groups: Vec::new(),
             equivalent_relation_groups: Vec::new(),
@@ -2302,6 +2306,100 @@ object TaggedPerson extends Person:
     }
 
     #[tokio::test]
+    async fn odl_object_one_of_evolve_and_replace_exactly() {
+        let storage = LibSQLStorage::open(":memory:").await.unwrap();
+        let base = r#"
+object Planet:
+  properties:
+    name: string
+
+one_of Planet = Mercury, Venus, Earth
+"#;
+        let initial_ir = oaip_abi::parse_odl(base).unwrap();
+        storage
+            .create(
+                "Planet",
+                "mercury",
+                serde_json::json!({ "name": "Mercury" }),
+            )
+            .await
+            .unwrap();
+        storage
+            .initialize_knowledge_version("root", &Ontology::new(), Some(&initial_ir))
+            .await
+            .unwrap();
+
+        let independent = OntologyProposal::new("add-friendly-class").with_change(
+            OntologyChange::Add(Axiom::subclass(
+                ClassExpression::class(Term::new("Friendly")),
+                ClassExpression::class(Term::new("Planet")),
+            )),
+        );
+        storage
+            .propose_knowledge_change("root", &independent, Some(&initial_ir.clone()))
+            .await
+            .unwrap();
+        storage
+            .decide_knowledge_proposal("add-friendly-class", true, "alice", None)
+            .await
+            .unwrap();
+        let (_, applied) = storage
+            .apply_knowledge_proposal("add-friendly-class", "v2")
+            .await
+            .unwrap();
+        assert!(
+            applied
+                .ontology
+                .axioms()
+                .contains(&Axiom::EquivalentClasses(vec![
+                    ClassExpression::class(Term::new("Planet")),
+                    ClassExpression::ObjectOneOf(vec![
+                        Term::new("Mercury"),
+                        Term::new("Venus"),
+                        Term::new("Earth"),
+                    ]),
+                ]))
+        );
+        assert_eq!(Some(initial_ir), applied.runtime_ir);
+
+        let removed_ir = oaip_abi::parse_odl(
+            r#"
+object Planet:
+  properties:
+    name: string
+"#,
+        )
+        .unwrap();
+        let remove = OntologyProposal::new("remove-planet-one-of").with_change(
+            OntologyChange::Add(Axiom::subclass(
+                ClassExpression::class(Term::new("Friendly")),
+                ClassExpression::class(Term::new("Planet")),
+            )),
+        );
+        storage
+            .propose_knowledge_change("v2", &remove, Some(&removed_ir.clone()))
+            .await
+            .unwrap();
+        storage
+            .decide_knowledge_proposal("remove-planet-one-of", true, "bob", None)
+            .await
+            .unwrap();
+        let (_, removed) = storage
+            .apply_knowledge_proposal("remove-planet-one-of", "v3")
+            .await
+            .unwrap();
+        assert!(!removed.ontology.axioms().iter().any(|axiom| matches!(
+            axiom,
+            Axiom::EquivalentClasses(classes)
+                if classes.iter().any(|c| matches!(
+                    c,
+                    ClassExpression::ObjectOneOf(_)
+                ))
+        )));
+        assert_eq!(Some(removed_ir), removed.runtime_ir);
+    }
+
+    #[tokio::test]
     async fn pure_dl_evolution_validates_the_current_live_world() {
         fn named(name: &str) -> ClassExpression {
             ClassExpression::class(Term::new(name))
@@ -2418,6 +2516,7 @@ object TaggedPerson extends Person:
                 disjoint_groups: Vec::new(),
                 equivalent_groups: Vec::new(),
                 disjoint_unions: Vec::new(),
+                object_one_ofs: Vec::new(),
                 relation_hierarchy: Vec::new(),
                 disjoint_relation_groups: Vec::new(),
                 equivalent_relation_groups: Vec::new(),
@@ -2524,6 +2623,7 @@ object TaggedPerson extends Person:
             disjoint_groups: Vec::new(),
             equivalent_groups: Vec::new(),
             disjoint_unions: Vec::new(),
+            object_one_ofs: Vec::new(),
             relation_hierarchy: Vec::new(),
             disjoint_relation_groups: Vec::new(),
             equivalent_relation_groups: Vec::new(),
@@ -2601,6 +2701,7 @@ object TaggedPerson extends Person:
             disjoint_groups: Vec::new(),
             equivalent_groups: Vec::new(),
             disjoint_unions: Vec::new(),
+            object_one_ofs: Vec::new(),
             relation_hierarchy: Vec::new(),
             disjoint_relation_groups: Vec::new(),
             equivalent_relation_groups: Vec::new(),

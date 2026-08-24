@@ -323,6 +323,14 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
             group.members.iter().map(class).collect(),
         ));
     }
+    for group in &ir.object_one_ofs {
+        ontology.push(Axiom::EquivalentClasses(vec![
+            class(&group.class),
+            ClassExpression::object_one_of(
+                group.individuals.iter().map(Term::new).collect::<Vec<_>>(),
+            ),
+        ]));
+    }
     for object_type in &ir.object_types {
         let source = class(&object_type.name);
         for restriction in &object_type.restrictions {
@@ -566,6 +574,9 @@ pub fn validate_runtime_ir(ir: &OntologyIR) -> Result<()> {
         return Err(KnowledgeError::Invalid(error.message));
     }
     if let Err(error) = ir.validate_disjoint_unions() {
+        return Err(KnowledgeError::Invalid(error.message));
+    }
+    if let Err(error) = ir.validate_object_one_ofs() {
         return Err(KnowledgeError::Invalid(error.message));
     }
     if let Err(error) = ir.validate_object_restrictions() {
@@ -1260,6 +1271,7 @@ mod tests {
             disjoint_groups: Vec::new(),
             equivalent_groups: Vec::new(),
             disjoint_unions: Vec::new(),
+            object_one_ofs: Vec::new(),
             relation_hierarchy: Vec::new(),
             disjoint_relation_groups: Vec::new(),
             equivalent_relation_groups: Vec::new(),
@@ -1470,6 +1482,49 @@ disjoint_union Vehicle = Car, Boat
         let conflicting = Ontology::from_iter(conflict_axioms);
         let reasoner = Reasoner::new(&conflicting).unwrap();
         assert!(!reasoner.is_consistent().unwrap());
+    }
+
+    #[test]
+    fn declared_object_one_of_projects_and_reasons_nominals() {
+        let ir = oaip_abi::parse_odl(
+            r#"
+object Planet:
+  properties:
+    name: string
+
+one_of Planet = Mercury, Venus, Earth
+"#,
+        )
+        .unwrap();
+        assert!(validate_runtime_ir(&ir).is_ok());
+        let schema = runtime_ir_to_knowledge(&ir);
+        assert!(schema.axioms().contains(&Axiom::EquivalentClasses(vec![
+            class("Planet"),
+            ClassExpression::ObjectOneOf(vec![
+                Term::new("Mercury"),
+                Term::new("Venus"),
+                Term::new("Earth"),
+            ]),
+        ])));
+
+        // A declared nominal is inferred into the enumerated class.
+        let mercury = RuntimeObjectFact {
+            id: "mercury".to_owned(),
+            object_type: "Planet".to_owned(),
+            data: serde_json::json!({ "name": "Mercury" }),
+        };
+        let world = runtime_world_to_knowledge(&schema, &[mercury], &[]).unwrap();
+        assert!(Reasoner::new(&world).unwrap().is_consistent().unwrap());
+
+        // A non-nominal individual asserted as Planet remains satisfiable under
+        // open-world semantics without a distinctness assumption, but the
+        // enumeration itself is correctly projected and reasoned about.
+        let reasoner = Reasoner::new(&world).unwrap();
+        let members = reasoner
+            .instances_of(&Term::new("Planet"))
+            .unwrap()
+            .contains(&Term::new("mercury"));
+        assert!(members);
     }
 
     #[test]

@@ -379,6 +379,13 @@ pub struct DisjointUnionGroup {
     pub members: Vec<String>,
 }
 
+/// A named class whose extension is exactly a set of named individuals.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObjectOneOfGroup {
+    pub class: String,
+    pub individuals: Vec<String>,
+}
+
 /// A named-class necessary condition over a declared executable relation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectPropertyRestriction {
@@ -440,6 +447,9 @@ pub struct OntologyIR {
     /// Named disjoint-union definitions declared directly in executable ODL.
     #[serde(default)]
     pub disjoint_unions: Vec<DisjointUnionGroup>,
+    /// Named individual-enumeration definitions declared directly in executable ODL.
+    #[serde(default)]
+    pub object_one_ofs: Vec<ObjectOneOfGroup>,
     /// Object-property inclusions declared directly between executable relations.
     #[serde(default)]
     pub relation_hierarchy: Vec<RelationHierarchy>,
@@ -773,6 +783,59 @@ impl OntologyIR {
                     return Err(DisjointUnionError {
                         index,
                         message: format!("disjoint_union repeats member class '{name}'"),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate named individual-enumeration definitions at both language and
+    /// governance boundaries so hand-built serialized IR cannot bypass ODL rules.
+    pub fn validate_object_one_ofs(&self) -> Result<(), DisjointUnionError> {
+        let names = self
+            .object_types
+            .iter()
+            .map(|object| object.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut seen_classes = std::collections::BTreeSet::new();
+        for (index, group) in self.object_one_ofs.iter().enumerate() {
+            if group.class.trim().is_empty() {
+                return Err(DisjointUnionError {
+                    index,
+                    message: "one_of contains an empty class name".to_owned(),
+                });
+            }
+            if !names.contains(group.class.as_str()) {
+                return Err(DisjointUnionError {
+                    index,
+                    message: format!("one_of references undeclared object type '{}'", group.class),
+                });
+            }
+            if !seen_classes.insert(group.class.as_str()) {
+                return Err(DisjointUnionError {
+                    index,
+                    message: format!("one_of repeats defined class '{}'", group.class),
+                });
+            }
+            if group.individuals.is_empty() {
+                return Err(DisjointUnionError {
+                    index,
+                    message: "one_of must contain at least one individual".to_owned(),
+                });
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            for name in &group.individuals {
+                if name.trim().is_empty() {
+                    return Err(DisjointUnionError {
+                        index,
+                        message: "one_of contains an empty individual".to_owned(),
+                    });
+                }
+                if !seen.insert(name.as_str()) {
+                    return Err(DisjointUnionError {
+                        index,
+                        message: format!("one_of repeats individual '{name}'"),
                     });
                 }
             }

@@ -4,8 +4,8 @@
 use openaip_os::abi::codegen;
 use openaip_os::abi::ir::{
     DataLiteral, DataPropertyHierarchy, DataPropertyRestriction, DataRestrictionKind,
-    DisjointUnionGroup, ObjectPropertyRestriction, ObjectRestrictionKind, OntologyIR, PropertyDef,
-    RelationHierarchy, ScalarType,
+    DisjointUnionGroup, ObjectOneOfGroup, ObjectPropertyRestriction, ObjectRestrictionKind,
+    OntologyIR, PropertyDef, RelationHierarchy, ScalarType,
 };
 use openaip_os::abi::odl::parse_odl;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine, ObjectRecord, StorageError};
@@ -711,6 +711,48 @@ fn tc001l_parse_data_property_restrictions() {
             .message
             .contains("unknown data restriction constructor")
     );
+}
+
+#[test]
+fn tc001m_parse_object_one_of() {
+    let odl = [
+        "object Planet:",
+        "  properties:",
+        "    name: string",
+        "one_of Planet = Mercury, Venus, Earth",
+    ]
+    .join("\n");
+    let ir = parse_odl(&odl).unwrap();
+    assert_eq!(
+        vec![ObjectOneOfGroup {
+            class: "Planet".to_owned(),
+            individuals: vec!["Mercury".to_owned(), "Venus".to_owned(), "Earth".to_owned(),],
+        }],
+        ir.object_one_ofs
+    );
+    assert!(codegen::roundtrip_ok(&ir).unwrap());
+
+    let undeclared_class =
+        parse_odl("object Planet:\n  properties:\n    name: string\none_of Star = Sun\n")
+            .unwrap_err();
+    assert_eq!(1017, undeclared_class.code);
+    assert_eq!(4, undeclared_class.line);
+    assert!(undeclared_class.message.contains("undeclared"));
+
+    let missing_equals =
+        parse_odl("object Planet:\n  properties:\n    name: string\none_of Planet\n").unwrap_err();
+    assert_eq!(1017, missing_equals.code);
+
+    let empty_individuals =
+        parse_odl("object Planet:\n  properties:\n    name: string\none_of Planet =\n")
+            .unwrap_err();
+    assert_eq!(1017, empty_individuals.code);
+
+    let duplicate = parse_odl(
+        "object Planet:\n  properties:\n    name: string\none_of Planet = Mercury, Mercury\n",
+    )
+    .unwrap_err();
+    assert_eq!(1017, duplicate.code);
 }
 
 // ── TC-002：IR 保真（REQ-002） ───────────────────────────────────────────
