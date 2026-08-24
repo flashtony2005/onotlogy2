@@ -1306,12 +1306,12 @@ pub async fn execute_opportunity(
         )));
     }
     let mut after_data = before_record.data.clone();
-    let mut retention_task_id = None;
+    let mut created_object: Option<(String, String)> = None;
     for update in &definition.updates {
         {
-            let after_object = after_data
-                .as_object_mut()
-                .ok_or_else(|| BusinessLoopError::invalid("Customer 数据必须是 JSON object"))?;
+            let after_object = after_data.as_object_mut().ok_or_else(|| {
+                BusinessLoopError::invalid(format!("{} 数据必须是 JSON object", owner.name))
+            })?;
             let value = evaluate_value(&update.value, &subject, &before_record.data)?;
             after_object.insert(update.field.clone(), value);
         }
@@ -1339,7 +1339,7 @@ pub async fn execute_opportunity(
         let task_id = effect
             .id
             .clone()
-            .unwrap_or_else(|| generated_id("retention-task"));
+            .unwrap_or_else(|| generated_id("follow-up"));
         create_world_object(
             storage,
             project_id,
@@ -1351,15 +1351,17 @@ pub async fn execute_opportunity(
         if let Some(edge) = &effect.link_edge {
             link_world(storage, project_id, subject.clone(), edge, task_id.clone()).await?;
         }
-        link_world(
-            storage,
-            project_id,
-            decision.id.clone(),
-            "produced_task",
-            task_id.clone(),
-        )
-        .await?;
-        retention_task_id = Some(task_id);
+        if let Some(edge) = &effect.decision_edge {
+            link_world(
+                storage,
+                project_id,
+                decision.id.clone(),
+                edge,
+                task_id.clone(),
+            )
+            .await?;
+        }
+        created_object = Some((task_id, effect.object_type.clone()));
     }
 
     let before = serde_json::to_string(&before_record.data)
@@ -1375,9 +1377,9 @@ pub async fn execute_opportunity(
         "success": true,
         "stage": OUTCOME_ACTION_EXECUTED,
     });
-    if let Some(task_id) = &retention_task_id {
-        action_outcome_data["before"] = json!(r#"{"RetentionTask":null}"#);
-        action_outcome_data["after"] = json!(format!(r#"{{"RetentionTask":"{task_id}"}}"#));
+    if let Some((task_id, task_type)) = &created_object {
+        action_outcome_data["before"] = json!(format!(r#"{{"{task_type}":null}}"#));
+        action_outcome_data["after"] = json!(format!(r#"{{"{task_type}":"{task_id}"}}"#));
     }
     let transition_data = json!({
         "subject": subject,
@@ -1504,111 +1506,153 @@ pub async fn execute_opportunity(
         "stateTransition": { "id": transition_id, "data": transition_data },
         "goals": goals,
     });
-    if let Some(task_id) = retention_task_id {
-        result["createdObject"] = json!({ "id": task_id, "type": "RetentionTask" });
+    if let Some((task_id, task_type)) = created_object {
+        result["createdObject"] = json!({ "id": task_id, "type": task_type });
     }
     Ok(result)
 }
 
-async fn retention_task(
-    storage: &LibSQLStorage,
-    project_id: &str,
-    task_id: &str,
-) -> Result<crate::storage::ObjectRecord, BusinessLoopError> {
-    let tasks = storage
-        .list_objects_for_project(project_id, "RetentionTask")
-        .await?;
-    find_record(&tasks, task_id, "RetentionTask")
-        .ok_or_else(|| BusinessLoopError::NotFound(task_id.to_string()))
-        .cloned()
+/// Deferred 创建效应的运行时元数据；终局证据必须沿这些声明边回链。
+#[derive(Clone)]
+struct FollowUpEffect {
+    object_type: String,
+    link_edge: Option<String>,
+    subject_field: String,
+    decision_edge: String,
 }
 
-/// 启动挽留任务。业务结果必须等到终局状态，执行动作本身不等于客户被留住。
-pub async fn start_retention_task(
+fn follow_up_effects(ontology: &OntologyIR) -> Vec<FollowUpEffect> {
+    all_planning_actions(ontology)
+        .into_iter()
+        .filter(|action| {
+            action
+                .planning
+                .as_ref()
+                .is_some_and(|planning| planning.outcome_timing == OutcomeTiming::Deferred)
+        })
+        .flat_map(|action| action.creates.iter())
+        .map(|effect| FollowUpEffect {
+            object_type: effect.object_type.clone(),
+            link_edge: effect.link_edge.clone(),
+            subject_field: effect.subject_field.clone().unwrap_or_default(),
+            decision_edge: effect.decision_edge.clone().unwrap_or_default(),
+        })
+        .collect()
+}
+
+async fn follow_up_object(
     storage: &LibSQLStorage,
     project_id: &str,
-    task_id: &str,
+    effects: &[FollowUpEffect],
+    id: &str,
+) -> Result<(crate::storage::ObjectRecord, FollowUpEffect), BusinessLoopError> {
+    for object_type in effects.iter().map(|effect| effect.object_type.as_str()) {
+        let objects = storage
+            .list_objects_for_project(project_id, object_type)
+            .await?;
+        if let Some(record) = find_record(&objects, id, object_type) {
+            let effect = effects
+                .iter()
+                .find(|effect| effect.object_type == object_type)
+                .ok_or_else(|| BusinessLoopError::invalid("Deferred 创建效应缺少元数据"))?
+                .clone();
+            return Ok((record.clone(), effect));
+        }
+    }
+    Err(BusinessLoopError::NotFound(id.to_string()))
+}
+
+/// 启动任意 Deferred 创建的跟进对象。业务结果必须等到终局状态，执行动作本身不等于业务成功。
+pub async fn start_follow_up(
+    storage: &LibSQLStorage,
+    project_id: &str,
+    id: &str,
 ) -> Result<Value, BusinessLoopError> {
     let (_, ontology) = project_ontology(storage, project_id).await?;
-    let mut task = retention_task(storage, project_id, task_id).await?;
-    if text(&task.data, "status")? != TASK_PENDING {
+    let effects = follow_up_effects(&ontology);
+    let (mut object, _) = follow_up_object(storage, project_id, &effects, id).await?;
+    if text(&object.data, "status")? != TASK_PENDING {
         return Err(BusinessLoopError::invalid(
-            "只有 Pending 状态的挽留任务可以启动",
+            "只有 Pending 状态的跟进对象可以启动",
         ));
     }
 
-    task.data = set_status(task.data.clone(), TASK_IN_PROGRESS);
-    validate_data(&ontology, "RetentionTask", &task.data)?;
+    object.data = set_status(object.data.clone(), TASK_IN_PROGRESS);
+    validate_data(&ontology, &object.r#type, &object.data)?;
     storage
         .apply_world(WorldCommand::UpdateObject {
-            id: task.id.clone(),
-            data: task.data.clone(),
+            id: object.id.clone(),
+            data: object.data.clone(),
             project_id: Some(project_id.to_string()),
         })
         .await?;
 
-    Ok(json!({ "id": task.id, "type": task.r#type, "data": task.data }))
+    Ok(json!({ "id": object.id, "type": object.r#type, "data": object.data }))
 }
 
-/// 记录挽留终局。成功与失败都会成为 BusinessResult，避免只拿成功样本学习。
-pub async fn settle_retention_task(
+/// 记录任意 Deferred 跟进对象终局。成功与失败都会成为 BusinessResult，避免只拿成功样本学习。
+pub async fn settle_follow_up(
     storage: &LibSQLStorage,
     project_id: &str,
-    task_id: &str,
+    id: &str,
     success: bool,
 ) -> Result<Value, BusinessLoopError> {
     let (_, ontology) = project_ontology(storage, project_id).await?;
-    let retention_actions = all_planning_actions(&ontology)
-        .into_iter()
-        .filter(|action| {
-            action
-                .creates
-                .iter()
-                .any(|effect| effect.object_type == "RetentionTask")
-        })
-        .map(|action| action.name.clone())
-        .collect::<Vec<_>>();
-    let retention_edges = all_planning_actions(&ontology)
-        .into_iter()
-        .flat_map(|action| action.creates.iter())
-        .filter(|effect| effect.object_type == "RetentionTask")
-        .filter_map(|effect| effect.link_edge.clone())
-        .collect::<Vec<_>>();
-    let task = retention_task(storage, project_id, task_id).await?;
-    if text(&task.data, "status")? != TASK_IN_PROGRESS {
+    let effects = follow_up_effects(&ontology);
+    let (object, effect) = follow_up_object(storage, project_id, &effects, id).await?;
+    if text(&object.data, "status")? != TASK_IN_PROGRESS {
         return Err(BusinessLoopError::invalid(
-            "只有 InProgress 状态的挽留任务可以记录终局",
+            "只有 InProgress 状态的跟进对象可以记录终局",
         ));
     }
 
     let relations = storage.list_all_relations().await?;
     let subject = relations
         .iter()
-        .find(|relation| retention_edges.contains(&relation.relation) && relation.target == task.id)
+        .find(|relation| {
+            effect.link_edge.as_deref() == Some(relation.relation.as_str())
+                && relation.target == object.id
+        })
         .map(|relation| relation.source.clone())
-        .ok_or_else(|| BusinessLoopError::invalid("挽留任务缺少 Customer 创建关系"))?;
-    if text(&task.data, "customer")? != subject {
+        .ok_or_else(|| BusinessLoopError::invalid("跟进对象缺少主体创建关系"))?;
+    if text(&object.data, &effect.subject_field)? != subject {
         return Err(BusinessLoopError::invalid(
-            "挽留任务的 Customer 关系与任务数据不一致",
+            "跟进对象的主体字段与创建关系不一致",
         ));
     }
     let decision_links = relations
         .iter()
-        .filter(|relation| relation.relation == "produced_task" && relation.target == task.id)
+        .filter(|relation| {
+            relation.relation == effect.decision_edge && relation.target == object.id
+        })
         .map(|relation| relation.source.as_str())
         .collect::<Vec<_>>();
     let decisions = storage
         .list_objects_for_project(project_id, "Decision")
         .await?;
+    let decision_actions = all_planning_actions(&ontology)
+        .into_iter()
+        .filter(|action| {
+            action
+                .planning
+                .as_ref()
+                .is_some_and(|planning| planning.outcome_timing == OutcomeTiming::Deferred)
+                && action
+                    .creates
+                    .iter()
+                    .any(|created| created.object_type == object.r#type)
+        })
+        .map(|action| action.name.clone())
+        .collect::<Vec<_>>();
     let decision = decisions
         .iter()
         .filter(|item| {
             decision_links.contains(&item.id.as_str())
                 && text(&item.data, "action")
-                    .is_ok_and(|action| retention_actions.iter().any(|name| name == action))
+                    .is_ok_and(|action| decision_actions.iter().any(|name| name == action))
         })
         .max_by(|left, right| left.id.cmp(&right.id))
-        .ok_or_else(|| BusinessLoopError::invalid("挽留任务缺少创建动作决策"))?
+        .ok_or_else(|| BusinessLoopError::invalid("跟进对象缺少创建动作决策"))?
         .clone();
 
     let settled_status = if success {
@@ -1616,15 +1660,15 @@ pub async fn settle_retention_task(
     } else {
         TASK_SETTLED_FAILURE
     };
-    let before = serde_json::to_string(&task.data)
+    let before = serde_json::to_string(&object.data)
         .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
-    let settled_data = set_status(task.data.clone(), settled_status);
-    validate_data(&ontology, "RetentionTask", &settled_data)?;
+    let settled_data = set_status(object.data.clone(), settled_status);
+    validate_data(&ontology, &object.r#type, &settled_data)?;
     let after = serde_json::to_string(&settled_data)
         .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
     storage
         .apply_world(WorldCommand::UpdateObject {
-            id: task.id.clone(),
+            id: object.id.clone(),
             data: settled_data.clone(),
             project_id: Some(project_id.to_string()),
         })
@@ -1658,13 +1702,12 @@ pub async fn settle_retention_task(
     let goals = refresh_goal_progress(storage, project_id).await?;
 
     Ok(json!({
-        "task": { "id": task.id, "data": settled_data },
+        "task": { "id": object.id, "type": object.r#type, "data": settled_data },
         "decision": { "id": decision.id, "data": decision.data },
         "outcome": { "id": outcome_id, "data": outcome_data },
         "goals": goals,
     }))
 }
-
 /// 执行一轮完整再规划：发现 → 选择最优动作 → 决策 → 执行 → 目标反馈。
 pub async fn run_next_best_action(
     storage: &LibSQLStorage,

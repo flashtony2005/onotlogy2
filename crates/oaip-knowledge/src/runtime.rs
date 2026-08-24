@@ -1365,6 +1365,8 @@ mod tests {
                             id: None,
                             data: Vec::new(),
                             link_edge: Some("needs_retention".to_owned()),
+                            subject_field: None,
+                            decision_edge: None,
                         }],
                         policy: Default::default(),
                         planning: None,

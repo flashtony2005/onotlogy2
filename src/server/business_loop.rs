@@ -3,8 +3,8 @@
 use crate::auth::AuthUser;
 use crate::business_loop::{
     BusinessLoopError, decide_opportunity, discover_opportunities, execute_opportunity, goal_gaps,
-    plan_opportunity_paths, recommend_next_actions, run_next_best_action, settle_retention_task,
-    start_retention_task,
+    plan_opportunity_paths, recommend_next_actions, run_next_best_action, settle_follow_up,
+    start_follow_up,
 };
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -37,7 +37,7 @@ pub(crate) struct DecideBody {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RetentionResultBody {
+pub(crate) struct FollowUpResultBody {
     pub success: Option<bool>,
 }
 
@@ -220,7 +220,7 @@ pub(crate) async fn execute(
     error_response(BusinessLoopError::NotFound(id))
 }
 
-pub(crate) async fn start_retention(
+pub(crate) async fn start_follow_up_object(
     State(st): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
     Path(id): Path<String>,
@@ -236,7 +236,7 @@ pub(crate) async fn start_retention(
         Err(error) => return error_response(error.into()),
     };
     for project_id in project_ids {
-        match start_retention_task(&st.storage, &project_id, &id).await {
+        match start_follow_up(&st.storage, &project_id, &id).await {
             Ok(result) => return ApiResponse::ok(result).into_response(),
             Err(BusinessLoopError::NotFound(_)) => continue,
             Err(error) => return error_response(error),
@@ -245,11 +245,11 @@ pub(crate) async fn start_retention(
     error_response(BusinessLoopError::NotFound(id))
 }
 
-pub(crate) async fn settle_retention(
+pub(crate) async fn settle_follow_up_object(
     State(st): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
     Path(id): Path<String>,
-    Json(body): Json<RetentionResultBody>,
+    Json(body): Json<FollowUpResultBody>,
 ) -> Response {
     if let Some(response) = write_denied(&user) {
         return response;
@@ -262,9 +262,7 @@ pub(crate) async fn settle_retention(
         Err(error) => return error_response(error.into()),
     };
     for project_id in project_ids {
-        match settle_retention_task(&st.storage, &project_id, &id, body.success.unwrap_or(true))
-            .await
-        {
+        match settle_follow_up(&st.storage, &project_id, &id, body.success.unwrap_or(true)).await {
             Ok(result) => return ApiResponse::ok(result).into_response(),
             Err(BusinessLoopError::NotFound(_)) => continue,
             Err(error) => return error_response(error),

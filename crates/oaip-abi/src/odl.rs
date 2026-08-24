@@ -652,6 +652,8 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                             id: None,
                             data: Vec::new(),
                             link_edge: None,
+                            subject_field: None,
+                            decision_edge: None,
                         });
                     }
                 }
@@ -949,6 +951,31 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         && let Some(c) = cur_create.as_mut()
                     {
                         c.id = Some(v.to_string());
+                    } else if k == "subject_field"
+                        && let Some(c) = cur_create.as_mut()
+                    {
+                        if v.trim().is_empty() {
+                            return Err(OdlError::new(
+                                E_INVALID_PROPERTY_CONSTRAINT,
+                                "subject_field 不能为空".to_string(),
+                                line_no,
+                                1,
+                            ));
+                        }
+                        c.subject_field = Some(v.to_string());
+                    } else if k == "decision_edge"
+                        && let Some(c) = cur_create.as_mut()
+                    {
+                        if v.trim().is_empty() {
+                            return Err(OdlError::new(
+                                E_INVALID_PROPERTY_CONSTRAINT,
+                                "decision_edge 不能为空".to_string(),
+                                line_no,
+                                1,
+                            ));
+                        }
+                        c.decision_edge = Some(v.to_string());
+                        link_lines.insert(v.to_string(), line_no);
                     }
                 }
                 Section::ActionPolicy => {
@@ -1403,6 +1430,11 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     let mut seen_opportunities = std::collections::BTreeSet::new();
     ir.relations = declared_relations.iter().map(|(_, r)| r.clone()).collect();
     for object in &ir.object_types {
+        let relation_matches = |name: &str, source: &str, target: &str| {
+            ir.relations.iter().any(|relation| {
+                relation.name == name && relation.source == source && relation.target == target
+            })
+        };
         for action in &object.actions {
             if let Some(planning) = &action.planning
                 && (planning.benefit_field.is_some() != planning.benefit_factor.is_some()
@@ -1426,6 +1458,61 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                     1,
                     1,
                 ));
+            }
+            for created in &action.creates {
+                let deferred = action
+                    .planning
+                    .as_ref()
+                    .is_some_and(|planning| planning.outcome_timing == OutcomeTiming::Deferred);
+                let meta_line = created
+                    .decision_edge
+                    .as_ref()
+                    .and_then(|edge| link_lines.get(edge))
+                    .copied()
+                    .unwrap_or(1);
+                if !deferred {
+                    if created.subject_field.is_some() || created.decision_edge.is_some() {
+                        return Err(OdlError::new(
+                            E_INVALID_PROPERTY_CONSTRAINT,
+                            format!(
+                                "immediate action '{}' 的创建效应不能声明 deferred 证据元数据",
+                                action.name
+                            ),
+                            meta_line,
+                            1,
+                        ));
+                    }
+                    continue;
+                }
+                let target = ir
+                    .object_types
+                    .iter()
+                    .find(|item| item.name == created.object_type);
+                let valid_subject = created.subject_field.as_ref().is_some_and(|field| {
+                    target.is_some_and(|item| {
+                        item.properties
+                            .iter()
+                            .any(|property| &property.name == field)
+                    }) && created
+                        .data
+                        .iter()
+                        .any(|(key, value)| key == field && matches!(value, ValueExpr::SelfId))
+                });
+                let valid_decision = created
+                    .decision_edge
+                    .as_ref()
+                    .is_some_and(|edge| relation_matches(edge, "Decision", &created.object_type));
+                if !valid_subject || !valid_decision {
+                    return Err(OdlError::new(
+                        E_INVALID_PROPERTY_CONSTRAINT,
+                        format!(
+                            "deferred action '{}' 的创建效应必须声明 self 主体字段和 Decision 证据边",
+                            action.name
+                        ),
+                        meta_line,
+                        1,
+                    ));
+                }
             }
         }
         for rule in &object.opportunity_rules {

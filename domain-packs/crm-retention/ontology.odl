@@ -63,6 +63,8 @@ object Customer:
             status: "Pending"
             priority: "MEDIUM"
           link: needs_retention
+          subject_field: customer
+          decision_edge: produced_task
     refund:
       params:
         amount: float

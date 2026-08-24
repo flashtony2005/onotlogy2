@@ -6,9 +6,10 @@
 
 mod common;
 
+use openaip_os::abi::odl::parse_odl;
 use openaip_os::business_loop::{
     decide_opportunity, discover_opportunities, execute_opportunity, plan_opportunity_paths,
-    recommend_next_actions, run_next_best_action,
+    recommend_next_actions, run_next_best_action, settle_follow_up, start_follow_up,
 };
 use openaip_os::storage::{LibSQLStorage, ObjectEngine};
 use serde_json::{Value, json};
@@ -327,6 +328,77 @@ async fn opportunity_cost_budget_blocks_unaffordable_actions() {
 }
 
 #[tokio::test]
+async fn deferred_follow_up_evidence_is_declared_and_type_generic() {
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let pack_ontology = std::fs::read_to_string("domain-packs/crm-retention/ontology.odl")
+        .expect("业务包 ODL 应存在");
+    let parsed = parse_odl(&pack_ontology).expect("完整 Deferred 证据契约应可解析");
+    let effect = &parsed
+        .find("Customer")
+        .expect("应存在 Customer")
+        .actions
+        .iter()
+        .find(|action| action.name == "RetainCustomer")
+        .expect("应存在挽留动作")
+        .creates[0];
+    assert_eq!(effect.subject_field.as_deref(), Some("customer"));
+    assert_eq!(effect.decision_edge.as_deref(), Some("produced_task"));
+
+    let missing = pack_ontology.replace(
+        "          subject_field: customer\n          decision_edge: produced_task\n",
+        "",
+    );
+    assert!(parse_odl(&missing).is_err(), "缺少证据链必须解析失败");
+    let immediate = pack_ontology
+        .replace("outcome_timing: deferred", "outcome_timing: immediate")
+        .replace("RetentionTask", "FollowUpPlan");
+    let error = parse_odl(&immediate).expect_err("immediate 创建不能携带终局元数据");
+    assert!(error.to_string().contains("deferred 证据元数据"));
+
+    let generic = pack_ontology.replace("RetentionTask", "FollowUpPlan");
+    assert_ne!(generic, pack_ontology, "契约测试必须修改成功");
+    seed_odl_project(
+        &storage,
+        "generic-follow-up",
+        &generic,
+        "monthly_reactivations",
+    )
+    .await;
+    let discovered = discover_opportunities(&storage, "generic-follow-up")
+        .await
+        .expect("应发现通用跟进机会");
+    let opportunity_id = discovered[0]["id"].as_str().expect("机会必须有 ID");
+    decide_opportunity(
+        &storage,
+        "generic-follow-up",
+        opportunity_id,
+        Some("RetainCustomer"),
+        "contract-test",
+        None,
+        None,
+    )
+    .await
+    .expect("应能决策 Deferred 动作");
+    let execution = execute_opportunity(&storage, "generic-follow-up", opportunity_id)
+        .await
+        .expect("应能执行创建效应");
+    let created = &execution["createdObject"];
+    assert_eq!(created["type"], json!("FollowUpPlan"));
+    let task_id = created["id"].as_str().expect("跟进对象必须有 ID");
+
+    start_follow_up(&storage, "generic-follow-up", task_id)
+        .await
+        .expect("应能启动任意声明的跟进对象");
+    let settled = settle_follow_up(&storage, "generic-follow-up", task_id, true)
+        .await
+        .expect("应能为任意声明对象记录终局");
+    assert_eq!(settled["task"]["type"], json!("FollowUpPlan"));
+    assert_eq!(settled["goals"][0]["currentValue"], json!(1.0));
+}
+
+#[tokio::test]
 async fn business_loop_discovers_decides_executes_and_replans() {
     let storage = Arc::new(LibSQLStorage::open(":memory:").await.unwrap());
     let addr = common::spawn_server(storage.clone()).await;
@@ -640,13 +712,13 @@ async fn business_loop_discovers_decides_executes_and_replans() {
     }));
 
     // 挽留结果必须经历显式生命周期；只有终局才成为可学习 BusinessResult。
-    let start_path = format!("/api/v1/business/retention-tasks/{task_id}/start");
+    let start_path = format!("/api/v1/business/follow-ups/{task_id}/start");
     let (status, body) = common::http_call(addr, "POST", &start_path, Some("{}")).await;
     assert_eq!(status, 200, "应能启动挽留任务：{body}");
     assert_eq!(data(&body).await["data"]["status"], json!("InProgress"));
 
     let retention_decision_id = result["decision"]["id"].as_str().unwrap().to_string();
-    let result_path = format!("/api/v1/business/retention-tasks/{task_id}/result");
+    let result_path = format!("/api/v1/business/follow-ups/{task_id}/result");
     let (status, body) =
         common::http_call(addr, "POST", &result_path, Some(r#"{"success":true}"#)).await;
     assert_eq!(status, 200, "应能记录挽留终局：{body}");
@@ -758,14 +830,14 @@ async fn business_loop_discovers_decides_executes_and_replans() {
     common::http_call(
         addr,
         "POST",
-        &format!("/api/v1/business/retention-tasks/{second_task_id}/start"),
+        &format!("/api/v1/business/follow-ups/{second_task_id}/start"),
         Some("{}"),
     )
     .await;
     let (status, body) = common::http_call(
         addr,
         "POST",
-        &format!("/api/v1/business/retention-tasks/{second_task_id}/result"),
+        &format!("/api/v1/business/follow-ups/{second_task_id}/result"),
         Some(r#"{"success":false}"#),
     )
     .await;

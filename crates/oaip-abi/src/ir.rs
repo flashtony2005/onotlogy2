@@ -233,6 +233,12 @@ pub struct CreateEffect {
     /// 若设置，建立 `target --edge--> new` 关系边。
     #[serde(default)]
     pub link_edge: Option<String>,
+    /// 创建对象上保存主体 ID 的字段；Deferred 动作必须声明。
+    #[serde(default)]
+    pub subject_field: Option<String>,
+    /// Decision 指向创建对象的证据边；Deferred 动作必须声明。
+    #[serde(default)]
+    pub decision_edge: Option<String>,
 }
 
 /// 比较运算符（Policy precondition 子句使用）。
