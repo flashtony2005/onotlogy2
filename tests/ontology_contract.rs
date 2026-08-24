@@ -671,6 +671,8 @@ fn tc001l_parse_data_property_restrictions() {
         "  data_restrictions:",
         "    note: some string",
         "    note: only string",
+        "    note: min 1 string",
+        "    status: max 0 string",
         "    status: value \"active\"",
     ]
     .join("\n");
@@ -685,6 +687,20 @@ fn tc001l_parse_data_property_restrictions() {
         DataPropertyRestriction {
             property: "note".to_owned(),
             kind: DataRestrictionKind::Only {
+                datatype: ScalarType::String,
+            },
+        },
+        DataPropertyRestriction {
+            property: "note".to_owned(),
+            kind: DataRestrictionKind::Min {
+                cardinality: 1,
+                datatype: ScalarType::String,
+            },
+        },
+        DataPropertyRestriction {
+            property: "status".to_owned(),
+            kind: DataRestrictionKind::Max {
+                cardinality: 0,
                 datatype: ScalarType::String,
             },
         },
@@ -726,6 +742,17 @@ fn tc001l_parse_data_property_restrictions() {
         literal_type_mismatch
             .message
             .contains("literal does not match declared type")
+    );
+
+    let excessive_cardinality = parse_odl(
+        "object Person:\n  properties:\n    age: int\n  data_restrictions:\n    age: min 2 int\n",
+    )
+    .unwrap_err();
+    assert_eq!(1016, excessive_cardinality.code);
+    assert!(
+        excessive_cardinality
+            .message
+            .contains("data cardinality restriction must be 0 or 1")
     );
 
     let invalid_constructor = parse_odl(

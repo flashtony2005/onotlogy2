@@ -373,6 +373,22 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
                     restriction.property.as_str(),
                     scalar_datatype(*datatype),
                 ),
+                DataRestrictionKind::Min {
+                    cardinality,
+                    datatype,
+                } => ClassExpression::DataMinCardinality {
+                    cardinality: *cardinality,
+                    property: Term::new(restriction.property.as_str()),
+                    datatype: scalar_datatype(*datatype),
+                },
+                DataRestrictionKind::Max {
+                    cardinality,
+                    datatype,
+                } => ClassExpression::DataMaxCardinality {
+                    cardinality: *cardinality,
+                    property: Term::new(restriction.property.as_str()),
+                    datatype: scalar_datatype(*datatype),
+                },
                 DataRestrictionKind::Value { literal } => {
                     ClassExpression::has_data(restriction.property.as_str(), data_literal(literal))
                 }
@@ -1772,6 +1788,18 @@ object ActivePerson extends Person:
     status: string
   data_restrictions:
     status: value "active"
+
+object RequiredPerson extends Person:
+  properties:
+    phone: string
+  data_restrictions:
+    phone: min 1 string
+
+object ClosedPerson extends Person:
+  properties:
+    fax: string
+  data_restrictions:
+    fax: max 0 string
 "#,
         )
         .unwrap();
@@ -1788,6 +1816,22 @@ object ActivePerson extends Person:
         assert!(schema.axioms().contains(&Axiom::subclass(
             class("ActivePerson"),
             ClassExpression::has_data("status", Literal::String("active".to_owned()))
+        )));
+        assert!(schema.axioms().contains(&Axiom::subclass(
+            class("RequiredPerson"),
+            ClassExpression::DataMinCardinality {
+                cardinality: 1,
+                property: Term::new("phone"),
+                datatype: Datatype::String,
+            }
+        )));
+        assert!(schema.axioms().contains(&Axiom::subclass(
+            class("ClosedPerson"),
+            ClassExpression::DataMaxCardinality {
+                cardinality: 0,
+                property: Term::new("fax"),
+                datatype: Datatype::String,
+            }
         )));
 
         let object = |id: &str, ty: &str| RuntimeObjectFact {
@@ -1807,11 +1851,17 @@ object ActivePerson extends Person:
                 o.data["status"] = serde_json::json!("active");
                 o
             },
+            {
+                let mut o = object("required-1", "RequiredPerson");
+                o.data["phone"] = serde_json::json!("555-0100");
+                o
+            },
+            object("closed-1", "ClosedPerson"),
         ];
         let world = runtime_world_to_knowledge(&schema, &objects, &[]).unwrap();
         assert!(validate_canonical_ontology_with_world(&schema, &objects, &[]).is_ok());
         let reasoner = Reasoner::new(&world).unwrap();
-        for id in ["tagged-1", "strict-1", "active-1"] {
+        for id in ["tagged-1", "strict-1", "active-1", "required-1", "closed-1"] {
             assert!(
                 reasoner
                     .instances_of(&Term::new("Person"))
@@ -1820,6 +1870,42 @@ object ActivePerson extends Person:
                 "{id} should be inferred as a Person"
             );
         }
+
+        let missing_required = object("required-missing", "RequiredPerson");
+        assert!(
+            validate_canonical_ontology_with_world(
+                &schema,
+                std::slice::from_ref(&missing_required),
+                &[]
+            )
+            .is_err()
+        );
+        let violations =
+            declared_data_cardinality_violations(&schema, std::slice::from_ref(&missing_required));
+        assert_eq!(1, violations.len());
+        assert_eq!("phone", violations[0].property);
+        assert_eq!((1, u32::MAX), (violations[0].min, violations[0].max));
+
+        let forbidden_optional = {
+            let mut o = object("closed-forbidden", "ClosedPerson");
+            o.data["fax"] = serde_json::json!("555-0101");
+            o
+        };
+        assert!(
+            validate_canonical_ontology_with_world(
+                &schema,
+                std::slice::from_ref(&forbidden_optional),
+                &[]
+            )
+            .is_err()
+        );
+        let violations = declared_data_cardinality_violations(
+            &schema,
+            std::slice::from_ref(&forbidden_optional),
+        );
+        assert_eq!(1, violations.len());
+        assert_eq!("fax", violations[0].property);
+        assert_eq!((0, 0), (violations[0].min, violations[0].max));
 
         // The parser rejects an undeclared property reference (fail-closed).
         let bad = oaip_abi::parse_odl(
@@ -1844,6 +1930,19 @@ object Person:
 "#,
         );
         assert!(mismatched.is_err());
+
+        // Executable scalar facts are single-valued, so class-level data
+        // cardinalities use the same conservative bounds as inline facets.
+        let excessive = oaip_abi::parse_odl(
+            r#"
+object Person:
+  properties:
+    age: int
+  data_restrictions:
+    age: min 2 int
+"#,
+        );
+        assert!(excessive.is_err());
     }
 
     #[test]

@@ -2201,8 +2201,11 @@ object TaggedPerson extends Person:
   properties:
     note: string
     status: string
+    fax: string
   data_restrictions:
     note: some string
+    note: min 1 string
+    fax: max 0 string
     status: value "active"
 "#;
         let initial_ir = oaip_abi::parse_odl(base).unwrap();
@@ -2254,6 +2257,22 @@ object TaggedPerson extends Person:
         )));
         assert!(applied.ontology.axioms().contains(&Axiom::subclass(
             ClassExpression::class(Term::new("TaggedPerson")),
+            ClassExpression::DataMinCardinality {
+                cardinality: 1,
+                property: Term::new("note"),
+                datatype: Datatype::String,
+            }
+        )));
+        assert!(applied.ontology.axioms().contains(&Axiom::subclass(
+            ClassExpression::class(Term::new("TaggedPerson")),
+            ClassExpression::DataMaxCardinality {
+                cardinality: 0,
+                property: Term::new("fax"),
+                datatype: Datatype::String,
+            }
+        )));
+        assert!(applied.ontology.axioms().contains(&Axiom::subclass(
+            ClassExpression::class(Term::new("TaggedPerson")),
             ClassExpression::DataHasValue {
                 property: Term::new("status"),
                 value: Literal::String("active".to_owned()),
@@ -2299,6 +2318,8 @@ object TaggedPerson extends Person:
                 if matches!(
                     sup,
                     ClassExpression::DataSomeValuesFrom { .. }
+                        | ClassExpression::DataMinCardinality { .. }
+                        | ClassExpression::DataMaxCardinality { .. }
                         | ClassExpression::DataHasValue { .. }
                 )
         )));

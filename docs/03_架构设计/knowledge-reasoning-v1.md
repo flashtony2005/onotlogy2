@@ -225,15 +225,16 @@ object TaggedPerson extends Person:
   data_restrictions:
     note: some string
     note: only string
+    note: min 1 string
+    status: max 0 string
     status: value "active"
 ```
 
-三条声明分别投影为 `SubClassOf(TaggedPerson, DataSomeValuesFrom(note, xsd:string))`、
-`SubClassOf(TaggedPerson, DataAllValuesFrom(note, xsd:string))` 和
-`SubClassOf(TaggedPerson, DataHasValue(status, "active"))`。property 必须是本对象已声明的
-标量属性；`some` / `only` 的 datatype 必须与属性声明类型一致，`value` 的 literal 类型也必须
-匹配。这些限制参与 classification、live-world 一致性、诊断和演化影响分析；移除后
-replace-exactly 会同步清除投影公理。
+五条声明分别投影为 `DataSomeValuesFrom`、`DataAllValuesFrom`、`DataMinCardinality`、
+`DataMaxCardinality` 和 `DataHasValue` 的 `SubClassOf` 必要条件。property 必须是本对象已声明
+的标量属性；datatype 和 literal 必须与属性声明类型一致。可执行世界事实使用单值 JSON 属性，
+因此 `min` / `max` 基数沿用内联标量约束的保守边界，只能为 0 或 1。这些限制参与
+classification、live-world 一致性、诊断和演化影响分析；移除后 replace-exactly 会同步清除投影公理。
 
 ### 4.5 ODL property constraints
 
@@ -709,7 +710,7 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 
 1. 继续按真实业务需要扩展更多 DL 结构到 ODL 直接表达面，进一步减少手写 proposal JSON。
    `disjoint_union`、object-property `some` / `only` / `value` 限制、data-property
-   `some` / `only` / `value` 限制和 `one_of` 个体枚举已经直接进入 ODL。
+   `some` / `only` / `min` / `max` / `value` 限制和 `one_of` 个体枚举已经直接进入 ODL。
 2. 在真实业务需要时继续扩展 XSD 构造（如自定义 datatype 定义），保持保守语义。
 3. 在 update/delete、append-only SameIndividuals、数据属性约束和
    `SubDataPropertyOf` 已支持增量复用后，继续处理其余 TBox 变更。

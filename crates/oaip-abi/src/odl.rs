@@ -876,32 +876,75 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                     }
                     let Some((kind, filler)) = v.split_once(char::is_whitespace) else {
                         return Err(invalid(
-                            "data restriction needs `property: some type`, `property: only type`, or `property: value literal`"
+                            "data restriction needs `property: some type`, `property: only type`, `property: min N type`, `property: max N type`, or `property: value literal`"
                                 .to_owned(),
                         ));
                     };
                     let filler = filler.trim();
-                    if filler.is_empty() || filler.contains(char::is_whitespace) {
-                        return Err(invalid(
-                            "data restriction filler is empty or contains whitespace".to_owned(),
-                        ));
-                    }
                     let kind = match kind {
                         "some" => {
+                            if filler.is_empty() || filler.contains(char::is_whitespace) {
+                                return Err(invalid(
+                                    "data restriction filler is empty or contains whitespace"
+                                        .to_owned(),
+                                ));
+                            }
                             let datatype = ScalarType::from_str(filler).map_err(invalid)?;
                             DataRestrictionKind::Some { datatype }
                         }
                         "only" => {
+                            if filler.is_empty() || filler.contains(char::is_whitespace) {
+                                return Err(invalid(
+                                    "data restriction filler is empty or contains whitespace"
+                                        .to_owned(),
+                                ));
+                            }
                             let datatype = ScalarType::from_str(filler).map_err(invalid)?;
                             DataRestrictionKind::Only { datatype }
                         }
+                        "min" | "max" => {
+                            let (num, datatype) =
+                                filler.split_once(char::is_whitespace).ok_or_else(|| {
+                                    invalid(format!(
+                                        "{kind} data cardinality restriction needs `{kind} N Type`"
+                                    ))
+                                })?;
+                            let num = num.trim();
+                            let datatype = datatype.trim();
+                            if datatype.is_empty() || datatype.contains(char::is_whitespace) {
+                                return Err(invalid(format!(
+                                    "{kind} data cardinality restriction type is empty or contains whitespace"
+                                )));
+                            }
+                            let cardinality: u32 = num.parse().map_err(|_| {
+                                invalid(format!("invalid data cardinality '{num}'"))
+                            })?;
+                            let datatype = ScalarType::from_str(datatype).map_err(invalid)?;
+                            if kind == "min" {
+                                DataRestrictionKind::Min {
+                                    cardinality,
+                                    datatype,
+                                }
+                            } else {
+                                DataRestrictionKind::Max {
+                                    cardinality,
+                                    datatype,
+                                }
+                            }
+                        }
                         "value" => {
+                            if filler.is_empty() {
+                                return Err(invalid(
+                                    "data restriction filler is empty or contains whitespace"
+                                        .to_owned(),
+                                ));
+                            }
                             let literal = parse_data_literal(filler).map_err(&invalid)?;
                             DataRestrictionKind::Value { literal }
                         }
                         _ => {
                             return Err(invalid(format!(
-                                "unknown data restriction constructor '{kind}'; expected some, only, or value"
+                                "unknown data restriction constructor '{kind}'; expected some, only, min, max, or value"
                             )));
                         }
                     };

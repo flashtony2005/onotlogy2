@@ -422,6 +422,16 @@ pub enum DataRestrictionKind {
     Some { datatype: ScalarType },
     /// `property: only string`
     Only { datatype: ScalarType },
+    /// `property: min N integer`
+    Min {
+        cardinality: u32,
+        datatype: ScalarType,
+    },
+    /// `property: max N string`
+    Max {
+        cardinality: u32,
+        datatype: ScalarType,
+    },
     /// `property: value "active"`
     Value { literal: DataLiteral },
 }
@@ -595,8 +605,20 @@ impl OntologyIR {
                     });
                 };
                 match &restriction.kind {
+                    DataRestrictionKind::Min { cardinality, .. }
+                    | DataRestrictionKind::Max { cardinality, .. }
+                        if *cardinality > 1 =>
+                    {
+                        return Err(DataRestrictionError {
+                            index,
+                            object: object.name.clone(),
+                            message: "data cardinality restriction must be 0 or 1".to_owned(),
+                        });
+                    }
                     DataRestrictionKind::Some { datatype }
-                    | DataRestrictionKind::Only { datatype } => {
+                    | DataRestrictionKind::Only { datatype }
+                    | DataRestrictionKind::Min { datatype, .. }
+                    | DataRestrictionKind::Max { datatype, .. } => {
                         if *datatype != declared {
                             return Err(DataRestrictionError {
                                 index,
