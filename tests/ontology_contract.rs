@@ -251,7 +251,7 @@ fn tc001j_parse_equivalent_relation_group() {
 }
 
 #[test]
-fn tc001i_parse_data_property_hierarchy_and_disjointness() {
+fn tc001i_parse_data_property_hierarchy_disjointness_and_equivalence() {
     let odl = [
         "object Person:",
         "  properties:",
@@ -259,8 +259,11 @@ fn tc001i_parse_data_property_hierarchy_and_disjointness() {
         "    work_email: string",
         "    mobile: string",
         "    landline: string",
+        "    primary_contact: string",
+        "    contact: string",
         "sub_data_property work_email, email",
         "disjoint_data_property mobile, landline",
+        "equivalent_data_property primary_contact, contact",
     ]
     .join("\n");
     let ir = parse_odl(&odl).unwrap();
@@ -274,6 +277,10 @@ fn tc001i_parse_data_property_hierarchy_and_disjointness() {
     assert_eq!(
         vec![vec!["mobile", "landline"]],
         ir.disjoint_data_property_groups
+    );
+    assert_eq!(
+        vec![vec!["primary_contact", "contact"]],
+        ir.equivalent_data_property_groups
     );
     assert!(codegen::roundtrip_ok(&ir).unwrap());
 
@@ -296,6 +303,17 @@ fn tc001i_parse_data_property_hierarchy_and_disjointness() {
     ]
     .join("\n");
     assert_eq!(1011, parse_odl(&singleton).unwrap_err().code);
+
+    let equivalent_singleton = [
+        "object Person:",
+        "  properties:",
+        "    email: string",
+        "equivalent_data_property email",
+    ]
+    .join("\n");
+    let error = parse_odl(&equivalent_singleton).unwrap_err();
+    assert_eq!(1011, error.code);
+    assert_eq!(4, error.line);
 }
 
 #[test]

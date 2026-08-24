@@ -288,17 +288,20 @@ object Person:
 
 sub_data_property work_email, email
 disjoint_data_property mobile, landline
+equivalent_data_property primary_contact, contact
 ```
 
-The two top-level declarations project to `SubDataPropertyOf` and `DisjointDataProperties`.
-Therefore a value asserted on `work_email` entails the same value on `email`; one individual
-with both `mobile` and `landline` values makes the canonical knowledge base inconsistent and
-is rejected by the live-world evolution gate.
+The three top-level declarations project to `SubDataPropertyOf`, `DisjointDataProperties`, and
+ordered pairs of `SubDataPropertyOf` for an equivalence group. Therefore a value asserted on
+`work_email` entails the same value on `email`; a value on either equivalent contact property
+entails the same value on the other; one individual with both `mobile` and `landline` values
+makes the canonical knowledge base inconsistent and is rejected by the live-world evolution gate.
 
 语义边界：
 
 - `sub_data_property` 恰好接受两个已声明的 executable scalar property，且子属性不能等于父属性；
 - `disjoint_data_property` 至少接受两个已声明 scalar property，组内不重复、同一语义组不可重复声明；
+- `equivalent_data_property` 至少接受两个已声明 scalar property，组内不重复、同一语义组不可重复声明；
 - 属性名解析为 data-property 命名空间，不会把显式 relation 当作合法成员；
 - 手工构造或反序列化 Runtime IR 必须通过同一 validation boundary；
 - 新 axiom 参与 entailment、explanation、OWL Functional Syntax 往返和演化影响分析。

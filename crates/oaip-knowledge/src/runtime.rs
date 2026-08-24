@@ -339,6 +339,22 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
             group.iter().map(Term::new).collect(),
         ));
     }
+    // Equivalence reuses the same ordered-inclusion projection as object
+    // properties, so mature reasoning and deterministic data checks see one
+    // canonical semantics.
+    for group in &ir.equivalent_data_property_groups {
+        for sub in group {
+            for sup in group {
+                if sub == sup {
+                    continue;
+                }
+                ontology.push(Axiom::SubDataPropertyOf {
+                    sub: Term::new(sub),
+                    sup: Term::new(sup),
+                });
+            }
+        }
+    }
     let cardinalities = ir
         .relations
         .iter()
@@ -545,6 +561,9 @@ pub fn validate_runtime_ir(ir: &OntologyIR) -> Result<()> {
         })
         .collect::<BTreeSet<_>>();
     if let Err(error) = ir.validate_data_property_groups(&data_property_names) {
+        return Err(KnowledgeError::Invalid(error.message));
+    }
+    if let Err(error) = ir.validate_equivalent_data_property_groups(&data_property_names) {
         return Err(KnowledgeError::Invalid(error.message));
     }
 
@@ -1169,6 +1188,7 @@ mod tests {
             equivalent_relation_groups: Vec::new(),
             data_property_hierarchy: Vec::new(),
             disjoint_data_property_groups: Vec::new(),
+            equivalent_data_property_groups: Vec::new(),
             object_types: vec![ObjectType {
                 name: "Customer".to_owned(),
                 extends: Vec::new(),
@@ -1987,6 +2007,16 @@ equivalent Pet, Companion
                 ty: ScalarType::String,
                 constraints: Vec::new(),
             },
+            PropertyDef {
+                name: "primary_contact".to_owned(),
+                ty: ScalarType::String,
+                constraints: Vec::new(),
+            },
+            PropertyDef {
+                name: "contact".to_owned(),
+                ty: ScalarType::String,
+                constraints: Vec::new(),
+            },
         ]);
         schema.data_property_hierarchy = vec![DataPropertyHierarchy {
             sub_property: "work_email".to_owned(),
@@ -1994,6 +2024,8 @@ equivalent Pet, Companion
         }];
         schema.disjoint_data_property_groups =
             vec![vec!["mobile".to_owned(), "landline".to_owned()]];
+        schema.equivalent_data_property_groups =
+            vec![vec!["primary_contact".to_owned(), "contact".to_owned()]];
 
         assert!(validate_runtime_ir(&schema).is_ok());
         let ontology = runtime_ir_to_knowledge(&schema);
@@ -2009,6 +2041,27 @@ equivalent Pet, Companion
                     Term::new("landline"),
                 ]))
         );
+        for (sub, sup) in [
+            ("primary_contact", "contact"),
+            ("contact", "primary_contact"),
+        ] {
+            assert!(ontology.axioms().contains(&Axiom::SubDataPropertyOf {
+                sub: Term::new(sub),
+                sup: Term::new(sup),
+            }));
+        }
+
+        let mut invalid_equivalent = schema.clone();
+        invalid_equivalent.equivalent_data_property_groups =
+            vec![vec!["contact".to_owned(), "missing".to_owned()]];
+        assert!(validate_runtime_ir(&invalid_equivalent).is_err());
+
+        let mut duplicate_equivalent = schema.clone();
+        duplicate_equivalent.equivalent_data_property_groups = vec![
+            vec!["contact".to_owned(), "primary_contact".to_owned()],
+            vec!["primary_contact".to_owned(), "contact".to_owned()],
+        ];
+        assert!(validate_runtime_ir(&duplicate_equivalent).is_err());
 
         let customer = |data: serde_json::Value| RuntimeObjectFact {
             id: "customer-1".to_owned(),
@@ -2021,6 +2074,7 @@ equivalent Pet, Companion
                 "name": "Alice",
                 "work_email": "alice@work.test",
                 "mobile": "+8610000000000",
+                "primary_contact": "alice@example.test",
             }))],
             &[],
         )
@@ -2033,6 +2087,15 @@ equivalent Pet, Companion
                     &Term::new("email"),
                     &Term::new("customer-1"),
                     &Literal::String("alice@work.test".into())
+                )
+                .unwrap()
+        );
+        assert!(
+            reasoner
+                .entails_data_property(
+                    &Term::new("contact"),
+                    &Term::new("customer-1"),
+                    &Literal::String("alice@example.test".into())
                 )
                 .unwrap()
         );

@@ -394,6 +394,9 @@ pub struct OntologyIR {
     /// Named data-property disjointness groups declared directly in executable ODL.
     #[serde(default)]
     pub disjoint_data_property_groups: Vec<Vec<String>>,
+    /// Named data-property equivalence groups declared directly in executable ODL.
+    #[serde(default)]
+    pub equivalent_data_property_groups: Vec<Vec<String>>,
 }
 
 impl OntologyIR {
@@ -570,6 +573,57 @@ impl OntologyIR {
             &self.disjoint_data_property_groups,
             property_names,
         )
+    }
+
+    /// Validate data-property equivalence groups at both language and governance
+    /// boundaries so hand-built serialized IR cannot bypass ODL rules.
+    pub fn validate_equivalent_data_property_groups(
+        &self,
+        property_names: &std::collections::BTreeSet<&str>,
+    ) -> Result<(), DataPropertyGroupError> {
+        let mut seen_groups = std::collections::BTreeSet::new();
+        for (index, group) in self.equivalent_data_property_groups.iter().enumerate() {
+            if group.len() < 2 {
+                return Err(DataPropertyGroupError {
+                    index,
+                    message: "equivalent_data_property group must contain at least two properties"
+                        .to_owned(),
+                });
+            }
+            let mut members = std::collections::BTreeSet::new();
+            for name in group {
+                if name.trim().is_empty() {
+                    return Err(DataPropertyGroupError {
+                        index,
+                        message: "equivalent_data_property group contains an empty property name"
+                            .to_owned(),
+                    });
+                }
+                if !property_names.contains(name.as_str()) {
+                    return Err(DataPropertyGroupError {
+                        index,
+                        message: format!(
+                            "equivalent_data_property group references undeclared property '{name}'"
+                        ),
+                    });
+                }
+                if !members.insert(name.as_str()) {
+                    return Err(DataPropertyGroupError {
+                        index,
+                        message: format!(
+                            "equivalent_data_property group repeats property '{name}'"
+                        ),
+                    });
+                }
+            }
+            if !seen_groups.insert(members) {
+                return Err(DataPropertyGroupError {
+                    index,
+                    message: "duplicate equivalent_data_property group".to_owned(),
+                });
+            }
+        }
+        Ok(())
     }
 
     fn validate_disjoint_data_property_group(
