@@ -30,6 +30,7 @@
 | Persisted knowledge recovery | 重开 file-backed DB 并读取 1 个已提交版本 + 1 个 pending proposal |
 | Index scaling | 250/500/1,000/2,000 条 functional assertion 的 cold rebuild |
 | HTTP/WS load | 10 次并发 submit/approve（并发 5），3 个 WebSocket 客户端，真实 release 二进制 |
+| Knowledge soak / crash drill | 可配置持续时间（默认 1 小时）的 reason/diagnosis 并发读、每 5 秒受控演化、RSS 采样，以及 Pending proposal SIGKILL 重启校验 |
 
 ## 基线结果
 
@@ -96,9 +97,18 @@ make bench
 make load-baseline
 ```
 
+目标硬件上的知识 soak 与灾难恢复演练：
+
+```bash
+make soak-baseline SOAK_DURATION=3600 SOAK_CONCURRENCY=4 \
+  SOAK_MUTATION_INTERVAL=5 SOAK_MEMORY_WARMUP=60
+```
+
 Criterion HTML 和机器可读结果位于 `target/criterion/report/index.html` 与各基准的
-`estimates.json`；HTTP/WS 结果写入 `target/performance-load.json`。比较趋势时必须保持
-同一硬件、电源、编译 profile 和上述固定负载。
+`estimates.json`；HTTP/WS 结果写入 `target/performance-load.json`；知识 soak 与 SIGKILL 恢复
+结果写入 `target/knowledge-soak.json`，其中包含 Git revision、二进制/ODL SHA-256、主机与 CPU
+信息。比较趋势时必须保持同一硬件、电源、编译 profile 和上述固定负载。当前仓库尚未归档目标
+硬件的 1 小时 soak 产物；上述命令是复现入口，不是已完成的性能结论。
 
 ## SLA 语义和边界（S4c）
 

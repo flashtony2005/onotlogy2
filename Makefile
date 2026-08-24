@@ -6,6 +6,10 @@ CARGO ?= cargo
 LOAD_REQUESTS ?= 10
 LOAD_CONCURRENCY ?= 5
 LOAD_WS_CLIENTS ?= 3
+SOAK_DURATION ?= 3600
+SOAK_CONCURRENCY ?= 4
+SOAK_MUTATION_INTERVAL ?= 5
+SOAK_MEMORY_WARMUP ?= 60
 export PATH := $(HOME)/.rustup/toolchains/nightly-2026-07-17-aarch64-apple-darwin/bin:$(HOME)/.cargo/bin:$(PATH)
 
 fmt:
@@ -69,6 +73,16 @@ load-baseline:
 	./scripts/performance-load.py --binary target/release/oaip --odl examples/crm.odl \
 		--requests $(LOAD_REQUESTS) --concurrency $(LOAD_CONCURRENCY) \
 		--ws-clients $(LOAD_WS_CLIENTS) --output target/performance-load.json
+
+# S4d：在目标硬件上执行知识推理、受控演化、RSS 增长和 SIGKILL 恢复基线。
+# 默认持续 1 小时；发布证据必须保留 target/knowledge-soak.json 和运行环境元数据。
+soak-baseline:
+	mkdir -p target
+	$(CARGO) build --release --bin oaip
+	./scripts/knowledge-soak.py --binary target/release/oaip --odl examples/crm.odl \
+		--output target/knowledge-soak.json --duration-seconds $(SOAK_DURATION) \
+		--concurrency $(SOAK_CONCURRENCY) --mutation-interval $(SOAK_MUTATION_INTERVAL) \
+		--memory-warmup-seconds $(SOAK_MEMORY_WARMUP)
 
 # CI 主门禁
 check: fmt-check clippy test unwrap-budget

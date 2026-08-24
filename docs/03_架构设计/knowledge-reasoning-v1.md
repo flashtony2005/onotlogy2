@@ -525,6 +525,14 @@ full TBox/ABox consistency 与同 snapshot 命中 `OnceLock` 的 cached consiste
 周期采样并写入 `memory_rss_kb`。这些是本机开发环境基线，不把时间趋势等同生产内存审计，
 也不替代目标硬件上的长周期 soak。
 
+知识面长周期验证使用 `make soak-baseline`（`scripts/knowledge-soak.py`）。该演练启动真实
+release 二进制，持续并发执行 consistency、classification 和 diagnosis，并按固定间隔创建、评审、
+应用交替 remove/add 的 ontology proposal；全程采样 RSS，预热后的时间序列用于拟合增长趋势。
+负载结束后写入一个 Pending `RecoveryProbe` proposal，用 SIGKILL 模拟进程崩溃，重启后校验当前
+版本、Pending 提案和 diagnosis 完全恢复。JSON 产物记录 UTC 时间、主机、OS/CPU、Git revision、
+二进制与 ODL SHA-256，以及原始 RSS 序列和失败样本。该入口保证演练可复现；未在目标硬件上归档
+足够长时间的产物前，不宣称已完成生产化 soak。
+
 ### 5.6 明确限制
 
 - 不宣称完整 OWL 2 DL entailment。
@@ -626,6 +634,7 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
    `SubDataPropertyOf` 已支持增量复用后，继续处理其余 TBox 变更。
    长生命快照已接入存储执行路径并具备缓存命中率可观测性。
 4. 已增加持续并发、缓存驱逐恢复、持久化 pending proposal 重开、推理一致性和固定规模索引
-   扩展基准；HTTP 负载现在采样进程 RSS。仍需在目标硬件上完成长周期生产化 soak、内存增长
-   和灾难恢复演练基线。
+   扩展基准；HTTP 负载现在采样进程 RSS。`make soak-baseline` 已补齐知识推理、受控演化、
+   RSS 增长拟合与 Pending proposal SIGKILL 重启校验的统一演练入口；仍需在目标硬件上执行并
+   归档长周期生产化基线。
 5. 在能力矩阵继续扩展时同步刷新本文档。
