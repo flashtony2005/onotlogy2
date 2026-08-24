@@ -133,7 +133,9 @@ async fn odl_planning_metadata_drives_action_catalog() {
     assert_eq!(retain.confidence, 0.6);
     assert!((retain.net_value - 1_000.0).abs() < 1e-9);
 
-    let expensive_contact = pack_ontology.replace("cost: 5000", "cost: 500000");
+    let expensive_contact = pack_ontology
+        .replace("cost: 5000", "cost: 500000")
+        .replace("require_approval: true", "require_approval: false");
     assert_ne!(expensive_contact, pack_ontology, "契约测试必须修改成功");
     seed_odl_project(
         &storage,
@@ -288,10 +290,12 @@ async fn opportunity_cost_budget_blocks_unaffordable_actions() {
         .expect("内存库应可打开");
     let pack_ontology = std::fs::read_to_string("domain-packs/crm-retention/ontology.odl")
         .expect("业务包 ODL 应存在");
-    let budgeted_ontology = pack_ontology.replace(
-        "goal_metric: monthly_reactivations\n      evidence:",
-        "goal_metric: monthly_reactivations\n      cost_budget: 4500\n      evidence:",
-    );
+    let budgeted_ontology = pack_ontology
+        .replace(
+            "goal_metric: monthly_reactivations\n      evidence:",
+            "goal_metric: monthly_reactivations\n      cost_budget: 4500\n      evidence:",
+        )
+        .replace("require_approval: true", "require_approval: false");
     assert_ne!(budgeted_ontology, pack_ontology, "契约测试必须修改成功");
     seed_odl_project(
         &storage,
@@ -786,7 +790,7 @@ async fn business_loop_discovers_decides_executes_and_replans() {
     let alternatives: Value =
         serde_json::from_str(result["decision"]["data"]["alternatives"].as_str().unwrap())
             .expect("候选比较应保存为 JSON 字符串");
-    assert_eq!(alternatives.as_array().map(Vec::len), Some(2));
+    assert_eq!(alternatives.as_array().map(Vec::len), Some(3));
     let task_id = result["execution"]["createdObject"]["id"]
         .as_str()
         .expect("挽留动作应创建 RetentionTask")
@@ -1491,6 +1495,23 @@ async fn require_approval_action_waits_for_separate_human_evidence() {
         .await
         .expect("应能发现机会");
     let opportunity_id = discovered[0]["id"].as_str().expect("机会必须有 ID");
+    let recommendations = recommend_next_actions(&storage, "approved-refund")
+        .await
+        .expect("审批动作应能进入推荐明细");
+    let refund = recommendations[0]
+        .candidates
+        .iter()
+        .find(|candidate| candidate.action == "refund")
+        .expect("审批候选必须可见");
+    assert!(refund.requires_approval);
+    assert_eq!(refund.params.len(), 1);
+    assert!(
+        !plan_opportunity_paths(&storage, "approved-refund")
+            .await
+            .expect("路径规划应成功")
+            .iter()
+            .any(|path| path.actions.contains(&"refund".to_string()))
+    );
     let decision = decide_opportunity(
         &storage,
         "approved-refund",
@@ -1579,4 +1600,50 @@ async fn require_approval_action_waits_for_separate_human_evidence() {
     assert_eq!(reviewed["approval"]["data"]["status"], json!("Rejected"));
     assert_eq!(reviewed["decision"]["data"]["status"], json!("Rejected"));
     assert_eq!(reviewed["opportunity"]["data"]["status"], json!("Open"));
+}
+
+#[tokio::test]
+async fn autonomous_run_skips_approval_only_candidate() {
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let pack_ontology = std::fs::read_to_string("domain-packs/crm-retention/ontology.odl")
+        .expect("业务包 ODL 应存在");
+    let ontology = pack_ontology.replace(
+        "goal_metric: monthly_reactivations\n      evidence:",
+        "goal_metric: monthly_reactivations\n      cost_budget: 4999\n      evidence:",
+    );
+    seed_odl_project(
+        &storage,
+        "approval-only",
+        &ontology,
+        "monthly_reactivations",
+    )
+    .await;
+    discover_opportunities(&storage, "approval-only")
+        .await
+        .expect("应能发现审批机会");
+    let recommendations = recommend_next_actions(&storage, "approval-only")
+        .await
+        .expect("审批动作应能进入推荐明细");
+    assert_eq!(recommendations.len(), 1);
+    assert_eq!(recommendations[0].action, "refund");
+    assert!(
+        recommendations[0]
+            .candidates
+            .iter()
+            .find(|candidate| candidate.action == "refund")
+            .is_some_and(|candidate| candidate.requires_approval)
+    );
+    assert!(
+        plan_opportunity_paths(&storage, "approval-only")
+            .await
+            .expect("路径规划应成功")
+            .is_empty()
+    );
+    let run = run_next_best_action(&storage, "approval-only", "agent")
+        .await
+        .expect("自动运行必须安全跳过审批动作");
+    assert!(!run.executed);
+    assert!(run.decision.is_none());
 }

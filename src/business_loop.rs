@@ -5,7 +5,7 @@
 
 use crate::abi::ir::{
     ActionDef, ActionPlanning, ActorKind, CompareOp, OntologyIR, OpportunityRule, OutcomeTiming,
-    ValueExpr,
+    ParamDef, ValueExpr,
 };
 use crate::abi::{DataValidationError, parse_odl, validate_object_data, value_matches_scalar};
 use crate::storage::{LibSQLStorage, ProjectRecord, StorageError, WorldCommand};
@@ -92,6 +92,9 @@ pub struct ActionRecommendation {
 pub struct ActionCandidate {
     pub action: String,
     pub actor: ActorKind,
+    #[serde(rename = "requiresApproval")]
+    pub requires_approval: bool,
+    pub params: Vec<ParamDef>,
     #[serde(rename = "expectedBenefit")]
     pub expected_benefit: f64,
     pub cost: f64,
@@ -110,6 +113,8 @@ pub struct OpportunityPath {
     pub actions: Vec<String>,
     #[serde(rename = "requiresHuman")]
     pub requires_human: bool,
+    #[serde(rename = "requiresApproval")]
+    pub requires_approval: bool,
     #[serde(rename = "projectedNetValue")]
     pub projected_net_value: f64,
     pub confidence: f64,
@@ -223,8 +228,22 @@ fn expected_benefit(
     Ok(number(subject, field)?.max(0.0) * factor)
 }
 
-fn action_available(action: &ActionDef, subject: &Value) -> Result<bool, BusinessLoopError> {
-    Ok(action.params.is_empty() && action_executable(action, subject, &json!({}))?)
+fn subject_preconditions_satisfied(
+    action: &ActionDef,
+    subject: &Value,
+) -> Result<bool, BusinessLoopError> {
+    for clause in &action.policy.precondition {
+        let Some(field) = clause.field.strip_prefix("self.") else {
+            continue;
+        };
+        let Some(left) = subject.get(field) else {
+            return Ok(false);
+        };
+        if !compare_values(left, clause.op, condition_literal(&clause.value)?)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn action_admissible(
@@ -251,14 +270,6 @@ fn action_admissible(
         }
     }
     Ok(true)
-}
-
-fn action_executable(
-    action: &ActionDef,
-    subject: &Value,
-    params: &Value,
-) -> Result<bool, BusinessLoopError> {
-    Ok(!action.policy.require_approval && action_admissible(action, subject, params)?)
 }
 
 fn validate_action_params(
@@ -834,6 +845,7 @@ pub async fn recommend_next_actions(
 struct ScoredPath {
     actions: Vec<String>,
     requires_human: bool,
+    requires_approval: bool,
     benefit: f64,
     cost: f64,
     net_value: f64,
@@ -983,6 +995,7 @@ fn search_paths<'a>(
         let contributes_to_goal = planning.outcome_timing == OutcomeTiming::Immediate
             && shared_goal_metric(ontology, opportunity_type, action).is_some();
         let requires_human = planning.actor == ActorKind::Human;
+        let requires_approval = action.policy.require_approval;
 
         // 创建效应是流程终点：其后续结果必须等真实终局证据，不能虚构对象内部状态。
         if !action.creates.is_empty() {
@@ -995,6 +1008,7 @@ fn search_paths<'a>(
                 confidence: step_confidence,
                 score: f64::NAN,
                 requires_human,
+                requires_approval,
             });
             if let Some(path) = paths.last_mut() {
                 path.score = path.net_value.max(0.0)
@@ -1026,6 +1040,7 @@ fn search_paths<'a>(
                             .map_or(0.0, |(_, gap)| gap),
                     ),
                 requires_human,
+                requires_approval,
             });
             continue;
         }
@@ -1042,6 +1057,7 @@ fn search_paths<'a>(
             confidence: step_confidence,
             score: f64::NAN,
             requires_human,
+            requires_approval,
         };
         // 每个可执行前缀本身也是完整路径；继续递归只用于比较更长的替代路线。
         candidate.benefit = benefit;
@@ -1067,6 +1083,7 @@ fn search_paths<'a>(
         )?;
         for mut child in children {
             child.requires_human |= requires_human;
+            child.requires_approval |= requires_approval;
             child.confidence *= step_confidence;
             child.benefit += benefit;
             child.cost += planning.cost;
@@ -1166,6 +1183,7 @@ pub async fn plan_opportunity_paths(
                 subject: subject.clone(),
                 actions: path.actions,
                 requires_human: path.requires_human,
+                requires_approval: path.requires_approval,
                 projected_net_value: path.net_value,
                 confidence: path.confidence,
                 score: path.score,
@@ -1216,7 +1234,10 @@ fn evaluate_candidates(
     actions
         .iter()
         .filter_map(|definition| {
-            if !action_available(definition, customer).ok()? {
+            if definition.planning.is_none()
+                || !(definition.policy.require_approval || definition.params.is_empty())
+                || !subject_preconditions_satisfied(definition, customer).ok()?
+            {
                 return None;
             }
             let cost = action_planning(definition).ok()?.cost;
@@ -1228,6 +1249,8 @@ fn evaluate_candidates(
             Some(ActionCandidate {
                 action: definition.name.to_string(),
                 actor: action_planning(definition).ok()?.actor,
+                requires_approval: definition.policy.require_approval,
+                params: definition.params.clone(),
                 expected_benefit: benefit,
                 cost,
                 confidence,
@@ -2055,13 +2078,22 @@ pub async fn run_next_best_action(
     let paths = plan_opportunity_paths(storage, project_id).await?;
     let agent_paths = paths
         .iter()
-        .filter(|path| !path.requires_human)
+        .filter(|path| !path.requires_human && !path.requires_approval)
         .cloned()
         .collect::<Vec<_>>();
+    let autonomous_candidate = |recommendation: &ActionRecommendation, action: &str| {
+        recommendation.candidates.iter().any(|candidate| {
+            candidate.action == action
+                && candidate.params.is_empty()
+                && !candidate.requires_approval
+        })
+    };
     let path_choice = agent_paths.first().and_then(|path| {
         let first_action = path.actions.first()?;
         recommendations.iter().find_map(|recommendation| {
-            if recommendation.opportunity_id != path.opportunity_id {
+            if recommendation.opportunity_id != path.opportunity_id
+                || !autonomous_candidate(recommendation, first_action)
+            {
                 return None;
             }
             let candidate = recommendation
@@ -2077,7 +2109,7 @@ pub async fn run_next_best_action(
     let mut recommendation = path_choice.or_else(|| {
         recommendations
             .iter()
-            .find(|item| item.actor == ActorKind::Agent)
+            .find(|item| item.actor == ActorKind::Agent && autonomous_candidate(item, &item.action))
             .cloned()
     });
     if let Some((recommendation, path)) = recommendation.as_mut().zip(agent_paths.first())
