@@ -1924,6 +1924,13 @@ relation changed_state:
     let discovered = discover_opportunities(&storage, "capability-loop")
         .await
         .expect("应能发现机会");
+    let recommendation = recommend_next_actions(&storage, "capability-loop")
+        .await
+        .expect("应能推荐外部能力动作");
+    assert_eq!(recommendation[0].action, "TouchCustomer");
+    let candidate = &recommendation[0].candidates[0];
+    assert_eq!(candidate.plugin.as_deref(), Some("crm-plugin"));
+    assert_eq!(candidate.capability.as_deref(), Some("touch_customer"));
     let opportunity_id = discovered[0]["id"].as_str().expect("机会必须有 ID");
     decide_opportunity(
         &storage,

@@ -108,6 +108,12 @@ pub struct ActionCandidate {
     pub confidence: f64,
     #[serde(rename = "netValue")]
     pub net_value: f64,
+    /// 声明的外部能力宿主；本地动作缺省不展示。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
+    /// 声明的外部能力；与 `plugin` 成对出现。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1282,15 +1288,18 @@ fn evaluate_candidates(
             }
             let confidence = action_confidence(definition, outcomes).ok()?;
             let benefit = expected_benefit(definition, estimated_value, customer).ok()?;
+            let planning = action_planning(definition).ok()?;
             Some(ActionCandidate {
                 action: definition.name.to_string(),
-                actor: action_planning(definition).ok()?.actor,
+                actor: planning.actor,
                 requires_approval: definition.policy.require_approval,
                 params: definition.params.clone(),
                 expected_benefit: benefit,
                 cost,
                 confidence,
                 net_value: benefit * confidence - cost,
+                plugin: planning.plugin.clone(),
+                capability: planning.capability.clone(),
             })
         })
         .collect()
