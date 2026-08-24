@@ -399,6 +399,96 @@ async fn deferred_follow_up_evidence_is_declared_and_type_generic() {
 }
 
 #[tokio::test]
+async fn metric_budget_is_shared_across_opportunities() {
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let pack_ontology = std::fs::read_to_string("domain-packs/crm-retention/ontology.odl")
+        .expect("业务包 ODL 应存在");
+    let shared_budget = pack_ontology.replace(
+        "goal_metric: monthly_reactivations\n      evidence:",
+        "goal_metric: monthly_reactivations\n      metric_budget: 5000\n      evidence:",
+    );
+    assert_ne!(shared_budget, pack_ontology, "契约测试必须修改成功");
+    seed_odl_project(
+        &storage,
+        "shared-budget",
+        &shared_budget,
+        "monthly_reactivations",
+    )
+    .await;
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+            object_type: "Customer".into(),
+            id: "customer:shared-budget-second".into(),
+            data: json!({
+                "name": "第二个 VIP",
+                "level": "VIP",
+                "balance": 100_000.0,
+                "days_since_last_contact": 75
+            }),
+            project_id: Some("shared-budget".into()),
+        })
+        .await
+        .expect("应能写入第二个客户状态");
+
+    let discovered = discover_opportunities(&storage, "shared-budget")
+        .await
+        .expect("应发现两个共享预算机会");
+    assert_eq!(discovered.len(), 2);
+    let first_run = run_next_best_action(&storage, "shared-budget", "contract-test")
+        .await
+        .expect("第一笔动作应消耗指标预算");
+    let execution = first_run.execution.expect("应有执行结果");
+    assert_eq!(
+        execution["actionOutcome"]["data"]["cost"],
+        json!(5_000.0),
+        "ActionExecuted 必须记录资源消耗"
+    );
+
+    discover_opportunities(&storage, "shared-budget")
+        .await
+        .expect("第二个机会仍可发现");
+    assert!(
+        recommend_next_actions(&storage, "shared-budget")
+            .await
+            .expect("共享预算耗尽后不应推荐")
+            .is_empty()
+    );
+    assert!(
+        plan_opportunity_paths(&storage, "shared-budget")
+            .await
+            .expect("共享预算耗尽后不应规划路径")
+            .is_empty()
+    );
+    let idle_run = run_next_best_action(&storage, "shared-budget", "contract-test")
+        .await
+        .expect("预算耗尽后自动运行应空闲");
+    assert!(!idle_run.executed);
+
+    let opportunities = storage
+        .list_objects_for_project("shared-budget", "Opportunity")
+        .await
+        .expect("应能读取机会");
+    let second = opportunities
+        .iter()
+        .find(|item| item.data["status"] == json!("Open"))
+        .expect("第二个机会应保持 Open");
+    let error = decide_opportunity(
+        &storage,
+        "shared-budget",
+        &second.id,
+        Some("ContactCustomer"),
+        "contract-test",
+        None,
+        None,
+    )
+    .await
+    .expect_err("显式决策不能绕过共享预算");
+    assert!(error.to_string().contains("指标剩余成本预算"));
+}
+
+#[tokio::test]
 async fn business_loop_discovers_decides_executes_and_replans() {
     let storage = Arc::new(LibSQLStorage::open(":memory:").await.unwrap());
     let addr = common::spawn_server(storage.clone()).await;
@@ -999,6 +1089,8 @@ object Outcome:
     before: string
     after: string
     success: bool
+    cost: float
+    metric: string
     stage: string one_of [ActionExecuted,BusinessResult]
 
 object StateTransition:

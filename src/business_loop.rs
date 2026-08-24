@@ -325,6 +325,39 @@ fn validate_action_budget(
     )))
 }
 
+fn metric_budget_remaining(
+    rule: &OpportunityRule,
+    outcomes: &[crate::storage::ObjectRecord],
+) -> Option<f64> {
+    let budget = rule.metric_budget?;
+    let spent = outcomes
+        .iter()
+        .filter(|outcome| {
+            text(&outcome.data, "stage").is_ok_and(|stage| stage == OUTCOME_ACTION_EXECUTED)
+                && text(&outcome.data, "metric")
+                    .is_ok_and(|metric| Some(metric) == rule.goal_metric.as_deref())
+        })
+        .filter_map(|outcome| number(&outcome.data, "cost").ok())
+        .sum::<f64>();
+    Some((budget - spent).max(0.0))
+}
+
+fn validate_metric_budget(
+    action: &ActionDef,
+    remaining: Option<f64>,
+) -> Result<(), BusinessLoopError> {
+    let Some(remaining) = remaining else {
+        return Ok(());
+    };
+    if action_planning(action)?.cost <= remaining {
+        return Ok(());
+    }
+    Err(BusinessLoopError::invalid(format!(
+        "业务动作 {} 超出指标剩余成本预算 {remaining:.0}",
+        action.name
+    )))
+}
+
 fn shared_goal_metric(
     ontology: &OntologyIR,
     opportunity_type: &str,
@@ -625,11 +658,17 @@ pub async fn recommend_next_actions(
         let estimated_value = number(&opportunity.data, "estimated_value")?;
         let urgency_value = urgency_value.max(0.0);
         let urgency = (urgency_value.min(rule.urgency_horizon) / rule.urgency_horizon).max(0.1);
+        let metric_budget = metric_budget_remaining(rule, &outcomes);
+        let available_budget = rule
+            .cost_budget
+            .into_iter()
+            .chain(metric_budget)
+            .fold(f64::INFINITY, f64::min);
         let mut candidates = evaluate_candidates(
             &actions,
             &subject_record.data,
             estimated_value,
-            rule.cost_budget,
+            Some(available_budget),
             &outcomes,
         );
         if candidates.is_empty() {
@@ -970,9 +1009,6 @@ pub async fn plan_opportunity_paths(
     let opportunities = storage
         .list_objects_for_project(project_id, "Opportunity")
         .await?;
-    let outcomes = storage
-        .list_objects_for_project(project_id, "Outcome")
-        .await?;
 
     let mut plans = Vec::new();
     for opportunity in opportunities {
@@ -990,6 +1026,15 @@ pub async fn plan_opportunity_paths(
             .ok_or_else(|| BusinessLoopError::NotFound(subject.clone()))?;
         let urgency_value = number(&subject_record.data, &rule.urgency_field)?.max(0.0);
         let urgency = (urgency_value.min(rule.urgency_horizon) / rule.urgency_horizon).max(0.1);
+        let outcomes = storage
+            .list_objects_for_project(project_id, "Outcome")
+            .await?;
+        let metric_budget = metric_budget_remaining(rule, &outcomes);
+        let path_budget = rule
+            .cost_budget
+            .into_iter()
+            .chain(metric_budget)
+            .fold(f64::INFINITY, f64::min);
         let initial_key = serde_json::to_string(&subject_record.data)
             .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
         let mut visited = std::collections::BTreeSet::from([initial_key]);
@@ -1009,7 +1054,7 @@ pub async fn plan_opportunity_paths(
             &subject_record.data,
             &[],
             &mut visited,
-            rule.cost_budget,
+            Some(path_budget),
             0,
         )?;
         scored.retain(|path| path.net_value > 0.0);
@@ -1194,6 +1239,10 @@ pub async fn decide_opportunity(
         )));
     };
     validate_action_budget(rule, definition)?;
+    let outcomes = storage
+        .list_objects_for_project(project_id, "Outcome")
+        .await?;
+    validate_metric_budget(definition, metric_budget_remaining(rule, &outcomes))?;
 
     let subject = text(&opportunity.data, "subject")?.to_string();
     let subjects = storage
@@ -1292,6 +1341,10 @@ pub async fn execute_opportunity(
         .ok_or_else(|| BusinessLoopError::invalid(format!("不支持的业务动作 {action}")))?;
     validate_action_budget(rule, &definition)?;
     let planning = action_planning(&definition)?;
+    let outcomes = storage
+        .list_objects_for_project(project_id, "Outcome")
+        .await?;
+    validate_metric_budget(&definition, metric_budget_remaining(rule, &outcomes))?;
 
     let subject = text(&opportunity.data, "subject")?.to_string();
     let subjects = storage
@@ -1375,6 +1428,8 @@ pub async fn execute_opportunity(
         "before": before,
         "after": after,
         "success": true,
+        "cost": planning.cost,
+        "metric": rule.goal_metric.clone().unwrap_or_default(),
         "stage": OUTCOME_ACTION_EXECUTED,
     });
     if let Some((task_id, task_type)) = &created_object {
@@ -1424,6 +1479,7 @@ pub async fn execute_opportunity(
             "before": before,
             "after": after,
             "success": true,
+            "metric": rule.goal_metric.clone().unwrap_or_default(),
             "stage": OUTCOME_BUSINESS_RESULT,
         });
         validate_data(&ontology, "Outcome", &result_data)?;
@@ -1680,6 +1736,7 @@ pub async fn settle_follow_up(
         "before": before,
         "after": after,
         "success": success,
+        "metric": "",
         "stage": OUTCOME_BUSINESS_RESULT,
     });
     validate_data(&ontology, "Outcome", &outcome_data)?;

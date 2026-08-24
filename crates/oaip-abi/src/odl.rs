@@ -751,6 +751,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                             urgency_field: String::new(),
                             urgency_horizon: 0.0,
                             cost_budget: None,
+                            metric_budget: None,
                             link_edge: String::new(),
                         },
                     ));
@@ -1136,6 +1137,15 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                                 return Err(invalid("cost_budget 不能为负或无限".into()));
                             }
                             rule.cost_budget = Some(value);
+                        }
+                        "metric_budget" => {
+                            let value = v.parse::<f64>().map_err(|_| {
+                                invalid(format!("metric_budget 必须是有限数值，得到 `{v}`"))
+                            })?;
+                            if !value.is_finite() || value < 0.0 {
+                                return Err(invalid("metric_budget 不能为负或无限".into()));
+                            }
+                            rule.metric_budget = Some(value);
                         }
                         "link_edge" => {
                             if v.trim().is_empty() {
@@ -1533,6 +1543,20 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                     format!(
                         "opportunity '{}' 的 subject_type 必须是所在对象 '{}'",
                         rule.name, object.name
+                    ),
+                    opportunity_lines
+                        .get(rule.name.as_str())
+                        .copied()
+                        .unwrap_or(1),
+                    1,
+                ));
+            }
+            if rule.metric_budget.is_some() && rule.goal_metric.is_none() {
+                return Err(OdlError::new(
+                    E_INVALID_PROPERTY_CONSTRAINT,
+                    format!(
+                        "opportunity '{}' 的 metric_budget 必须配合 goal_metric",
+                        rule.name
                     ),
                     opportunity_lines
                         .get(rule.name.as_str())

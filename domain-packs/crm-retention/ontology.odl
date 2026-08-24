@@ -172,6 +172,8 @@ object Outcome:
     before: string
     after: string
     success: bool
+    cost: float
+    metric: string
     stage: string one_of [ActionExecuted,BusinessResult]
 
 object StateTransition:

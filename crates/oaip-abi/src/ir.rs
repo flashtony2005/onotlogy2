@@ -346,6 +346,9 @@ pub struct OpportunityRule {
     /// 单个机会允许消耗的成本上限；未声明表示不限制。
     #[serde(default)]
     pub cost_budget: Option<f64>,
+    /// 同一 goal_metric 下所有机会共享的成本上限；未声明表示不限制。
+    #[serde(default)]
+    pub metric_budget: Option<f64>,
     /// Opportunity 指向主体的关系边。
     pub link_edge: String,
 }

@@ -98,11 +98,13 @@ fn opportunity_rule_requires_complete_and_typed_metadata() {
         "  opportunities:",
         "    Reactivation:",
         "      estimated_value: 180000",
+        "      goal_metric: monthly_reactivations",
         "      evidence: \"客户已 {days_since_last_contact} 天未联系\"",
         "      subject_type: Customer",
         "      urgency_field: days_since_last_contact",
         "      urgency_horizon: 90",
         "      cost_budget: 25000",
+        "      metric_budget: 80000",
         "      link_edge: targets",
         "      when:",
         "        - field: self.level",
@@ -157,6 +159,7 @@ fn opportunity_rule_requires_complete_and_typed_metadata() {
     assert_eq!(rule.urgency_field, "days_since_last_contact");
     assert_eq!(rule.urgency_horizon, 90.0);
     assert_eq!(rule.cost_budget, Some(25_000.0));
+    assert_eq!(rule.metric_budget, Some(80_000.0));
     assert_eq!(rule.link_edge, "targets");
 
     let negative = base
@@ -166,6 +169,14 @@ fn opportunity_rule_requires_complete_and_typed_metadata() {
         .join("\n");
     let error = parse_odl(&negative).expect_err("负数成本预算必须解析失败");
     assert!(error.to_string().contains("cost_budget 不能为负或无限"));
+
+    let negative_metric = base
+        .iter()
+        .map(|line| line.replace("metric_budget: 80000", "metric_budget: -1"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let error = parse_odl(&negative_metric).expect_err("负数指标预算必须解析失败");
+    assert!(error.to_string().contains("metric_budget 不能为负或无限"));
     assert_eq!(rule.when.len(), 2);
 }
 
