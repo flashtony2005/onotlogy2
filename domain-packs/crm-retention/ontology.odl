@@ -24,6 +24,7 @@ object Customer:
   opportunities:
     Reactivation:
       estimated_value: 180000
+      goal_metric: monthly_reactivations
       evidence: "VIP 客户已 {days_since_last_contact} 天未联系，超过复购预警阈值"
       when:
         - field: self.level
@@ -38,6 +39,7 @@ object Customer:
         cost: 5000
         prior_confidence: 0.7
         outcome_timing: immediate
+        goal_metric: monthly_reactivations
       updates:
         - field: days_since_last_contact
           value: 0
@@ -46,6 +48,7 @@ object Customer:
         cost: 20000
         prior_confidence: 0.6
         outcome_timing: deferred
+        goal_metric: monthly_reactivations
       creates:
         - type: RetentionTask
           data:

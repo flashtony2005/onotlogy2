@@ -138,6 +138,58 @@ fn opportunity_rule_requires_complete_and_typed_metadata() {
 }
 
 #[test]
+fn goal_metric_is_declared_on_rules_and_actions() {
+    let odl = [
+        "object Customer:",
+        "  properties:",
+        "    name: string",
+        "  opportunities:",
+        "    Reactivation:",
+        "      estimated_value: 180000",
+        "      goal_metric: monthly_reactivations",
+        "      evidence: \"客户已 {name} 天未联系\"",
+        "      when:",
+        "        - field: self.name",
+        "          op: eq",
+        "          value: \"VIP\"",
+        "  actions:",
+        "    ContactCustomer:",
+        "      planning:",
+        "        cost: 100",
+        "        prior_confidence: 0.5",
+        "        outcome_timing: immediate",
+        "        goal_metric: monthly_reactivations",
+    ]
+    .join("\n");
+
+    let ir = parse_odl(&odl).expect("声明 goal_metric 的 ODL 应可解析");
+    assert_eq!(
+        ir.object_types[0].opportunity_rules[0].goal_metric,
+        Some("monthly_reactivations".into())
+    );
+    assert_eq!(
+        ir.object_types[0].actions[0]
+            .planning
+            .as_ref()
+            .expect("planning 应存在")
+            .goal_metric,
+        Some("monthly_reactivations".into())
+    );
+}
+
+#[test]
+fn goal_metric_rejects_blank_declarations() {
+    for line in [
+        "object Customer:\n  properties:\n    name: string\n  actions:\n    ContactCustomer:\n      planning:\n        cost: 100\n        prior_confidence: 0.5\n        outcome_timing: immediate\n        goal_metric: ",
+        "object Customer:\n  properties:\n    name: string\n  opportunities:\n    Reactivation:\n      estimated_value: 1\n      goal_metric: \n      evidence: \"证据\"\n      when:\n        - field: self.name\n          op: eq\n          value: \"VIP\"",
+    ] {
+        let error = parse_odl(line).expect_err("空 goal_metric 必须解析失败");
+        assert_eq!(error.code, 1011);
+        assert!(error.to_string().contains("goal_metric 不能为空"));
+    }
+}
+
+#[test]
 fn tc001c_parse_typed_relations() {
     let odl = [
         "object Customer:",

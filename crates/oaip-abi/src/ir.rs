@@ -268,13 +268,16 @@ pub struct PolicyDef {
 }
 
 /// Business Loop 需要的动作规划元数据；执行效应仍由 updates/creates 声明。
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActionPlanning {
     pub cost: f64,
     #[serde(default)]
     pub prior_confidence: f64,
     /// `immediate` 执行后直接产生 BusinessResult；`deferred` 必须等待终局上报。
     pub outcome_timing: OutcomeTiming,
+    /// 成功 BusinessResult 递增的经营目标；未声明时不参与目标进度。
+    #[serde(default)]
+    pub goal_metric: Option<String>,
 }
 
 /// 业务结果的产生时机。
@@ -319,6 +322,9 @@ pub struct OpportunityRule {
     /// 触发条件；多条为 AND。
     #[serde(default)]
     pub when: Vec<Clause>,
+    /// 命中后服务的经营目标；与动作 goal_metric 匹配才计入进度。
+    #[serde(default)]
+    pub goal_metric: Option<String>,
 }
 
 /// 对象类型（对应 ODL `object X:`）。

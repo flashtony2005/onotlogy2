@@ -24,8 +24,6 @@ const TASK_IN_PROGRESS: &str = "InProgress";
 const TASK_SETTLED_SUCCESS: &str = "Completed";
 const TASK_SETTLED_FAILURE: &str = "Failed";
 
-const GOAL_METRIC: &str = "monthly_reactivations";
-
 #[derive(Debug, Error)]
 pub enum BusinessLoopError {
     #[error("不存在：{0}")]
@@ -254,6 +252,35 @@ fn opportunity_rules(ontology: &OntologyIR) -> Result<Vec<&OpportunityRule>, Bus
     Ok(customer.opportunity_rules.iter().collect())
 }
 
+fn opportunity_rule<'a>(ontology: &'a OntologyIR, name: &str) -> Option<&'a OpportunityRule> {
+    ontology
+        .object_types
+        .iter()
+        .flat_map(|object| object.opportunity_rules.iter())
+        .find(|rule| rule.name == name)
+}
+
+fn action_goal_metric(action: &ActionDef) -> Option<String> {
+    action
+        .planning
+        .as_ref()
+        .and_then(|planning| planning.goal_metric.clone())
+}
+
+fn shared_goal_metric(
+    ontology: &OntologyIR,
+    opportunity_type: &str,
+    action: &ActionDef,
+) -> Option<String> {
+    let opportunity_metric =
+        opportunity_rule(ontology, opportunity_type).and_then(|rule| rule.goal_metric.clone());
+    let action_metric = action_goal_metric(action);
+    if opportunity_metric.is_some() && opportunity_metric == action_metric {
+        return opportunity_metric;
+    }
+    None
+}
+
 fn condition_literal(expression: &ValueExpr) -> Result<&Value, BusinessLoopError> {
     match expression {
         ValueExpr::Literal(value) => Ok(value),
@@ -428,28 +455,64 @@ pub async fn refresh_goal_progress(
     project_id: &str,
 ) -> Result<Vec<GoalGap>, BusinessLoopError> {
     let (_, ontology) = project_ontology(storage, project_id).await?;
-    let immediate_actions = planning_actions(&ontology)?
-        .iter()
-        .filter(|action| {
-            action_planning(action)
-                .is_ok_and(|planning| planning.outcome_timing == OutcomeTiming::Immediate)
-        })
-        .map(|action| action.name.as_str())
-        .collect::<Vec<_>>();
+    let actions = planning_actions(&ontology)?;
     let goals = storage
         .list_objects_for_project(project_id, "BusinessGoal")
         .await?;
     let outcomes = storage
         .list_objects_for_project(project_id, "Outcome")
         .await?;
-    let completed_reactivations = outcomes
-        .iter()
-        .filter(|outcome| is_counted_reactivation(&outcome.data, &immediate_actions))
-        .count() as f64;
+
+    // 目标进度只信任图谱证据：Outcome 必须由 Decision 产生，且 Decision 指向
+    // 与动作声明同一 goal_metric 的 Opportunity Rule。
+    let relations = storage.list_all_relations().await?;
+    let decisions = storage
+        .list_objects_for_project(project_id, "Decision")
+        .await?;
+    let opportunities = storage
+        .list_objects_for_project(project_id, "Opportunity")
+        .await?;
+    let mut completed_by_metric = std::collections::HashMap::<String, u64>::new();
+    for outcome in outcomes {
+        if outcome.data.get("success").and_then(Value::as_bool) != Some(true)
+            || text(&outcome.data, "stage")? != OUTCOME_BUSINESS_RESULT
+        {
+            continue;
+        }
+        let decision_id = relations
+            .iter()
+            .filter(|relation| {
+                relation.relation == "produced_outcome" && relation.target == outcome.id
+            })
+            .map(|relation| relation.source.as_str())
+            .next();
+        let Some(decision) = decision_id.and_then(|id| find_record(&decisions, id, "Decision"))
+        else {
+            continue;
+        };
+        let action_name = text(&decision.data, "action")?;
+        let Some(action) = find_action(&actions, action_name) else {
+            continue;
+        };
+        let opportunity_id = text(&decision.data, "opportunity")?;
+        let Some(opportunity) = find_record(&opportunities, opportunity_id, "Opportunity") else {
+            continue;
+        };
+        let metric = shared_goal_metric(
+            &ontology,
+            text(&opportunity.data, "opportunity_type")?,
+            action,
+        );
+        if let Some(metric) = metric {
+            *completed_by_metric.entry(metric).or_default() += 1;
+        }
+    }
 
     for goal in goals {
         let baseline = number(&goal.data, "baseline_value")?;
-        let current = baseline + completed_reactivations;
+        let metric = text(&goal.data, "target_metric")?;
+        let current =
+            baseline + completed_by_metric.get(metric).copied().unwrap_or_default() as f64;
         if number(&goal.data, "current_value")? == current {
             continue;
         }
@@ -467,23 +530,6 @@ pub async fn refresh_goal_progress(
     }
 
     goal_gaps(storage, project_id).await
-}
-
-fn outcome_snapshot_days(outcome: &Value, field: &str) -> Option<i64> {
-    let snapshot = outcome.get(field)?.as_str()?;
-    let snapshot: Value = serde_json::from_str(snapshot).ok()?;
-    snapshot.get("days_since_last_contact")?.as_i64()
-}
-
-fn is_counted_reactivation(outcome: &Value, immediate_actions: &[&str]) -> bool {
-    outcome.get("success").and_then(Value::as_bool) == Some(true)
-        && outcome
-            .get("action")
-            .and_then(Value::as_str)
-            .is_some_and(|action| immediate_actions.contains(&action))
-        && outcome.get("stage").and_then(Value::as_str) == Some(OUTCOME_BUSINESS_RESULT)
-        && outcome_snapshot_days(outcome, "before").is_some_and(|days| days > 45)
-        && outcome_snapshot_days(outcome, "after") == Some(0)
 }
 
 /// 按目标相关性、状态紧急度、估计价值和历史成功率对 Open Opportunity 排序。
@@ -505,17 +551,6 @@ pub async fn recommend_next_actions(
     let outcomes = storage
         .list_objects_for_project(project_id, "Outcome")
         .await?;
-
-    let active_goal = goals.iter().find(|goal| {
-        text(&goal.data, "target_metric").is_ok_and(|metric| metric == GOAL_METRIC)
-            && text(&goal.data, "status").is_ok_and(|status| status == "active")
-    });
-    let remaining_gap = match active_goal {
-        Some(goal) => {
-            (number(&goal.data, "target_value")? - number(&goal.data, "current_value")?).max(0.0)
-        }
-        None => 0.0,
-    };
 
     let mut recommendations = Vec::new();
     for opportunity in opportunities {
@@ -542,18 +577,38 @@ pub async fn recommend_next_actions(
                 .total_cmp(&left.net_value)
                 .then_with(|| left.action.cmp(&right.action))
         });
-        let selected = &candidates[0];
-        let score = selected.net_value
-            * goal_alignment(
+
+        // 每个候选先按目标对齐加权，再选总分最高者；净价值排序只保留为候选明细。
+        let mut scored = Vec::with_capacity(candidates.len());
+        for candidate in &candidates {
+            let active_goal = active_goal_gap(
+                &goals,
                 &actions,
-                selected.action.as_str(),
+                &ontology,
                 opportunity_type.as_str(),
-                remaining_gap,
-            )
-            * (0.6 + 0.4 * urgency);
-        let reason = if remaining_gap > 0.0 {
+                candidate.action.as_str(),
+            )?;
+            let remaining_gap = active_goal.as_ref().map_or(0.0, |(_, gap)| *gap);
+            let score = candidate.net_value
+                * goal_alignment(&actions, candidate.action.as_str(), remaining_gap)
+                * (0.6 + 0.4 * urgency);
+            scored.push((candidate.action.clone(), score, active_goal));
+        }
+        let (selected_action, score, active_goal) = scored
+            .into_iter()
+            .max_by(|left, right| {
+                left.1
+                    .total_cmp(&right.1)
+                    .then_with(|| right.0.cmp(&left.0))
+            })
+            .expect("Open Opportunity 至少应有一个候选动作");
+        let selected = candidates
+            .iter()
+            .find(|candidate| candidate.action == selected_action)
+            .expect("选中动作必须来自候选明细");
+        let reason = if let Some((metric, gap)) = active_goal {
             format!(
-                "{GOAL_METRIC} 还差 {remaining_gap:.0}；客户已 {days} 天未联系；{}",
+                "{metric} 还差 {gap:.0}；客户已 {days} 天未联系；{}",
                 candidate_reason(candidates.as_slice())
             )
         } else {
@@ -629,23 +684,48 @@ fn evaluate_candidates(
         .collect()
 }
 
-fn goal_alignment(
-    actions: &[&ActionDef],
-    action: &str,
-    opportunity_type: &str,
-    remaining_gap: f64,
-) -> f64 {
+fn goal_alignment(actions: &[&ActionDef], action: &str, remaining_gap: f64) -> f64 {
     let immediate = find_action(actions, action).is_some_and(|definition| {
         action_planning(definition)
             .is_ok_and(|planning| planning.outcome_timing == OutcomeTiming::Immediate)
     });
-    if remaining_gap > 0.0 && opportunity_type == "Reactivation" && immediate {
+    if remaining_gap > 0.0 && immediate {
         return 1.0;
     }
-    if remaining_gap > 0.0 && opportunity_type == "Reactivation" {
+    if remaining_gap > 0.0 {
         return 0.85;
     }
     0.5
+}
+
+fn active_goal_gap(
+    goals: &[crate::storage::ObjectRecord],
+    actions: &[&ActionDef],
+    ontology: &OntologyIR,
+    opportunity_type: &str,
+    action_name: &str,
+) -> Result<Option<(String, f64)>, BusinessLoopError> {
+    let Some(action) = find_action(actions, action_name) else {
+        return Ok(None);
+    };
+    let Some(metric) = shared_goal_metric(ontology, opportunity_type, action) else {
+        return Ok(None);
+    };
+
+    let mut remaining_gap = 0.0_f64;
+    for goal in goals {
+        if text(&goal.data, "target_metric")? != metric || text(&goal.data, "status")? != "active" {
+            continue;
+        }
+        let gap =
+            (number(&goal.data, "target_value")? - number(&goal.data, "current_value")?).max(0.0);
+        remaining_gap = remaining_gap.max(gap);
+    }
+
+    if remaining_gap > 0.0 {
+        return Ok(Some((metric, remaining_gap)));
+    }
+    Ok(None)
 }
 
 fn candidate_reason(candidates: &[ActionCandidate]) -> String {

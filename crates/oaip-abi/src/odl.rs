@@ -740,6 +740,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                             estimated_value: 0.0,
                             evidence: String::new(),
                             when: Vec::new(),
+                            goal_metric: None,
                         },
                     ));
                     opportunity_fields = [false; 2];
@@ -748,6 +749,15 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                 (Section::OpportunityRule, "when") => {
                     // 条件是重复列表项；子块边界必须高于列表缩进，避免下一条同级 `- field` 被误判为离开。
                     section.push((Section::OpportunityCondition, indent + 1))
+                }
+                (Section::ActionPlanning, "goal_metric")
+                | (Section::OpportunityRule, "goal_metric") => {
+                    return Err(OdlError::new(
+                        E_INVALID_PROPERTY_CONSTRAINT,
+                        "goal_metric 不能为空".to_string(),
+                        line_no,
+                        1,
+                    ));
                 }
                 (Section::ActionCreates, "data") => section.push((Section::CreateData, indent)),
                 (Section::ActionPolicy, "precondition") => {
@@ -950,6 +960,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         cost: 0.0,
                         prior_confidence: 0.0,
                         outcome_timing: OutcomeTiming::Immediate,
+                        goal_metric: None,
                     });
                     match k {
                         "cost" | "prior_confidence" => {
@@ -981,6 +992,12 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                                 }
                             };
                             planning_fields[2] = true;
+                        }
+                        "goal_metric" => {
+                            if v.trim().is_empty() {
+                                return Err(invalid("goal_metric 不能为空".to_string()));
+                            }
+                            planning.goal_metric = Some(v.to_string());
                         }
                         _ => return Err(invalid(format!("'{k}' 不是 action planning 属性"))),
                     }
@@ -1027,6 +1044,12 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                             }
                             rule.evidence = text.to_owned();
                             opportunity_fields[1] = true;
+                        }
+                        "goal_metric" => {
+                            if v.trim().is_empty() {
+                                return Err(invalid("goal_metric 不能为空".to_string()));
+                            }
+                            rule.goal_metric = Some(v.to_string());
                         }
                         _ => return Err(invalid(format!("'{k}' 不是 opportunity 规则属性"))),
                     }

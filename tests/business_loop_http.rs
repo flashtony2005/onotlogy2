@@ -7,7 +7,7 @@
 mod common;
 
 use openaip_os::business_loop::{
-    decide_opportunity, discover_opportunities, recommend_next_actions,
+    decide_opportunity, discover_opportunities, execute_opportunity, recommend_next_actions,
 };
 use openaip_os::storage::{LibSQLStorage, ObjectEngine};
 use serde_json::{Value, json};
@@ -36,7 +36,12 @@ async fn insert_rich_vip(storage: &LibSQLStorage, id: &str) {
         .expect("应能写入高余额客户状态");
 }
 
-async fn seed_odl_project(storage: &LibSQLStorage, project_id: &str, ontology: &str) -> String {
+async fn seed_odl_project(
+    storage: &LibSQLStorage,
+    project_id: &str,
+    ontology: &str,
+    target_metric: &str,
+) -> String {
     storage
         .create_project(project_id, "ODL 契约", "验证动作目录由 ODL 驱动", ontology)
         .await
@@ -61,7 +66,7 @@ async fn seed_odl_project(storage: &LibSQLStorage, project_id: &str, ontology: &
             object_type: "BusinessGoal".into(),
             id: format!("business-goal:{project_id}"),
             data: json!({
-                "target_metric": "monthly_reactivations",
+                "target_metric": target_metric,
                 "baseline_value": 0.0,
                 "target_value": 1.0,
                 "current_value": 0.0,
@@ -82,7 +87,13 @@ async fn odl_planning_metadata_drives_action_catalog() {
     let pack_ontology = std::fs::read_to_string("domain-packs/crm-retention/ontology.odl")
         .expect("业务包 ODL 应存在");
 
-    seed_odl_project(&storage, "odl-base", &pack_ontology).await;
+    seed_odl_project(
+        &storage,
+        "odl-base",
+        &pack_ontology,
+        "monthly_reactivations",
+    )
+    .await;
     let discovered = discover_opportunities(&storage, "odl-base")
         .await
         .expect("基础 ODL 应能发现机会");
@@ -120,7 +131,13 @@ async fn odl_planning_metadata_drives_action_catalog() {
 
     let expensive_contact = pack_ontology.replace("cost: 5000", "cost: 500000");
     assert_ne!(expensive_contact, pack_ontology, "契约测试必须修改成功");
-    seed_odl_project(&storage, "odl-changed", &expensive_contact).await;
+    seed_odl_project(
+        &storage,
+        "odl-changed",
+        &expensive_contact,
+        "monthly_reactivations",
+    )
+    .await;
     discover_opportunities(&storage, "odl-changed")
         .await
         .expect("变更 ODL 应能发现机会");
@@ -134,7 +151,13 @@ async fn odl_planning_metadata_drives_action_catalog() {
 
     let inactive_rule = pack_ontology.replace("value: 45", "value: 1000");
     assert_ne!(inactive_rule, pack_ontology, "契约测试必须修改成功");
-    seed_odl_project(&storage, "odl-inactive", &inactive_rule).await;
+    seed_odl_project(
+        &storage,
+        "odl-inactive",
+        &inactive_rule,
+        "monthly_reactivations",
+    )
+    .await;
     let none = discover_opportunities(&storage, "odl-inactive")
         .await
         .expect("修改机会条件后仍应可执行发现");
@@ -152,6 +175,97 @@ async fn odl_planning_metadata_drives_action_catalog() {
     .await
     .expect_err("没有 planning 元数据的 refund 不能进入业务规划");
     assert!(error.to_string().contains("不支持的业务动作 refund"));
+}
+
+#[tokio::test]
+async fn goal_metric_is_declared_and_must_agree_across_evidence_chain() {
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let pack_ontology = std::fs::read_to_string("domain-packs/crm-retention/ontology.odl")
+        .expect("业务包 ODL 应存在");
+
+    let custom_ontology = pack_ontology.replace(
+        "goal_metric: monthly_reactivations",
+        "goal_metric: qualified_reactivations",
+    );
+    assert_ne!(custom_ontology, pack_ontology, "契约测试必须修改成功");
+    seed_odl_project(
+        &storage,
+        "custom-goal",
+        &custom_ontology,
+        "qualified_reactivations",
+    )
+    .await;
+    let discovered = discover_opportunities(&storage, "custom-goal")
+        .await
+        .expect("自定义指标项目应能发现机会");
+    assert_eq!(discovered.len(), 1);
+    let opportunity_id = discovered[0]["id"].as_str().expect("机会必须有 ID");
+    decide_opportunity(
+        &storage,
+        "custom-goal",
+        opportunity_id,
+        Some("ContactCustomer"),
+        "contract-test",
+        None,
+        None,
+    )
+    .await
+    .expect("应能决策接触动作");
+    let execution = execute_opportunity(&storage, "custom-goal", opportunity_id)
+        .await
+        .expect("应能执行接触动作");
+    assert_eq!(
+        execution["goals"][0]["targetMetric"],
+        json!("qualified_reactivations")
+    );
+    assert_eq!(
+        execution["goals"][0]["currentValue"],
+        json!(1.0),
+        "规则与动作声明同一自定义指标时，成功结果应推进目标"
+    );
+
+    let mismatched_ontology = pack_ontology.replacen(
+        "goal_metric: monthly_reactivations",
+        "goal_metric: awareness_contacts",
+        1,
+    );
+    assert_ne!(mismatched_ontology, pack_ontology, "契约测试必须修改成功");
+    seed_odl_project(
+        &storage,
+        "mismatched-goal",
+        &mismatched_ontology,
+        "monthly_reactivations",
+    )
+    .await;
+    discover_opportunities(&storage, "mismatched-goal")
+        .await
+        .expect("指标不一致仍可发现机会");
+    let opportunities = storage
+        .list_objects_for_project("mismatched-goal", "Opportunity")
+        .await
+        .expect("应能读取机会");
+    let opportunity_id = opportunities[0].id.clone();
+    decide_opportunity(
+        &storage,
+        "mismatched-goal",
+        &opportunity_id,
+        Some("ContactCustomer"),
+        "contract-test",
+        None,
+        None,
+    )
+    .await
+    .expect("应能决策接触动作");
+    let execution = execute_opportunity(&storage, "mismatched-goal", &opportunity_id)
+        .await
+        .expect("指标不一致不阻止执行，但不应计入目标");
+    assert_eq!(
+        execution["goals"][0]["currentValue"],
+        json!(0.0),
+        "规则与动作 goal_metric 不一致时，目标进度必须保持不变"
+    );
 }
 
 #[tokio::test]
@@ -459,8 +573,8 @@ async fn business_loop_discovers_decides_executes_and_replans() {
     assert_eq!(settled["outcome"]["data"]["success"], json!(true));
     assert_eq!(
         settled["goals"][0]["currentValue"],
-        json!(13.0),
-        "挽留成功也不误报为复购指标"
+        json!(14.0),
+        "挽留成功按 ODL 声明的同一目标指标计入进度"
     );
     let current_relations = storage.list_all_relations().await.unwrap();
     assert!(current_relations.iter().any(|relation| {
@@ -493,8 +607,8 @@ async fn business_loop_discovers_decides_executes_and_replans() {
         result["execution"]["businessResult"]["data"]["success"],
         json!(true)
     );
-    assert_eq!(result["goals"][0]["currentValue"], json!(14.0));
-    assert_eq!(result["goals"][0]["gap"], json!(6.0));
+    assert_eq!(result["goals"][0]["currentValue"], json!(15.0));
+    assert_eq!(result["goals"][0]["gap"], json!(5.0));
 
     let late_vip = storage
         .get("customer:demo-vip-late")
