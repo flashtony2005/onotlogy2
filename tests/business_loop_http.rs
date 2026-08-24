@@ -743,3 +743,165 @@ async fn business_loop_discovers_decides_executes_and_replans() {
     assert_eq!(status, 200, "没有机会时应返回空闲结果：{body}");
     assert_eq!(data(&body).await["executed"], json!(false));
 }
+
+#[tokio::test]
+async fn generic_opportunity_engine_supports_non_customer_subjects() {
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let ontology = r#"
+object Contract:
+  properties:
+    title: string
+    status: string one_of [Expiring,Active]
+    days_to_expiry: int
+  opportunities:
+    RenewalDue:
+      subject_type: Contract
+      estimated_value: 12000
+      urgency_field: days_to_expiry
+      urgency_horizon: 30
+      link_edge: targets_contract
+      goal_metric: contract_renewals
+      evidence: "合同 {title} 将在 {days_to_expiry} 天内到期"
+      when:
+        - field: self.status
+          op: eq
+          value: "Expiring"
+  actions:
+    RenewContract:
+      planning:
+        cost: 1000
+        prior_confidence: 0.8
+        outcome_timing: immediate
+        goal_metric: contract_renewals
+      updates:
+        - field: status
+          value: "Active"
+
+object BusinessGoal:
+  properties:
+    target_metric: string
+    baseline_value: float
+    target_value: float
+    current_value: float
+    status: string
+
+object Opportunity:
+  properties:
+    subject: string
+    opportunity_type: string
+    status: string
+    estimated_value: float
+    evidence: string
+
+object Decision:
+  properties:
+    opportunity: string
+    action: string
+    reason: string
+    alternatives: string
+    decided_by: string
+    status: string
+
+object Outcome:
+  properties:
+    action: string
+    before: string
+    after: string
+    success: bool
+    stage: string one_of [ActionExecuted,BusinessResult]
+
+object StateTransition:
+  properties:
+    subject: string
+    before_data: string
+    after_data: string
+    at_action: string
+
+relation targets_contract:
+  source: Opportunity
+  target: Contract
+
+relation decided_from:
+  source: Decision
+  target: Opportunity
+
+relation produced_outcome:
+  source: Decision
+  target: Outcome
+
+relation changed_state:
+  source: StateTransition
+  target: Contract
+"#
+    .to_owned();
+    storage
+        .create_project("contract-loop", "合同闭环", "非 Customer 主体", &ontology)
+        .await
+        .expect("应能创建项目");
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+            object_type: "Contract".into(),
+            id: "contract:acme".into(),
+            data: json!({
+                "title": "ACME 年度合同",
+                "status": "Expiring",
+                "days_to_expiry": 20
+            }),
+            project_id: Some("contract-loop".into()),
+        })
+        .await
+        .expect("应能写入合同状态");
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+            object_type: "BusinessGoal".into(),
+            id: "business-goal:contract-loop".into(),
+            data: json!({
+                "target_metric": "contract_renewals",
+                "baseline_value": 0.0,
+                "target_value": 1.0,
+                "current_value": 0.0,
+                "status": "active"
+            }),
+            project_id: Some("contract-loop".into()),
+        })
+        .await
+        .expect("应能写入经营目标");
+
+    let discovered = discover_opportunities(&storage, "contract-loop")
+        .await
+        .expect("应能发现合同机会");
+    assert_eq!(discovered.len(), 1);
+    assert_eq!(discovered[0]["data"]["subject"], json!("contract:acme"));
+    let opportunity_id = discovered[0]["id"].as_str().expect("机会必须有 ID");
+
+    let recommendations = recommend_next_actions(&storage, "contract-loop")
+        .await
+        .expect("应能推荐合同动作");
+    assert_eq!(recommendations.len(), 1);
+    assert_eq!(recommendations[0].action, "RenewContract");
+    assert!(recommendations[0].reason.contains("days_to_expiry=20"));
+
+    decide_opportunity(
+        &storage,
+        "contract-loop",
+        opportunity_id,
+        None,
+        "contract-test",
+        None,
+        None,
+    )
+    .await
+    .expect("应能决策默认合同动作");
+    let execution = execute_opportunity(&storage, "contract-loop", opportunity_id)
+        .await
+        .expect("应能执行合同续约");
+    let contract = storage
+        .get("contract:acme")
+        .await
+        .expect("应能查询合同")
+        .expect("合同应存在");
+    assert_eq!(contract.data["status"], json!("Active"));
+    assert_eq!(execution["goals"][0]["currentValue"], json!(1.0));
+}

@@ -87,6 +87,9 @@ fn action_planning_requires_complete_metadata() {
 #[test]
 fn opportunity_rule_requires_complete_and_typed_metadata() {
     let base = [
+        "relation targets:",
+        "  source: Opportunity",
+        "  target: Customer",
         "object Customer:",
         "  properties:",
         "    name: string",
@@ -96,6 +99,10 @@ fn opportunity_rule_requires_complete_and_typed_metadata() {
         "    Reactivation:",
         "      estimated_value: 180000",
         "      evidence: \"客户已 {days_since_last_contact} 天未联系\"",
+        "      subject_type: Customer",
+        "      urgency_field: days_since_last_contact",
+        "      urgency_horizon: 90",
+        "      link_edge: targets",
         "      when:",
         "        - field: self.level",
         "          op: eq",
@@ -103,6 +110,13 @@ fn opportunity_rule_requires_complete_and_typed_metadata() {
         "        - field: self.days_since_last_contact",
         "          op: gt",
         "          value: 45",
+        "object Opportunity:",
+        "  properties:",
+        "    subject: string",
+        "    opportunity_type: string",
+        "    status: string",
+        "    estimated_value: decimal",
+        "    evidence: string",
     ];
 
     let incomplete = [
@@ -116,7 +130,11 @@ fn opportunity_rule_requires_complete_and_typed_metadata() {
     .join("\n");
     assert_eq!(parse_odl(&incomplete).unwrap_err().code, 1011);
 
-    let no_conditions = [base.as_slice()[..8].join("\n"), "      when:".to_owned()].join("\n");
+    let when_index = base
+        .iter()
+        .position(|line| line.starts_with("      when:"))
+        .expect("base 必须包含 when 块");
+    let no_conditions = [base[..when_index].join("\n"), "      when:".to_owned()].join("\n");
     assert_eq!(parse_odl(&no_conditions).unwrap_err().code, 1011);
 
     let unknown_field = base
@@ -134,20 +152,32 @@ fn opportunity_rule_requires_complete_and_typed_metadata() {
     assert_eq!(rule.name, "Reactivation");
     assert_eq!(rule.estimated_value, 180_000.0);
     assert_eq!(rule.evidence, "客户已 {days_since_last_contact} 天未联系");
+    assert_eq!(rule.subject_type, "Customer");
+    assert_eq!(rule.urgency_field, "days_since_last_contact");
+    assert_eq!(rule.urgency_horizon, 90.0);
+    assert_eq!(rule.link_edge, "targets");
     assert_eq!(rule.when.len(), 2);
 }
 
 #[test]
 fn goal_metric_is_declared_on_rules_and_actions() {
     let odl = [
+        "relation targets:",
+        "  source: Opportunity",
+        "  target: Customer",
         "object Customer:",
         "  properties:",
         "    name: string",
+        "    days_since_last_contact: int",
         "  opportunities:",
         "    Reactivation:",
         "      estimated_value: 180000",
         "      goal_metric: monthly_reactivations",
         "      evidence: \"客户已 {name} 天未联系\"",
+        "      subject_type: Customer",
+        "      urgency_field: days_since_last_contact",
+        "      urgency_horizon: 90",
+        "      link_edge: targets",
         "      when:",
         "        - field: self.name",
         "          op: eq",
@@ -159,6 +189,13 @@ fn goal_metric_is_declared_on_rules_and_actions() {
         "        prior_confidence: 0.5",
         "        outcome_timing: immediate",
         "        goal_metric: monthly_reactivations",
+        "object Opportunity:",
+        "  properties:",
+        "    subject: string",
+        "    opportunity_type: string",
+        "    status: string",
+        "    estimated_value: decimal",
+        "    evidence: string",
     ]
     .join("\n");
 

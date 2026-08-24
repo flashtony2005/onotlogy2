@@ -114,7 +114,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     let mut cur_create: Option<CreateEffect> = None;
     let mut cur_clause: Option<Clause> = None;
     let mut cur_opportunity: Option<(u32, OpportunityRule)> = None;
-    let mut opportunity_fields = [false; 2];
+    let mut opportunity_fields = [false; 6];
     let mut declared_relations: Vec<(u32, RelationDef)> = Vec::new();
     let mut current_relation: Option<(u32, RelationDef)> = None;
     let mut link_lines: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
@@ -522,6 +522,10 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             flush_update(&mut cur_update, &mut cur_action);
             flush_create(&mut cur_create, &mut cur_action);
             flush_action(&mut cur_action, &mut current);
+            if let Some(rule) = cur_opportunity.as_mut() {
+                flush_condition(&mut cur_clause, rule);
+            }
+            flush_opportunity(&mut cur_opportunity, &mut opportunity_fields, &mut current)?;
             if let Some(obj) = current.take() {
                 declared.push(obj);
             }
@@ -737,13 +741,17 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         line_no,
                         OpportunityRule {
                             name: name.to_string(),
+                            subject_type: String::new(),
                             estimated_value: 0.0,
                             evidence: String::new(),
                             when: Vec::new(),
                             goal_metric: None,
+                            urgency_field: String::new(),
+                            urgency_horizon: 0.0,
+                            link_edge: String::new(),
                         },
                     ));
-                    opportunity_fields = [false; 2];
+                    opportunity_fields = [false; 6];
                     section.push((Section::OpportunityRule, indent));
                 }
                 (Section::OpportunityRule, "when") => {
@@ -961,6 +969,8 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         prior_confidence: 0.0,
                         outcome_timing: OutcomeTiming::Immediate,
                         goal_metric: None,
+                        benefit_field: None,
+                        benefit_factor: None,
                     });
                     match k {
                         "cost" | "prior_confidence" => {
@@ -999,6 +1009,21 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                             }
                             planning.goal_metric = Some(v.to_string());
                         }
+                        "benefit_field" => {
+                            if v.trim().is_empty() {
+                                return Err(invalid("benefit_field 不能为空".into()));
+                            }
+                            planning.benefit_field = Some(v.to_string());
+                        }
+                        "benefit_factor" => {
+                            let value = v.parse::<f64>().map_err(|_| {
+                                invalid(format!("benefit_factor 必须是有限数值，得到 `{v}`"))
+                            })?;
+                            if !value.is_finite() || value < 0.0 || value > 1.0 {
+                                return Err(invalid("benefit_factor 必须在 [0,1] 内".into()));
+                            }
+                            planning.benefit_factor = Some(value);
+                        }
                         _ => return Err(invalid(format!("'{k}' 不是 action planning 属性"))),
                     }
                 }
@@ -1021,6 +1046,13 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         continue;
                     };
                     match k {
+                        "subject_type" => {
+                            if v.trim().is_empty() {
+                                return Err(invalid("subject_type 不能为空".into()));
+                            }
+                            rule.subject_type = v.to_string();
+                            opportunity_fields[0] = true;
+                        }
                         "estimated_value" => {
                             let value = v.parse::<f64>().map_err(|_| {
                                 invalid(format!("estimated_value 必须是有限数值，得到 `{v}`"))
@@ -1029,7 +1061,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                                 return Err(invalid("estimated_value 不能为负或无限".into()));
                             }
                             rule.estimated_value = value;
-                            opportunity_fields[0] = true;
+                            opportunity_fields[1] = true;
                         }
                         "evidence" => {
                             let parsed: serde_json::Value =
@@ -1043,13 +1075,38 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                                 return Err(invalid("evidence 不能为空".into()));
                             }
                             rule.evidence = text.to_owned();
-                            opportunity_fields[1] = true;
+                            opportunity_fields[2] = true;
                         }
                         "goal_metric" => {
                             if v.trim().is_empty() {
                                 return Err(invalid("goal_metric 不能为空".to_string()));
                             }
                             rule.goal_metric = Some(v.to_string());
+                        }
+                        "urgency_field" => {
+                            if v.trim().is_empty() {
+                                return Err(invalid("urgency_field 不能为空".into()));
+                            }
+                            rule.urgency_field = v.to_string();
+                            opportunity_fields[3] = true;
+                        }
+                        "urgency_horizon" => {
+                            let value = v.parse::<f64>().map_err(|_| {
+                                invalid(format!("urgency_horizon 必须是正数值，得到 `{v}`"))
+                            })?;
+                            if !value.is_finite() || value <= 0.0 {
+                                return Err(invalid("urgency_horizon 必须大于零".into()));
+                            }
+                            rule.urgency_horizon = value;
+                            opportunity_fields[4] = true;
+                        }
+                        "link_edge" => {
+                            if v.trim().is_empty() {
+                                return Err(invalid("link_edge 不能为空".into()));
+                            }
+                            rule.link_edge = v.to_string();
+                            link_lines.insert(v.to_string(), line_no);
+                            opportunity_fields[5] = true;
                         }
                         _ => return Err(invalid(format!("'{k}' 不是 opportunity 规则属性"))),
                     }
@@ -1334,12 +1391,94 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     }
 
     let mut seen_opportunities = std::collections::BTreeSet::new();
+    ir.relations = declared_relations.iter().map(|(_, r)| r.clone()).collect();
     for object in &ir.object_types {
+        for action in &object.actions {
+            if let Some(planning) = &action.planning
+                && (planning.benefit_field.is_some() != planning.benefit_factor.is_some()
+                    || !planning.benefit_field.as_ref().is_none_or(|field| {
+                        matches!(
+                            object
+                                .properties
+                                .iter()
+                                .find(|p| &p.name == field)
+                                .map(|p| &p.ty),
+                            Some(ScalarType::Int | ScalarType::Float)
+                        )
+                    }))
+            {
+                return Err(OdlError::new(
+                    E_INVALID_PROPERTY_CONSTRAINT,
+                    format!(
+                        "action '{}' 的 benefit_field/benefit_factor 必须成对声明且字段是 int/float 属性",
+                        action.name
+                    ),
+                    1,
+                    1,
+                ));
+            }
+        }
         for rule in &object.opportunity_rules {
             if !seen_opportunities.insert(rule.name.as_str()) {
                 return Err(OdlError::new(
                     E_INVALID_PROPERTY_CONSTRAINT,
                     format!("重复 opportunity 规则 '{}'", rule.name),
+                    opportunity_lines
+                        .get(rule.name.as_str())
+                        .copied()
+                        .unwrap_or(1),
+                    1,
+                ));
+            }
+            if rule.subject_type != object.name {
+                return Err(OdlError::new(
+                    E_INVALID_PROPERTY_CONSTRAINT,
+                    format!(
+                        "opportunity '{}' 的 subject_type 必须是所在对象 '{}'",
+                        rule.name, object.name
+                    ),
+                    opportunity_lines
+                        .get(rule.name.as_str())
+                        .copied()
+                        .unwrap_or(1),
+                    1,
+                ));
+            }
+            let numeric = |field: &str| {
+                matches!(
+                    object
+                        .properties
+                        .iter()
+                        .find(|p| p.name == field)
+                        .map(|p| &p.ty),
+                    Some(ScalarType::Int | ScalarType::Float)
+                )
+            };
+            if !numeric(&rule.urgency_field) {
+                return Err(OdlError::new(
+                    E_INVALID_PROPERTY_CONSTRAINT,
+                    format!(
+                        "opportunity '{}' 的 urgency_field 必须是 int/float 属性",
+                        rule.name
+                    ),
+                    opportunity_lines
+                        .get(rule.name.as_str())
+                        .copied()
+                        .unwrap_or(1),
+                    1,
+                ));
+            }
+            if !ir.relations.iter().any(|relation| {
+                relation.name == rule.link_edge
+                    && relation.source == "Opportunity"
+                    && relation.target == object.name
+            }) {
+                return Err(OdlError::new(
+                    E_INVALID_PROPERTY_CONSTRAINT,
+                    format!(
+                        "opportunity '{}' link_edge 必须是 Opportunity -> {} 关系",
+                        rule.name, object.name
+                    ),
                     opportunity_lines
                         .get(rule.name.as_str())
                         .copied()
@@ -1478,7 +1617,6 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
         ));
     }
 
-    ir.relations = declared_relations.iter().map(|(_, r)| r.clone()).collect();
     let mut endpoints = std::collections::BTreeMap::new();
     let mut seen_relations = std::collections::BTreeSet::new();
     for (ln, relation) in &declared_relations {
@@ -2089,7 +2227,7 @@ fn flush_condition(c: &mut Option<Clause>, r: &mut (u32, OpportunityRule)) {
 /// 校验并冲刷完整机会规则；半声明规则在解析阶段失败。
 fn flush_opportunity(
     r: &mut Option<(u32, OpportunityRule)>,
-    fields: &mut [bool; 2],
+    fields: &mut [bool; 6],
     o: &mut Option<(u32, ObjectType)>,
 ) -> Result<(), OdlError> {
     let Some((line_no, rule)) = r.take() else {
@@ -2098,7 +2236,7 @@ fn flush_opportunity(
     if !fields.iter().all(|seen| *seen) || rule.evidence.is_empty() || rule.when.is_empty() {
         return Err(OdlError::new(
             E_INVALID_PROPERTY_CONSTRAINT,
-            "opportunity 规则必须完整声明 estimated_value、evidence 和至少一个 when 条件",
+            "opportunity 规则必须完整声明 subject_type、estimated_value、evidence、urgency、link 和至少一个 when 条件",
             line_no,
             1,
         ));
@@ -2106,7 +2244,7 @@ fn flush_opportunity(
     if let Some((_, obj)) = o.as_mut() {
         obj.opportunity_rules.push(rule);
     }
-    *fields = [false; 2];
+    *fields = [false; 6];
     Ok(())
 }
 

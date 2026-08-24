@@ -7,7 +7,7 @@ use crate::abi::ir::{
     ActionDef, ActionPlanning, CompareOp, OntologyIR, OpportunityRule, OutcomeTiming, ValueExpr,
 };
 use crate::abi::{DataValidationError, parse_odl, validate_object_data};
-use crate::storage::{LibSQLStorage, ObjectEngine, ProjectRecord, StorageError, WorldCommand};
+use crate::storage::{LibSQLStorage, ProjectRecord, StorageError, WorldCommand};
 use serde::Serialize;
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -130,19 +130,22 @@ fn validate_data(
 }
 
 /// 从项目当前 ODL 收集参与商业规划的动作；动作目录不再属于 Rust。
-fn planning_actions(ontology: &OntologyIR) -> Result<Vec<&ActionDef>, BusinessLoopError> {
-    let customer = ontology
-        .find("Customer")
-        .ok_or_else(|| BusinessLoopError::invalid("本体未定义业务规划对象类型 Customer"))?;
-    let actions = customer
+fn planning_actions_for<'a>(
+    ontology: &'a OntologyIR,
+    subject_type: &str,
+) -> Result<Vec<&'a ActionDef>, BusinessLoopError> {
+    let definition = ontology.find(subject_type).ok_or_else(|| {
+        BusinessLoopError::invalid(format!("本体未定义业务规划对象类型 {subject_type}"))
+    })?;
+    let actions = definition
         .actions
         .iter()
         .filter(|action| action.planning.is_some())
         .collect::<Vec<_>>();
     if actions.is_empty() {
-        return Err(BusinessLoopError::invalid(
-            "Customer 本体未声明可规划的 action",
-        ));
+        return Err(BusinessLoopError::invalid(format!(
+            "{subject_type} 本体未声明可规划的 action"
+        )));
     }
     Ok(actions)
 }
@@ -157,18 +160,29 @@ fn action_planning(action: &ActionDef) -> Result<&ActionPlanning, BusinessLoopEr
     })
 }
 
-fn expected_benefit(action: &ActionDef, estimated_value: f64, customer: &Value) -> f64 {
-    // 直接状态更新按机会价值估算；创建后续任务时只计可挽回的存量价值。
-    if action.updates.is_empty() && !action.creates.is_empty() {
-        customer
-            .get("balance")
-            .and_then(Value::as_f64)
-            .unwrap_or_default()
-            .max(0.0)
-            * 0.35
-    } else {
-        estimated_value
-    }
+fn all_planning_actions(ontology: &OntologyIR) -> Vec<&ActionDef> {
+    ontology
+        .object_types
+        .iter()
+        .flat_map(|object| object.actions.iter())
+        .filter(|action| action.planning.is_some())
+        .collect()
+}
+
+fn expected_benefit(
+    action: &ActionDef,
+    estimated_value: f64,
+    subject: &Value,
+) -> Result<f64, BusinessLoopError> {
+    let planning = action_planning(action)?;
+    let Some((field, factor)) = planning
+        .benefit_field
+        .as_deref()
+        .zip(planning.benefit_factor)
+    else {
+        return Ok(estimated_value);
+    };
+    Ok(number(subject, field)?.max(0.0) * factor)
 }
 
 fn evaluate_value(
@@ -240,24 +254,23 @@ async fn link_world(
     Ok(())
 }
 
-fn opportunity_rules(ontology: &OntologyIR) -> Result<Vec<&OpportunityRule>, BusinessLoopError> {
-    let customer = ontology
-        .find("Customer")
-        .ok_or_else(|| BusinessLoopError::invalid("本体未定义业务规划对象类型 Customer"))?;
-    if customer.opportunity_rules.is_empty() {
-        return Err(BusinessLoopError::invalid(
-            "Customer 本体未声明可发现的 opportunity 规则",
-        ));
-    }
-    Ok(customer.opportunity_rules.iter().collect())
-}
+type SubjectRule<'a> = (&'a crate::abi::ir::ObjectType, &'a OpportunityRule);
 
-fn opportunity_rule<'a>(ontology: &'a OntologyIR, name: &str) -> Option<&'a OpportunityRule> {
+fn subject_rule<'a>(
+    ontology: &'a OntologyIR,
+    name: &str,
+) -> Result<SubjectRule<'a>, BusinessLoopError> {
     ontology
         .object_types
         .iter()
-        .flat_map(|object| object.opportunity_rules.iter())
-        .find(|rule| rule.name == name)
+        .find_map(|object| {
+            object
+                .opportunity_rules
+                .iter()
+                .find(|rule| rule.name == name)
+                .map(|rule| (object, rule))
+        })
+        .ok_or_else(|| BusinessLoopError::NotFound(format!("opportunity 规则 {name}")))
 }
 
 fn action_goal_metric(action: &ActionDef) -> Option<String> {
@@ -272,8 +285,9 @@ fn shared_goal_metric(
     opportunity_type: &str,
     action: &ActionDef,
 ) -> Option<String> {
-    let opportunity_metric =
-        opportunity_rule(ontology, opportunity_type).and_then(|rule| rule.goal_metric.clone());
+    let opportunity_metric = subject_rule(ontology, opportunity_type)
+        .ok()
+        .and_then(|(_, rule)| rule.goal_metric.clone());
     let action_metric = action_goal_metric(action);
     if opportunity_metric.is_some() && opportunity_metric == action_metric {
         return opportunity_metric;
@@ -344,16 +358,14 @@ fn rule_matches(rule: &OpportunityRule, customer: &Value) -> Result<bool, Busine
     Ok(true)
 }
 
-fn evidence_text(template: &str, ontology: &OntologyIR, customer: &Value) -> String {
+fn evidence_text(template: &str, owner: &crate::abi::ir::ObjectType, customer: &Value) -> String {
     let mut text = template.to_owned();
-    if let Some(customer_type) = ontology.find("Customer") {
-        for property in &customer_type.properties {
-            if let Some(value) = customer.get(&property.name) {
-                text = text.replace(
-                    format!("{{{}}}", property.name).as_str(),
-                    value.as_str().unwrap_or(&value.to_string()),
-                );
-            }
+    for property in &owner.properties {
+        if let Some(value) = customer.get(&property.name) {
+            text = text.replace(
+                format!("{{{}}}", property.name).as_str(),
+                value.as_str().unwrap_or(&value.to_string()),
+            );
         }
     }
     text
@@ -377,50 +389,52 @@ pub async fn discover_opportunities(
         }),
     )?;
 
-    let customers = storage
-        .list_objects_for_project(project_id, "Customer")
-        .await?;
     let opportunities = storage
         .list_objects_for_project(project_id, "Opportunity")
         .await?;
-    let rules = opportunity_rules(&ontology)?;
     let mut created = Vec::new();
-    for customer in customers {
-        for rule in &rules {
-            if !rule_matches(rule, &customer.data)? {
-                continue;
-            }
-            let already_discovered = opportunities.iter().any(|existing| {
-                existing.data.get("subject").and_then(Value::as_str) == Some(customer.id.as_str())
-                    && existing
-                        .data
-                        .get("opportunity_type")
-                        .and_then(Value::as_str)
-                        == Some(rule.name.as_str())
-            });
-            if already_discovered {
-                continue;
-            }
-            let id = opportunity_id(project_id, &rule.name, &customer.id);
-            let data = json!({
-                "subject": customer.id,
-                "opportunity_type": rule.name,
-                "status": OPPORTUNITY_OPEN,
-                "estimated_value": rule.estimated_value,
-                "evidence": evidence_text(&rule.evidence, &ontology, &customer.data),
-            });
-            validate_data(&ontology, "Opportunity", &data)?;
-            create_world_object(storage, project_id, "Opportunity", id.clone(), data.clone())
+    for owner in &ontology.object_types {
+        for rule in &owner.opportunity_rules {
+            let subjects = storage
+                .list_objects_for_project(project_id, &owner.name)
                 .await?;
-            link_world(
-                storage,
-                project_id,
-                customer.id.clone(),
-                "targets",
-                id.clone(),
-            )
-            .await?;
-            created.push(json!({ "id": id, "type": "Opportunity", "data": data }));
+            for subject in subjects {
+                if !rule_matches(rule, &subject.data)? {
+                    continue;
+                }
+                let already_discovered = opportunities.iter().any(|existing| {
+                    existing.data.get("subject").and_then(Value::as_str)
+                        == Some(subject.id.as_str())
+                        && existing
+                            .data
+                            .get("opportunity_type")
+                            .and_then(Value::as_str)
+                            == Some(rule.name.as_str())
+                });
+                if already_discovered {
+                    continue;
+                }
+                let id = opportunity_id(project_id, &rule.name, &subject.id);
+                let data = json!({
+                    "subject": subject.id,
+                    "opportunity_type": rule.name,
+                    "status": OPPORTUNITY_OPEN,
+                    "estimated_value": rule.estimated_value,
+                    "evidence": evidence_text(&rule.evidence, owner, &subject.data),
+                });
+                validate_data(&ontology, "Opportunity", &data)?;
+                create_world_object(storage, project_id, "Opportunity", id.clone(), data.clone())
+                    .await?;
+                link_world(
+                    storage,
+                    project_id,
+                    subject.id.clone(),
+                    &rule.link_edge,
+                    id.clone(),
+                )
+                .await?;
+                created.push(json!({ "id": id, "type": "Opportunity", "data": data }));
+            }
         }
     }
     Ok(created)
@@ -455,7 +469,7 @@ pub async fn refresh_goal_progress(
     project_id: &str,
 ) -> Result<Vec<GoalGap>, BusinessLoopError> {
     let (_, ontology) = project_ontology(storage, project_id).await?;
-    let actions = planning_actions(&ontology)?;
+    let actions = all_planning_actions(&ontology);
     let goals = storage
         .list_objects_for_project(project_id, "BusinessGoal")
         .await?;
@@ -538,15 +552,11 @@ pub async fn recommend_next_actions(
     project_id: &str,
 ) -> Result<Vec<ActionRecommendation>, BusinessLoopError> {
     let (_, ontology) = project_ontology(storage, project_id).await?;
-    let actions = planning_actions(&ontology)?;
     let goals = storage
         .list_objects_for_project(project_id, "BusinessGoal")
         .await?;
     let opportunities = storage
         .list_objects_for_project(project_id, "Opportunity")
-        .await?;
-    let customers = storage
-        .list_objects_for_project(project_id, "Customer")
         .await?;
     let outcomes = storage
         .list_objects_for_project(project_id, "Outcome")
@@ -558,19 +568,20 @@ pub async fn recommend_next_actions(
             continue;
         }
         let subject = text(&opportunity.data, "subject")?.to_string();
-        let customer = find_record(&customers, &subject, "Customer")
+        let opportunity_type = text(&opportunity.data, "opportunity_type")?;
+        let (owner, rule) = subject_rule(&ontology, opportunity_type)?;
+        let actions = planning_actions_for(&ontology, &owner.name)?;
+        let subjects = storage
+            .list_objects_for_project(project_id, &owner.name)
+            .await?;
+        let subject_record = find_record(&subjects, &subject, &owner.name)
             .ok_or_else(|| BusinessLoopError::NotFound(subject.clone()))?;
-        let days = customer
-            .data
-            .get("days_since_last_contact")
-            .and_then(Value::as_i64)
-            .unwrap_or_default();
+        let urgency_value = number(&subject_record.data, &rule.urgency_field)?;
         let estimated_value = number(&opportunity.data, "estimated_value")?;
-        let opportunity_type = text(&opportunity.data, "opportunity_type")?.to_string();
-
+        let urgency_value = urgency_value.max(0.0);
+        let urgency = (urgency_value.min(rule.urgency_horizon) / rule.urgency_horizon).max(0.1);
         let mut candidates =
-            evaluate_candidates(&actions, &customer.data, estimated_value, &outcomes);
-        let urgency = (days.min(90) as f64 / 90.0).max(0.1);
+            evaluate_candidates(&actions, &subject_record.data, estimated_value, &outcomes);
         candidates.sort_by(|left, right| {
             right
                 .net_value
@@ -585,7 +596,7 @@ pub async fn recommend_next_actions(
                 &goals,
                 &actions,
                 &ontology,
-                opportunity_type.as_str(),
+                opportunity_type,
                 candidate.action.as_str(),
             )?;
             let remaining_gap = active_goal.as_ref().map_or(0.0, |(_, gap)| *gap);
@@ -601,19 +612,23 @@ pub async fn recommend_next_actions(
                     .total_cmp(&right.1)
                     .then_with(|| right.0.cmp(&left.0))
             })
-            .expect("Open Opportunity 至少应有一个候选动作");
+            .ok_or_else(|| BusinessLoopError::invalid("Open Opportunity 没有候选动作"))?;
         let selected = candidates
             .iter()
             .find(|candidate| candidate.action == selected_action)
-            .expect("选中动作必须来自候选明细");
+            .ok_or_else(|| BusinessLoopError::invalid("选中动作缺少候选明细"))?;
+        let urgency_reason = format!(
+            "{}={urgency_value:.0}，紧迫度 {urgency:.2}",
+            rule.urgency_field
+        );
         let reason = if let Some((metric, gap)) = active_goal {
             format!(
-                "{metric} 还差 {gap:.0}；客户已 {days} 天未联系；{}",
+                "{metric} 还差 {gap:.0}；{urgency_reason}；{}",
                 candidate_reason(candidates.as_slice())
             )
         } else {
             format!(
-                "客户已 {days} 天未联系；{}",
+                "{urgency_reason}；{}",
                 candidate_reason(candidates.as_slice())
             )
         };
@@ -671,7 +686,7 @@ fn evaluate_candidates(
         .iter()
         .filter_map(|definition| {
             let confidence = action_confidence(definition, outcomes).ok()?;
-            let benefit = expected_benefit(definition, estimated_value, customer);
+            let benefit = expected_benefit(definition, estimated_value, customer).ok()?;
             let cost = action_planning(definition).ok()?.cost;
             Some(ActionCandidate {
                 action: definition.name.to_string(),
@@ -759,13 +774,6 @@ pub async fn decide_opportunity(
     alternatives: Option<Value>,
 ) -> Result<Value, BusinessLoopError> {
     let (_, ontology) = project_ontology(storage, project_id).await?;
-    let actions = planning_actions(&ontology)?;
-    let action = requested_action.unwrap_or(actions[0].name.as_str());
-    if find_action(&actions, action).is_none() {
-        return Err(BusinessLoopError::invalid(format!(
-            "不支持的业务动作 {action}"
-        )));
-    }
     let opportunities = storage
         .list_objects_for_project(project_id, "Opportunity")
         .await?;
@@ -774,12 +782,21 @@ pub async fn decide_opportunity(
     if text(&opportunity.data, "status")? != OPPORTUNITY_OPEN {
         return Err(BusinessLoopError::invalid("只有 Open 状态的机会可以决策"));
     }
+    let opportunity_type = text(&opportunity.data, "opportunity_type")?;
+    let (owner, _) = subject_rule(&ontology, opportunity_type)?;
+    let actions = planning_actions_for(&ontology, &owner.name)?;
+    let action = requested_action.unwrap_or(actions[0].name.as_str());
+    if find_action(&actions, action).is_none() {
+        return Err(BusinessLoopError::invalid(format!(
+            "不支持的业务动作 {action}"
+        )));
+    }
 
     let subject = text(&opportunity.data, "subject")?.to_string();
-    let customers = storage
-        .list_objects_for_project(project_id, "Customer")
+    let subjects = storage
+        .list_objects_for_project(project_id, &owner.name)
         .await?;
-    if find_record(&customers, &subject, "Customer").is_none() {
+    if find_record(&subjects, &subject, &owner.name).is_none() {
         return Err(BusinessLoopError::NotFound(subject));
     }
 
@@ -860,17 +877,20 @@ pub async fn execute_opportunity(
         .ok_or_else(|| BusinessLoopError::NotFound("机会缺少 Selected 决策".into()))?
         .clone();
     let action = text(&decision.data, "action")?.to_string();
-    let actions = planning_actions(&ontology)?;
+    let (owner, _) = subject_rule(&ontology, text(&opportunity.data, "opportunity_type")?)?;
+    let actions = planning_actions_for(&ontology, &owner.name)?;
     let definition = find_action(&actions, &action)
         .cloned()
         .ok_or_else(|| BusinessLoopError::invalid(format!("不支持的业务动作 {action}")))?;
     let planning = action_planning(&definition)?;
 
     let subject = text(&opportunity.data, "subject")?.to_string();
-    let before_record = storage
-        .get(&subject)
-        .await?
-        .ok_or_else(|| BusinessLoopError::NotFound(subject.clone()))?;
+    let subjects = storage
+        .list_objects_for_project(project_id, &owner.name)
+        .await?;
+    let before_record = find_record(&subjects, &subject, &owner.name)
+        .ok_or_else(|| BusinessLoopError::NotFound(subject.clone()))?
+        .clone();
     let mut after_data = before_record.data.clone();
     let mut retention_task_id = None;
     for update in &definition.updates {
@@ -1124,7 +1144,7 @@ pub async fn settle_retention_task(
     success: bool,
 ) -> Result<Value, BusinessLoopError> {
     let (_, ontology) = project_ontology(storage, project_id).await?;
-    let retention_actions = planning_actions(&ontology)?
+    let retention_actions = all_planning_actions(&ontology)
         .into_iter()
         .filter(|action| {
             action
@@ -1134,7 +1154,7 @@ pub async fn settle_retention_task(
         })
         .map(|action| action.name.clone())
         .collect::<Vec<_>>();
-    let retention_edges = planning_actions(&ontology)?
+    let retention_edges = all_planning_actions(&ontology)
         .into_iter()
         .flat_map(|action| action.creates.iter())
         .filter(|effect| effect.object_type == "RetentionTask")

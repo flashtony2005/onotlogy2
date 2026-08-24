@@ -278,6 +278,12 @@ pub struct ActionPlanning {
     /// 成功 BusinessResult 递增的经营目标；未声明时不参与目标进度。
     #[serde(default)]
     pub goal_metric: Option<String>,
+    /// 期望收益折算的数据属性；与 `benefit_factor` 成对声明。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub benefit_field: Option<String>,
+    /// 该属性值折算为期望收益的系数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub benefit_factor: Option<f64>,
 }
 
 /// 业务结果的产生时机。
@@ -314,6 +320,8 @@ pub struct ActionDef {
 pub struct OpportunityRule {
     /// Opportunity 的业务类型，同时用于幂等去重。
     pub name: String,
+    /// 规则扫描的主体对象类型；必须等于所在 object。
+    pub subject_type: String,
     /// 机会的估计业务价值；必须是非负有限数值。
     pub estimated_value: f64,
     /// 证据模板，`{field}` 会替换为触发对象的同名字段。
@@ -325,6 +333,12 @@ pub struct OpportunityRule {
     /// 命中后服务的经营目标；与动作 goal_metric 匹配才计入进度。
     #[serde(default)]
     pub goal_metric: Option<String>,
+    /// 紧迫度来源；必须是主体上的数值属性。
+    pub urgency_field: String,
+    /// 归一化上限，超过按满紧迫度处理。
+    pub urgency_horizon: f64,
+    /// Opportunity 指向主体的关系边。
+    pub link_edge: String,
 }
 
 /// 对象类型（对应 ODL `object X:`）。
