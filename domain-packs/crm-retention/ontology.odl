@@ -105,6 +105,7 @@ object Approval:
 object BusinessGoal:
   properties:
     target_metric: string
+    baseline_value: float
     target_value: float
     current_value: float
     status: string

@@ -49,6 +49,7 @@
       "type": "BusinessGoal",
       "data": {
         "target_metric": "monthly_reactivations",
+        "baseline_value": 12,
         "target_value": 20,
         "current_value": 12,
         "status": "active"

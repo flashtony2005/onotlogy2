@@ -1,4 +1,4 @@
-//! Business Loop v1：企业状态 → 机会 → 决策 → 行动结果 → 状态变化。
+//! Business Loop v2：企业状态 → 机会 → 决策 → 行动结果 → 目标反馈与再规划。
 //!
 //! 闭环对象都是普通世界对象；所有事实写入都经 `WorldCommand`，因此天然获得
 //! 项目归属、事件溯源和审计链。机会规则集中在本模块，Kernel 不感知具体业务。
@@ -16,9 +16,10 @@ const OPPORTUNITY_EXECUTED: &str = "Executed";
 const DECISION_SELECTED: &str = "Selected";
 const DECISION_EXECUTED: &str = "Executed";
 
-/// 当前最小可执行动作集。新增业务动作先扩展这张表，再由引擎解释执行，
+/// 当前最小可执行动作集。新增业务动作先扩展这张表，再由引擎和推荐器解释执行，
 /// 避免在 handler 或多个业务函数中散落 `match object_type` 规则。
 const ACTIONS: &[(&str, &str)] = &[("ContactCustomer", "days_since_last_contact")];
+const GOAL_METRIC: &str = "monthly_reactivations";
 
 #[derive(Debug, Error)]
 pub enum BusinessLoopError {
@@ -51,6 +52,30 @@ pub struct GoalGap {
     pub current_value: f64,
     pub gap: f64,
     pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ActionRecommendation {
+    #[serde(rename = "projectId")]
+    pub project_id: String,
+    #[serde(rename = "opportunityId")]
+    pub opportunity_id: String,
+    pub subject: String,
+    pub action: String,
+    pub score: f64,
+    pub confidence: f64,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BusinessLoopRun {
+    pub executed: bool,
+    #[serde(rename = "projectId")]
+    pub project_id: String,
+    pub recommendation: Option<ActionRecommendation>,
+    pub decision: Option<Value>,
+    pub execution: Option<Value>,
+    pub goals: Vec<GoalGap>,
 }
 
 fn text<'a>(data: &'a Value, key: &str) -> Result<&'a str, BusinessLoopError> {
@@ -240,6 +265,161 @@ pub async fn goal_gaps(
         });
     }
     Ok(gaps)
+}
+
+/// 从不可变的 Outcome 证据重建目标进度，避免执行链中断后重复累加指标。
+pub async fn refresh_goal_progress(
+    storage: &LibSQLStorage,
+    project_id: &str,
+) -> Result<Vec<GoalGap>, BusinessLoopError> {
+    let goals = storage
+        .list_objects_for_project(project_id, "BusinessGoal")
+        .await?;
+    let outcomes = storage
+        .list_objects_for_project(project_id, "Outcome")
+        .await?;
+    let completed_reactivations = outcomes
+        .iter()
+        .filter(|outcome| is_counted_reactivation(&outcome.data))
+        .count() as f64;
+
+    for goal in goals {
+        let baseline = number(&goal.data, "baseline_value")?;
+        let current = baseline + completed_reactivations;
+        if number(&goal.data, "current_value")? == current {
+            continue;
+        }
+        let mut data = goal.data.clone();
+        if let Some(object) = data.as_object_mut() {
+            object.insert("current_value".into(), json!(current));
+        }
+        storage
+            .apply_world(WorldCommand::UpdateObject {
+                id: goal.id.clone(),
+                data,
+                project_id: Some(project_id.to_string()),
+            })
+            .await?;
+    }
+
+    goal_gaps(storage, project_id).await
+}
+
+fn outcome_snapshot_days(outcome: &Value, field: &str) -> Option<i64> {
+    let snapshot = outcome.get(field)?.as_str()?;
+    let snapshot: Value = serde_json::from_str(snapshot).ok()?;
+    snapshot.get("days_since_last_contact")?.as_i64()
+}
+
+fn is_counted_reactivation(outcome: &Value) -> bool {
+    outcome.get("success").and_then(Value::as_bool) == Some(true)
+        && outcome.get("action").and_then(Value::as_str) == Some("ContactCustomer")
+        && outcome_snapshot_days(outcome, "before").is_some_and(|days| days > 45)
+        && outcome_snapshot_days(outcome, "after") == Some(0)
+}
+
+/// 按目标相关性、状态紧急度、估计价值和历史成功率对 Open Opportunity 排序。
+pub async fn recommend_next_actions(
+    storage: &LibSQLStorage,
+    project_id: &str,
+) -> Result<Vec<ActionRecommendation>, BusinessLoopError> {
+    project_ontology(storage, project_id).await?;
+    let goals = storage
+        .list_objects_for_project(project_id, "BusinessGoal")
+        .await?;
+    let opportunities = storage
+        .list_objects_for_project(project_id, "Opportunity")
+        .await?;
+    let customers = storage
+        .list_objects_for_project(project_id, "Customer")
+        .await?;
+    let outcomes = storage
+        .list_objects_for_project(project_id, "Outcome")
+        .await?;
+
+    let active_goal = goals.iter().find(|goal| {
+        text(&goal.data, "target_metric").is_ok_and(|metric| metric == GOAL_METRIC)
+            && text(&goal.data, "status").is_ok_and(|status| status == "active")
+    });
+    let remaining_gap = match active_goal {
+        Some(goal) => {
+            (number(&goal.data, "target_value")? - number(&goal.data, "current_value")?).max(0.0)
+        }
+        None => 0.0,
+    };
+
+    let mut recommendations = Vec::new();
+    for opportunity in opportunities {
+        if text(&opportunity.data, "status")? != OPPORTUNITY_OPEN {
+            continue;
+        }
+        let subject = text(&opportunity.data, "subject")?.to_string();
+        let customer = find_record(&customers, &subject, "Customer")
+            .ok_or_else(|| BusinessLoopError::NotFound(subject.clone()))?;
+        let days = customer
+            .data
+            .get("days_since_last_contact")
+            .and_then(Value::as_i64)
+            .unwrap_or_default();
+        let estimated_value = number(&opportunity.data, "estimated_value")?;
+        let opportunity_type = text(&opportunity.data, "opportunity_type")?.to_string();
+
+        // 动作目录保持单一事实源；当前只有一个动作，但选择规则已经按经验证据比较候选路径。
+        let mut selected = (ACTIONS[0].0, 0.7_f64);
+        for (action, _) in ACTIONS {
+            let total = outcomes
+                .iter()
+                .filter(|item| text(&item.data, "action").is_ok_and(|name| name == *action))
+                .count();
+            let success = outcomes
+                .iter()
+                .filter(|item| {
+                    text(&item.data, "action").is_ok_and(|name| name == *action)
+                        && item.data.get("success").and_then(Value::as_bool) == Some(true)
+                })
+                .count();
+            if total == 0 {
+                continue;
+            }
+            let rate = success as f64 / total as f64;
+            if rate > selected.1 {
+                selected = (action, rate);
+            }
+        }
+
+        let alignment = if remaining_gap > 0.0 && opportunity_type == "Reactivation" {
+            1.0
+        } else {
+            0.5
+        };
+        let urgency = (days.min(90) as f64 / 90.0).max(0.1);
+        let score = (estimated_value / 100_000.0) * selected.1 * alignment * (0.6 + 0.4 * urgency);
+        let reason = if remaining_gap > 0.0 {
+            format!(
+                "{GOAL_METRIC} 还差 {remaining_gap:.0}；客户已 {days} 天未联系；动作历史置信度 {:.2}",
+                selected.1
+            )
+        } else {
+            format!("客户已 {days} 天未联系；动作历史置信度 {:.2}", selected.1)
+        };
+        recommendations.push(ActionRecommendation {
+            project_id: project_id.to_string(),
+            opportunity_id: opportunity.id.clone(),
+            subject,
+            action: selected.0.to_string(),
+            score,
+            confidence: selected.1,
+            reason,
+        });
+    }
+
+    recommendations.sort_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| left.opportunity_id.cmp(&right.opportunity_id))
+    });
+    Ok(recommendations)
 }
 
 fn find_record<'a>(
@@ -463,10 +643,60 @@ pub async fn execute_opportunity(
             .await?;
     }
 
+    let goals = refresh_goal_progress(storage, project_id).await?;
+
     Ok(json!({
         "opportunity": { "id": opportunity.id, "data": set_status(opportunity.data, OPPORTUNITY_EXECUTED) },
         "decision": { "id": decision.id, "data": set_status(decision.data, DECISION_EXECUTED) },
         "outcome": { "id": outcome_id, "data": outcome_data },
-        "stateTransition": { "id": transition_id, "data": transition_data }
+        "stateTransition": { "id": transition_id, "data": transition_data },
+        "goals": goals
     }))
+}
+
+/// 执行一轮完整再规划：发现 → 选择最优动作 → 决策 → 执行 → 目标反馈。
+pub async fn run_next_best_action(
+    storage: &LibSQLStorage,
+    project_id: &str,
+    decided_by: &str,
+) -> Result<BusinessLoopRun, BusinessLoopError> {
+    discover_opportunities(storage, project_id).await?;
+    let goals = refresh_goal_progress(storage, project_id).await?;
+    let recommendation = recommend_next_actions(storage, project_id)
+        .await?
+        .into_iter()
+        .next();
+
+    let Some(recommendation) = recommendation else {
+        return Ok(BusinessLoopRun {
+            executed: false,
+            project_id: project_id.to_string(),
+            recommendation: None,
+            decision: None,
+            execution: None,
+            goals,
+        });
+    };
+
+    let decision = decide_opportunity(
+        storage,
+        project_id,
+        &recommendation.opportunity_id,
+        Some(&recommendation.action),
+        decided_by,
+        Some(&recommendation.reason),
+    )
+    .await?;
+    let execution =
+        execute_opportunity(storage, project_id, &recommendation.opportunity_id).await?;
+    let goals = refresh_goal_progress(storage, project_id).await?;
+
+    Ok(BusinessLoopRun {
+        executed: true,
+        project_id: project_id.to_string(),
+        recommendation: Some(recommendation),
+        decision: Some(decision),
+        execution: Some(execution),
+        goals,
+    })
 }

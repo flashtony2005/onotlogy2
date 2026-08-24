@@ -1,7 +1,8 @@
-//! Business Loop v1 端到端契约测试。
+//! Business Loop 端到端契约测试。
 //!
 //! 从真实 crm-retention 业务包出发，验证：
-//! 目标差距 → 幂等发现机会 → 显式决策 → 执行与结果记录 → 再规划不再重复发现。
+//! 目标差距 → 幂等发现机会 → 显式决策 → 执行与结果记录 → 目标反馈 →
+//! 新状态进入后自动选择并执行下一最优动作。
 
 mod common;
 
@@ -120,6 +121,21 @@ async fn business_loop_discovers_decides_executes_and_replans() {
         .expect("执行后 VIP 客户仍存在");
     assert_eq!(vip.data["days_since_last_contact"], json!(0));
 
+    let (_, body) = common::http_call(
+        addr,
+        "GET",
+        "/api/v1/business/goals?projectId=crm-retention",
+        None,
+    )
+    .await;
+    let goals = data(&body).await.as_array().cloned().unwrap_or_default();
+    let goal = goals
+        .iter()
+        .find(|goal| goal["targetMetric"] == "monthly_reactivations")
+        .unwrap_or_else(|| panic!("执行后仍应能看到业务目标：{goals:?}"));
+    assert_eq!(goal["currentValue"], 13.0, "Outcome 应反馈到目标进度");
+    assert_eq!(goal["gap"], 7.0);
+
     let relations = storage.list_all_relations().await.unwrap();
     let has_edge = |source: &str, edge: &str, target: &str| {
         relations.iter().any(|relation| {
@@ -147,4 +163,86 @@ async fn business_loop_discovers_decides_executes_and_replans() {
         Some(0),
         "状态变化后不应再次发现同一机会"
     );
+
+    // 注入新的企业状态，验证闭环会重新发现、排序、决策、执行并再次更新目标。
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+            object_type: "Customer".into(),
+            id: "customer:demo-vip-late".into(),
+            data: json!({
+                "name": "第二位超期 VIP 客户",
+                "level": "VIP",
+                "balance": 0,
+                "days_since_last_contact": 61
+            }),
+            project_id: Some("crm-retention".into()),
+        })
+        .await
+        .expect("应能写入新企业状态");
+
+    let run_next_body = json!({ "projectId": "crm-retention" }).to_string();
+    let (status, body) = common::http_call(
+        addr,
+        "POST",
+        "/api/v1/business/discover-opportunities",
+        Some(&run_next_body),
+    )
+    .await;
+    assert_eq!(status, 200, "应能重新发现新状态机会：{body}");
+    assert_eq!(data(&body).await.as_array().map(Vec::len), Some(1));
+
+    let (status, body) = common::http_call(
+        addr,
+        "GET",
+        "/api/v1/business/recommendations?projectId=crm-retention",
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "应能读取下一动作推荐：{body}");
+    let recommendations = data(&body).await.as_array().cloned().unwrap_or_default();
+    assert_eq!(recommendations.len(), 1);
+    assert_eq!(
+        recommendations[0]["subject"],
+        json!("customer:demo-vip-late")
+    );
+
+    let (status, body) = common::http_call(
+        addr,
+        "POST",
+        "/api/v1/business/run-next",
+        Some(&run_next_body),
+    )
+    .await;
+    assert_eq!(status, 200, "应能自动执行下一最优动作：{body}");
+    let result = data(&body).await;
+    assert_eq!(result["executed"], json!(true));
+    assert_eq!(
+        result["recommendation"]["subject"],
+        json!("customer:demo-vip-late")
+    );
+    assert_eq!(result["recommendation"]["action"], json!("ContactCustomer"));
+    assert_eq!(result["decision"]["data"]["status"], json!("Selected"));
+    assert_eq!(
+        result["execution"]["outcome"]["data"]["success"],
+        json!(true)
+    );
+    assert_eq!(result["goals"][0]["currentValue"], json!(14.0));
+    assert_eq!(result["goals"][0]["gap"], json!(6.0));
+
+    let late_vip = storage
+        .get("customer:demo-vip-late")
+        .await
+        .expect("应能读取新 VIP 客户")
+        .expect("新 VIP 客户仍存在");
+    assert_eq!(late_vip.data["days_since_last_contact"], json!(0));
+
+    let (status, body) = common::http_call(
+        addr,
+        "POST",
+        "/api/v1/business/run-next",
+        Some(&run_next_body),
+    )
+    .await;
+    assert_eq!(status, 200, "没有机会时应返回空闲结果：{body}");
+    assert_eq!(data(&body).await["executed"], json!(false));
 }

@@ -50,6 +50,5 @@ Enterprise State → Opportunity → Decision → Action → Outcome → State T
 
 ## 边界
 
-v1 是最小闭环，只覆盖一个可执行规则和一个确定性动作。它还没有引入概率、多行动
-比较、自动 Agent 再规划和跨包规则语言。这些能力应在闭环证据链已经稳定后按业务包
-逐步扩展，而不是提前抽象成新的 Kernel 概念。
+v1 是最小闭环基线，只覆盖一个可执行规则和一个确定性动作。目标反馈、动作推荐和
+单步自动再规划由 [Business Loop v2](./business-loop-v2.md) 继续扩展。

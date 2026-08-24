@@ -3,6 +3,7 @@
 use crate::auth::AuthUser;
 use crate::business_loop::{
     BusinessLoopError, decide_opportunity, discover_opportunities, execute_opportunity, goal_gaps,
+    recommend_next_actions, run_next_best_action,
 };
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -103,6 +104,34 @@ pub(crate) async fn discover(
     }
     match discover_opportunities(&st.storage, &body.project_id).await {
         Ok(opportunities) => ApiResponse::ok(Value::Array(opportunities)).into_response(),
+        Err(error) => error_response(error),
+    }
+}
+
+pub(crate) async fn recommendations(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Query(query): Query<ProjectScope>,
+) -> Response {
+    if !user.can_read_evaluation() {
+        return forbidden("当前角色无权读取业务推荐（需 Operator 及以上）").into_response();
+    }
+    match recommend_next_actions(&st.storage, &query.project_id).await {
+        Ok(recommendations) => ApiResponse::ok(recommendations).into_response(),
+        Err(error) => error_response(error),
+    }
+}
+
+pub(crate) async fn run_next(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<ProjectScope>,
+) -> Response {
+    if let Some(response) = write_denied(&user) {
+        return response;
+    }
+    match run_next_best_action(&st.storage, &body.project_id, &user.username).await {
+        Ok(result) => ApiResponse::ok(result).into_response(),
         Err(error) => error_response(error),
     }
 }
