@@ -366,6 +366,13 @@ pub struct DataPropertyHierarchy {
     pub super_property: String,
 }
 
+/// A named class equivalent to a disjoint union of declared classes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DisjointUnionGroup {
+    pub class: String,
+    pub members: Vec<String>,
+}
+
 /// 整份 ODL 解析出的 IR。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct OntologyIR {
@@ -379,6 +386,9 @@ pub struct OntologyIR {
     /// Named-class equivalence axioms declared directly in executable ODL.
     #[serde(default)]
     pub equivalent_groups: Vec<Vec<String>>,
+    /// Named disjoint-union definitions declared directly in executable ODL.
+    #[serde(default)]
+    pub disjoint_unions: Vec<DisjointUnionGroup>,
     /// Object-property inclusions declared directly between executable relations.
     #[serde(default)]
     pub relation_hierarchy: Vec<RelationHierarchy>,
@@ -485,6 +495,79 @@ impl OntologyIR {
             .collect::<std::collections::BTreeSet<_>>();
         Self::validate_class_group("disjoint", &self.disjoint_groups, &names)?;
         Self::validate_class_group("equivalent", &self.equivalent_groups, &names)?;
+        Ok(())
+    }
+
+    /// Validate disjoint-union definitions at both language and governance
+    /// boundaries so hand-built serialized IR cannot bypass ODL rules.
+    pub fn validate_disjoint_unions(&self) -> Result<(), DisjointUnionError> {
+        let names = self
+            .object_types
+            .iter()
+            .map(|object| object.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut seen_classes = std::collections::BTreeSet::new();
+        for (index, group) in self.disjoint_unions.iter().enumerate() {
+            if group.class.trim().is_empty() {
+                return Err(DisjointUnionError {
+                    index,
+                    message: "disjoint_union contains an empty class name".to_owned(),
+                });
+            }
+            if !names.contains(group.class.as_str()) {
+                return Err(DisjointUnionError {
+                    index,
+                    message: format!(
+                        "disjoint_union references undeclared object type '{}'",
+                        group.class
+                    ),
+                });
+            }
+            if !seen_classes.insert(group.class.as_str()) {
+                return Err(DisjointUnionError {
+                    index,
+                    message: format!("disjoint_union repeats defined class '{}'", group.class),
+                });
+            }
+            if group.members.len() < 2 {
+                return Err(DisjointUnionError {
+                    index,
+                    message: "disjoint_union must contain at least two member classes".to_owned(),
+                });
+            }
+            let mut members = std::collections::BTreeSet::new();
+            for name in &group.members {
+                if name.trim().is_empty() {
+                    return Err(DisjointUnionError {
+                        index,
+                        message: "disjoint_union contains an empty member class".to_owned(),
+                    });
+                }
+                if !names.contains(name.as_str()) {
+                    return Err(DisjointUnionError {
+                        index,
+                        message: format!(
+                            "disjoint_union references undeclared object type '{name}'"
+                        ),
+                    });
+                }
+                if name == &group.class {
+                    return Err(DisjointUnionError {
+                        index,
+                        message: format!(
+                            "disjoint_union class '{}' cannot be its own member",
+                            group.class
+                        ),
+                    });
+                }
+                if !members.insert(name.as_str()) {
+                    return Err(DisjointUnionError {
+                        index,
+                        message: format!("disjoint_union repeats member class '{name}'"),
+                    });
+                }
+            }
+        }
         Ok(())
     }
 
@@ -898,6 +981,13 @@ impl OntologyIR {
 pub struct ClassGroupError {
     pub index: usize,
     pub kind: &'static str,
+    pub message: String,
+}
+
+/// An invalid disjoint-union definition, identified by declaration order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisjointUnionError {
+    pub index: usize,
     pub message: String,
 }
 

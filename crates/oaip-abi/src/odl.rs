@@ -27,9 +27,9 @@
 
 use crate::data_range::parse_data_range;
 use crate::ir::{
-    ActionDef, Clause, CompareOp, CreateEffect, DataPropertyHierarchy, FieldUpdate, ObjectType,
-    OntologyIR, ParamDef, PolicyDef, PropertyDef, PropertyFacet, RelationDef, RelationHierarchy,
-    ScalarType, ValueExpr,
+    ActionDef, Clause, CompareOp, CreateEffect, DataPropertyHierarchy, DisjointUnionGroup,
+    FieldUpdate, ObjectType, OntologyIR, ParamDef, PolicyDef, PropertyDef, PropertyFacet,
+    RelationDef, RelationHierarchy, ScalarType, ValueExpr,
 };
 use crate::validation::validate_property_constraints;
 use std::str::FromStr;
@@ -69,6 +69,7 @@ const E_RELATION_CONTRADICTION: u32 = 1010;
 const E_INVALID_PROPERTY_CONSTRAINT: u32 = 1011; // relation 特征互相矛盾或引用无效
 const E_INVALID_OBJECT_HIERARCHY: u32 = 1012; // object extends 引用无效或形成继承环
 const E_INVALID_CLASS_GROUP: u32 = 1013; // disjoint/equivalent 类组声明无效
+const E_INVALID_DISJOINT_UNION: u32 = 1014; // disjoint_union 类定义无效
 
 /// 解析上下文中的块（基于缩进的简易状态机）。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -103,6 +104,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     let mut link_lines: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
     let mut declared_disjoint: Vec<(u32, Vec<String>)> = Vec::new();
     let mut declared_equivalent: Vec<(u32, Vec<String>)> = Vec::new();
+    let mut declared_disjoint_unions: Vec<(u32, DisjointUnionGroup)> = Vec::new();
     let mut declared_sub_relations: Vec<(u32, (String, String))> = Vec::new();
     let mut declared_disjoint_relations: Vec<(u32, Vec<String>)> = Vec::new();
     let mut declared_equivalent_relations: Vec<(u32, Vec<String>)> = Vec::new();
@@ -119,6 +121,52 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             continue;
         }
         let indent = indent_of(raw);
+
+        // Common OWL covered-class pattern: one named class is exactly the
+        // union of a pairwise-disjoint set of named classes.
+        if let Some(rest) = line.strip_prefix("disjoint_union ") {
+            flush_update(&mut cur_update, &mut cur_action);
+            flush_create(&mut cur_create, &mut cur_action);
+            flush_action(&mut cur_action, &mut current);
+            if let Some(obj) = current.take() {
+                declared.push(obj);
+            }
+            if let Some(relation) = current_relation.take() {
+                declared_relations.push(relation);
+            }
+
+            let invalid =
+                |message: String| OdlError::new(E_INVALID_DISJOINT_UNION, message, line_no, 1);
+            let (class, members_source) = rest.split_once('=').ok_or_else(|| {
+                invalid("disjoint_union declaration needs `Class = Member, ...`".to_owned())
+            })?;
+            let class = class.trim();
+            if class.is_empty() || class.contains(char::is_whitespace) {
+                return Err(invalid(
+                    "disjoint_union contains an empty or invalid class name".to_owned(),
+                ));
+            }
+            let members = members_source
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            if members.len() < 2 {
+                return Err(invalid(
+                    "disjoint_union must contain at least two member classes".to_owned(),
+                ));
+            }
+            declared_disjoint_unions.push((
+                line_no,
+                DisjointUnionGroup {
+                    class: class.to_string(),
+                    members,
+                },
+            ));
+            section = vec![(Section::Top, 0)];
+            continue 'line;
+        }
 
         // Named-class DL 组声明：让常见 TBox 约束无需手写 proposal JSON。
         for (keyword, is_disjoint) in [("disjoint ", true), ("equivalent ", false)] {
@@ -746,6 +794,10 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
 
     ir.disjoint_groups = declared_disjoint.iter().map(|(_, g)| g.clone()).collect();
     ir.equivalent_groups = declared_equivalent.iter().map(|(_, g)| g.clone()).collect();
+    ir.disjoint_unions = declared_disjoint_unions
+        .iter()
+        .map(|(_, group)| group.clone())
+        .collect();
     if let Err(error) = ir.validate_class_groups() {
         let lines = if error.kind == "disjoint" {
             &declared_disjoint
@@ -754,6 +806,18 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
         };
         let line = lines.get(error.index).map(|(line, _)| *line).unwrap_or(1);
         return Err(OdlError::new(E_INVALID_CLASS_GROUP, error.message, line, 1));
+    }
+    if let Err(error) = ir.validate_disjoint_unions() {
+        let line = declared_disjoint_unions
+            .get(error.index)
+            .map(|(line, _)| *line)
+            .unwrap_or(1);
+        return Err(OdlError::new(
+            E_INVALID_DISJOINT_UNION,
+            error.message,
+            line,
+            1,
+        ));
     }
 
     ir.relations = declared_relations.iter().map(|(_, r)| r.clone()).collect();

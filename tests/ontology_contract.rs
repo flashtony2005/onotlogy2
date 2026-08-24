@@ -3,7 +3,8 @@
 
 use openaip_os::abi::codegen;
 use openaip_os::abi::ir::{
-    DataPropertyHierarchy, OntologyIR, PropertyDef, RelationHierarchy, ScalarType,
+    DataPropertyHierarchy, DisjointUnionGroup, OntologyIR, PropertyDef, RelationHierarchy,
+    ScalarType,
 };
 use openaip_os::abi::odl::parse_odl;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine, ObjectRecord, StorageError};
@@ -498,6 +499,59 @@ fn tc001e_parse_disjoint_and_equivalent_groups() {
     let duplicate = parse_odl(&duplicate).unwrap_err();
     assert_eq!(1013, duplicate.code);
     assert!(duplicate.message.contains("duplicate"));
+}
+
+#[test]
+fn tc001f_parse_disjoint_union() {
+    let odl = [
+        "object Vehicle:",
+        "  properties:",
+        "    label: string",
+        "object Car:",
+        "  properties:",
+        "    wheels: int",
+        "object Boat:",
+        "  properties:",
+        "    draft: decimal",
+        "disjoint_union Vehicle = Car, Boat",
+    ]
+    .join("\n");
+    let ir = parse_odl(&odl).unwrap();
+    assert_eq!(
+        vec![DisjointUnionGroup {
+            class: "Vehicle".to_owned(),
+            members: vec!["Car".to_owned(), "Boat".to_owned()],
+        }],
+        ir.disjoint_unions
+    );
+    assert!(codegen::roundtrip_ok(&ir).unwrap());
+
+    let unknown = [
+        "object Vehicle:",
+        "  properties:",
+        "    label: string",
+        "object Car:",
+        "  properties:",
+        "    wheels: int",
+        "disjoint_union Vehicle = Car, Boat",
+    ]
+    .join("\n");
+    let error = parse_odl(&unknown).unwrap_err();
+    assert_eq!(1014, error.code);
+    assert_eq!(7, error.line);
+    assert!(error.message.contains("undeclared"));
+
+    let singleton = parse_odl(
+        "object Vehicle:\n  properties:\n    label: string\nobject Car:\n  properties:\n    wheels: int\ndisjoint_union Vehicle = Car\n",
+    )
+    .unwrap_err();
+    assert_eq!(1014, singleton.code);
+
+    let self_member = parse_odl(
+        "object Vehicle:\n  properties:\n    label: string\nobject Car:\n  properties:\n    wheels: int\ndisjoint_union Vehicle = Vehicle, Car\n",
+    )
+    .unwrap_err();
+    assert_eq!(1014, self_member.code);
 }
 
 // ── TC-002：IR 保真（REQ-002） ───────────────────────────────────────────

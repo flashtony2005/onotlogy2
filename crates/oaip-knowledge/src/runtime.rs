@@ -302,6 +302,15 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
     for group in &ir.equivalent_groups {
         ontology.push(Axiom::EquivalentClasses(group.iter().map(class).collect()));
     }
+    for group in &ir.disjoint_unions {
+        ontology.push(Axiom::EquivalentClasses(vec![
+            class(&group.class),
+            ClassExpression::Union(group.members.iter().map(class).collect()),
+        ]));
+        ontology.push(Axiom::DisjointClasses(
+            group.members.iter().map(class).collect(),
+        ));
+    }
     for hierarchy in &ir.relation_hierarchy {
         ontology.push(Axiom::SubObjectPropertyOf {
             sub: Term::new(&hierarchy.sub_relation),
@@ -509,6 +518,9 @@ pub fn validate_runtime_ir(ir: &OntologyIR) -> Result<()> {
         )));
     }
     if let Err(error) = ir.validate_class_groups() {
+        return Err(KnowledgeError::Invalid(error.message));
+    }
+    if let Err(error) = ir.validate_disjoint_unions() {
         return Err(KnowledgeError::Invalid(error.message));
     }
     if let Err(error) = ir.validate_relation_cardinalities() {
@@ -1180,8 +1192,8 @@ pub fn validate_canonical_ontology_with_world(
 mod tests {
     use super::*;
     use oaip_abi::ir::{
-        ActionDef, CreateEffect, DataPropertyHierarchy, ObjectType, PropertyDef, PropertyFacet,
-        RelationDef, RelationHierarchy,
+        ActionDef, CreateEffect, DataPropertyHierarchy, DisjointUnionGroup, ObjectType,
+        PropertyDef, PropertyFacet, RelationDef, RelationHierarchy,
     };
 
     fn ir(actions: bool) -> OntologyIR {
@@ -1189,6 +1201,7 @@ mod tests {
             relations: Vec::new(),
             disjoint_groups: Vec::new(),
             equivalent_groups: Vec::new(),
+            disjoint_unions: Vec::new(),
             relation_hierarchy: Vec::new(),
             disjoint_relation_groups: Vec::new(),
             equivalent_relation_groups: Vec::new(),
@@ -1342,6 +1355,64 @@ equivalent Pet, Companion
     }
 
     #[test]
+    fn declared_disjoint_union_projects_and_reasons_covered_members() {
+        let ir = oaip_abi::parse_odl(
+            r#"
+object Vehicle:
+  properties:
+    label: string
+object Car:
+  properties:
+    wheels: int
+object Boat:
+  properties:
+    draft: decimal
+disjoint_union Vehicle = Car, Boat
+"#,
+        )
+        .unwrap();
+        assert!(validate_runtime_ir(&ir).is_ok());
+        let schema = runtime_ir_to_knowledge(&ir);
+        assert!(schema.axioms().contains(&Axiom::EquivalentClasses(vec![
+            class("Vehicle"),
+            ClassExpression::Union(vec![class("Car"), class("Boat")])
+        ])));
+        assert!(
+            schema
+                .axioms()
+                .contains(&Axiom::DisjointClasses(vec![class("Car"), class("Boat")]))
+        );
+
+        let car = RuntimeObjectFact {
+            id: "car-1".to_owned(),
+            object_type: "Car".to_owned(),
+            data: serde_json::json!({ "wheels": 4 }),
+        };
+        let world = runtime_world_to_knowledge(&schema, &[car], &[]).unwrap();
+        let reasoner = Reasoner::new(&world).unwrap();
+        assert!(
+            reasoner
+                .instances_of(&Term::new("Vehicle"))
+                .unwrap()
+                .contains(&Term::new("car-1"))
+        );
+
+        let conflict_axioms = schema.axioms().iter().cloned().chain([
+            Axiom::ClassAssertion {
+                class: class("Car"),
+                individual: Term::new("car-1"),
+            },
+            Axiom::ClassAssertion {
+                class: class("Boat"),
+                individual: Term::new("car-1"),
+            },
+        ]);
+        let conflicting = Ontology::from_iter(conflict_axioms);
+        let reasoner = Reasoner::new(&conflicting).unwrap();
+        assert!(!reasoner.is_consistent().unwrap());
+    }
+
+    #[test]
     fn runtime_validation_rejects_invalid_class_groups() {
         let mut ir = ir(false);
         ir.object_types.push(ObjectType {
@@ -1364,6 +1435,16 @@ equivalent Pet, Companion
         assert!(matches!(
             validate_runtime_ir(&ir),
             Err(KnowledgeError::Invalid(message)) if message.contains("repeats")
+        ));
+
+        ir.disjoint_groups = Vec::new();
+        ir.disjoint_unions = vec![DisjointUnionGroup {
+            class: "Customer".to_owned(),
+            members: vec!["Dog".to_owned(), "Cat".to_owned()],
+        }];
+        assert!(matches!(
+            validate_runtime_ir(&ir),
+            Err(KnowledgeError::Invalid(message)) if message.contains("undeclared")
         ));
     }
 

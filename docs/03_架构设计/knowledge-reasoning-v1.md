@@ -156,6 +156,29 @@ Runtime IR 校验边界 fail-closed。
 已声明 object、成员不重复、同一语义组不可重复声明；这些约束同样作用于手工构造或持久化反序列化的
 Runtime IR。
 
+常见 covered-class 模式可直接声明 disjoint union，不再手写 proposal JSON：
+
+```odl
+object Vehicle:
+  properties:
+    label: string
+
+object Car:
+  properties:
+    wheels: int
+
+object Boat:
+  properties:
+    draft: decimal
+
+disjoint_union Vehicle = Car, Boat
+```
+
+该声明投影为 `EquivalentClasses(Vehicle, ObjectUnionOf(Car, Boat))` 和
+`DisjointClasses(Car, Boat)`。目标类与成员都必须是已声明 object；成员至少两个、不重复，且不能
+包含目标类。同一目标类只能定义一次。ODL 解析、手工构造 Runtime IR 和持久化治理边界使用同一条
+校验语义；结果参与一致性、classification、entailment、诊断和演化影响分析。
+
 ### 4.5 ODL property constraints
 
 Executable ODL 属性现在可以在标量类型后直接声明保守约束：
