@@ -1260,6 +1260,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn odl_cross_datatype_range_gates_live_world_evolution() {
+        let storage = LibSQLStorage::open(":memory:").await.unwrap();
+        let root =
+            Ontology::new().with_axiom(Axiom::subclass(class("Customer"), ClassExpression::Thing));
+        let initial_ir = oaip_abi::parse_odl(
+            r#"object Customer:
+  properties:
+    contact: string range(restriction(pattern "[^@]+@[^@]+"))
+"#,
+        )
+        .unwrap();
+        storage
+            .initialize_knowledge_version("root", &root, Some(&initial_ir))
+            .await
+            .unwrap();
+        storage
+            .create(
+                "Customer",
+                "customer-1",
+                json!({ "contact": "support@example.com" }),
+            )
+            .await
+            .unwrap();
+
+        // The reviewed replacement retains the live string branch and adds an
+        // explicit integer branch; existing facts therefore remain admissible.
+        let replacement_ir = oaip_abi::parse_odl(
+            r#"object Customer:
+  properties:
+    contact: string range(union(restriction(pattern "[^@]+@[^@]+"),datatype(int)))
+"#,
+        )
+        .unwrap();
+        let proposal = OntologyProposal::new("admit-numeric-contact").with_change(
+            OntologyChange::Add(Axiom::subclass(class("Preferred"), class("Customer"))),
+        );
+        storage
+            .propose_knowledge_change("root", &proposal, Some(&replacement_ir.clone()))
+            .await
+            .unwrap();
+        storage
+            .decide_knowledge_proposal("admit-numeric-contact", true, "alice", None)
+            .await
+            .unwrap();
+        let (_, applied) = storage
+            .apply_knowledge_proposal("admit-numeric-contact", "v2")
+            .await
+            .unwrap();
+        assert_eq!(Some(replacement_ir), applied.runtime_ir);
+
+        storage
+            .create("Customer", "customer-2", json!({ "contact": 42 }))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn data_property_enumeration_gates_live_world_evolution() {
         fn one_of(values: &[&str]) -> Axiom {
             Axiom::DataPropertyOneOf {

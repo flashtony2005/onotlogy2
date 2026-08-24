@@ -13,6 +13,7 @@ use crate::model::{
 };
 use crate::reasoner::Reasoner;
 use chrono::{NaiveDate, SecondsFormat, Utc};
+use oaip_abi::data_range::range_has_extra_base;
 use oaip_abi::{
     canonical_decimal,
     ir::{OntologyIR, PropertyDataRange, PropertyFacet, ScalarType},
@@ -44,15 +45,33 @@ fn scalar_datatype(ty: ScalarType) -> Datatype {
 /// `xsd:double`.  ODL accepts `30` for a Float property, so projection must use
 /// the declared canonical range instead of letting that boundary choose a
 /// different datatype from the executable validator.
-fn data_property_ranges(ontology: &Ontology) -> BTreeMap<Term, Datatype> {
+fn data_property_ranges(ontology: &Ontology) -> BTreeMap<Term, BTreeSet<Datatype>> {
     ontology
         .axioms()
         .iter()
         .filter_map(|axiom| match axiom {
-            Axiom::DataPropertyRange { property, datatype } => Some((property.clone(), *datatype)),
+            Axiom::DataPropertyRange { property, datatype } => {
+                Some((property.clone(), BTreeSet::from([*datatype])))
+            }
+            Axiom::DataPropertyDataRange { property, range } => {
+                Some((property.clone(), model_data_range_datatypes(range)))
+            }
             _ => None,
         })
         .collect()
+}
+
+fn model_data_range_datatypes(range: &ModelDataRange) -> BTreeSet<Datatype> {
+    match range {
+        ModelDataRange::Datatype(datatype) => BTreeSet::from([*datatype]),
+        ModelDataRange::OneOf(values) => values.iter().map(Literal::datatype).collect(),
+        ModelDataRange::Restriction { datatype, .. } => BTreeSet::from([*datatype]),
+        ModelDataRange::Complement(child) => model_data_range_datatypes(child),
+        ModelDataRange::Union(children) | ModelDataRange::Intersection(children) => children
+            .iter()
+            .flat_map(model_data_range_datatypes)
+            .collect(),
+    }
 }
 
 fn property_facet_value(ty: ScalarType, facet: &PropertyFacet) -> Option<FacetValue> {
@@ -116,6 +135,7 @@ fn property_data_range(
     let datatype = scalar_datatype(ty);
     let range = match range {
         PropertyDataRange::Datatype => ModelDataRange::Datatype(datatype),
+        PropertyDataRange::Base(base) => ModelDataRange::Datatype(scalar_datatype(*base)),
         PropertyDataRange::OneOf(values) => {
             let literals = property_one_of_json_values(ty, &[PropertyFacet::OneOf(values.clone())])
                 .map_err(KnowledgeError::Invalid)?
@@ -187,10 +207,15 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
                 property: term.clone(),
                 class: source.clone(),
             });
-            ontology.push(Axiom::DataPropertyRange {
-                property: term.clone(),
-                datatype: scalar_datatype(property.ty),
-            });
+            let has_cross_range = property.constraints.iter().any(
+                |facet| matches!(facet, PropertyFacet::Range(range) if range_has_extra_base(range)),
+            );
+            if !has_cross_range {
+                ontology.push(Axiom::DataPropertyRange {
+                    property: term.clone(),
+                    datatype: scalar_datatype(property.ty),
+                });
+            }
             let value_constraints = property
                 .constraints
                 .iter()
@@ -729,9 +754,39 @@ fn json_literal(field: &str, value: &Value, expected: Option<Datatype>) -> Resul
     }
 }
 
+/// Convert JSON while respecting every datatype admitted by a composable range.
+///
+/// Ordinary single-range properties retain the old canonicalization behavior:
+/// for example integral JSON is still projected as `xsd:double` on a Float
+/// property.  Cross-datatype unions instead choose the branch matching the
+/// concrete JSON value, with explicit date/date-time/decimal conversion only
+/// when those branches are declared.
+fn json_literal_with_expected_types(
+    field: &str,
+    value: &Value,
+    expected: &BTreeSet<Datatype>,
+) -> Result<Literal> {
+    let inferred = json_literal(field, value, None)?;
+    if expected.is_empty() || expected.contains(&inferred.datatype()) {
+        return Ok(inferred);
+    }
+    for datatype in expected {
+        if matches!(
+            datatype,
+            Datatype::Decimal | Datatype::Date | Datatype::DateTime | Datatype::Double
+        ) && let Ok(literal) = json_literal(field, value, Some(*datatype))
+        {
+            return Ok(literal);
+        }
+    }
+    Err(KnowledgeError::Invalid(format!(
+        "data field `{field}` does not match any declared range datatype"
+    )))
+}
+
 fn runtime_object_axioms(
     fact: &RuntimeObjectFact,
-    ranges: &BTreeMap<Term, Datatype>,
+    ranges: &BTreeMap<Term, BTreeSet<Datatype>>,
 ) -> Result<Vec<Axiom>> {
     let mut axioms = vec![Axiom::ClassAssertion {
         class: class(&fact.object_type),
@@ -749,11 +804,14 @@ fn runtime_object_axioms(
         if value.is_null() {
             continue;
         }
-        let expected = ranges.get(&Term::new(field.clone())).copied();
+        let expected = ranges
+            .get(&Term::new(field.clone()))
+            .cloned()
+            .unwrap_or_default();
         axioms.push(Axiom::DataPropertyAssertion {
             property: Term::new(field.clone()),
             individual: Term::new(&fact.id),
-            value: json_literal(field, value, expected)?,
+            value: json_literal_with_expected_types(field, value, &expected)?,
         });
     }
     Ok(axioms)
@@ -1521,6 +1579,74 @@ equivalent Pet, Companion
                 validate_canonical_ontology_with_world(&schema, &[fact(rejected)], &[]).is_err()
             );
         }
+    }
+
+    #[test]
+    fn odl_cross_datatype_union_projects_and_gates_world_facts() {
+        let schema = oaip_abi::parse_odl(
+            r#"object Customer:
+  properties:
+    contact: string range(union(restriction(pattern "[^@]+@[^@]+"),datatype(int)))
+"#,
+        )
+        .unwrap();
+        validate_runtime_ir(&schema).unwrap();
+        let schema = runtime_ir_to_knowledge(&schema);
+
+        assert!(
+            !schema.axioms().iter().any(|axiom| matches!(
+                axiom,
+                Axiom::DataPropertyRange { property, .. } if property.as_str() == "contact"
+            )),
+            "a cross-datatype union must not also narrow the property to its leading type"
+        );
+        assert!(schema.axioms().iter().any(|axiom| matches!(
+            axiom,
+            Axiom::DataPropertyDataRange { property, range }
+                if property.as_str() == "contact"
+                    && matches!(range, ModelDataRange::Union(branches)
+                        if matches!(branches.as_slice(), [
+                            ModelDataRange::Restriction { datatype: Datatype::String, .. },
+                            ModelDataRange::Datatype(Datatype::Integer),
+                        ])
+            )
+        )));
+
+        let fact = |contact: serde_json::Value| RuntimeObjectFact {
+            id: "customer-1".to_owned(),
+            object_type: "Customer".to_owned(),
+            data: serde_json::json!({ "contact": contact }),
+        };
+        for accepted in [
+            serde_json::Value::String("user@example.com".to_owned()),
+            serde_json::json!(42),
+        ] {
+            let world =
+                runtime_world_to_knowledge(&schema, &[fact(accepted.clone())], &[]).unwrap();
+            assert!(Reasoner::new(&world).unwrap().is_consistent().unwrap());
+            assert!(
+                validate_canonical_ontology_with_world(&schema, &[fact(accepted)], &[]).is_ok()
+            );
+        }
+
+        let rejected = fact(serde_json::json!(true));
+        assert!(runtime_world_to_knowledge(&schema, &[rejected], &[]).is_err());
+
+        // The governance boundary rejects a hand-built IR that omits the
+        // declared leading datatype, even when the parser is bypassed.
+        let mut invalid = oaip_abi::parse_odl(
+            r#"object Customer:
+  properties:
+    contact: string range(union(datatype,datatype(int)))
+"#,
+        )
+        .unwrap();
+        invalid.object_types[0].properties[0].constraints[0] =
+            PropertyFacet::Range(PropertyDataRange::Union(vec![
+                PropertyDataRange::Base(ScalarType::Int),
+                PropertyDataRange::Base(ScalarType::Float),
+            ]));
+        assert!(validate_runtime_ir(&invalid).is_err());
     }
 
     #[test]

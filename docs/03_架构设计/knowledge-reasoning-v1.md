@@ -330,9 +330,17 @@ object Customer:
     code: string range(complement(restriction(pattern "TEST-.*")))
 ```
 
+常见跨 datatype 值域可以直接用显式 typed union 表达：
+
+```odl
+object Customer:
+  properties:
+    contact: string range(union(restriction(pattern "[^@]+@[^@]+"),datatype(int)))
+```
+
 支持的组合子：
 
-- `datatype`
+- `datatype`（不限定参数时表示 leading scalar type；`datatype(int)` 等显式形式表示另一个 base datatype）
 - `one_of`
 - `restriction`
 - `complement`
@@ -341,18 +349,27 @@ object Customer:
 
 实现边界：
 
-- ODL 属性的 leading scalar type 是唯一 base datatype；`datatype` 与 `restriction`
-  都指向它。跨 datatype 的 union 仍由 governed DL proposal 表达，避免破坏 executable
-  row 的单一类型契约；
-- `complement(child)` 表示 typed literal 全域中不属于 `child` 的部分。ODL admission 先
-  强制 leading scalar type，因此 executable property 不会通过 complement 意外引入其他
-  JSON/XSD 类型；
+- 不带参数的 `datatype` 和 `restriction` 指向 property 的 leading scalar type。
+  `datatype(int)` 这类显式 typed branch 只能作为 union 的直接分支，用来扩大该属性可接受的
+  finite scalar-type 集合；cross-datatype union 必须直接保留一个 leading-type 分支（裸
+  `datatype`、leading `one_of` 或 leading `restriction`）；
+- cross-datatype range 不能与外部 value facet 或 enumeration 组合。datatype-specific
+  facet 必须放进对应 union branch，避免把 leading-type constraint 错误应用到其他类型；
+  `max_cardinality 0` 可组合，但 required `min_cardinality 1` 会 fail-closed；
+- executable admission 接受 declared type 加上所有显式 typed branch；其他 JSON 类型仍然
+  fail-closed。存储和 runtime row 继续以 leading scalar type 作为主 schema 类型；
+- 无 cross branch 时，`complement(child)` 表示 typed literal 全域中不属于 `child` 的部分，
+  admission 先强制 leading scalar type；有显式 typed branch 时，只有列出的 branch 类型可以
+  进入该 range；
 - `range` 是普通属性约束命名空间中的一个 facet，同一属性最多声明一个；它与
   `min_cardinality` / `max_cardinality` 可组合；
 - boolean 组至少两个分支；
 - 嵌套深度上限 8，节点总数上限 64，单个 enumeration 上限 64 个 literal；
 - uncertain 或超界构造 fail-closed；
 - positive ABox 断言由确定性 kernel 精确检查；mature tableau 同时接收对应 OWL 2 语法；
+- cross-datatype projection 用同一条 `DataPropertyDataRange` 表示完整 union，并省略会与之
+ 矛盾的单独 leading `DataPropertyRange` axiom；因此 reasoner、diagnosis 和演化 gate 看到
+ 同一个允许集合；
 - ODL projection、closed-world admission、live-world evolution gate 和 HTTP diagnosis
   使用同一条 nested range 语义；
 - 多个普通 range/restriction 公理仍按交集处理。

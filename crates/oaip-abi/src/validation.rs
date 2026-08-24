@@ -11,7 +11,7 @@ use regex::Regex;
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::data_range::validate_data_range;
+use crate::data_range::{range_has_extra_base, validate_data_range};
 use crate::ir::{ObjectType, PropertyDataRange, PropertyFacet, ScalarType};
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -150,6 +150,23 @@ pub fn validate_property_constraints(
     let mut seen = std::collections::BTreeSet::new();
     let mut min_cardinality = None::<u32>;
     let mut max_cardinality = None::<u32>;
+    let cross_datatype_range = constraints
+        .iter()
+        .any(|facet| matches!(facet, PropertyFacet::Range(range) if range_has_extra_base(range)));
+    if cross_datatype_range
+        && constraints.iter().any(|facet| {
+            !matches!(
+                facet,
+                PropertyFacet::MinCardinality(_)
+                    | PropertyFacet::MaxCardinality(_)
+                    | PropertyFacet::Range(_)
+            )
+        })
+    {
+        return Err(
+            "a cross-datatype range cannot be combined with value constraints; put datatype-specific facets inside its union branches".to_owned(),
+        );
+    }
     let allowed = |facet: &PropertyFacet| match ty {
         ScalarType::String => matches!(
             facet,
@@ -246,6 +263,11 @@ pub fn validate_property_constraints(
         return Err(format!(
             "property cardinality has min {min} greater than max {max}"
         ));
+    }
+    if cross_datatype_range && min_cardinality.is_some_and(|min| min > 0) {
+        return Err(
+            "a required scalar cardinality cannot cross datatypes because the DL presence constraint needs one declared base datatype".to_owned(),
+        );
     }
     Ok(())
 }
@@ -433,6 +455,7 @@ fn compare_decimal(left: &str, right: &str) -> Option<std::cmp::Ordering> {
 fn property_data_range_admits(value: &Value, ty: ScalarType, range: &PropertyDataRange) -> bool {
     match range {
         PropertyDataRange::Datatype => true,
+        PropertyDataRange::Base(branch_ty) => matches_scalar(value, *branch_ty),
         PropertyDataRange::OneOf(values) => one_of_admits(ty, value, values),
         PropertyDataRange::Restriction(facets) => facets
             .iter()
@@ -577,6 +600,38 @@ fn one_of_admits(ty: ScalarType, actual: &Value, values: &[String]) -> bool {
     })
 }
 
+/// Scalar types admitted by a composable range.  The declared property type is
+/// always retained; explicit `datatype(type)` union branches may add to it.
+fn range_scalar_types(range: &PropertyDataRange, result: &mut Vec<ScalarType>) {
+    match range {
+        PropertyDataRange::Base(base) => result.push(*base),
+        PropertyDataRange::Complement(child) => range_scalar_types(child, result),
+        PropertyDataRange::Union(children) | PropertyDataRange::Intersection(children) => {
+            for child in children {
+                range_scalar_types(child, result);
+            }
+        }
+        PropertyDataRange::Datatype
+        | PropertyDataRange::OneOf(_)
+        | PropertyDataRange::Restriction(_) => {}
+    }
+}
+
+fn property_scalar_types(
+    property_constraints: &[PropertyFacet],
+    ty: ScalarType,
+) -> Vec<ScalarType> {
+    let mut result = vec![ty];
+    for facet in property_constraints {
+        if let PropertyFacet::Range(range) = facet {
+            range_scalar_types(range, &mut result);
+        }
+    }
+    result.sort();
+    result.dedup();
+    result
+}
+
 /// Validate one persisted JSON row against the current object definition.
 ///
 /// Missing properties remain valid unless an explicit scalar cardinality makes
@@ -609,10 +664,15 @@ pub fn validate_object_data(
             }
             continue;
         };
-        if !matches_scalar(value, property.ty) {
+        let accepted_types = property_scalar_types(&property.constraints, property.ty);
+        if !accepted_types.iter().any(|ty| matches_scalar(value, *ty)) {
             return Err(DataValidationError::InvalidPropertyType {
                 field: property.name.clone(),
-                expected: property.ty.to_string(),
+                expected: accepted_types
+                    .iter()
+                    .map(ScalarType::to_string)
+                    .collect::<Vec<_>>()
+                    .join("|"),
                 actual: json_type(value).to_string(),
             });
         }
@@ -907,6 +967,66 @@ mod tests {
         let missing_child =
             parse_odl("object Customer:\n  properties:\n    code: string range(complement())\n");
         assert!(missing_child.is_err());
+    }
+
+    #[test]
+    fn parses_cross_datatype_union_range_and_gates_data() {
+        let current = object(
+            r#"object Customer:
+  properties:
+    contact: string range(union(restriction(pattern "[^@]+@[^@]+"),datatype(int)))
+"#,
+        );
+        let PropertyFacet::Range(range) = &current.properties[0].constraints[0] else {
+            panic!("range facet should survive parsing");
+        };
+        let PropertyDataRange::Union(branches) = range else {
+            panic!("cross-datatype declaration should preserve the union");
+        };
+        assert_eq!(2, branches.len());
+
+        assert!(
+            validate_object_data(
+                &current,
+                &serde_json::json!({ "contact": "user@example.com" })
+            )
+            .is_ok()
+        );
+        assert!(validate_object_data(&current, &serde_json::json!({ "contact": 42 })).is_ok());
+        assert!(matches!(
+            validate_object_data(&current, &serde_json::json!({ "contact": true })),
+            Err(DataValidationError::InvalidPropertyType { expected, .. }) if expected == "string|int"
+        ));
+
+        let source = |range: &str| {
+            format!("object Customer:\n  properties:\n    contact: string range({range})\n")
+        };
+        for invalid in [
+            "datatype(int)",
+            "union(datatype(int),datatype(float))",
+            "complement(datatype(int))",
+            "intersection(datatype,datatype(int))",
+        ] {
+            assert!(parse_odl(&source(invalid)).is_err(), "accepted: {invalid}");
+        }
+
+        assert!(
+            parse_odl(
+                r#"object Customer:
+  properties:
+    contact: string min_length 1 range(union(datatype,datatype(int)))
+"#
+            )
+            .is_err()
+        );
+
+        let required = parse_odl(
+            r#"object Customer:
+  properties:
+    contact: string min_cardinality 1 range(union(datatype,datatype(int)))
+"#,
+        );
+        assert!(required.is_err());
     }
 
     #[test]

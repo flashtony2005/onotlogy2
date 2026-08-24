@@ -1,7 +1,8 @@
 //! Parser for composable ODL property-range expressions.
 
-use crate::ir::{PropertyDataRange, PropertyFacet};
+use crate::ir::{PropertyDataRange, PropertyFacet, ScalarType};
 use crate::validation::{property_one_of_json_values, validate_property_constraints};
+use std::str::FromStr;
 
 const MAX_DATA_RANGE_DEPTH: usize = 8;
 const MAX_DATA_RANGE_NODES: usize = 64;
@@ -40,12 +41,40 @@ pub fn validate_data_range(
     ty: crate::ir::ScalarType,
     range: &PropertyDataRange,
 ) -> Result<(), String> {
+    validate_data_range_node(name, ty, range, false)?;
+    let cross = range_has_extra_base(range);
+    if cross && !union_has_leading_branch(range) {
+        return Err(
+            "a cross-datatype union must retain an unqualified branch for the declared property type"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_data_range_node(
+    name: &str,
+    ty: ScalarType,
+    range: &PropertyDataRange,
+    in_union: bool,
+) -> Result<(), String> {
     shape(range)?;
+    let effective_ty = match range {
+        PropertyDataRange::Base(branch_ty) => {
+            if !in_union {
+                return Err(
+                    "`datatype(type)` is only valid as a direct branch of a union".to_owned(),
+                );
+            }
+            *branch_ty
+        }
+        _ => ty,
+    };
     match range {
-        PropertyDataRange::Datatype => Ok(()),
+        PropertyDataRange::Datatype | PropertyDataRange::Base(_) => Ok(()),
         PropertyDataRange::OneOf(values) => {
             let normalized =
-                property_one_of_json_values(ty, &[PropertyFacet::OneOf(values.clone())])?;
+                property_one_of_json_values(effective_ty, &[PropertyFacet::OneOf(values.clone())])?;
             if normalized.is_empty() {
                 return Err("enumeration requires at least one value".to_owned());
             }
@@ -63,15 +92,54 @@ pub fn validate_data_range(
             }) {
                 return Err("restriction accepts only datatype facets, not presence, enumeration, or nested range constructs".to_owned());
             }
-            validate_property_constraints(name, ty, facets)
+            validate_property_constraints(name, effective_ty, facets)
         }
-        PropertyDataRange::Complement(child) => validate_data_range(name, ty, child),
+        PropertyDataRange::Complement(child) => {
+            validate_data_range_node(name, effective_ty, child, false)
+        }
         PropertyDataRange::Union(children) | PropertyDataRange::Intersection(children) => {
+            let nested_in_union = matches!(range, PropertyDataRange::Union(_));
             for child in children {
-                validate_data_range(name, ty, child)?;
+                validate_data_range_node(name, effective_ty, child, nested_in_union)?;
             }
             Ok(())
         }
+    }
+}
+
+/// Whether the expression explicitly adds a scalar type beyond the property's
+/// leading declaration.
+pub fn range_has_extra_base(range: &PropertyDataRange) -> bool {
+    match range {
+        PropertyDataRange::Datatype
+        | PropertyDataRange::OneOf(_)
+        | PropertyDataRange::Restriction(_) => false,
+        PropertyDataRange::Base(_) => true,
+        PropertyDataRange::Complement(child) => range_has_extra_base(child),
+        PropertyDataRange::Union(children) | PropertyDataRange::Intersection(children) => {
+            children.iter().any(range_has_extra_base)
+        }
+    }
+}
+
+/// Require cross-datatype unions to name their leading branch directly.  This
+/// avoids trying to prove satisfiability of arbitrarily intersected ranges.
+fn union_has_leading_branch(range: &PropertyDataRange) -> bool {
+    match range {
+        PropertyDataRange::Union(children) => children.iter().any(|child| {
+            matches!(
+                child,
+                PropertyDataRange::Datatype
+                    | PropertyDataRange::OneOf(_)
+                    | PropertyDataRange::Restriction(_)
+            )
+        }),
+        PropertyDataRange::Base(_)
+        | PropertyDataRange::OneOf(_)
+        | PropertyDataRange::Restriction(_) => false,
+        PropertyDataRange::Datatype => false,
+        PropertyDataRange::Complement(child) => union_has_leading_branch(child),
+        PropertyDataRange::Intersection(children) => children.iter().any(union_has_leading_branch),
     }
 }
 
@@ -163,9 +231,19 @@ impl Parser {
         let range = match word.as_str() {
             "datatype" => {
                 if self.eat_punct('(')? {
+                    let Token::Word(type_name) = self.next()? else {
+                        return Err("expected a datatype name in `datatype(...)`".to_owned());
+                    };
+                    if type_name == "datatype" {
+                        return Err("`datatype` cannot be nested inside `datatype(...)`".to_owned());
+                    }
+                    let base_type = ScalarType::from_str(&type_name)
+                        .map_err(|error| format!("invalid datatype `{type_name}`: {error}"))?;
                     self.expect_punct(')')?;
+                    PropertyDataRange::Base(base_type)
+                } else {
+                    PropertyDataRange::Datatype
                 }
-                PropertyDataRange::Datatype
             }
             "one_of" => PropertyDataRange::OneOf(self.values()?),
             "restriction" => PropertyDataRange::Restriction(self.restriction_facets()?),

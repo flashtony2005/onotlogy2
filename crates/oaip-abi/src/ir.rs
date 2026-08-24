@@ -5,7 +5,7 @@ use std::fmt;
 use std::str::FromStr;
 
 /// 标量类型。V0.1 仅支持基础标量；Relation / Event 类型在 V0.2+。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ScalarType {
     String,
     Int,
@@ -77,13 +77,15 @@ impl fmt::Display for ScalarType {
 
 /// A composable data-range expression attached to a typed ODL property.
 ///
-/// The property declaration supplies the datatype; `restriction` and `datatype`
-/// therefore denote that same base datatype.  This keeps executable rows and
-/// generated storage schemas singly typed while still allowing nested unions
-/// and intersections of facets and enumerations.
+/// The property declaration supplies the leading datatype; unqualified
+/// `datatype` and `restriction` denote that same base datatype.  A union may
+/// additionally contain an explicit `Base` branch, which is the only sanctioned
+/// cross-datatype extension and keeps executable rows within a finite declared
+/// set of scalar types.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PropertyDataRange {
     Datatype,
+    Base(ScalarType),
     OneOf(Vec<String>),
     Restriction(Vec<PropertyFacet>),
     Complement(Box<PropertyDataRange>),
@@ -95,6 +97,7 @@ impl PropertyDataRange {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Datatype => "datatype",
+            Self::Base(_) => "datatype",
             Self::OneOf(_) => "one_of",
             Self::Restriction(_) => "restriction",
             Self::Complement(_) => "complement",
