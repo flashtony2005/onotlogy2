@@ -46,6 +46,45 @@ fn tc001b_parse_invalid() {
 }
 
 #[test]
+fn action_planning_requires_complete_metadata() {
+    let prefix = [
+        "object Customer:",
+        "  properties:",
+        "    name: string",
+        "  actions:",
+        "    ContactCustomer:",
+        "      planning:",
+    ];
+
+    let empty = prefix.join("\n");
+    assert_eq!(parse_odl(&empty).unwrap_err().code, 1011);
+
+    let partial = [prefix.as_slice(), ["        cost: 100"].as_slice()]
+        .concat()
+        .join("\n");
+    assert_eq!(parse_odl(&partial).unwrap_err().code, 1011);
+
+    let complete = [
+        prefix.as_slice(),
+        [
+            "        cost: 100",
+            "        prior_confidence: 0.5",
+            "        outcome_timing: immediate",
+        ]
+        .as_slice(),
+    ]
+    .concat()
+    .join("\n");
+    let ir = parse_odl(&complete).unwrap();
+    let planning = ir.object_types[0].actions[0]
+        .planning
+        .as_ref()
+        .expect("完整声明必须生成 planning 元数据");
+    assert_eq!(planning.cost, 100.0);
+    assert_eq!(planning.prior_confidence, 0.5);
+}
+
+#[test]
 fn tc001c_parse_typed_relations() {
     let odl = [
         "object Customer:",

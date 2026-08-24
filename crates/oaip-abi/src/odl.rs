@@ -131,6 +131,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
         String,
         (ScalarType, PropertyDataRange),
     > = std::collections::BTreeMap::new();
+    let mut planning_fields = [false; 3];
 
     let indent_of = |raw: &str| raw.len() - raw.trim_start().len();
 
@@ -587,6 +588,16 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                 Section::ActionUpdates => flush_update(&mut cur_update, &mut cur_action),
                 Section::ActionCreates => flush_create(&mut cur_create, &mut cur_action),
                 Section::ActionPrecondition => flush_clause(&mut cur_clause, &mut cur_action),
+                Section::ActionPlanning => {
+                    if !planning_fields.iter().all(|seen| *seen) {
+                        return Err(OdlError::new(
+                            E_INVALID_PROPERTY_CONSTRAINT,
+                            "action planning 必须完整声明 cost、prior_confidence 和 outcome_timing",
+                            line_no,
+                            1,
+                        ));
+                    }
+                }
                 Section::Action => flush_action(&mut cur_action, &mut current),
                 Section::Relation => {
                     if let Some(relation) = current_relation.take() {
@@ -687,7 +698,10 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                 (Section::Action, "updates") => section.push((Section::ActionUpdates, indent)),
                 (Section::Action, "creates") => section.push((Section::ActionCreates, indent)),
                 (Section::Action, "policy") => section.push((Section::ActionPolicy, indent)),
-                (Section::Action, "planning") => section.push((Section::ActionPlanning, indent)),
+                (Section::Action, "planning") => {
+                    planning_fields = [false; 3];
+                    section.push((Section::ActionPlanning, indent));
+                }
                 (Section::ActionCreates, "data") => section.push((Section::CreateData, indent)),
                 (Section::ActionPolicy, "precondition") => {
                     section.push((Section::ActionPrecondition, indent))
@@ -900,11 +914,13 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                             }
                             if k == "cost" {
                                 planning.cost = value;
+                                planning_fields[0] = true;
                             } else {
                                 if value > 1.0 {
                                     return Err(invalid("prior_confidence 必须在 [0,1] 内".into()));
                                 }
                                 planning.prior_confidence = value;
+                                planning_fields[1] = true;
                             }
                         }
                         "outcome_timing" => {
@@ -917,6 +933,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                                     ));
                                 }
                             };
+                            planning_fields[2] = true;
                         }
                         _ => return Err(invalid(format!("'{k}' 不是 action planning 属性"))),
                     }
@@ -1128,6 +1145,21 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             E_EMPTY_PROP_NAME,
             format!("无法解析行: {line}"),
             line_no,
+            1,
+        ));
+    }
+
+    if section
+        .last()
+        .expect("section 栈非空：解析入口必压 Object 帧")
+        .0
+        == Section::ActionPlanning
+        && !planning_fields.iter().all(|seen| *seen)
+    {
+        return Err(OdlError::new(
+            E_INVALID_PROPERTY_CONSTRAINT,
+            "action planning 必须完整声明 cost、prior_confidence 和 outcome_timing",
+            src.lines().count() as u32,
             1,
         ));
     }
