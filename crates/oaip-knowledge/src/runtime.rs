@@ -293,6 +293,14 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
             property: edge.clone(),
             class: class(&target_name),
         });
+        if let Some(relation) = cardinalities.get(edge_name.as_str())
+            && !relation.composed_of.is_empty()
+        {
+            ontology.push(Axiom::SubObjectPropertyChainOf {
+                properties: relation.composed_of.iter().map(Term::new).collect(),
+                super_property: edge.clone(),
+            });
+        }
         if let Some(relation) = cardinalities.get(edge_name.as_str()) {
             if let Some(cardinality) = relation.min_cardinality {
                 ontology.push(Axiom::subclass(
@@ -496,6 +504,25 @@ pub fn validate_runtime_ir(ir: &OntologyIR) -> Result<()> {
                         )));
                     }
                 }
+            }
+        }
+    }
+    for relation in &ir.relations {
+        if relation.composed_of.is_empty() {
+            continue;
+        }
+        if relation.composed_of.len() < 2 {
+            return Err(KnowledgeError::Invalid(format!(
+                "relation `{}` must compose at least two object properties",
+                relation.name
+            )));
+        }
+        for property in &relation.composed_of {
+            if !endpoints.contains_key(property.as_str()) {
+                return Err(KnowledgeError::Invalid(format!(
+                    "relation `{}` composes undeclared object property `{property}`",
+                    relation.name
+                )));
             }
         }
     }
@@ -1606,6 +1633,40 @@ equivalent Pet, Companion
         let mut invalid = schema;
         invalid.relations[0].min_cardinality = Some(3);
         invalid.relations[0].max_cardinality = Some(2);
+        assert!(validate_runtime_ir(&invalid).is_err());
+    }
+
+    #[test]
+    fn declared_relation_chains_project_into_the_canonical_tbox() {
+        let mut schema = ir(false);
+        schema.relations = vec![
+            RelationDef {
+                name: "has_parent".to_owned(),
+                source: "Customer".to_owned(),
+                target: "Customer".to_owned(),
+                ..RelationDef::default()
+            },
+            RelationDef {
+                name: "has_grandparent".to_owned(),
+                source: "Customer".to_owned(),
+                target: "Customer".to_owned(),
+                composed_of: vec!["has_parent".to_owned(), "has_parent".to_owned()],
+                ..RelationDef::default()
+            },
+        ];
+        assert!(validate_runtime_ir(&schema).is_ok());
+        let ontology = runtime_ir_to_knowledge(&schema);
+        assert!(
+            ontology
+                .axioms()
+                .contains(&Axiom::SubObjectPropertyChainOf {
+                    properties: vec![Term::new("has_parent"), Term::new("has_parent")],
+                    super_property: Term::new("has_grandparent"),
+                })
+        );
+
+        let mut invalid = schema;
+        invalid.relations[1].composed_of = vec!["missing".to_owned()];
         assert!(validate_runtime_ir(&invalid).is_err());
     }
 

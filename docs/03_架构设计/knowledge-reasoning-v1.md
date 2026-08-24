@@ -50,7 +50,7 @@ Runtime world facts 不是“假装已经改变”的 projection。执行链必�
 data-property domain、range 和 functional axiom；`object X extends Parent` 生成 named-class
 SubClassOf 公理。显式关系和 action `link_edge` 共享同一命名空间，并生成 typed domain/range。
 关系特征按 IR 投影为 transitive、symmetric、functional、inverse-functional、reflexive、
-irreflexive、asymmetric 和 inverse。
+irreflexive、asymmetric、inverse 和 composed-of property chain。
 
 规则：
 
@@ -110,7 +110,7 @@ TBox / property：
 - `SubClassOf`
 - `EquivalentClasses`
 - `DisjointClasses`
-- Object property domain/range/subproperty
+- Object property domain/range/subproperty/property chain
 - Transitive、Symmetric、Functional、InverseFunctional、Reflexive、Irreflexive、Asymmetric
 - Inverse object properties
 - Data property domain/range/subproperty/disjointness
@@ -206,7 +206,33 @@ relation placed:
   `equivalent` named-class 关系识别子类型实例；evolution gate 拒绝违反，diagnosis 以
   `cardinalityViolations` 显式报告。
 
-### 4.7 Composable data ranges
+### 4.7 ODL relation property chains
+
+Executable relation 可以直接声明 OWL 2 property chain，不必手写 proposal JSON：
+
+```odl
+relation has_parent:
+  source: Person
+  target: Person
+
+relation has_grandparent:
+  source: Person
+  target: Person
+  composed_of: has_parent has_parent
+```
+
+`composed_of` 是有序属性序列，投影为
+`SubObjectPropertyChainOf { properties, super_property }`。因此 `has_parent ∘ has_parent`
+的 ABox 蕴含会进入同一 canonical ontology，供 entailment、explanation、诊断和演化影响分析使用。
+
+语义边界：
+
+- 至少两个成员；成员必须是显式 relation 或 action 声明的 object property；
+- 同一属性可重复出现，用于表达传递式的组合；
+- ODL 解析和手工构造 / 反序列化 Runtime IR 的 governance boundary 都会拒绝未声明属性或单元素链；
+- super relation 自身仍必须声明 typed source/target，其 domain/range 和关系特征照常投影。
+
+### 4.8 Composable data ranges
 
 Governed DL proposal 可以使用通用 `DataPropertyDataRange` 表达属性值域：
 
@@ -267,7 +293,7 @@ object Customer:
   使用同一条 nested range 语义；
 - 多个普通 range/restriction 公理仍按交集处理。
 
-### 4.8 Datatype facet matrix
+### 4.9 Datatype facet matrix
 
 | Base datatype | 支持的 facet |
 |---------------|--------------|

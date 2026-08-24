@@ -86,6 +86,58 @@ fn tc001c_parse_typed_relations() {
 }
 
 #[test]
+fn tc001g_parse_relation_property_chains() {
+    let odl = [
+        "object Person:",
+        "  properties:",
+        "    name: string",
+        "relation has_parent:",
+        "  source: Person",
+        "  target: Person",
+        "relation has_grandparent:",
+        "  source: Person",
+        "  target: Person",
+        "  composed_of: has_parent has_parent",
+    ]
+    .join("\n");
+    let ir = parse_odl(&odl).unwrap();
+    assert_eq!(
+        vec!["has_parent", "has_parent"],
+        ir.relations[1].composed_of
+    );
+    assert!(codegen::roundtrip_ok(&ir).unwrap());
+
+    let unknown = [
+        "object Person:",
+        "  properties:",
+        "    name: string",
+        "relation has_grandparent:",
+        "  source: Person",
+        "  target: Person",
+        "  composed_of: has_parent has_parent",
+    ]
+    .join("\n");
+    let error = parse_odl(&unknown).unwrap_err();
+    assert_eq!(1011, error.code);
+    assert_eq!(4, error.line);
+
+    let singleton = [
+        "object Person:",
+        "  properties:",
+        "    name: string",
+        "relation has_parent:",
+        "  source: Person",
+        "  target: Person",
+        "relation has_grandparent:",
+        "  source: Person",
+        "  target: Person",
+        "  composed_of: has_parent",
+    ]
+    .join("\n");
+    assert_eq!(1011, parse_odl(&singleton).unwrap_err().code);
+}
+
+#[test]
 fn tc001f_parse_relation_cardinalities() {
     let odl = [
         "object Customer:",

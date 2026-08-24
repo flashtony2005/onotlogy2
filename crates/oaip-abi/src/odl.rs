@@ -387,6 +387,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                     if k != "source"
                         && k != "target"
                         && k != "inverse_of"
+                        && k != "composed_of"
                         && k != "min_cardinality"
                         && k != "max_cardinality"
                         && !boolean_keys.contains(&k)
@@ -413,6 +414,18 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         "source" => relation.source = v.to_string(),
                         "target" => relation.target = v.to_string(),
                         "inverse_of" => relation.inverse_of = Some(v.to_string()),
+                        "composed_of" => {
+                            relation.composed_of =
+                                v.split_whitespace().map(str::to_string).collect::<Vec<_>>();
+                            if relation.composed_of.len() < 2 {
+                                return Err(OdlError::new(
+                                    E_INVALID_PROPERTY_CONSTRAINT,
+                                    "relation composed_of must contain at least two properties",
+                                    line_no,
+                                    1,
+                                ));
+                            }
+                        }
                         "min_cardinality" | "max_cardinality" => {
                             let value = v.parse::<u32>().map_err(|_| {
                                 OdlError::new(
@@ -716,6 +729,24 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                     continue;
                 }
                 endpoints.insert(edge.clone(), value);
+            }
+        }
+    }
+    for (line_no, relation) in &declared_relations {
+        if relation.composed_of.is_empty() {
+            continue;
+        }
+        for property in &relation.composed_of {
+            if !endpoints.contains_key(property) {
+                return Err(OdlError::new(
+                    E_INVALID_PROPERTY_CONSTRAINT,
+                    format!(
+                        "relation '{}' composes undeclared object property '{property}'",
+                        relation.name
+                    ),
+                    *line_no,
+                    1,
+                ));
             }
         }
     }

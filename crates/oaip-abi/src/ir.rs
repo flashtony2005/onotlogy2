@@ -309,6 +309,9 @@ pub struct RelationDef {
     /// 逆关系的名称；两端点各自声明互逆即可，投影会去重。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inverse_of: Option<String>,
+    /// Ordered object properties whose composition implies this relation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub composed_of: Vec<String>,
     /// Minimum number of outgoing edges required for every source instance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_cardinality: Option<u32>,
