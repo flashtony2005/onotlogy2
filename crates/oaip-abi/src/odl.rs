@@ -28,7 +28,7 @@
 use crate::data_range::parse_data_range;
 use crate::ir::{
     ActionDef, Clause, CompareOp, CreateEffect, FieldUpdate, ObjectType, OntologyIR, ParamDef,
-    PolicyDef, PropertyDef, PropertyFacet, RelationDef, ScalarType, ValueExpr,
+    PolicyDef, PropertyDef, PropertyFacet, RelationDef, RelationHierarchy, ScalarType, ValueExpr,
 };
 use crate::validation::validate_property_constraints;
 use std::str::FromStr;
@@ -102,6 +102,8 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     let mut link_lines: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
     let mut declared_disjoint: Vec<(u32, Vec<String>)> = Vec::new();
     let mut declared_equivalent: Vec<(u32, Vec<String>)> = Vec::new();
+    let mut declared_sub_relations: Vec<(u32, (String, String))> = Vec::new();
+    let mut declared_disjoint_relations: Vec<(u32, Vec<String>)> = Vec::new();
 
     let indent_of = |raw: &str| raw.len() - raw.trim_start().len();
 
@@ -146,6 +148,52 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                 declared_disjoint.push((line_no, group));
             } else {
                 declared_equivalent.push((line_no, group));
+            }
+            section = vec![(Section::Top, 0)];
+            continue 'line;
+        }
+
+        // Relation-property DL 组声明：常见对象属性层级和不相交性无需手写 proposal。
+        for (keyword, is_hierarchy) in [("sub_relation ", true), ("disjoint_relation ", false)] {
+            let Some(rest) = line.strip_prefix(keyword) else {
+                continue;
+            };
+            flush_update(&mut cur_update, &mut cur_action);
+            flush_create(&mut cur_create, &mut cur_action);
+            flush_action(&mut cur_action, &mut current);
+            if let Some(obj) = current.take() {
+                declared.push(obj);
+            }
+            if let Some(relation) = current_relation.take() {
+                declared_relations.push(relation);
+            }
+            let group = rest
+                .trim()
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            if is_hierarchy {
+                if group.len() != 2 {
+                    return Err(OdlError::new(
+                        E_INVALID_PROPERTY_CONSTRAINT,
+                        "sub_relation declaration needs exactly two relations",
+                        line_no,
+                        1,
+                    ));
+                }
+                declared_sub_relations.push((line_no, (group[0].clone(), group[1].clone())));
+            } else {
+                if group.len() < 2 {
+                    return Err(OdlError::new(
+                        E_INVALID_PROPERTY_CONSTRAINT,
+                        "disjoint_relation declaration needs at least two relations",
+                        line_no,
+                        1,
+                    ));
+                }
+                declared_disjoint_relations.push((line_no, group));
             }
             section = vec![(Section::Top, 0)];
             continue 'line;
@@ -710,6 +758,38 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
         }
     }
     ir.relations = declared_relations.iter().map(|(_, r)| r.clone()).collect();
+    ir.relation_hierarchy = declared_sub_relations
+        .iter()
+        .map(|(_, (sub, sup))| RelationHierarchy {
+            sub_relation: sub.clone(),
+            super_relation: sup.clone(),
+        })
+        .collect();
+    ir.disjoint_relation_groups = declared_disjoint_relations
+        .iter()
+        .map(|(_, group)| group.clone())
+        .collect();
+    let relation_names = declared_relations
+        .iter()
+        .map(|(_, relation)| relation.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    if let Err(error) = ir.validate_relation_property_groups(&relation_names) {
+        let line = if error.message.starts_with("disjoint_relation") {
+            declared_disjoint_relations
+                .get(error.index)
+                .map(|(line, _)| *line)
+        } else {
+            declared_sub_relations
+                .get(error.index)
+                .map(|(line, _)| *line)
+        };
+        return Err(OdlError::new(
+            E_INVALID_PROPERTY_CONSTRAINT,
+            error.message,
+            line.unwrap_or(1),
+            1,
+        ));
+    }
     for object in &ir.object_types {
         for action in &object.actions {
             for created in &action.creates {

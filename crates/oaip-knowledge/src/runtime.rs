@@ -277,6 +277,17 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
     for group in &ir.equivalent_groups {
         ontology.push(Axiom::EquivalentClasses(group.iter().map(class).collect()));
     }
+    for hierarchy in &ir.relation_hierarchy {
+        ontology.push(Axiom::SubObjectPropertyOf {
+            sub: Term::new(&hierarchy.sub_relation),
+            sup: Term::new(&hierarchy.super_relation),
+        });
+    }
+    for group in &ir.disjoint_relation_groups {
+        ontology.push(Axiom::DisjointObjectProperties(
+            group.iter().map(Term::new).collect(),
+        ));
+    }
     let cardinalities = ir
         .relations
         .iter()
@@ -462,6 +473,11 @@ pub fn validate_runtime_ir(ir: &OntologyIR) -> Result<()> {
                 relation.name
             )));
         }
+    }
+
+    let relation_names = relation_names.iter().copied().collect();
+    if let Err(error) = ir.validate_relation_property_groups(&relation_names) {
+        return Err(KnowledgeError::Invalid(error.message));
     }
 
     for relation in &ir.relations {
@@ -1039,6 +1055,7 @@ mod tests {
     use super::*;
     use oaip_abi::ir::{
         ActionDef, CreateEffect, ObjectType, PropertyDef, PropertyFacet, RelationDef,
+        RelationHierarchy,
     };
 
     fn ir(actions: bool) -> OntologyIR {
@@ -1046,6 +1063,8 @@ mod tests {
             relations: Vec::new(),
             disjoint_groups: Vec::new(),
             equivalent_groups: Vec::new(),
+            relation_hierarchy: Vec::new(),
+            disjoint_relation_groups: Vec::new(),
             object_types: vec![ObjectType {
                 name: "Customer".to_owned(),
                 extends: Vec::new(),
@@ -1668,6 +1687,87 @@ equivalent Pet, Companion
         let mut invalid = schema;
         invalid.relations[1].composed_of = vec!["missing".to_owned()];
         assert!(validate_runtime_ir(&invalid).is_err());
+    }
+
+    #[test]
+    fn declared_relation_property_groups_reason_and_gate_world_facts() {
+        let relation = |name: &str| RelationDef {
+            name: name.to_owned(),
+            source: "Customer".to_owned(),
+            target: "Customer".to_owned(),
+            ..RelationDef::default()
+        };
+        let mut schema = ir(false);
+        schema.relations = vec![
+            relation("biological_parent"),
+            relation("legal_parent"),
+            relation("parent"),
+        ];
+        schema.relation_hierarchy = vec![RelationHierarchy {
+            sub_relation: "biological_parent".to_owned(),
+            super_relation: "parent".to_owned(),
+        }];
+        schema.disjoint_relation_groups = vec![vec![
+            "biological_parent".to_owned(),
+            "legal_parent".to_owned(),
+        ]];
+
+        assert!(validate_runtime_ir(&schema).is_ok());
+        let ontology = runtime_ir_to_knowledge(&schema);
+        assert!(ontology.axioms().contains(&Axiom::SubObjectPropertyOf {
+            sub: Term::new("biological_parent"),
+            sup: Term::new("parent"),
+        }));
+        assert!(
+            ontology
+                .axioms()
+                .contains(&Axiom::DisjointObjectProperties(vec![
+                    Term::new("biological_parent"),
+                    Term::new("legal_parent"),
+                ]))
+        );
+
+        let objects = [
+            RuntimeObjectFact {
+                id: "person-a".to_owned(),
+                object_type: "Customer".to_owned(),
+                data: serde_json::json!({ "name": "Alice" }),
+            },
+            RuntimeObjectFact {
+                id: "person-b".to_owned(),
+                object_type: "Customer".to_owned(),
+                data: serde_json::json!({ "name": "Bob" }),
+            },
+        ];
+        let biological = RuntimeRelationFact {
+            source: "person-a".to_owned(),
+            relation: "biological_parent".to_owned(),
+            target: "person-b".to_owned(),
+        };
+        let valid_world =
+            runtime_world_to_knowledge(&ontology, &objects, std::slice::from_ref(&biological))
+                .unwrap();
+        let reasoner = Reasoner::new(&valid_world).unwrap();
+        assert!(reasoner.is_consistent().unwrap());
+        assert!(
+            reasoner
+                .entails_object_property(
+                    &Term::new("parent"),
+                    &Term::new("person-a"),
+                    &Term::new("person-b")
+                )
+                .unwrap()
+        );
+
+        let conflicting = [
+            biological,
+            RuntimeRelationFact {
+                source: "person-a".to_owned(),
+                relation: "legal_parent".to_owned(),
+                target: "person-b".to_owned(),
+            },
+        ];
+        assert!(validate_canonical_ontology_with_world(&ontology, &objects, &conflicting).is_err());
     }
 
     #[test]

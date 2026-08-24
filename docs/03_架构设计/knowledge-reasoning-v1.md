@@ -110,7 +110,7 @@ TBox / property：
 - `SubClassOf`
 - `EquivalentClasses`
 - `DisjointClasses`
-- Object property domain/range/subproperty/property chain
+- Object property domain/range/subproperty/property chain/disjointness
 - Transitive、Symmetric、Functional、InverseFunctional、Reflexive、Irreflexive、Asymmetric
 - Inverse object properties
 - Data property domain/range/subproperty/disjointness
@@ -232,7 +232,42 @@ relation has_grandparent:
 - ODL 解析和手工构造 / 反序列化 Runtime IR 的 governance boundary 都会拒绝未声明属性或单元素链；
 - super relation 自身仍必须声明 typed source/target，其 domain/range 和关系特征照常投影。
 
-### 4.8 Composable data ranges
+### 4.8 ODL relation hierarchy and disjointness
+
+Executable relation 可以直接声明对象属性包含和不相交性：
+
+```odl
+relation biological_parent:
+  source: Person
+  target: Person
+
+relation legal_parent:
+  source: Person
+  target: Person
+
+relation parent:
+  source: Person
+  target: Person
+
+sub_relation biological_parent, parent
+disjoint_relation biological_parent, legal_parent
+```
+
+两条顶层声明分别投影为 `SubObjectPropertyOf` 和 `DisjointObjectProperties`。因此
+`biological_parent(a,b)` 会蕴含 `parent(a,b)`；同一 individual pair 同时出现
+`biological_parent` 和 `legal_parent` 时会进入 mature-reasoner 一致性失败，并被
+live-world evolution gate 拒绝。
+
+语义边界：
+
+- `sub_relation` 恰好接受两个已声明显式 relation，且子关系不能等于父关系；
+- `disjoint_relation` 至少接受两个已声明显式 relation，组内不重复、同一语义组不可重复声明；
+- 层级允许跨不同 typed endpoints，由此引发的 domain/range 冲突由 canonical ontology 的
+  consistency gate fail-closed，而不是在语言层静默丢弃；
+- 手工构造或反序列化 Runtime IR 必须通过同一 validation boundary；
+- 新 axiom 参与 entailment、explanation、OWL Functional Syntax 往返和演化影响分析。
+
+### 4.9 Composable data ranges
 
 Governed DL proposal 可以使用通用 `DataPropertyDataRange` 表达属性值域：
 
@@ -293,7 +328,7 @@ object Customer:
   使用同一条 nested range 语义；
 - 多个普通 range/restriction 公理仍按交集处理。
 
-### 4.9 Datatype facet matrix
+### 4.10 Datatype facet matrix
 
 | Base datatype | 支持的 facet |
 |---------------|--------------|

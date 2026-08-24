@@ -73,6 +73,7 @@ impl TBox {
                 Axiom::ObjectPropertyRange { property, class } => {
                     tbox.ranges.push((property.clone(), class.clone(), index))
                 }
+                Axiom::DisjointObjectProperties(_) => {}
                 Axiom::SubObjectPropertyOf { sub, sup } => {
                     tbox.property_edges
                         .entry(sub.clone())

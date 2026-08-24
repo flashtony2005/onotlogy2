@@ -2,7 +2,7 @@
 //! 一条用例定义一个能力的边界（Red→Green）。
 
 use openaip_os::abi::codegen;
-use openaip_os::abi::ir::{OntologyIR, PropertyDef, ScalarType};
+use openaip_os::abi::ir::{OntologyIR, PropertyDef, RelationHierarchy, ScalarType};
 use openaip_os::abi::odl::parse_odl;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine, ObjectRecord, StorageError};
 use openaip_os::trace::{TraceEvent, TraceKind};
@@ -132,6 +132,66 @@ fn tc001g_parse_relation_property_chains() {
         "  source: Person",
         "  target: Person",
         "  composed_of: has_parent",
+    ]
+    .join("\n");
+    assert_eq!(1011, parse_odl(&singleton).unwrap_err().code);
+}
+
+#[test]
+fn tc001h_parse_relation_hierarchy_and_disjointness() {
+    let odl = [
+        "object Person:",
+        "  properties:",
+        "    name: string",
+        "relation biological_parent:",
+        "  source: Person",
+        "  target: Person",
+        "relation parent:",
+        "  source: Person",
+        "  target: Person",
+        "relation legal_parent:",
+        "  source: Person",
+        "  target: Person",
+        "sub_relation biological_parent, parent",
+        "disjoint_relation biological_parent, legal_parent",
+    ]
+    .join("\n");
+    let ir = parse_odl(&odl).unwrap();
+    assert_eq!(
+        vec![RelationHierarchy {
+            sub_relation: "biological_parent".into(),
+            super_relation: "parent".into(),
+        }],
+        ir.relation_hierarchy
+    );
+    assert_eq!(
+        vec![vec!["biological_parent", "legal_parent"]],
+        ir.disjoint_relation_groups
+    );
+    assert!(codegen::roundtrip_ok(&ir).unwrap());
+
+    let unknown = [
+        "object Person:",
+        "  properties:",
+        "    name: string",
+        "relation parent:",
+        "  source: Person",
+        "  target: Person",
+        "sub_relation biological_parent, parent",
+    ]
+    .join("\n");
+    let error = parse_odl(&unknown).unwrap_err();
+    assert_eq!(1011, error.code);
+    assert_eq!(7, error.line);
+
+    let singleton = [
+        "object Person:",
+        "  properties:",
+        "    name: string",
+        "relation parent:",
+        "  source: Person",
+        "  target: Person",
+        "disjoint_relation parent",
     ]
     .join("\n");
     assert_eq!(1011, parse_odl(&singleton).unwrap_err().code);

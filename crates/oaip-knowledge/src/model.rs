@@ -421,6 +421,7 @@ pub enum Axiom {
         sub: Term,
         sup: Term,
     },
+    DisjointObjectProperties(Vec<Term>),
     /// OWL 2 property chain inclusion: `p1 ∘ p2 ⊑ super`.
     SubObjectPropertyChainOf {
         properties: Vec<Term>,

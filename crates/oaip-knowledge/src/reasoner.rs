@@ -18,13 +18,13 @@ use chrono::{DateTime, Utc};
 use horned_owl::model::{
     ArcStr, AsymmetricObjectProperty, Build, ClassAssertion, ClassExpression as OwlClassExpression,
     DataProperty, DataPropertyAssertion, DataPropertyDomain, DataPropertyRange, DataRange,
-    Datatype as OwlDatatype, DifferentIndividuals, DisjointClasses, EquivalentClasses,
-    FacetRestriction as OwlFacetRestriction, FunctionalDataProperty, FunctionalObjectProperty,
-    InverseFunctionalObjectProperty, InverseObjectProperties, IrreflexiveObjectProperty,
-    Literal as OwlLiteral, MutableOntology, NamedIndividual, NegativeObjectPropertyAssertion,
-    ObjectProperty, ObjectPropertyAssertion, ObjectPropertyDomain, ObjectPropertyExpression,
-    ObjectPropertyRange, ReflexiveObjectProperty, SameIndividual, SubClassOf,
-    SubObjectPropertyExpression, SubObjectPropertyOf, SymmetricObjectProperty,
+    Datatype as OwlDatatype, DifferentIndividuals, DisjointClasses, DisjointObjectProperties,
+    EquivalentClasses, FacetRestriction as OwlFacetRestriction, FunctionalDataProperty,
+    FunctionalObjectProperty, InverseFunctionalObjectProperty, InverseObjectProperties,
+    IrreflexiveObjectProperty, Literal as OwlLiteral, MutableOntology, NamedIndividual,
+    NegativeObjectPropertyAssertion, ObjectProperty, ObjectPropertyAssertion, ObjectPropertyDomain,
+    ObjectPropertyExpression, ObjectPropertyRange, ReflexiveObjectProperty, SameIndividual,
+    SubClassOf, SubObjectPropertyExpression, SubObjectPropertyOf, SymmetricObjectProperty,
     TransitiveObjectProperty,
 };
 use horned_owl::ontology::set::SetOntology;
@@ -680,6 +680,22 @@ pub(crate) fn to_horned_owl(ontology: &Ontology) -> Result<SetOntology<ArcStr>> 
                     property_expression(&build, sub),
                 );
                 out.insert(SubObjectPropertyOf { sup, sub });
+            }
+            Axiom::DisjointObjectProperties(properties) if properties.len() >= 2 => {
+                for property in properties {
+                    declare_property(&build, &mut out, property);
+                }
+                out.insert(DisjointObjectProperties(
+                    properties
+                        .iter()
+                        .map(|property| property_expression(&build, property))
+                        .collect(),
+                ));
+            }
+            Axiom::DisjointObjectProperties(_) => {
+                return Err(KnowledgeError::Invalid(
+                    "object property disjointness needs at least two properties".to_owned(),
+                ));
             }
             Axiom::SubObjectPropertyChainOf {
                 properties,

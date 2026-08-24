@@ -349,6 +349,13 @@ impl RelationDef {
     }
 }
 
+/// A declared object-property inclusion between two executable relations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelationHierarchy {
+    pub sub_relation: String,
+    pub super_relation: String,
+}
+
 /// 整份 ODL 解析出的 IR。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct OntologyIR {
@@ -362,6 +369,12 @@ pub struct OntologyIR {
     /// Named-class equivalence axioms declared directly in executable ODL.
     #[serde(default)]
     pub equivalent_groups: Vec<Vec<String>>,
+    /// Object-property inclusions declared directly between executable relations.
+    #[serde(default)]
+    pub relation_hierarchy: Vec<RelationHierarchy>,
+    /// Named relation disjointness groups declared directly in executable ODL.
+    #[serde(default)]
+    pub disjoint_relation_groups: Vec<Vec<String>>,
 }
 
 impl OntologyIR {
@@ -389,6 +402,101 @@ impl OntologyIR {
             .collect::<std::collections::BTreeSet<_>>();
         Self::validate_class_group("disjoint", &self.disjoint_groups, &names)?;
         Self::validate_class_group("equivalent", &self.equivalent_groups, &names)?;
+        Ok(())
+    }
+
+    /// Validate relation hierarchy and disjointness at both language and
+    /// governance boundaries so hand-built serialized IR cannot bypass ODL rules.
+    pub fn validate_relation_property_groups(
+        &self,
+        relation_names: &std::collections::BTreeSet<&str>,
+    ) -> Result<(), RelationPropertyGroupError> {
+        let mut seen_edges = std::collections::BTreeSet::new();
+        for (index, edge) in self.relation_hierarchy.iter().enumerate() {
+            if edge.sub_relation.trim().is_empty() || edge.super_relation.trim().is_empty() {
+                return Err(RelationPropertyGroupError {
+                    index,
+                    message: "relation hierarchy contains an empty property name".to_owned(),
+                });
+            }
+            if !relation_names.contains(edge.sub_relation.as_str())
+                || !relation_names.contains(edge.super_relation.as_str())
+            {
+                return Err(RelationPropertyGroupError {
+                    index,
+                    message: format!(
+                        "relation hierarchy references undeclared relation '{} -> {}'",
+                        edge.sub_relation, edge.super_relation
+                    ),
+                });
+            }
+            if edge.sub_relation == edge.super_relation {
+                return Err(RelationPropertyGroupError {
+                    index,
+                    message: format!(
+                        "relation '{}' cannot be its own sub-relation",
+                        edge.sub_relation
+                    ),
+                });
+            }
+            if !seen_edges.insert((edge.sub_relation.as_str(), edge.super_relation.as_str())) {
+                return Err(RelationPropertyGroupError {
+                    index,
+                    message: format!(
+                        "duplicate relation hierarchy '{} -> {}'",
+                        edge.sub_relation, edge.super_relation
+                    ),
+                });
+            }
+        }
+
+        Self::validate_disjoint_relation_group(&self.disjoint_relation_groups, relation_names)
+    }
+
+    fn validate_disjoint_relation_group(
+        groups: &[Vec<String>],
+        relation_names: &std::collections::BTreeSet<&str>,
+    ) -> Result<(), RelationPropertyGroupError> {
+        let mut seen_groups = std::collections::BTreeSet::new();
+        for (index, group) in groups.iter().enumerate() {
+            if group.len() < 2 {
+                return Err(RelationPropertyGroupError {
+                    index,
+                    message: "disjoint_relation group must contain at least two relations"
+                        .to_owned(),
+                });
+            }
+            let mut members = std::collections::BTreeSet::new();
+            for name in group {
+                if name.trim().is_empty() {
+                    return Err(RelationPropertyGroupError {
+                        index,
+                        message: "disjoint_relation group contains an empty relation name"
+                            .to_owned(),
+                    });
+                }
+                if !relation_names.contains(name.as_str()) {
+                    return Err(RelationPropertyGroupError {
+                        index,
+                        message: format!(
+                            "disjoint_relation group references undeclared relation '{name}'"
+                        ),
+                    });
+                }
+                if !members.insert(name.as_str()) {
+                    return Err(RelationPropertyGroupError {
+                        index,
+                        message: format!("disjoint_relation group repeats relation '{name}'"),
+                    });
+                }
+            }
+            if !seen_groups.insert(members) {
+                return Err(RelationPropertyGroupError {
+                    index,
+                    message: "duplicate disjoint_relation group".to_owned(),
+                });
+            }
+        }
         Ok(())
     }
 
@@ -509,6 +617,13 @@ impl OntologyIR {
 pub struct ClassGroupError {
     pub index: usize,
     pub kind: &'static str,
+    pub message: String,
+}
+
+/// An invalid relation property hierarchy/group, identified by declaration order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelationPropertyGroupError {
+    pub index: usize,
     pub message: String,
 }
 

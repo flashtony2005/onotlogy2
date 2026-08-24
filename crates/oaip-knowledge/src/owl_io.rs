@@ -389,6 +389,13 @@ fn axiom(component: &OwlComponent) -> Result<Option<Axiom>> {
                 }
             }
         },
+        Component::DisjointObjectProperties(properties) => Axiom::DisjointObjectProperties(
+            properties
+                .0
+                .iter()
+                .map(object_property)
+                .collect::<Result<_>>()?,
+        ),
         Component::TransitiveObjectProperty(property) => {
             Axiom::TransitiveObjectProperty(object_property(&property.0)?)
         }
@@ -521,6 +528,10 @@ mod tests {
                 ],
                 super_property: Term::new("http://example.com/owl#supervises"),
             })
+            .with_axiom(Axiom::DisjointObjectProperties(vec![
+                Term::new("http://example.com/owl#internal"),
+                Term::new("http://example.com/owl#external"),
+            ]))
             .with_axiom(Axiom::DataPropertyRangeRestriction {
                 property: Term::new("http://example.com/owl#age"),
                 datatype: Datatype::Integer,
