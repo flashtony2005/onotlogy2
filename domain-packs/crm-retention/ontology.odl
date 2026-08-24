@@ -144,6 +144,10 @@ object Approval:
     subject: string
     status: string
     amount: float
+    decision: string
+    requested_by: string
+    approved_by: string
+    reason: string
 
 object BusinessGoal:
   properties:
@@ -199,6 +203,10 @@ relation targets:
 relation decided_from:
   source: Decision
   target: Opportunity
+
+relation requires_approval:
+  source: Decision
+  target: Approval
 
 relation produced_outcome:
   source: Decision

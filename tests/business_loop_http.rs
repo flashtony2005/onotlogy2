@@ -9,9 +9,9 @@ mod common;
 use openaip_os::abi::ir::ActorKind;
 use openaip_os::abi::odl::parse_odl;
 use openaip_os::business_loop::{
-    DecisionOptions, decide_opportunity, discover_opportunities, execute_opportunity,
-    plan_opportunity_paths, recommend_next_actions, run_next_best_action, settle_follow_up,
-    start_follow_up,
+    DecisionOptions, decide_business_approval, decide_opportunity, discover_opportunities,
+    execute_opportunity, plan_opportunity_paths, recommend_next_actions, run_next_best_action,
+    settle_follow_up, start_follow_up,
 };
 use openaip_os::storage::{LibSQLStorage, ObjectEngine};
 use serde_json::{Value, json};
@@ -1471,4 +1471,112 @@ async fn explicit_decision_validates_and_executes_declared_action_params() {
         .expect("应能查询客户")
         .expect("客户应存在");
     assert_eq!(customer.data["balance"], json!(250));
+}
+
+#[tokio::test]
+async fn require_approval_action_waits_for_separate_human_evidence() {
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let ontology = std::fs::read_to_string("domain-packs/crm-retention/ontology.odl")
+        .expect("业务包 ODL 应存在");
+    seed_odl_project(
+        &storage,
+        "approved-refund",
+        &ontology,
+        "monthly_reactivations",
+    )
+    .await;
+    let discovered = discover_opportunities(&storage, "approved-refund")
+        .await
+        .expect("应能发现机会");
+    let opportunity_id = discovered[0]["id"].as_str().expect("机会必须有 ID");
+    let decision = decide_opportunity(
+        &storage,
+        "approved-refund",
+        opportunity_id,
+        "contract-test",
+        DecisionOptions {
+            action: Some("refund"),
+            reason: None,
+            alternatives: None,
+            params: Some(json!({"amount": 250})),
+        },
+    )
+    .await
+    .expect("通过前置条件的审批动作应能创建待审决策");
+    assert_eq!(decision["data"]["status"], json!("PendingApproval"));
+    assert_eq!(decision["approval"]["data"]["status"], json!("Pending"));
+
+    let early_execute = execute_opportunity(&storage, "approved-refund", opportunity_id)
+        .await
+        .expect_err("未批准动作不能执行");
+    assert!(early_execute.to_string().contains("机会缺少 Selected 决策"));
+
+    let self_error = decide_business_approval(
+        &storage,
+        decision["id"].as_str().expect("决策必须有 ID"),
+        true,
+        "contract-test",
+        Some("自批"),
+    )
+    .await
+    .expect_err("审批人不能与决策人相同");
+
+    assert!(self_error.to_string().contains("审批人不能与决策人相同"));
+
+    let decision_id = decision["id"].as_str().expect("决策必须有 ID").to_owned();
+    let reviewed = decide_business_approval(
+        &storage,
+        &decision_id,
+        true,
+        "human-reviewer",
+        Some("金额在授权范围内"),
+    )
+    .await
+    .expect("独立审批人应能放行");
+    assert_eq!(reviewed["approval"]["data"]["status"], json!("Approved"));
+    assert_eq!(reviewed["decision"]["data"]["status"], json!("Selected"));
+    let execution = execute_opportunity(&storage, "approved-refund", opportunity_id)
+        .await
+        .expect("Approved 审批后应能执行");
+    assert_eq!(execution["businessResult"]["data"]["success"], json!(true));
+
+    seed_odl_project(
+        &storage,
+        "rejected-refund",
+        &ontology,
+        "monthly_reactivations",
+    )
+    .await;
+    let discovered = discover_opportunities(&storage, "rejected-refund")
+        .await
+        .expect("拒绝项目应能发现机会");
+    let opportunity_id = discovered[0]["id"].as_str().expect("机会必须有 ID");
+    let decision = decide_opportunity(
+        &storage,
+        "rejected-refund",
+        opportunity_id,
+        "contract-test",
+        DecisionOptions {
+            action: Some("refund"),
+            reason: None,
+            alternatives: None,
+            params: Some(json!({"amount": 100})),
+        },
+    )
+    .await
+    .expect("应能创建第二个待审决策");
+    let reviewed = decide_business_approval(
+        &storage,
+        decision["id"].as_str().expect("决策必须有 ID"),
+        false,
+        "human-reviewer",
+        Some("证据不足"),
+    )
+    .await
+    .expect("独立审批人应能拒绝");
+    assert_eq!(reviewed["approval"]["data"]["status"], json!("Rejected"));
+    assert_eq!(reviewed["decision"]["data"]["status"], json!("Rejected"));
+    assert_eq!(reviewed["opportunity"]["data"]["status"], json!("Open"));
 }

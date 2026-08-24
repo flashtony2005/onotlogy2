@@ -17,7 +17,12 @@ const OPPORTUNITY_OPEN: &str = "Open";
 const OPPORTUNITY_DECIDED: &str = "Decided";
 const OPPORTUNITY_EXECUTED: &str = "Executed";
 const DECISION_SELECTED: &str = "Selected";
+const DECISION_PENDING_APPROVAL: &str = "PendingApproval";
+const DECISION_REJECTED: &str = "Rejected";
 const DECISION_EXECUTED: &str = "Executed";
+const APPROVAL_PENDING: &str = "Pending";
+const APPROVAL_APPROVED: &str = "Approved";
+const APPROVAL_REJECTED: &str = "Rejected";
 const OUTCOME_ACTION_EXECUTED: &str = "ActionExecuted";
 const OUTCOME_BUSINESS_RESULT: &str = "BusinessResult";
 const TASK_PENDING: &str = "Pending";
@@ -222,12 +227,12 @@ fn action_available(action: &ActionDef, subject: &Value) -> Result<bool, Busines
     Ok(action.params.is_empty() && action_executable(action, subject, &json!({}))?)
 }
 
-fn action_executable(
+fn action_admissible(
     action: &ActionDef,
     subject: &Value,
     params: &Value,
 ) -> Result<bool, BusinessLoopError> {
-    if action.planning.is_none() || action.policy.require_approval {
+    if action.planning.is_none() {
         return Ok(false);
     }
     for clause in &action.policy.precondition {
@@ -246,6 +251,14 @@ fn action_executable(
         }
     }
     Ok(true)
+}
+
+fn action_executable(
+    action: &ActionDef,
+    subject: &Value,
+    params: &Value,
+) -> Result<bool, BusinessLoopError> {
+    Ok(!action.policy.require_approval && action_admissible(action, subject, params)?)
 }
 
 fn validate_action_params(
@@ -1330,11 +1343,12 @@ pub async fn decide_opportunity(
     let params = validate_action_params(definition, options.params.as_ref())?;
     let params_value: Value = serde_json::from_str(&params)
         .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
-    if !action_executable(definition, &subject_record.data, &params_value)? {
+    if !action_admissible(definition, &subject_record.data, &params_value)? {
         return Err(BusinessLoopError::invalid(format!(
             "业务动作 {action} 当前不可用"
         )));
     }
+    let requires_approval = definition.policy.require_approval;
 
     let decision_id = generated_id("decision");
     let alternatives = options
@@ -1351,7 +1365,11 @@ pub async fn decide_opportunity(
         "alternatives": alternatives.unwrap_or_else(|| json!([]).to_string()),
         "params": params,
         "decided_by": decided_by,
-        "status": DECISION_SELECTED
+        "status": if requires_approval {
+            DECISION_PENDING_APPROVAL
+        } else {
+            DECISION_SELECTED
+        },
     });
     validate_data(&ontology, "Decision", &decision_data)?;
     create_world_object(
@@ -1378,11 +1396,164 @@ pub async fn decide_opportunity(
         })
         .await?;
 
+    let mut approval: Option<Value> = None;
+    if requires_approval {
+        let approval_id = generated_id("approval");
+        let mut approval_data = serde_json::Map::from_iter([
+            ("subject".to_owned(), json!(opportunity.id)),
+            ("status".to_owned(), json!(APPROVAL_PENDING)),
+            ("decision".to_owned(), json!(decision_id)),
+            ("requested_by".to_owned(), json!(decided_by)),
+            ("approved_by".to_owned(), json!("")),
+            ("reason".to_owned(), json!("")),
+        ]);
+        if let Some(amount) = params_value.get("amount") {
+            approval_data.insert("amount".to_owned(), amount.clone());
+        }
+        let approval_data = Value::Object(approval_data);
+        validate_data(&ontology, "Approval", &approval_data)?;
+        create_world_object(
+            storage,
+            project_id,
+            "Approval",
+            approval_id.clone(),
+            approval_data.clone(),
+        )
+        .await?;
+        link_world(
+            storage,
+            project_id,
+            decision_id.clone(),
+            "requires_approval",
+            approval_id.clone(),
+        )
+        .await?;
+        approval = Some(json!({
+            "id": approval_id,
+            "type": "Approval",
+            "data": approval_data
+        }));
+    }
+
     Ok(json!({
         "id": decision_id,
         "type": "Decision",
-        "data": decision_data
+        "data": decision_data,
+        "approval": approval
     }))
+}
+
+/// 显式裁决 Pending Approval；批准后才允许执行原 Decision。
+pub async fn decide_business_approval(
+    storage: &LibSQLStorage,
+    decision_id: &str,
+    approved: bool,
+    approver: &str,
+    reason: Option<&str>,
+) -> Result<Value, BusinessLoopError> {
+    for project_id in storage.list_projects().await? {
+        let project_id = project_id.id;
+        let decisions = storage
+            .list_objects_for_project(&project_id, "Decision")
+            .await?;
+        let Some(decision) = find_record(&decisions, decision_id, "Decision") else {
+            continue;
+        };
+        if text(&decision.data, "status")? != DECISION_PENDING_APPROVAL {
+            return Err(BusinessLoopError::invalid(
+                "只有 PendingApproval 决策可以审批",
+            ));
+        }
+        let requested_by = text(&decision.data, "decided_by")?;
+        if approver == requested_by {
+            return Err(BusinessLoopError::invalid("审批人不能与决策人相同"));
+        }
+
+        let (_, ontology) = project_ontology(storage, &project_id).await?;
+        let relations = storage.list_all_relations().await?;
+        let approval_id = relations
+            .iter()
+            .find(|relation| {
+                relation.relation == "requires_approval" && relation.source == decision_id
+            })
+            .map(|relation| relation.target.clone())
+            .ok_or_else(|| BusinessLoopError::invalid("决策缺少 Approval 证据对象"))?;
+        let approvals = storage
+            .list_objects_for_project(&project_id, "Approval")
+            .await?;
+        let approval = find_record(&approvals, &approval_id, "Approval")
+            .ok_or_else(|| BusinessLoopError::NotFound(approval_id.clone()))?;
+        if text(&approval.data, "status")? != APPROVAL_PENDING {
+            return Err(BusinessLoopError::invalid(
+                "只有 Pending 状态的审批可以裁决",
+            ));
+        }
+
+        let approval_status = if approved {
+            APPROVAL_APPROVED
+        } else {
+            APPROVAL_REJECTED
+        };
+        let mut approval_data = approval.data.clone();
+        if let Some(object) = approval_data.as_object_mut() {
+            object.insert("status".into(), json!(approval_status));
+            object.insert("approved_by".into(), json!(approver));
+            object.insert("reason".into(), json!(reason.unwrap_or("")));
+        }
+        validate_data(&ontology, "Approval", &approval_data)?;
+        storage
+            .apply_world(WorldCommand::UpdateObject {
+                id: approval_id.clone(),
+                data: approval_data.clone(),
+                project_id: Some(project_id.clone()),
+            })
+            .await?;
+
+        let decision_status = if approved {
+            DECISION_SELECTED
+        } else {
+            DECISION_REJECTED
+        };
+        let mut decision_data = decision.data.clone();
+        decision_data = set_status(decision_data, decision_status);
+        validate_data(&ontology, "Decision", &decision_data)?;
+        storage
+            .apply_world(WorldCommand::UpdateObject {
+                id: decision_id.to_string(),
+                data: decision_data.clone(),
+                project_id: Some(project_id.clone()),
+            })
+            .await?;
+
+        let opportunity_id = text(&decision.data, "opportunity")?.to_string();
+        let opportunities = storage
+            .list_objects_for_project(&project_id, "Opportunity")
+            .await?;
+        let opportunity = find_record(&opportunities, &opportunity_id, "Opportunity")
+            .ok_or_else(|| BusinessLoopError::NotFound(opportunity_id.clone()))?;
+        let opportunity_status = if approved {
+            OPPORTUNITY_DECIDED
+        } else {
+            OPPORTUNITY_OPEN
+        };
+        let opportunity_data = set_status(opportunity.data.clone(), opportunity_status);
+        validate_data(&ontology, "Opportunity", &opportunity_data)?;
+        storage
+            .apply_world(WorldCommand::UpdateObject {
+                id: opportunity_id.clone(),
+                data: opportunity_data.clone(),
+                project_id: Some(project_id.clone()),
+            })
+            .await?;
+
+        return Ok(json!({
+            "project_id": project_id,
+            "decision": { "id": decision_id, "data": decision_data },
+            "approval": { "id": approval_id, "data": approval_data },
+            "opportunity": { "id": opportunity_id, "data": opportunity_data },
+        }));
+    }
+    Err(BusinessLoopError::NotFound(decision_id.to_string()))
 }
 
 /// 执行已选动作，记录 Outcome 与 StateTransition，并推进 Opportunity/Decision 状态。
@@ -1428,6 +1599,26 @@ pub async fn execute_opportunity(
         .list_objects_for_project(project_id, "Outcome")
         .await?;
     validate_metric_budget(&definition, metric_budget_remaining(rule, &outcomes))?;
+    if definition.policy.require_approval {
+        let relations = storage.list_all_relations().await?;
+        let approval_id = relations
+            .iter()
+            .find(|relation| {
+                relation.relation == "requires_approval" && relation.source == decision.id
+            })
+            .map(|relation| relation.target.clone())
+            .ok_or_else(|| BusinessLoopError::invalid("业务动作缺少 Approval 证据对象"))?;
+        let approvals = storage
+            .list_objects_for_project(project_id, "Approval")
+            .await?;
+        let approval = find_record(&approvals, &approval_id, "Approval")
+            .ok_or_else(|| BusinessLoopError::invalid("业务动作缺少 Approval 证据对象"))?;
+        if text(&approval.data, "status")? != APPROVAL_APPROVED {
+            return Err(BusinessLoopError::invalid(
+                "业务动作必须先获得 Approved 审批",
+            ));
+        }
+    }
 
     let subject = text(&opportunity.data, "subject")?.to_string();
     let subjects = storage
@@ -1439,7 +1630,7 @@ pub async fn execute_opportunity(
     let params_value = serde_json::from_str::<Value>(text(&decision.data, "params")?)
         .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
     validate_action_params(&definition, Some(&params_value))?;
-    if !action_executable(&definition, &before_record.data, &params_value)? {
+    if !action_admissible(&definition, &before_record.data, &params_value)? {
         return Err(BusinessLoopError::invalid(format!(
             "业务动作 {action} 当前不可用"
         )));

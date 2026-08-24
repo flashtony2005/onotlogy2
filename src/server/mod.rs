@@ -416,6 +416,10 @@ fn router() -> Router<Arc<AppState>> {
             post(business_loop::execute),
         )
         .route(
+            "/api/v1/business/decisions/:id/approval",
+            post(business_loop::approve_decision),
+        )
+        .route(
             "/api/v1/business/follow-ups/:id/start",
             post(business_loop::start_follow_up_object),
         )

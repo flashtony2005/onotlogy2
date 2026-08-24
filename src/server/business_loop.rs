@@ -2,9 +2,9 @@
 
 use crate::auth::AuthUser;
 use crate::business_loop::{
-    BusinessLoopError, decide_opportunity, discover_opportunities, execute_opportunity, goal_gaps,
-    plan_opportunity_paths, recommend_next_actions, run_next_best_action, settle_follow_up,
-    start_follow_up,
+    BusinessLoopError, decide_business_approval, decide_opportunity, discover_opportunities,
+    execute_opportunity, goal_gaps, plan_opportunity_paths, recommend_next_actions,
+    run_next_best_action, settle_follow_up, start_follow_up,
 };
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -34,6 +34,13 @@ pub(crate) struct DecideBody {
     pub action: Option<String>,
     pub reason: Option<String>,
     pub params: Option<Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ApprovalDecisionBody {
+    pub approved: bool,
+    pub reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -273,4 +280,27 @@ pub(crate) async fn settle_follow_up_object(
         }
     }
     error_response(BusinessLoopError::NotFound(id))
+}
+
+pub(crate) async fn approve_decision(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(id): Path<String>,
+    Json(body): Json<ApprovalDecisionBody>,
+) -> Response {
+    if let Some(response) = write_denied(&user) {
+        return response;
+    }
+    match decide_business_approval(
+        &st.storage,
+        &id,
+        body.approved,
+        &user.username,
+        body.reason.as_deref(),
+    )
+    .await
+    {
+        Ok(result) => ApiResponse::ok(result).into_response(),
+        Err(error) => error_response(error),
+    }
 }
