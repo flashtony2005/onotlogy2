@@ -26,12 +26,13 @@
 //! Event 顶层语法暂未开放；action 内的 effects 已是声明式表达。
 
 use crate::data_range::parse_data_range;
+use crate::data_range::validate_data_range;
 use crate::ir::{
     ActionDef, Clause, CompareOp, CreateEffect, DataLiteral, DataPropertyHierarchy,
     DataPropertyRestriction, DataRestrictionKind, DisjointUnionGroup, FieldUpdate,
     ObjectOneOfGroup, ObjectPropertyRestriction, ObjectRestrictionKind, ObjectType, OntologyIR,
-    ParamDef, PolicyDef, PropertyDef, PropertyFacet, RelationDef, RelationHierarchy, ScalarType,
-    ValueExpr,
+    ParamDef, PolicyDef, PropertyDataRange, PropertyDef, PropertyFacet, RelationDef,
+    RelationHierarchy, ScalarType, ValueExpr,
 };
 use crate::validation::validate_property_constraints;
 use std::str::FromStr;
@@ -75,6 +76,7 @@ const E_INVALID_DISJOINT_UNION: u32 = 1014; // disjoint_union 类定义无效
 const E_INVALID_OBJECT_RESTRICTION: u32 = 1015; // 对象属性限制引用无效
 const E_INVALID_DATA_RESTRICTION: u32 = 1016; // 数据属性限制引用无效或类型不匹配
 const E_INVALID_OBJECT_ONE_OF: u32 = 1017; // one_of 类个体枚举定义无效
+const E_INVALID_DATATYPE: u32 = 1018; // 自定义 datatype 定义无效或重复
 
 /// 解析上下文中的块（基于缩进的简易状态机）。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -121,6 +123,10 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     let mut declared_sub_data_properties: Vec<(u32, (String, String))> = Vec::new();
     let mut declared_disjoint_data_properties: Vec<(u32, Vec<String>)> = Vec::new();
     let mut declared_equivalent_data_properties: Vec<(u32, Vec<String>)> = Vec::new();
+    let mut declared_datatypes: std::collections::BTreeMap<
+        String,
+        (ScalarType, PropertyDataRange),
+    > = std::collections::BTreeMap::new();
 
     let indent_of = |raw: &str| raw.len() - raw.trim_start().len();
 
@@ -131,6 +137,52 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             continue;
         }
         let indent = indent_of(raw);
+
+        // Named datatype definition.  The executable IR intentionally stores the
+        // expanded base type/range; governance and reasoning therefore see the
+        // same closed semantics whether input came from ODL or proposal JSON.
+        if let Some(rest) = line.strip_prefix("datatype ") {
+            flush_update(&mut cur_update, &mut cur_action);
+            flush_create(&mut cur_create, &mut cur_action);
+            flush_action(&mut cur_action, &mut current);
+            if let Some(obj) = current.take() {
+                declared.push(obj);
+            }
+            if let Some(relation) = current_relation.take() {
+                declared_relations.push(relation);
+            }
+
+            let invalid = |message: String| OdlError::new(E_INVALID_DATATYPE, message, line_no, 1);
+            let (name, definition) = rest.split_once('=').ok_or_else(|| {
+                invalid("datatype declaration needs `Name = base range-expression`".to_owned())
+            })?;
+            let name = name.trim();
+            if name.is_empty()
+                || name.contains(char::is_whitespace)
+                || ScalarType::from_str(name).is_ok()
+            {
+                return Err(invalid(
+                    "datatype name must be a non-empty identifier distinct from base scalar types"
+                        .to_owned(),
+                ));
+            }
+            if declared_datatypes.contains_key(name) {
+                return Err(invalid(format!("duplicate datatype definition `{name}`")));
+            }
+
+            let definition = definition.trim();
+            let Some((base, range_source)) = definition.split_once(char::is_whitespace) else {
+                return Err(invalid(
+                    "datatype definition needs a base scalar type and range expression".to_owned(),
+                ));
+            };
+            let ty = ScalarType::from_str(base.trim()).map_err(&invalid)?;
+            let range = parse_data_range(range_source.trim()).map_err(&invalid)?;
+            validate_data_range(name, ty, &range).map_err(invalid)?;
+            declared_datatypes.insert(name.to_string(), (ty, range));
+            section = vec![(Section::Top, 0)];
+            continue 'line;
+        }
 
         // Common OWL covered-class pattern: one named class is exactly the
         // union of a pairwise-disjoint set of named classes.
@@ -710,18 +762,19 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         return Err(OdlError::new(E_EMPTY_PROP_NAME, "属性名为空", line_no, 1));
                     }
                     let col = (k.len() + 2) as u32;
-                    let (ty, constraints) = parse_property_definition(v).map_err(|error| {
-                        let (code, message) = match error {
-                            PropertyDefinitionError::UnknownType(message) => {
-                                (E_UNKNOWN_TYPE, message)
-                            }
-                            PropertyDefinitionError::Invalid(message) => (
-                                E_INVALID_PROPERTY_CONSTRAINT,
-                                format!("property constraint: {message}"),
-                            ),
-                        };
-                        OdlError::new(code, message, line_no, col)
-                    })?;
+                    let (ty, constraints) = parse_property_definition(v, &declared_datatypes)
+                        .map_err(|error| {
+                            let (code, message) = match error {
+                                PropertyDefinitionError::UnknownType(message) => {
+                                    (E_UNKNOWN_TYPE, message)
+                                }
+                                PropertyDefinitionError::Invalid(message) => (
+                                    E_INVALID_PROPERTY_CONSTRAINT,
+                                    format!("property constraint: {message}"),
+                                ),
+                            };
+                            OdlError::new(code, message, line_no, col)
+                        })?;
                     if let Some((_, obj)) = current.as_mut() {
                         obj.properties.push(PropertyDef {
                             name: k.to_string(),
@@ -1433,6 +1486,7 @@ enum PropertyDefinitionError {
 
 fn parse_property_definition(
     spec: &str,
+    declared_datatypes: &std::collections::BTreeMap<String, (ScalarType, PropertyDataRange)>,
 ) -> Result<(ScalarType, Vec<PropertyFacet>), PropertyDefinitionError> {
     let (spec, data_range_source) =
         extract_data_range(spec).map_err(PropertyDefinitionError::Invalid)?;
@@ -1442,9 +1496,24 @@ fn parse_property_definition(
             "property type is empty".to_owned(),
         ));
     };
-    let ty = ScalarType::from_str(type_token).map_err(PropertyDefinitionError::UnknownType)?;
+    let (ty, inherited_range) = if let Ok(ty) = ScalarType::from_str(type_token) {
+        (ty, None)
+    } else if let Some((ty, range)) = declared_datatypes.get(type_token) {
+        (*ty, Some(range.clone()))
+    } else {
+        return Err(PropertyDefinitionError::UnknownType(format!(
+            "未知标量类型: {type_token}"
+        )));
+    };
     let mut constraints = Vec::new();
-    if let Some(source) = data_range_source {
+    if inherited_range.is_some() && data_range_source.is_some() {
+        return Err(PropertyDefinitionError::Invalid(
+            "property cannot combine a named datatype with another range".to_owned(),
+        ));
+    }
+    if let Some(range) = inherited_range {
+        constraints.push(PropertyFacet::Range(range));
+    } else if let Some(source) = data_range_source {
         let body = &source["range(".len()..source.len() - 1];
         let range = parse_data_range(body).map_err(PropertyDefinitionError::Invalid)?;
         constraints.push(PropertyFacet::Range(range));

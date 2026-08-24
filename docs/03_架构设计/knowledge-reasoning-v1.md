@@ -429,6 +429,18 @@ object Customer:
     contact: string range(union(restriction(pattern "[^@]+@[^@]+"),datatype(int)))
 ```
 
+同一受限值域需要在多个模型中复用时，可以先命名一个保守 datatype，再在属性声明处使用该名称：
+
+```odl
+datatype Email = string restriction(pattern "[^@]+@[^@]+")
+datatype Contact = string union(restriction(pattern "[^@]+@[^@]+"),datatype(int))
+
+object Customer:
+  properties:
+    email: Email
+    contact: Contact
+```
+
 支持的组合子：
 
 - `datatype`（不限定参数时表示 leading scalar type；`datatype(int)` 等显式形式表示另一个 base datatype）
@@ -454,6 +466,12 @@ object Customer:
   进入该 range；
 - `range` 是普通属性约束命名空间中的一个 facet，同一属性最多声明一个；它与
   `min_cardinality` / `max_cardinality` 可组合；
+- named datatype 必须先声明后使用；右侧是一个 base scalar type 加一个 composable range。
+  解析器会把命名引用展开成 leading scalar type 和 `DataPropertyDataRange`，因此存储、推理和
+  live-world gate 不引入第二个 datatype 命名空间或隐式全局类型；
+- named datatype 名称不可重复，也不可复用内置 scalar type 名；属性引用 named datatype 后不能
+  再写另一个 `range(...)`。definition 和最终 property constraints 都通过同一条 validation
+  boundary；cross-datatype definition 仍遵守上述 leading-branch 与 cardinality 限制；
 - boolean 组至少两个分支；
 - 嵌套深度上限 8，节点总数上限 64，单个 enumeration 上限 64 个 literal；
 - uncertain 或超界构造 fail-closed；
@@ -711,7 +729,8 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 1. 继续按真实业务需要扩展更多 DL 结构到 ODL 直接表达面，进一步减少手写 proposal JSON。
    `disjoint_union`、object-property `some` / `only` / `value` 限制、data-property
    `some` / `only` / `min` / `max` / `value` 限制和 `one_of` 个体枚举已经直接进入 ODL。
-2. 在真实业务需要时继续扩展 XSD 构造（如自定义 datatype 定义），保持保守语义。
+2. 在真实业务需要时继续扩展更多 XSD 构造，保持保守语义。基础 named datatype definition
+   已可在 ODL 中复用受限 composable range，但尚不宣称完整 XSD derivation/union 语义。
 3. 在 update/delete、append-only SameIndividuals、数据属性约束和
    `SubDataPropertyOf` 已支持增量复用后，继续处理其余 TBox 变更。
    长生命快照已接入存储执行路径并具备缓存命中率可观测性。

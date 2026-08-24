@@ -1296,6 +1296,7 @@ mod tests {
         ObjectPropertyRestriction, ObjectRestrictionKind, ObjectType, PropertyDef, PropertyFacet,
         RelationDef, RelationHierarchy,
     };
+    use serde_json::json;
 
     fn ir(actions: bool) -> OntologyIR {
         OntologyIR {
@@ -2272,6 +2273,83 @@ object Person:
                 PropertyDataRange::Base(ScalarType::Float),
             ]));
         assert!(validate_runtime_ir(&invalid).is_err());
+    }
+
+    #[test]
+    fn odl_named_datatypes_project_and_gate_world_facts() {
+        let schema = oaip_abi::parse_odl(
+            r#"datatype Email = string restriction(pattern "[^@]+@[^@]+")
+datatype Contact = string union(restriction(pattern "[^@]+@[^@]+"),datatype(int))
+object Customer:
+  properties:
+    email: Email
+    contact: Contact
+"#,
+        )
+        .unwrap();
+        validate_runtime_ir(&schema).unwrap();
+        let schema = runtime_ir_to_knowledge(&schema);
+
+        for (property, expected) in [
+            (
+                "email",
+                ModelDataRange::Restriction {
+                    datatype: Datatype::String,
+                    facets: vec![FacetValue {
+                        facet: DataFacet::Pattern,
+                        value: Literal::String("[^@]+@[^@]+".into()),
+                    }],
+                },
+            ),
+            (
+                "contact",
+                ModelDataRange::Union(vec![
+                    ModelDataRange::Restriction {
+                        datatype: Datatype::String,
+                        facets: vec![FacetValue {
+                            facet: DataFacet::Pattern,
+                            value: Literal::String("[^@]+@[^@]+".into()),
+                        }],
+                    },
+                    ModelDataRange::Datatype(Datatype::Integer),
+                ]),
+            ),
+        ] {
+            assert_eq!(
+                Some(expected),
+                schema.axioms().iter().find_map(|axiom| match axiom {
+                    Axiom::DataPropertyDataRange {
+                        property: name,
+                        range,
+                    } if name.as_str() == property => {
+                        Some(range.clone())
+                    }
+                    _ => None,
+                })
+            );
+        }
+
+        let fact = |email: serde_json::Value, contact: serde_json::Value| RuntimeObjectFact {
+            id: "customer-1".to_owned(),
+            object_type: "Customer".to_owned(),
+            data: serde_json::json!({ "email": email, "contact": contact }),
+        };
+        for fact in [
+            fact(json!("user@example.com"), json!(42)),
+            fact(json!("ops@example.com"), json!("support@example.com")),
+        ] {
+            let world =
+                runtime_world_to_knowledge(&schema, std::slice::from_ref(&fact), &[]).unwrap();
+            assert!(Reasoner::new(&world).unwrap().is_consistent().unwrap());
+        }
+        let wrong_pattern = fact(json!("not-an-email"), json!(42));
+        let world =
+            runtime_world_to_knowledge(&schema, std::slice::from_ref(&wrong_pattern), &[]).unwrap();
+        assert!(!Reasoner::new(&world).unwrap().is_consistent().unwrap());
+        assert!(validate_canonical_ontology_with_world(&schema, &[wrong_pattern], &[]).is_err());
+
+        let wrong_datatype = fact(json!("user@example.com"), json!(true));
+        assert!(runtime_world_to_knowledge(&schema, &[wrong_datatype], &[]).is_err());
     }
 
     #[test]

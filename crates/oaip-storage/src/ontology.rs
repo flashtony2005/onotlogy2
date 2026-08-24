@@ -1323,6 +1323,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn odl_named_datatypes_gate_live_world_evolution() {
+        let storage = LibSQLStorage::open(":memory:").await.unwrap();
+        let root =
+            Ontology::new().with_axiom(Axiom::subclass(class("Customer"), ClassExpression::Thing));
+        let initial_ir = oaip_abi::parse_odl(
+            r#"datatype Email = string restriction(pattern "[^@]+@[^@]+")
+object Customer:
+  properties:
+    email: Email
+"#,
+        )
+        .unwrap();
+        storage
+            .initialize_knowledge_version("root", &root, Some(&initial_ir))
+            .await
+            .unwrap();
+        storage
+            .create(
+                "Customer",
+                "customer-1",
+                json!({ "email": "support@example.com" }),
+            )
+            .await
+            .unwrap();
+
+        // The named datatype expands before governance, so narrowing its range
+        // is evaluated against persisted facts exactly like an inline range.
+        let narrow_ir = oaip_abi::parse_odl(
+            r#"datatype Email = string restriction(pattern "[A-Z]+@example[.]com")
+object Customer:
+  properties:
+    email: Email
+"#,
+        )
+        .unwrap();
+        let incompatible = OntologyProposal::new("exclude-live-email");
+        assert!(
+            storage
+                .propose_knowledge_change("root", &incompatible, Some(&narrow_ir))
+                .await
+                .is_err()
+        );
+
+        let proposal = OntologyProposal::new("retain-email-datatype").with_change(
+            OntologyChange::Add(Axiom::subclass(class("Preferred"), class("Customer"))),
+        );
+        storage
+            .propose_knowledge_change("root", &proposal, Some(&initial_ir.clone()))
+            .await
+            .unwrap();
+        storage
+            .decide_knowledge_proposal("retain-email-datatype", true, "alice", None)
+            .await
+            .unwrap();
+        let (_, applied) = storage
+            .apply_knowledge_proposal("retain-email-datatype", "v2")
+            .await
+            .unwrap();
+        assert_eq!(Some(initial_ir), applied.runtime_ir);
+    }
+
+    #[tokio::test]
     async fn odl_equivalent_relations_gate_live_world_evolution() {
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
         let root =

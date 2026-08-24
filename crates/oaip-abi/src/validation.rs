@@ -1030,6 +1030,96 @@ mod tests {
     }
 
     #[test]
+    fn parses_named_datatypes_expands_semantics_and_gates_data() {
+        let current = object(
+            r#"datatype Email = string restriction(pattern "[^@]+@[^@]+")
+datatype Contact = string union(restriction(pattern "[^@]+@[^@]+"),datatype(int))
+object Customer:
+  properties:
+    email: Email min_cardinality 1
+    contact: Contact
+"#,
+        );
+
+        let PropertyFacet::Range(PropertyDataRange::Restriction(facets)) =
+            &current.properties[0].constraints[0]
+        else {
+            panic!("named datatype should expand to its declared restriction");
+        };
+        assert!(matches!(facets.as_slice(), [PropertyFacet::Pattern(_)]));
+        let PropertyFacet::Range(PropertyDataRange::Union(branches)) =
+            &current.properties[1].constraints[0]
+        else {
+            panic!("named datatype should expand to its declared union");
+        };
+        assert_eq!(2, branches.len());
+
+        assert!(
+            validate_object_data(
+                &current,
+                &json!({ "email": "user@example.com", "contact": 42 })
+            )
+            .is_ok()
+        );
+        for (field, value) in [
+            ("email", json!("not-an-email")),
+            ("email", json!(42)),
+            ("contact", json!("not-an-email")),
+            ("contact", json!(true)),
+        ] {
+            let mut data = json!({ "email": "user@example.com", "contact": "user@example.com" });
+            data[field] = value;
+            assert!(validate_object_data(&current, &data).is_err(), "{field}");
+        }
+        assert!(validate_object_data(&current, &json!({})).is_err());
+
+        let duplicate = parse_odl(
+            r#"datatype Email = string restriction(pattern "[^@]+")
+datatype Email = string restriction(pattern "[^@]+")
+object Customer:
+  properties:
+    email: Email
+"#,
+        );
+        assert_eq!(1018, duplicate.unwrap_err().code);
+
+        let unknown_base = parse_odl(
+            r#"datatype Email = unknown restriction(pattern "[^@]+")
+object Customer:
+  properties:
+    email: Email
+"#,
+        );
+        assert_eq!(1018, unknown_base.unwrap_err().code);
+
+        let invalid_range = parse_odl(
+            r#"datatype Email = string restriction(pattern "^bad$")
+object Customer:
+  properties:
+    email: Email
+"#,
+        );
+        assert_eq!(1018, invalid_range.unwrap_err().code);
+
+        let second_range = parse_odl(
+            r#"datatype Email = string restriction(pattern "[^@]+@[^@]+")
+object Customer:
+  properties:
+    email: Email range(restriction(min_length 3))
+"#,
+        );
+        assert_eq!(1011, second_range.unwrap_err().code);
+
+        let undeclared = parse_odl(
+            r#"object Customer:
+  properties:
+    email: Email
+"#,
+        );
+        assert_eq!(1002, undeclared.unwrap_err().code);
+    }
+
+    #[test]
     fn scalar_cardinality_gates_presence_in_closed_object_data() {
         let current = object(
             r#"object Customer:
