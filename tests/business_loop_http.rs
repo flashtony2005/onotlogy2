@@ -83,9 +83,20 @@ async fn odl_planning_metadata_drives_action_catalog() {
         .expect("业务包 ODL 应存在");
 
     seed_odl_project(&storage, "odl-base", &pack_ontology).await;
-    discover_opportunities(&storage, "odl-base")
+    let discovered = discover_opportunities(&storage, "odl-base")
         .await
         .expect("基础 ODL 应能发现机会");
+    assert_eq!(discovered.len(), 1, "ODL 规则应发现机会：{discovered:?}");
+    let stored_opportunity = storage
+        .get("opportunity:odl-base:reactivation:customer-odl-base-vip")
+        .await
+        .expect("应能查询 ODL 发现的机会")
+        .expect("ODL 规则应创建机会");
+    assert_eq!(stored_opportunity.data["estimated_value"], json!(180_000.0));
+    assert_eq!(
+        stored_opportunity.data["evidence"],
+        json!("VIP 客户已 75 天未联系，超过复购预警阈值")
+    );
     let baseline = recommend_next_actions(&storage, "odl-base")
         .await
         .expect("基础 ODL 应能推荐动作");
@@ -120,6 +131,14 @@ async fn odl_planning_metadata_drives_action_catalog() {
         changed[0].action, "RetainCustomer",
         "ODL 成本变化应直接改变最优决策"
     );
+
+    let inactive_rule = pack_ontology.replace("value: 45", "value: 1000");
+    assert_ne!(inactive_rule, pack_ontology, "契约测试必须修改成功");
+    seed_odl_project(&storage, "odl-inactive", &inactive_rule).await;
+    let none = discover_opportunities(&storage, "odl-inactive")
+        .await
+        .expect("修改机会条件后仍应可执行发现");
+    assert!(none.is_empty(), "ODL 条件不满足时不能发现机会：{none:?}");
 
     let error = decide_opportunity(
         &storage,

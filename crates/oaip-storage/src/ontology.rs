@@ -827,6 +827,7 @@ mod tests {
                     actions: Vec::new(),
                     restrictions: Vec::new(),
                     data_restrictions: Vec::new(),
+                    opportunity_rules: Vec::new(),
                 }],
             }
         }
@@ -1638,6 +1639,7 @@ equivalent_relation primary_contact, contact
                 actions: Vec::new(),
                 restrictions: Vec::new(),
                 data_restrictions: Vec::new(),
+                opportunity_rules: Vec::new(),
             }],
         };
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
@@ -1704,6 +1706,7 @@ equivalent_relation primary_contact, contact
                 actions: Vec::new(),
                 restrictions: Vec::new(),
                 data_restrictions: Vec::new(),
+                opportunity_rules: Vec::new(),
             }],
         };
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
@@ -1779,6 +1782,7 @@ equivalent_relation primary_contact, contact
                 actions: Vec::new(),
                 restrictions: Vec::new(),
                 data_restrictions: Vec::new(),
+                opportunity_rules: Vec::new(),
             }],
         };
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
@@ -2679,6 +2683,7 @@ object Planet:
                 actions: Vec::new(),
                 restrictions: Vec::new(),
                 data_restrictions: Vec::new(),
+                opportunity_rules: Vec::new(),
             };
             OntologyIR {
                 object_types: vec![object("Customer"), object("Order")],
@@ -2786,6 +2791,7 @@ object Planet:
                 actions: Vec::new(),
                 restrictions: Vec::new(),
                 data_restrictions: Vec::new(),
+                opportunity_rules: Vec::new(),
             }
         }
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
@@ -2867,6 +2873,7 @@ object Planet:
             actions: Vec::new(),
             restrictions: Vec::new(),
             data_restrictions: Vec::new(),
+            opportunity_rules: Vec::new(),
         };
         let runtime_ir = OntologyIR {
             object_types: vec![object("Customer"), object("Order")],

@@ -306,6 +306,21 @@ pub struct ActionDef {
     pub planning: Option<ActionPlanning>,
 }
 
+/// 声明式机会发现规则：当前对象状态满足 `when` 时创建同名 Opportunity。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpportunityRule {
+    /// Opportunity 的业务类型，同时用于幂等去重。
+    pub name: String,
+    /// 机会的估计业务价值；必须是非负有限数值。
+    pub estimated_value: f64,
+    /// 证据模板，`{field}` 会替换为触发对象的同名字段。
+    #[serde(default)]
+    pub evidence: String,
+    /// 触发条件；多条为 AND。
+    #[serde(default)]
+    pub when: Vec<Clause>,
+}
+
 /// 对象类型（对应 ODL `object X:`）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObjectType {
@@ -323,6 +338,9 @@ pub struct ObjectType {
     /// Necessary data-property conditions declared directly on this class.
     #[serde(default)]
     pub data_restrictions: Vec<DataPropertyRestriction>,
+    /// Business Loop 可发现的机会模式；ODL 未声明时没有隐式业务规则。
+    #[serde(default)]
+    pub opportunity_rules: Vec<OpportunityRule>,
 }
 
 /// 有类型关系边及其 OWL 对象属性特征（对应 ODL `relation X:`）。

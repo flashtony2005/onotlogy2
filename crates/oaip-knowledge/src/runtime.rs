@@ -1374,6 +1374,7 @@ mod tests {
                 },
                 restrictions: Vec::new(),
                 data_restrictions: Vec::new(),
+                opportunity_rules: Vec::new(),
             }],
         }
     }
@@ -1611,6 +1612,7 @@ one_of Planet = Mercury, Venus, Earth
             actions: Vec::new(),
             restrictions: Vec::new(),
             data_restrictions: Vec::new(),
+            opportunity_rules: Vec::new(),
         });
         ir.disjoint_groups = vec![vec!["Dog".to_owned(), "Cat".to_owned()]];
         assert!(matches!(
@@ -2119,6 +2121,7 @@ relation parent:
             actions: Vec::new(),
             restrictions: Vec::new(),
             data_restrictions: Vec::new(),
+            opportunity_rules: Vec::new(),
         });
         assert!(validate_runtime_ir(&ir).is_err());
 

@@ -31,8 +31,8 @@ use crate::ir::{
     ActionDef, ActionPlanning, Clause, CompareOp, CreateEffect, DataLiteral, DataPropertyHierarchy,
     DataPropertyRestriction, DataRestrictionKind, DisjointUnionGroup, FieldUpdate,
     ObjectOneOfGroup, ObjectPropertyRestriction, ObjectRestrictionKind, ObjectType, OntologyIR,
-    OutcomeTiming, ParamDef, PolicyDef, PropertyDataRange, PropertyDef, PropertyFacet, RelationDef,
-    RelationHierarchy, ScalarType, ValueExpr,
+    OpportunityRule, OutcomeTiming, ParamDef, PolicyDef, PropertyDataRange, PropertyDef,
+    PropertyFacet, RelationDef, RelationHierarchy, ScalarType, ValueExpr,
 };
 use crate::validation::validate_property_constraints;
 use std::str::FromStr;
@@ -93,6 +93,9 @@ enum Section {
     CreateData,
     ActionPolicy,
     ActionPlanning,
+    Opportunities,
+    OpportunityRule,
+    OpportunityCondition,
     ActionPrecondition,
     ObjectRestrictions,
     DataRestrictions,
@@ -110,6 +113,8 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     let mut cur_update: Option<FieldUpdate> = None;
     let mut cur_create: Option<CreateEffect> = None;
     let mut cur_clause: Option<Clause> = None;
+    let mut cur_opportunity: Option<(u32, OpportunityRule)> = None;
+    let mut opportunity_fields = [false; 2];
     let mut declared_relations: Vec<(u32, RelationDef)> = Vec::new();
     let mut current_relation: Option<(u32, RelationDef)> = None;
     let mut link_lines: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
@@ -570,6 +575,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                     actions: Vec::new(),
                     restrictions: Vec::new(),
                     data_restrictions: Vec::new(),
+                    opportunity_rules: Vec::new(),
                 },
             ));
             section = vec![(Section::Object, indent)];
@@ -597,6 +603,14 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                             1,
                         ));
                     }
+                }
+                Section::OpportunityCondition => {
+                    if let Some(rule) = cur_opportunity.as_mut() {
+                        flush_condition(&mut cur_clause, rule);
+                    }
+                }
+                Section::OpportunityRule => {
+                    flush_opportunity(&mut cur_opportunity, &mut opportunity_fields, &mut current)?
                 }
                 Section::Action => flush_action(&mut cur_action, &mut current),
                 Section::Relation => {
@@ -648,6 +662,18 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         });
                     }
                 }
+                Section::OpportunityCondition => {
+                    if let Some(rule) = cur_opportunity.as_mut() {
+                        flush_condition(&mut cur_clause, rule);
+                    }
+                    if let Some(v) = list_item_value(content, "field") {
+                        cur_clause = Some(Clause {
+                            field: v.to_string(),
+                            op: CompareOp::Eq,
+                            value: ValueExpr::Literal(serde_json::Value::Null),
+                        });
+                    }
+                }
                 _ => {
                     return Err(OdlError::new(
                         E_NO_PROP_BLOCK,
@@ -679,6 +705,9 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                     section.push((Section::DataRestrictions, indent))
                 }
                 (Section::Object, "actions") => section.push((Section::Actions, indent)),
+                (Section::Object, "opportunities") => {
+                    section.push((Section::Opportunities, indent))
+                }
                 (Section::Actions, name) => {
                     flush_action(&mut cur_action, &mut current);
                     cur_action = Some((
@@ -701,6 +730,24 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                 (Section::Action, "planning") => {
                     planning_fields = [false; 3];
                     section.push((Section::ActionPlanning, indent));
+                }
+                (Section::Opportunities, name) => {
+                    flush_opportunity(&mut cur_opportunity, &mut opportunity_fields, &mut current)?;
+                    cur_opportunity = Some((
+                        line_no,
+                        OpportunityRule {
+                            name: name.to_string(),
+                            estimated_value: 0.0,
+                            evidence: String::new(),
+                            when: Vec::new(),
+                        },
+                    ));
+                    opportunity_fields = [false; 2];
+                    section.push((Section::OpportunityRule, indent));
+                }
+                (Section::OpportunityRule, "when") => {
+                    // 条件是重复列表项；子块边界必须高于列表缩进，避免下一条同级 `- field` 被误判为离开。
+                    section.push((Section::OpportunityCondition, indent + 1))
                 }
                 (Section::ActionCreates, "data") => section.push((Section::CreateData, indent)),
                 (Section::ActionPolicy, "precondition") => {
@@ -949,6 +996,61 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         c.value = parse_value_expr(v, &param_names);
                     }
                 }
+                Section::OpportunityRule => {
+                    let invalid = |message: String| {
+                        OdlError::new(E_INVALID_PROPERTY_CONSTRAINT, message, line_no, 1)
+                    };
+                    let Some((_, rule)) = cur_opportunity.as_mut() else {
+                        continue;
+                    };
+                    match k {
+                        "estimated_value" => {
+                            let value = v.parse::<f64>().map_err(|_| {
+                                invalid(format!("estimated_value 必须是有限数值，得到 `{v}`"))
+                            })?;
+                            if !value.is_finite() || value < 0.0 {
+                                return Err(invalid("estimated_value 不能为负或无限".into()));
+                            }
+                            rule.estimated_value = value;
+                            opportunity_fields[0] = true;
+                        }
+                        "evidence" => {
+                            let parsed: serde_json::Value =
+                                serde_json::from_str(v).map_err(|error| {
+                                    invalid(format!("evidence 必须是非空 JSON 字符串：{error}"))
+                                })?;
+                            let text = parsed
+                                .as_str()
+                                .ok_or_else(|| invalid("evidence 必须是非空 JSON 字符串".into()))?;
+                            if text.is_empty() {
+                                return Err(invalid("evidence 不能为空".into()));
+                            }
+                            rule.evidence = text.to_owned();
+                            opportunity_fields[1] = true;
+                        }
+                        _ => return Err(invalid(format!("'{k}' 不是 opportunity 规则属性"))),
+                    }
+                }
+                Section::OpportunityCondition => match k {
+                    "op" => {
+                        if let Some(c) = cur_clause.as_mut() {
+                            c.op = parse_compare_op(v);
+                        }
+                    }
+                    "value" => {
+                        if let Some(c) = cur_clause.as_mut() {
+                            c.value = parse_value_expr(v, &[]);
+                        }
+                    }
+                    _ => {
+                        return Err(OdlError::new(
+                            E_INVALID_PROPERTY_CONSTRAINT,
+                            format!("'{k}' 不是 opportunity condition 属性"),
+                            line_no,
+                            1,
+                        ));
+                    }
+                },
                 Section::ObjectRestrictions => {
                     let invalid = |message: String| {
                         OdlError::new(E_INVALID_OBJECT_RESTRICTION, message, line_no, 1)
@@ -1165,6 +1267,10 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     }
 
     // 冲刷尾部临时态
+    if let Some(rule) = cur_opportunity.as_mut() {
+        flush_condition(&mut cur_clause, rule);
+    }
+    flush_opportunity(&mut cur_opportunity, &mut opportunity_fields, &mut current)?;
     flush_update(&mut cur_update, &mut cur_action);
     flush_create(&mut cur_create, &mut cur_action);
     flush_clause(&mut cur_clause, &mut cur_action);
@@ -1178,6 +1284,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
 
     // 每个 object 必须至少含一个 property（TC-001-b：缺 property → 错误码，带回声明行列号）
     let mut object_lines = std::collections::BTreeMap::new();
+    let mut opportunity_lines = std::collections::BTreeMap::new();
     for (ln, obj) in &declared {
         if obj.properties.is_empty() {
             return Err(OdlError::new(
@@ -1197,7 +1304,77 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             ));
         }
         object_lines.insert(obj.name.as_str(), *ln);
+        for rule in &obj.opportunity_rules {
+            opportunity_lines.insert(rule.name.as_str(), *ln);
+        }
         ir.object_types.push(obj.clone());
+    }
+
+    let mut seen_opportunities = std::collections::BTreeSet::new();
+    for object in &ir.object_types {
+        for rule in &object.opportunity_rules {
+            if !seen_opportunities.insert(rule.name.as_str()) {
+                return Err(OdlError::new(
+                    E_INVALID_PROPERTY_CONSTRAINT,
+                    format!("重复 opportunity 规则 '{}'", rule.name),
+                    opportunity_lines
+                        .get(rule.name.as_str())
+                        .copied()
+                        .unwrap_or(1),
+                    1,
+                ));
+            }
+            for clause in &rule.when {
+                let Some(field) = clause.field.strip_prefix("self.") else {
+                    return Err(OdlError::new(
+                        E_INVALID_PROPERTY_CONSTRAINT,
+                        format!(
+                            "opportunity '{}' condition field must reference self.<property>",
+                            rule.name
+                        ),
+                        opportunity_lines
+                            .get(rule.name.as_str())
+                            .copied()
+                            .unwrap_or(1),
+                        1,
+                    ));
+                };
+                if field.is_empty()
+                    || field.contains('.')
+                    || !object
+                        .properties
+                        .iter()
+                        .any(|property| property.name == field)
+                {
+                    return Err(OdlError::new(
+                        E_INVALID_PROPERTY_CONSTRAINT,
+                        format!(
+                            "opportunity '{}' references unknown condition field '{field}'",
+                            rule.name
+                        ),
+                        opportunity_lines
+                            .get(rule.name.as_str())
+                            .copied()
+                            .unwrap_or(1),
+                        1,
+                    ));
+                }
+                if !matches!(clause.value, ValueExpr::Literal(_)) {
+                    return Err(OdlError::new(
+                        E_INVALID_PROPERTY_CONSTRAINT,
+                        format!(
+                            "opportunity '{}' condition value must be a literal",
+                            rule.name
+                        ),
+                        opportunity_lines
+                            .get(rule.name.as_str())
+                            .copied()
+                            .unwrap_or(1),
+                        1,
+                    ));
+                }
+            }
+        }
     }
 
     if let Err(error) = ir.validate_extends() {
@@ -1877,6 +2054,37 @@ fn flush_clause(c: &mut Option<Clause>, a: &mut Option<(u32, ActionDef)>) {
     if let (Some(cl), Some((_, act))) = (c.take(), a.as_mut()) {
         act.policy.precondition.push(cl);
     }
+}
+
+/// 冲刷当前机会条件到机会规则。
+fn flush_condition(c: &mut Option<Clause>, r: &mut (u32, OpportunityRule)) {
+    if let Some(cl) = c.take() {
+        r.1.when.push(cl);
+    }
+}
+
+/// 校验并冲刷完整机会规则；半声明规则在解析阶段失败。
+fn flush_opportunity(
+    r: &mut Option<(u32, OpportunityRule)>,
+    fields: &mut [bool; 2],
+    o: &mut Option<(u32, ObjectType)>,
+) -> Result<(), OdlError> {
+    let Some((line_no, rule)) = r.take() else {
+        return Ok(());
+    };
+    if !fields.iter().all(|seen| *seen) || rule.evidence.is_empty() || rule.when.is_empty() {
+        return Err(OdlError::new(
+            E_INVALID_PROPERTY_CONSTRAINT,
+            "opportunity 规则必须完整声明 estimated_value、evidence 和至少一个 when 条件",
+            line_no,
+            1,
+        ));
+    }
+    if let Some((_, obj)) = o.as_mut() {
+        obj.opportunity_rules.push(rule);
+    }
+    *fields = [false; 2];
+    Ok(())
 }
 
 /// 把 ODL 比较运算符文本解析为 `CompareOp`（未知 → `Eq` 兜底）。

@@ -85,6 +85,59 @@ fn action_planning_requires_complete_metadata() {
 }
 
 #[test]
+fn opportunity_rule_requires_complete_and_typed_metadata() {
+    let base = [
+        "object Customer:",
+        "  properties:",
+        "    name: string",
+        "    level: string",
+        "    days_since_last_contact: int",
+        "  opportunities:",
+        "    Reactivation:",
+        "      estimated_value: 180000",
+        "      evidence: \"客户已 {days_since_last_contact} 天未联系\"",
+        "      when:",
+        "        - field: self.level",
+        "          op: eq",
+        "          value: \"VIP\"",
+        "        - field: self.days_since_last_contact",
+        "          op: gt",
+        "          value: 45",
+    ];
+
+    let incomplete = [
+        "object Customer:",
+        "  properties:",
+        "    name: string",
+        "  opportunities:",
+        "    Reactivation:",
+        "      estimated_value: 180000",
+    ]
+    .join("\n");
+    assert_eq!(parse_odl(&incomplete).unwrap_err().code, 1011);
+
+    let no_conditions = [base.as_slice()[..8].join("\n"), "      when:".to_owned()].join("\n");
+    assert_eq!(parse_odl(&no_conditions).unwrap_err().code, 1011);
+
+    let unknown_field = base
+        .iter()
+        .map(|line| line.replace("self.days_since_last_contact", "self.unknown"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(parse_odl(&unknown_field).unwrap_err().code, 1011);
+
+    let ir = parse_odl(&base.join("\n")).expect("完整规则应可解析");
+    let rule = &ir
+        .find("Customer")
+        .expect("Customer 应存在")
+        .opportunity_rules[0];
+    assert_eq!(rule.name, "Reactivation");
+    assert_eq!(rule.estimated_value, 180_000.0);
+    assert_eq!(rule.evidence, "客户已 {days_since_last_contact} 天未联系");
+    assert_eq!(rule.when.len(), 2);
+}
+
+#[test]
 fn tc001c_parse_typed_relations() {
     let odl = [
         "object Customer:",

@@ -3,7 +3,9 @@
 //! 闭环对象都是普通世界对象；所有事实写入都经 `WorldCommand`，因此天然获得
 //! 项目归属、事件溯源和审计链。机会规则集中在本模块，Kernel 不感知具体业务。
 
-use crate::abi::ir::{ActionDef, ActionPlanning, OntologyIR, OutcomeTiming, ValueExpr};
+use crate::abi::ir::{
+    ActionDef, ActionPlanning, CompareOp, OntologyIR, OpportunityRule, OutcomeTiming, ValueExpr,
+};
 use crate::abi::{DataValidationError, parse_odl, validate_object_data};
 use crate::storage::{LibSQLStorage, ObjectEngine, ProjectRecord, StorageError, WorldCommand};
 use serde::Serialize;
@@ -193,9 +195,10 @@ fn set_status(mut data: Value, status: &str) -> Value {
     data
 }
 
-fn opportunity_id(project_id: &str, customer_id: &str) -> String {
+fn opportunity_id(project_id: &str, opportunity_type: &str, customer_id: &str) -> String {
     let key = customer_id.replace([':', '/'], "-");
-    format!("opportunity:{project_id}:reactivation:{key}")
+    let rule = opportunity_type.to_lowercase().replace([':', '/'], "-");
+    format!("opportunity:{project_id}:{rule}:{key}")
 }
 
 fn generated_id(prefix: &str) -> String {
@@ -239,12 +242,94 @@ async fn link_world(
     Ok(())
 }
 
-fn is_reactivation(customer: &Value) -> bool {
-    customer.get("level").and_then(Value::as_str) == Some("VIP")
-        && customer
-            .get("days_since_last_contact")
-            .and_then(Value::as_i64)
-            .is_some_and(|days| days > 45)
+fn opportunity_rules(ontology: &OntologyIR) -> Result<Vec<&OpportunityRule>, BusinessLoopError> {
+    let customer = ontology
+        .find("Customer")
+        .ok_or_else(|| BusinessLoopError::invalid("本体未定义业务规划对象类型 Customer"))?;
+    if customer.opportunity_rules.is_empty() {
+        return Err(BusinessLoopError::invalid(
+            "Customer 本体未声明可发现的 opportunity 规则",
+        ));
+    }
+    Ok(customer.opportunity_rules.iter().collect())
+}
+
+fn condition_literal(expression: &ValueExpr) -> Result<&Value, BusinessLoopError> {
+    match expression {
+        ValueExpr::Literal(value) => Ok(value),
+        _ => Err(BusinessLoopError::invalid("机会条件值必须是字面量")),
+    }
+}
+
+fn compare_values(left: &Value, op: CompareOp, right: &Value) -> Result<bool, BusinessLoopError> {
+    let invalid = || BusinessLoopError::invalid(format!("机会条件不能比较 {left} 和 {right}"));
+    let ordered = |ordering: Option<std::cmp::Ordering>| {
+        ordering.ok_or_else(invalid).map(|ordering| match op {
+            CompareOp::Lt => ordering.is_lt(),
+            CompareOp::Le => ordering.is_le(),
+            CompareOp::Gt => ordering.is_gt(),
+            CompareOp::Ge => ordering.is_ge(),
+            CompareOp::Eq | CompareOp::Ne => false,
+        })
+    };
+    let equality = |equal: bool| match op {
+        CompareOp::Eq => Ok(equal),
+        CompareOp::Ne => Ok(!equal),
+        _ => Err(invalid()),
+    };
+    if let (Some(left), Some(right)) = (left.as_f64(), right.as_f64()) {
+        if matches!(op, CompareOp::Eq | CompareOp::Ne) {
+            return equality((left - right).abs() < f64::EPSILON);
+        }
+        return ordered(left.partial_cmp(&right));
+    }
+    if let (Some(left), Some(right)) = (left.as_str(), right.as_str()) {
+        if matches!(op, CompareOp::Eq | CompareOp::Ne) {
+            return equality(left == right);
+        }
+        return ordered(Some(left.cmp(right)));
+    }
+    if left.is_boolean() && right.is_boolean() {
+        return equality(left == right);
+    }
+    if left.is_null() && right.is_null() {
+        return equality(true);
+    }
+    Err(invalid())
+}
+
+fn rule_matches(rule: &OpportunityRule, customer: &Value) -> Result<bool, BusinessLoopError> {
+    for clause in &rule.when {
+        let field = clause.field.strip_prefix("self.").ok_or_else(|| {
+            BusinessLoopError::invalid(format!(
+                "机会条件字段必须引用 self.<property>：{}",
+                clause.field
+            ))
+        })?;
+        let Some(left) = customer.get(field) else {
+            return Ok(false);
+        };
+        let matched = compare_values(left, clause.op, condition_literal(&clause.value)?)?;
+        if !matched {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn evidence_text(template: &str, ontology: &OntologyIR, customer: &Value) -> String {
+    let mut text = template.to_owned();
+    if let Some(customer_type) = ontology.find("Customer") {
+        for property in &customer_type.properties {
+            if let Some(value) = customer.get(&property.name) {
+                text = text.replace(
+                    format!("{{{}}}", property.name).as_str(),
+                    value.as_str().unwrap_or(&value.to_string()),
+                );
+            }
+        }
+    }
+    text
 }
 
 /// 扫描项目内 Customer 状态，幂等创建 Open Opportunity。
@@ -271,46 +356,45 @@ pub async fn discover_opportunities(
     let opportunities = storage
         .list_objects_for_project(project_id, "Opportunity")
         .await?;
+    let rules = opportunity_rules(&ontology)?;
     let mut created = Vec::new();
     for customer in customers {
-        if !is_reactivation(&customer.data) {
-            continue;
+        for rule in &rules {
+            if !rule_matches(rule, &customer.data)? {
+                continue;
+            }
+            let already_discovered = opportunities.iter().any(|existing| {
+                existing.data.get("subject").and_then(Value::as_str) == Some(customer.id.as_str())
+                    && existing
+                        .data
+                        .get("opportunity_type")
+                        .and_then(Value::as_str)
+                        == Some(rule.name.as_str())
+            });
+            if already_discovered {
+                continue;
+            }
+            let id = opportunity_id(project_id, &rule.name, &customer.id);
+            let data = json!({
+                "subject": customer.id,
+                "opportunity_type": rule.name,
+                "status": OPPORTUNITY_OPEN,
+                "estimated_value": rule.estimated_value,
+                "evidence": evidence_text(&rule.evidence, &ontology, &customer.data),
+            });
+            validate_data(&ontology, "Opportunity", &data)?;
+            create_world_object(storage, project_id, "Opportunity", id.clone(), data.clone())
+                .await?;
+            link_world(
+                storage,
+                project_id,
+                customer.id.clone(),
+                "targets",
+                id.clone(),
+            )
+            .await?;
+            created.push(json!({ "id": id, "type": "Opportunity", "data": data }));
         }
-        let already_discovered = opportunities.iter().any(|existing| {
-            existing.data.get("subject").and_then(Value::as_str) == Some(customer.id.as_str())
-                && existing
-                    .data
-                    .get("opportunity_type")
-                    .and_then(Value::as_str)
-                    == Some("Reactivation")
-        });
-        if already_discovered {
-            continue;
-        }
-        let id = opportunity_id(project_id, &customer.id);
-        let days = customer
-            .data
-            .get("days_since_last_contact")
-            .and_then(Value::as_i64)
-            .unwrap_or_default();
-        let data = json!({
-            "subject": customer.id,
-            "opportunity_type": "Reactivation",
-            "status": OPPORTUNITY_OPEN,
-            "estimated_value": 180_000.0,
-            "evidence": format!("VIP 客户已 {days} 天未联系，超过 45 天复购预警阈值")
-        });
-        validate_data(&ontology, "Opportunity", &data)?;
-        create_world_object(storage, project_id, "Opportunity", id.clone(), data.clone()).await?;
-        link_world(
-            storage,
-            project_id,
-            customer.id.clone(),
-            "targets",
-            id.clone(),
-        )
-        .await?;
-        created.push(json!({ "id": id, "type": "Opportunity", "data": data }));
     }
     Ok(created)
 }

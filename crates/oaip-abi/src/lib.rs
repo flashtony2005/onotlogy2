@@ -11,8 +11,9 @@ pub mod validation;
 
 pub use codegen::{CodegenOutput, ObjectDef, codegen};
 pub use ir::{
-    ActionDef, Clause, CompareOp, CreateEffect, FieldUpdate, ObjectType, OntologyIR, ParamDef,
-    PolicyDef, PropertyDataRange, PropertyDef, PropertyFacet, RelationDef, ScalarType, ValueExpr,
+    ActionDef, Clause, CompareOp, CreateEffect, FieldUpdate, ObjectType, OntologyIR,
+    OpportunityRule, ParamDef, PolicyDef, PropertyDataRange, PropertyDef, PropertyFacet,
+    RelationDef, ScalarType, ValueExpr,
 };
 pub use odl::parse_odl;
 pub use validation::{

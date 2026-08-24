@@ -21,6 +21,17 @@ object Customer:
     level: string
     balance: float
     days_since_last_contact: int
+  opportunities:
+    Reactivation:
+      estimated_value: 180000
+      evidence: "VIP 客户已 {days_since_last_contact} 天未联系，超过复购预警阈值"
+      when:
+        - field: self.level
+          op: eq
+          value: "VIP"
+        - field: self.days_since_last_contact
+          op: gt
+          value: 45
   actions:
     ContactCustomer:
       planning:
