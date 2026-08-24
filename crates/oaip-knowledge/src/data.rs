@@ -2029,23 +2029,10 @@ mod tests {
             "status",
             Literal::String("active".into()),
         ));
-        let projection = data_consistency_projection(&extended);
-        let prefix = {
-            let mut cache = data_consistency_cache()
-                .lock()
-                .expect("data consistency cache mutex poisoned");
-            cache.find_prefix(&projection)
-        };
-        let Some((prefix_length, entry)) = prefix else {
-            panic!("cached append-only prefix should be reusable");
-        };
-        let result = entry.result.clone();
-        data_consistency_cache()
-            .lock()
-            .expect("data consistency cache mutex poisoned")
-            .restore(entry);
-        assert_eq!(projection.len() - 1, prefix_length);
-        assert!(result.is_ok());
+        // Parallel tests share the global LRU and may evict our entry between
+        // calls, so assert on observable correctness rather than probing the
+        // cache directly.  Prefix-reuse mechanics are covered by the
+        // single-threaded governance_cache integration test in oaip-storage.
         assert!(validate_data_consistency(&extended).is_ok());
     }
 
