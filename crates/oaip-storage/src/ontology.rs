@@ -822,6 +822,7 @@ mod tests {
                     extends: Vec::new(),
                     properties,
                     actions: Vec::new(),
+                    restrictions: Vec::new(),
                 }],
             }
         }
@@ -1482,6 +1483,7 @@ equivalent_relation primary_contact, contact
                     constraints: Vec::new(),
                 }],
                 actions: Vec::new(),
+                restrictions: Vec::new(),
             }],
         };
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
@@ -1543,6 +1545,7 @@ equivalent_relation primary_contact, contact
                     constraints: Vec::new(),
                 }],
                 actions: Vec::new(),
+                restrictions: Vec::new(),
             }],
         };
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
@@ -1613,6 +1616,7 @@ equivalent_relation primary_contact, contact
                     constraints: Vec::new(),
                 }],
                 actions: Vec::new(),
+                restrictions: Vec::new(),
             }],
         };
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
@@ -2063,6 +2067,120 @@ object Cat extends Animal:
     }
 
     #[tokio::test]
+    async fn odl_object_restrictions_evolve_and_replace_exactly() {
+        let storage = LibSQLStorage::open(":memory:").await.unwrap();
+        let base = r#"
+object Person:
+  properties:
+    name: string
+
+object Parent extends Person:
+  properties:
+    note: string
+  restrictions:
+    child: some Person
+    guardian: value alice
+
+relation child:
+  source: Person
+  target: Person
+
+relation guardian:
+  source: Person
+  target: Person
+"#;
+        let initial_ir = oaip_abi::parse_odl(base).unwrap();
+        storage
+            .create("Person", "alice", serde_json::json!({ "name": "Alice" }))
+            .await
+            .unwrap();
+        storage
+            .initialize_knowledge_version("root", &Ontology::new(), Some(&initial_ir))
+            .await
+            .unwrap();
+
+        let independent = OntologyProposal::new("add-friendly-class").with_change(
+            OntologyChange::Add(Axiom::subclass(
+                ClassExpression::class(Term::new("Friendly")),
+                ClassExpression::class(Term::new("Person")),
+            )),
+        );
+        storage
+            .propose_knowledge_change("root", &independent, Some(&initial_ir.clone()))
+            .await
+            .unwrap();
+        storage
+            .decide_knowledge_proposal("add-friendly-class", true, "alice", None)
+            .await
+            .unwrap();
+        let (_, applied) = storage
+            .apply_knowledge_proposal("add-friendly-class", "v2")
+            .await
+            .unwrap();
+        assert!(applied.ontology.axioms().contains(&Axiom::subclass(
+            ClassExpression::class(Term::new("Parent")),
+            ClassExpression::some_values_from(
+                Term::new("child"),
+                ClassExpression::class(Term::new("Person"))
+            )
+        )));
+        assert!(applied.ontology.axioms().contains(&Axiom::subclass(
+            ClassExpression::class(Term::new("Parent")),
+            ClassExpression::has_value(Term::new("guardian"), Term::new("alice"))
+        )));
+        assert_eq!(Some(initial_ir), applied.runtime_ir);
+
+        let removed_ir = oaip_abi::parse_odl(
+            r#"
+object Person:
+  properties:
+    name: string
+
+object Parent extends Person:
+  properties:
+    note: string
+
+relation child:
+  source: Person
+  target: Person
+
+relation guardian:
+  source: Person
+  target: Person
+"#,
+        )
+        .unwrap();
+        let remove = OntologyProposal::new("remove-parent-restrictions").with_change(
+            OntologyChange::Add(Axiom::subclass(
+                ClassExpression::class(Term::new("Friendly")),
+                ClassExpression::class(Term::new("Person")),
+            )),
+        );
+        storage
+            .propose_knowledge_change("v2", &remove, Some(&removed_ir.clone()))
+            .await
+            .unwrap();
+        storage
+            .decide_knowledge_proposal("remove-parent-restrictions", true, "bob", None)
+            .await
+            .unwrap();
+        let (_, removed) = storage
+            .apply_knowledge_proposal("remove-parent-restrictions", "v3")
+            .await
+            .unwrap();
+        assert!(!removed.ontology.axioms().iter().any(|axiom| matches!(
+            axiom,
+            Axiom::SubClassOf { sup, .. }
+                if matches!(
+                    sup,
+                    ClassExpression::ObjectSomeValuesFrom { .. }
+                        | ClassExpression::ObjectHasValue { .. }
+                )
+        )));
+        assert_eq!(Some(removed_ir), removed.runtime_ir);
+    }
+
+    #[tokio::test]
     async fn pure_dl_evolution_validates_the_current_live_world() {
         fn named(name: &str) -> ClassExpression {
             ClassExpression::class(Term::new(name))
@@ -2165,6 +2283,7 @@ object Cat extends Animal:
                     constraints: Vec::new(),
                 }],
                 actions: Vec::new(),
+                restrictions: Vec::new(),
             };
             OntologyIR {
                 object_types: vec![object("Customer"), object("Order")],
@@ -2267,6 +2386,7 @@ object Cat extends Animal:
                     constraints: Vec::new(),
                 }],
                 actions: Vec::new(),
+                restrictions: Vec::new(),
             }
         }
         let storage = LibSQLStorage::open(":memory:").await.unwrap();
@@ -2343,6 +2463,7 @@ object Cat extends Animal:
                 constraints: Vec::new(),
             }],
             actions: Vec::new(),
+            restrictions: Vec::new(),
         };
         let runtime_ir = OntologyIR {
             object_types: vec![object("Customer"), object("Order")],

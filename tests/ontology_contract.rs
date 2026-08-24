@@ -3,8 +3,8 @@
 
 use openaip_os::abi::codegen;
 use openaip_os::abi::ir::{
-    DataPropertyHierarchy, DisjointUnionGroup, OntologyIR, PropertyDef, RelationHierarchy,
-    ScalarType,
+    DataPropertyHierarchy, DisjointUnionGroup, ObjectPropertyRestriction, ObjectRestrictionKind,
+    OntologyIR, PropertyDef, RelationHierarchy, ScalarType,
 };
 use openaip_os::abi::odl::parse_odl;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine, ObjectRecord, StorageError};
@@ -552,6 +552,81 @@ fn tc001f_parse_disjoint_union() {
     )
     .unwrap_err();
     assert_eq!(1014, self_member.code);
+}
+
+#[test]
+fn tc001k_parse_object_property_restrictions() {
+    let odl = [
+        "object Person:",
+        "  properties:",
+        "    name: string",
+        "object Parent extends Person:",
+        "  properties:",
+        "    note: string",
+        "  restrictions:",
+        "    child: some Person",
+        "    contact: only Person",
+        "    guardian: value alice",
+        "relation child:",
+        "  source: Person",
+        "  target: Person",
+        "relation contact:",
+        "  source: Person",
+        "  target: Person",
+        "relation guardian:",
+        "  source: Person",
+        "  target: Person",
+    ]
+    .join("\n");
+    let ir = parse_odl(&odl).unwrap();
+    let expected = vec![
+        ObjectPropertyRestriction {
+            relation: "child".to_owned(),
+            kind: ObjectRestrictionKind::Some {
+                class: "Person".to_owned(),
+            },
+        },
+        ObjectPropertyRestriction {
+            relation: "contact".to_owned(),
+            kind: ObjectRestrictionKind::Only {
+                class: "Person".to_owned(),
+            },
+        },
+        ObjectPropertyRestriction {
+            relation: "guardian".to_owned(),
+            kind: ObjectRestrictionKind::Value {
+                individual: "alice".to_owned(),
+            },
+        },
+    ];
+    assert_eq!(expected, ir.find("Parent").unwrap().restrictions);
+    assert!(codegen::roundtrip_ok(&ir).unwrap());
+
+    let unknown_relation = parse_odl(
+        "object Person:\n  properties:\n    name: string\nobject Parent:\n  properties:\n    note: string\n  restrictions:\n    child: some Person\n",
+    )
+    .unwrap_err();
+    assert_eq!(1015, unknown_relation.code);
+    assert_eq!(8, unknown_relation.line);
+    assert!(
+        unknown_relation
+            .message
+            .contains("undeclared object property")
+    );
+
+    let unknown_class = parse_odl(
+        "object Person:\n  properties:\n    name: string\nobject Parent:\n  properties:\n    note: string\n  restrictions:\n    child: only Robot\nrelation child:\n  source: Person\n  target: Person\n",
+    )
+    .unwrap_err();
+    assert_eq!(1015, unknown_class.code);
+    assert_eq!(8, unknown_class.line);
+    assert!(unknown_class.message.contains("undeclared class"));
+
+    let invalid_constructor = parse_odl(
+        "object Person:\n  properties:\n    name: string\nobject Parent:\n  properties:\n    note: string\n  restrictions:\n    child: maybe Person\n",
+    )
+    .unwrap_err();
+    assert_eq!(1015, invalid_constructor.code);
 }
 
 // ── TC-002：IR 保真（REQ-002） ───────────────────────────────────────────

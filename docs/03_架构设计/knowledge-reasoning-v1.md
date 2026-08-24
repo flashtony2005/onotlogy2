@@ -179,6 +179,24 @@ disjoint_union Vehicle = Car, Boat
 包含目标类。同一目标类只能定义一次。ODL 解析、手工构造 Runtime IR 和持久化治理边界使用同一条
 校验语义；结果参与一致性、classification、entailment、诊断和演化影响分析。
 
+对象类型还可以在 `restrictions:` 块直接声明 object-property 必要条件：
+
+```odl
+object Parent extends Person:
+  properties:
+    note: string
+  restrictions:
+    child: some Person
+    contact: only Person
+    guardian: value alice
+```
+
+三条声明分别投影为 `SubClassOf(Parent, ObjectSomeValuesFrom(child, Person))`、
+`SubClassOf(Parent, ObjectAllValuesFrom(contact, Person))` 和
+`SubClassOf(Parent, ObjectHasValue(guardian, alice))`。relation 必须是已声明显式 relation 或
+action link edge；`some` / `only` 的 filler 必须是已声明类，`value` 的 individual 在 TBox 层保持
+开放世界语义。这些限制参与 classification、live-world 一致性、诊断和演化影响分析。
+
 ### 4.5 ODL property constraints
 
 Executable ODL 属性现在可以在标量类型后直接声明保守约束：
@@ -652,6 +670,7 @@ golden 场景必须证明 ODL 编译、真实执行、审批、append-only audit
 ## 9. 已知下一步
 
 1. 继续按真实业务需要扩展更多 DL 结构到 ODL 直接表达面，进一步减少手写 proposal JSON。
+   `disjoint_union` 与 object-property `some` / `only` / `value` 限制已经直接进入 ODL。
 2. 在真实业务需要时继续扩展 XSD 构造（如自定义 datatype 定义），保持保守语义。
 3. 在 update/delete、append-only SameIndividuals、数据属性约束和
    `SubDataPropertyOf` 已支持增量复用后，继续处理其余 TBox 变更。

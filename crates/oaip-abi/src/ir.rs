@@ -297,6 +297,9 @@ pub struct ObjectType {
     /// 对象自有动作（V0.4）；ODL 未声明时为空。
     #[serde(default)]
     pub actions: Vec<ActionDef>,
+    /// Necessary object-property conditions declared directly on this class.
+    #[serde(default)]
+    pub restrictions: Vec<ObjectPropertyRestriction>,
 }
 
 /// 有类型关系边及其 OWL 对象属性特征（对应 ODL `relation X:`）。
@@ -373,6 +376,24 @@ pub struct DisjointUnionGroup {
     pub members: Vec<String>,
 }
 
+/// A named-class necessary condition over a declared executable relation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObjectPropertyRestriction {
+    pub relation: String,
+    pub kind: ObjectRestrictionKind,
+}
+
+/// The supported object-property restriction constructors.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ObjectRestrictionKind {
+    /// `relation: some Class`
+    Some { class: String },
+    /// `relation: only Class`
+    Only { class: String },
+    /// `relation: value individual`
+    Value { individual: String },
+}
+
 /// 整份 ODL 解析出的 IR。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct OntologyIR {
@@ -413,6 +434,95 @@ impl OntologyIR {
     /// 按名称查找对象类型（codegen / query 复用）。
     pub fn find(&self, name: &str) -> Option<&ObjectType> {
         self.object_types.iter().find(|o| o.name == name)
+    }
+
+    /// Validate that direct object-property restrictions refer to declared
+    /// executable relations and classes. Hand-built serialized IR cannot bypass
+    /// the ODL grammar.
+    pub fn validate_object_restrictions(&self) -> Result<(), ObjectRestrictionError> {
+        let mut classes = self
+            .object_types
+            .iter()
+            .map(|object| object.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut relations = self
+            .relations
+            .iter()
+            .map(|relation| relation.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        for object in &self.object_types {
+            for action in &object.actions {
+                for created in &action.creates {
+                    if let Some(edge) = created.link_edge.as_ref() {
+                        relations.insert(edge);
+                        classes.insert(created.object_type.as_str());
+                    }
+                }
+            }
+        }
+
+        let mut restriction_index = 0usize;
+        for object in &self.object_types {
+            for restriction in &object.restrictions {
+                let index = restriction_index;
+                restriction_index += 1;
+                if restriction.relation.trim().is_empty() {
+                    return Err(ObjectRestrictionError {
+                        index,
+                        object: object.name.clone(),
+                        message: "restriction relation is empty".to_owned(),
+                    });
+                }
+                if !relations.contains(restriction.relation.as_str()) {
+                    return Err(ObjectRestrictionError {
+                        index,
+                        object: object.name.clone(),
+                        message: format!(
+                            "restriction references undeclared object property `{}`",
+                            restriction.relation
+                        ),
+                    });
+                }
+                match &restriction.kind {
+                    ObjectRestrictionKind::Some { class }
+                    | ObjectRestrictionKind::Only { class } => {
+                        Self::validate_restriction_filler(class, &classes, &mut |message| {
+                            ObjectRestrictionError {
+                                index,
+                                object: object.name.clone(),
+                                message,
+                            }
+                        })?;
+                    }
+                    ObjectRestrictionKind::Value { individual } => {
+                        if individual.trim().is_empty() {
+                            return Err(ObjectRestrictionError {
+                                index,
+                                object: object.name.clone(),
+                                message: "has-value individual is empty".to_owned(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_restriction_filler<'a>(
+        class: &'a str,
+        classes: &std::collections::BTreeSet<&'a str>,
+        error: &mut dyn FnMut(String) -> ObjectRestrictionError,
+    ) -> Result<(), ObjectRestrictionError> {
+        if class.trim().is_empty() {
+            return Err(error("restriction class is empty".to_owned()));
+        }
+        if !classes.contains(class) {
+            return Err(error(format!(
+                "restriction references undeclared class `{class}`"
+            )));
+        }
+        Ok(())
     }
 
     /// Validate relation participation bounds so hand-built serialized IR cannot
@@ -988,6 +1098,14 @@ pub struct ClassGroupError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DisjointUnionError {
     pub index: usize,
+    pub message: String,
+}
+
+/// An invalid direct object-property restriction, attributed to its class.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectRestrictionError {
+    pub index: usize,
+    pub object: String,
     pub message: String,
 }
 

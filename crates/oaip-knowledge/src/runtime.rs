@@ -16,7 +16,7 @@ use chrono::{NaiveDate, SecondsFormat, Utc};
 use oaip_abi::data_range::range_has_extra_base;
 use oaip_abi::{
     canonical_decimal,
-    ir::{OntologyIR, PropertyDataRange, PropertyFacet, ScalarType},
+    ir::{ObjectRestrictionKind, OntologyIR, PropertyDataRange, PropertyFacet, ScalarType},
     property_cardinality_bounds, property_one_of_json_values, validate_property_constraints,
 };
 use serde::{Deserialize, Serialize};
@@ -311,6 +311,23 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
             group.members.iter().map(class).collect(),
         ));
     }
+    for object_type in &ir.object_types {
+        let source = class(&object_type.name);
+        for restriction in &object_type.restrictions {
+            let expression = match &restriction.kind {
+                ObjectRestrictionKind::Some { class: filler } => {
+                    ClassExpression::some_values_from(restriction.relation.as_str(), class(filler))
+                }
+                ObjectRestrictionKind::Only { class: filler } => {
+                    ClassExpression::all_values_from(restriction.relation.as_str(), class(filler))
+                }
+                ObjectRestrictionKind::Value { individual } => {
+                    ClassExpression::has_value(restriction.relation.as_str(), individual.as_str())
+                }
+            };
+            ontology.push(Axiom::subclass(source.clone(), expression));
+        }
+    }
     for hierarchy in &ir.relation_hierarchy {
         ontology.push(Axiom::SubObjectPropertyOf {
             sub: Term::new(&hierarchy.sub_relation),
@@ -522,6 +539,12 @@ pub fn validate_runtime_ir(ir: &OntologyIR) -> Result<()> {
     }
     if let Err(error) = ir.validate_disjoint_unions() {
         return Err(KnowledgeError::Invalid(error.message));
+    }
+    if let Err(error) = ir.validate_object_restrictions() {
+        return Err(KnowledgeError::Invalid(format!(
+            "object `{}`: {}",
+            error.object, error.message
+        )));
     }
     if let Err(error) = ir.validate_relation_cardinalities() {
         return Err(KnowledgeError::Invalid(error));
@@ -1192,8 +1215,9 @@ pub fn validate_canonical_ontology_with_world(
 mod tests {
     use super::*;
     use oaip_abi::ir::{
-        ActionDef, CreateEffect, DataPropertyHierarchy, DisjointUnionGroup, ObjectType,
-        PropertyDef, PropertyFacet, RelationDef, RelationHierarchy,
+        ActionDef, CreateEffect, DataPropertyHierarchy, DisjointUnionGroup,
+        ObjectPropertyRestriction, ObjectRestrictionKind, ObjectType, PropertyDef, PropertyFacet,
+        RelationDef, RelationHierarchy,
     };
 
     fn ir(actions: bool) -> OntologyIR {
@@ -1232,6 +1256,7 @@ mod tests {
                 } else {
                     Vec::new()
                 },
+                restrictions: Vec::new(),
             }],
         }
     }
@@ -1424,6 +1449,7 @@ disjoint_union Vehicle = Car, Boat
                 constraints: Vec::new(),
             }],
             actions: Vec::new(),
+            restrictions: Vec::new(),
         });
         ir.disjoint_groups = vec![vec!["Dog".to_owned(), "Cat".to_owned()]];
         assert!(matches!(
@@ -1446,6 +1472,161 @@ disjoint_union Vehicle = Car, Boat
             validate_runtime_ir(&ir),
             Err(KnowledgeError::Invalid(message)) if message.contains("undeclared")
         ));
+
+        ir.disjoint_unions = Vec::new();
+        ir.relations.push(RelationDef {
+            name: "child".to_owned(),
+            source: "Customer".to_owned(),
+            target: "Dog".to_owned(),
+            ..RelationDef::default()
+        });
+        ir.object_types[0]
+            .restrictions
+            .push(ObjectPropertyRestriction {
+                relation: "child".to_owned(),
+                kind: ObjectRestrictionKind::Some {
+                    class: "Cat".to_owned(),
+                },
+            });
+        assert!(matches!(
+            validate_runtime_ir(&ir),
+            Err(KnowledgeError::Invalid(message)) if message.contains("undeclared class")
+        ));
+
+        ir.object_types[0].restrictions[0] = ObjectPropertyRestriction {
+            relation: "child".to_owned(),
+            kind: ObjectRestrictionKind::Value {
+                individual: "  ".to_owned(),
+            },
+        };
+        assert!(matches!(
+            validate_runtime_ir(&ir),
+            Err(KnowledgeError::Invalid(message)) if message.contains("individual is empty")
+        ));
+    }
+
+    #[test]
+    fn declared_object_restrictions_project_and_reason_relationships() {
+        let ir = oaip_abi::parse_odl(
+            r#"
+object Person:
+  properties:
+    name: string
+
+object Robot:
+  properties:
+    serial: string
+
+disjoint Person, Robot
+
+object Parent extends Person:
+  properties:
+    note: string
+  restrictions:
+    child: some Person
+
+object SafeContact extends Person:
+  properties:
+    note: string
+  restrictions:
+    contact: only Person
+
+object AliceWatcher extends Person:
+  properties:
+    note: string
+  restrictions:
+    guardian: value alice
+
+relation child:
+  source: Person
+  target: Person
+
+relation contact:
+  source: Person
+  target: Person
+
+relation guardian:
+  source: Person
+  target: Person
+"#,
+        )
+        .unwrap();
+        assert!(validate_runtime_ir(&ir).is_ok());
+        let schema = runtime_ir_to_knowledge(&ir);
+        assert!(schema.axioms().contains(&Axiom::subclass(
+            class("Parent"),
+            ClassExpression::some_values_from("child", class("Person"))
+        )));
+        assert!(schema.axioms().contains(&Axiom::subclass(
+            class("SafeContact"),
+            ClassExpression::all_values_from("contact", class("Person"))
+        )));
+        assert!(schema.axioms().contains(&Axiom::subclass(
+            class("AliceWatcher"),
+            ClassExpression::has_value("guardian", "alice")
+        )));
+
+        let object = |id: &str, ty: &str| RuntimeObjectFact {
+            id: id.to_owned(),
+            object_type: ty.to_owned(),
+            data: serde_json::json!({ "name": id }),
+        };
+        let objects = [
+            object("parent-1", "Parent"),
+            object("person-1", "Person"),
+            object("contact-1", "SafeContact"),
+            object("watcher-1", "AliceWatcher"),
+        ];
+        let relations = [
+            RuntimeRelationFact {
+                source: "parent-1".to_owned(),
+                relation: "child".to_owned(),
+                target: "person-1".to_owned(),
+            },
+            RuntimeRelationFact {
+                source: "watcher-1".to_owned(),
+                relation: "guardian".to_owned(),
+                target: "alice".to_owned(),
+            },
+        ];
+        let world = runtime_world_to_knowledge(&schema, &objects, &relations).unwrap();
+        let reasoner = Reasoner::new(&world).unwrap();
+        assert!(
+            reasoner
+                .instances_of(&Term::new("Parent"))
+                .unwrap()
+                .contains(&Term::new("parent-1"))
+        );
+        assert!(
+            reasoner
+                .instances_of(&Term::new("AliceWatcher"))
+                .unwrap()
+                .contains(&Term::new("watcher-1"))
+        );
+
+        // The mature tableau sees an `only` breach as inconsistency when the
+        // forbidden edge reaches a class disjoint from the declared filler.
+        let invalid_edge = Ontology::from_iter(schema.axioms().iter().cloned().chain([
+            Axiom::ClassAssertion {
+                class: class("SafeContact"),
+                individual: Term::new("contact-1"),
+            },
+            Axiom::ClassAssertion {
+                class: class("Robot"),
+                individual: Term::new("robot-1"),
+            },
+            Axiom::ObjectPropertyAssertion {
+                property: Term::new("contact"),
+                subject: Term::new("contact-1"),
+                object: Term::new("robot-1"),
+            },
+        ]));
+        assert!(
+            !Reasoner::new(&invalid_edge)
+                .unwrap()
+                .is_consistent()
+                .unwrap()
+        );
     }
 
     #[test]
@@ -1460,6 +1641,7 @@ disjoint_union Vehicle = Car, Boat
                 constraints: Vec::new(),
             }],
             actions: Vec::new(),
+            restrictions: Vec::new(),
         });
         assert!(validate_runtime_ir(&ir).is_err());
 
