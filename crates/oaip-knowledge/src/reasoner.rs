@@ -2035,5 +2035,4 @@ mod data_negative_tests {
             .expect("sub-property entailment should be explainable");
         assert_eq!(justification.axioms.len(), 2);
     }
-
 }

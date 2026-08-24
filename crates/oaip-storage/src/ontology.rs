@@ -1987,14 +1987,10 @@ object Cat extends Animal:
             "v2 should be derived from root"
         );
         assert!(
-            applied
-                .ontology
-                .axioms()
-                .iter()
-                .any(|axiom| matches!(axiom,
-                    Axiom::SubObjectPropertyChainOf { super_property, .. }
-                        if *super_property == has_grandparent
-                )),
+            applied.ontology.axioms().iter().any(|axiom| matches!(axiom,
+                Axiom::SubObjectPropertyChainOf { super_property, .. }
+                    if *super_property == has_grandparent
+            )),
             "applied version must retain the chain axiom"
         );
 
