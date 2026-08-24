@@ -164,7 +164,7 @@ async fn business_loop_discovers_decides_executes_and_replans() {
         "状态变化后不应再次发现同一机会"
     );
 
-    // 注入新的企业状态，验证闭环会重新发现、排序、决策、执行并再次更新目标。
+    // 注入两类新企业状态：低余额客户适合低成本接触；高余额客户应比较出挽留路径。
     storage
         .apply_world(openaip_os::storage::WorldCommand::CreateObject {
             object_type: "Customer".into(),
@@ -179,6 +179,20 @@ async fn business_loop_discovers_decides_executes_and_replans() {
         })
         .await
         .expect("应能写入新企业状态");
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+            object_type: "Customer".into(),
+            id: "customer:demo-vip-rich".into(),
+            data: json!({
+                "name": "高余额超期 VIP 客户",
+                "level": "VIP",
+                "balance": 2_000_000.0,
+                "days_since_last_contact": 75
+            }),
+            project_id: Some("crm-retention".into()),
+        })
+        .await
+        .expect("应能写入高余额客户状态");
 
     let run_next_body = json!({ "projectId": "crm-retention" }).to_string();
     let (status, body) = common::http_call(
@@ -189,7 +203,7 @@ async fn business_loop_discovers_decides_executes_and_replans() {
     )
     .await;
     assert_eq!(status, 200, "应能重新发现新状态机会：{body}");
-    assert_eq!(data(&body).await.as_array().map(Vec::len), Some(1));
+    assert_eq!(data(&body).await.as_array().map(Vec::len), Some(2));
 
     let (status, body) = common::http_call(
         addr,
@@ -200,10 +214,28 @@ async fn business_loop_discovers_decides_executes_and_replans() {
     .await;
     assert_eq!(status, 200, "应能读取下一动作推荐：{body}");
     let recommendations = data(&body).await.as_array().cloned().unwrap_or_default();
-    assert_eq!(recommendations.len(), 1);
+    assert_eq!(recommendations.len(), 2);
+    let recommendation_for = |subject: &str| {
+        recommendations
+            .iter()
+            .find(|item| item["subject"] == json!(subject))
+            .unwrap_or_else(|| panic!("缺少 {subject} 的推荐：{recommendations:?}"))
+    };
+    let low_recommendation = recommendation_for("customer:demo-vip-late");
+    let rich_recommendation = recommendation_for("customer:demo-vip-rich");
+    assert_eq!(low_recommendation["action"], json!("ContactCustomer"));
     assert_eq!(
-        recommendations[0]["subject"],
-        json!("customer:demo-vip-late")
+        low_recommendation["candidates"][0]["action"],
+        json!("ContactCustomer")
+    );
+    assert_eq!(rich_recommendation["action"], json!("RetainCustomer"));
+    assert_eq!(
+        rich_recommendation["candidates"][0]["action"],
+        json!("RetainCustomer")
+    );
+    assert_eq!(
+        rich_recommendation["candidates"][1]["action"],
+        json!("ContactCustomer")
     );
 
     let (status, body) = common::http_call(
@@ -218,10 +250,59 @@ async fn business_loop_discovers_decides_executes_and_replans() {
     assert_eq!(result["executed"], json!(true));
     assert_eq!(
         result["recommendation"]["subject"],
+        json!("customer:demo-vip-rich")
+    );
+    assert_eq!(result["recommendation"]["action"], json!("RetainCustomer"));
+    assert_eq!(result["decision"]["data"]["status"], json!("Selected"));
+    let alternatives: Value =
+        serde_json::from_str(result["decision"]["data"]["alternatives"].as_str().unwrap())
+            .expect("候选比较应保存为 JSON 字符串");
+    assert_eq!(alternatives.as_array().map(Vec::len), Some(2));
+    let task_id = result["execution"]["createdObject"]["id"]
+        .as_str()
+        .expect("挽留动作应创建 RetentionTask")
+        .to_string();
+    assert_eq!(
+        result["execution"]["outcome"]["data"]["success"],
+        json!(true)
+    );
+    assert_eq!(
+        result["goals"][0]["currentValue"],
+        json!(13.0),
+        "挽留不直接计入复购指标"
+    );
+    assert_eq!(result["goals"][0]["gap"], json!(7.0));
+
+    let task = storage
+        .get(&task_id)
+        .await
+        .expect("应能读取挽留任务")
+        .expect("挽留任务应存在");
+    assert_eq!(task.r#type, "RetentionTask");
+    assert_eq!(task.data["status"], json!("Pending"));
+    let current_relations = storage.list_all_relations().await.unwrap();
+    assert!(current_relations.iter().any(|relation| {
+        relation.source == "customer:demo-vip-rich"
+            && relation.relation == "needs_retention"
+            && relation.target == task_id
+    }));
+
+    // 高净值路径执行完后，低余额机会仍应由接触动作闭环并推进目标。
+    let (status, body) = common::http_call(
+        addr,
+        "POST",
+        "/api/v1/business/run-next",
+        Some(&run_next_body),
+    )
+    .await;
+    assert_eq!(status, 200, "应能自动执行剩余最优动作：{body}");
+    let result = data(&body).await;
+    assert_eq!(result["executed"], json!(true));
+    assert_eq!(
+        result["recommendation"]["subject"],
         json!("customer:demo-vip-late")
     );
     assert_eq!(result["recommendation"]["action"], json!("ContactCustomer"));
-    assert_eq!(result["decision"]["data"]["status"], json!("Selected"));
     assert_eq!(
         result["execution"]["outcome"]["data"]["success"],
         json!(true)
@@ -235,6 +316,13 @@ async fn business_loop_discovers_decides_executes_and_replans() {
         .expect("应能读取新 VIP 客户")
         .expect("新 VIP 客户仍存在");
     assert_eq!(late_vip.data["days_since_last_contact"], json!(0));
+
+    let rich_vip = storage
+        .get("customer:demo-vip-rich")
+        .await
+        .expect("应能读取高余额客户")
+        .expect("高余额客户仍存在");
+    assert_eq!(rich_vip.data["days_since_last_contact"], json!(75));
 
     let (status, body) = common::http_call(
         addr,

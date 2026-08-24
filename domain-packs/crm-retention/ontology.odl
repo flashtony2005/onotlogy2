@@ -123,6 +123,7 @@ object Decision:
     opportunity: string
     action: string
     reason: string
+    alternatives: string
     decided_by: string
     status: string
 
@@ -159,3 +160,7 @@ relation produced_outcome:
 relation changed_state:
   source: StateTransition
   target: Customer
+
+relation needs_retention:
+  source: Customer
+  target: RetentionTask

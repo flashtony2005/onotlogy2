@@ -1,4 +1,4 @@
-//! Business Loop v2：企业状态 → 机会 → 决策 → 行动结果 → 目标反馈与再规划。
+//! Business Loop v3：企业状态 → 机会 → 候选动作比较 → 行动结果 → 目标反馈与再规划。
 //!
 //! 闭环对象都是普通世界对象；所有事实写入都经 `WorldCommand`，因此天然获得
 //! 项目归属、事件溯源和审计链。机会规则集中在本模块，Kernel 不感知具体业务。
@@ -16,9 +16,56 @@ const OPPORTUNITY_EXECUTED: &str = "Executed";
 const DECISION_SELECTED: &str = "Selected";
 const DECISION_EXECUTED: &str = "Executed";
 
-/// 当前最小可执行动作集。新增业务动作先扩展这张表，再由引擎和推荐器解释执行，
+/// 可比较的业务动作目录。新增动作先扩展这张表，再由引擎和规划器解释执行，
 /// 避免在 handler 或多个业务函数中散落 `match object_type` 规则。
-const ACTIONS: &[(&str, &str)] = &[("ContactCustomer", "days_since_last_contact")];
+#[derive(Debug, Clone, Copy)]
+enum ActionEffect {
+    Update { field: &'static str, value: i64 },
+    CreateRetentionTask,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BusinessAction {
+    name: &'static str,
+    prior_confidence: f64,
+    cost: f64,
+    effect: ActionEffect,
+}
+
+impl BusinessAction {
+    fn expected_benefit(&self, estimated_value: f64, customer: &Value) -> f64 {
+        match self.effect {
+            ActionEffect::Update { .. } => estimated_value,
+            // 挽留的价值主要来自可挽回的存量余额；低余额客户自然不适合支付挽留成本。
+            ActionEffect::CreateRetentionTask => {
+                customer
+                    .get("balance")
+                    .and_then(Value::as_f64)
+                    .unwrap_or_default()
+                    .max(0.0)
+                    * 0.35
+            }
+        }
+    }
+}
+
+const ACTIONS: &[BusinessAction] = &[
+    BusinessAction {
+        name: "ContactCustomer",
+        prior_confidence: 0.7,
+        cost: 5_000.0,
+        effect: ActionEffect::Update {
+            field: "days_since_last_contact",
+            value: 0,
+        },
+    },
+    BusinessAction {
+        name: "RetainCustomer",
+        prior_confidence: 0.6,
+        cost: 20_000.0,
+        effect: ActionEffect::CreateRetentionTask,
+    },
+];
 const GOAL_METRIC: &str = "monthly_reactivations";
 
 #[derive(Debug, Error)]
@@ -65,6 +112,18 @@ pub struct ActionRecommendation {
     pub score: f64,
     pub confidence: f64,
     pub reason: String,
+    pub candidates: Vec<ActionCandidate>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ActionCandidate {
+    pub action: String,
+    #[serde(rename = "expectedBenefit")]
+    pub expected_benefit: f64,
+    pub cost: f64,
+    pub confidence: f64,
+    #[serde(rename = "netValue")]
+    pub net_value: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -204,16 +263,15 @@ pub async fn discover_opportunities(
         if !is_reactivation(&customer.data) {
             continue;
         }
-        let already_open = opportunities.iter().any(|existing| {
+        let already_discovered = opportunities.iter().any(|existing| {
             existing.data.get("subject").and_then(Value::as_str) == Some(customer.id.as_str())
                 && existing
                     .data
                     .get("opportunity_type")
                     .and_then(Value::as_str)
                     == Some("Reactivation")
-                && existing.data.get("status").and_then(Value::as_str) == Some(OPPORTUNITY_OPEN)
         });
-        if already_open {
+        if already_discovered {
             continue;
         }
         let id = opportunity_id(project_id, &customer.id);
@@ -364,52 +422,42 @@ pub async fn recommend_next_actions(
         let estimated_value = number(&opportunity.data, "estimated_value")?;
         let opportunity_type = text(&opportunity.data, "opportunity_type")?.to_string();
 
-        // 动作目录保持单一事实源；当前只有一个动作，但选择规则已经按经验证据比较候选路径。
-        let mut selected = (ACTIONS[0].0, 0.7_f64);
-        for (action, _) in ACTIONS {
-            let total = outcomes
-                .iter()
-                .filter(|item| text(&item.data, "action").is_ok_and(|name| name == *action))
-                .count();
-            let success = outcomes
-                .iter()
-                .filter(|item| {
-                    text(&item.data, "action").is_ok_and(|name| name == *action)
-                        && item.data.get("success").and_then(Value::as_bool) == Some(true)
-                })
-                .count();
-            if total == 0 {
-                continue;
-            }
-            let rate = success as f64 / total as f64;
-            if rate > selected.1 {
-                selected = (action, rate);
-            }
-        }
-
-        let alignment = if remaining_gap > 0.0 && opportunity_type == "Reactivation" {
-            1.0
-        } else {
-            0.5
-        };
+        let mut candidates = evaluate_candidates(&customer.data, estimated_value, &outcomes);
         let urgency = (days.min(90) as f64 / 90.0).max(0.1);
-        let score = (estimated_value / 100_000.0) * selected.1 * alignment * (0.6 + 0.4 * urgency);
+        candidates.sort_by(|left, right| {
+            right
+                .net_value
+                .total_cmp(&left.net_value)
+                .then_with(|| left.action.cmp(&right.action))
+        });
+        let selected = &candidates[0];
+        let score = selected.net_value
+            * goal_alignment(
+                selected.action.as_str(),
+                opportunity_type.as_str(),
+                remaining_gap,
+            )
+            * (0.6 + 0.4 * urgency);
         let reason = if remaining_gap > 0.0 {
             format!(
-                "{GOAL_METRIC} 还差 {remaining_gap:.0}；客户已 {days} 天未联系；动作历史置信度 {:.2}",
-                selected.1
+                "{GOAL_METRIC} 还差 {remaining_gap:.0}；客户已 {days} 天未联系；{}",
+                candidate_reason(candidates.as_slice())
             )
         } else {
-            format!("客户已 {days} 天未联系；动作历史置信度 {:.2}", selected.1)
+            format!(
+                "客户已 {days} 天未联系；{}",
+                candidate_reason(candidates.as_slice())
+            )
         };
         recommendations.push(ActionRecommendation {
             project_id: project_id.to_string(),
             opportunity_id: opportunity.id.clone(),
             subject,
-            action: selected.0.to_string(),
+            action: selected.action.clone(),
             score,
-            confidence: selected.1,
+            confidence: selected.confidence,
             reason,
+            candidates,
         });
     }
 
@@ -420,6 +468,67 @@ pub async fn recommend_next_actions(
             .then_with(|| left.opportunity_id.cmp(&right.opportunity_id))
     });
     Ok(recommendations)
+}
+
+fn action_confidence(action: &str, outcomes: &[crate::storage::ObjectRecord]) -> f64 {
+    let definition = ACTIONS
+        .iter()
+        .find(|candidate| candidate.name == action)
+        .expect("注册表中的动作必然存在");
+    let relevant = outcomes
+        .iter()
+        .filter(|item| text(&item.data, "action").is_ok_and(|name| name == action))
+        .collect::<Vec<_>>();
+    if relevant.is_empty() {
+        return definition.prior_confidence;
+    }
+
+    let success = relevant
+        .iter()
+        .filter(|item| item.data.get("success").and_then(Value::as_bool) == Some(true))
+        .count();
+    success as f64 / relevant.len() as f64
+}
+
+fn evaluate_candidates(
+    customer: &Value,
+    estimated_value: f64,
+    outcomes: &[crate::storage::ObjectRecord],
+) -> Vec<ActionCandidate> {
+    ACTIONS
+        .iter()
+        .map(|definition| {
+            let confidence = action_confidence(definition.name, outcomes);
+            let expected_benefit = definition.expected_benefit(estimated_value, customer);
+            ActionCandidate {
+                action: definition.name.to_string(),
+                expected_benefit,
+                cost: definition.cost,
+                confidence,
+                net_value: expected_benefit * confidence - definition.cost,
+            }
+        })
+        .collect()
+}
+
+fn goal_alignment(action: &str, opportunity_type: &str, remaining_gap: f64) -> f64 {
+    if remaining_gap > 0.0 && opportunity_type == "Reactivation" && action == "ContactCustomer" {
+        return 1.0;
+    }
+    if remaining_gap > 0.0 && opportunity_type == "Reactivation" {
+        return 0.85;
+    }
+    0.5
+}
+
+fn candidate_reason(candidates: &[ActionCandidate]) -> String {
+    let parts = candidates.iter().map(|candidate| {
+        format!(
+            "{} 净价值 {:.0}（置信度 {:.2}）",
+            candidate.action, candidate.net_value, candidate.confidence
+        )
+    });
+    format!("候选比较：{}", parts.collect::<Vec<_>>().join("；"))
 }
 
 fn find_record<'a>(
@@ -440,9 +549,11 @@ pub async fn decide_opportunity(
     requested_action: Option<&str>,
     decided_by: &str,
     reason: Option<&str>,
+    alternatives: Option<Value>,
 ) -> Result<Value, BusinessLoopError> {
-    let action = requested_action.unwrap_or("ContactCustomer");
-    if !ACTIONS.iter().any(|(name, _)| *name == action) {
+    let default_action = ACTIONS[0].name;
+    let action = requested_action.unwrap_or(default_action);
+    if !ACTIONS.iter().any(|definition| definition.name == action) {
         return Err(BusinessLoopError::invalid(format!(
             "不支持的业务动作 {action}"
         )));
@@ -466,10 +577,15 @@ pub async fn decide_opportunity(
     }
 
     let decision_id = generated_id("decision");
+    let alternatives = alternatives
+        .map(|value| serde_json::to_string(&value))
+        .transpose()
+        .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
     let decision_data = json!({
         "opportunity": opportunity.id,
         "action": action,
         "reason": reason.unwrap_or("选择客户接触动作以关闭复购风险差距"),
+        "alternatives": alternatives.unwrap_or_else(|| json!([]).to_string()),
         "decided_by": decided_by,
         "status": DECISION_SELECTED
     });
@@ -537,9 +653,9 @@ pub async fn execute_opportunity(
         .ok_or_else(|| BusinessLoopError::NotFound("机会缺少 Selected 决策".into()))?
         .clone();
     let action = text(&decision.data, "action")?.to_string();
-    let field = ACTIONS
+    let definition = ACTIONS
         .iter()
-        .find_map(|(name, field)| (*name == action).then_some(*field))
+        .find(|candidate| candidate.name == action)
         .ok_or_else(|| BusinessLoopError::invalid(format!("不支持的业务动作 {action}")))?;
 
     let subject = text(&opportunity.data, "subject")?.to_string();
@@ -548,10 +664,42 @@ pub async fn execute_opportunity(
         .await?
         .ok_or_else(|| BusinessLoopError::NotFound(subject.clone()))?;
     let mut after_data = before_record.data.clone();
-    let after_object = after_data
-        .as_object_mut()
-        .ok_or_else(|| BusinessLoopError::invalid("Customer 数据必须是 JSON object"))?;
-    after_object.insert(field.to_string(), json!(0));
+    let mut retention_task_id = None;
+    match definition.effect {
+        ActionEffect::Update { field, value } => {
+            let after_object = after_data
+                .as_object_mut()
+                .ok_or_else(|| BusinessLoopError::invalid("Customer 数据必须是 JSON object"))?;
+            after_object.insert(field.to_string(), json!(value));
+        }
+        ActionEffect::CreateRetentionTask => {
+            let task_id = generated_id("retention-task");
+            let task_data = json!({
+                "title": "客户挽留计划",
+                "customer": subject,
+                "status": "Pending",
+                "priority": "HIGH"
+            });
+            validate_data(&ontology, "RetentionTask", &task_data)?;
+            create_world_object(
+                storage,
+                project_id,
+                "RetentionTask",
+                task_id.clone(),
+                task_data,
+            )
+            .await?;
+            link_world(
+                storage,
+                project_id,
+                subject.clone(),
+                "needs_retention",
+                task_id.clone(),
+            )
+            .await?;
+            retention_task_id = Some(task_id);
+        }
+    }
 
     let before = serde_json::to_string(&before_record.data)
         .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
@@ -645,13 +793,17 @@ pub async fn execute_opportunity(
 
     let goals = refresh_goal_progress(storage, project_id).await?;
 
-    Ok(json!({
+    let mut result = json!({
         "opportunity": { "id": opportunity.id, "data": set_status(opportunity.data, OPPORTUNITY_EXECUTED) },
         "decision": { "id": decision.id, "data": set_status(decision.data, DECISION_EXECUTED) },
         "outcome": { "id": outcome_id, "data": outcome_data },
         "stateTransition": { "id": transition_id, "data": transition_data },
-        "goals": goals
-    }))
+        "goals": goals,
+    });
+    if let Some(task_id) = retention_task_id {
+        result["createdObject"] = json!({ "id": task_id, "type": "RetentionTask" });
+    }
+    Ok(result)
 }
 
 /// 执行一轮完整再规划：发现 → 选择最优动作 → 决策 → 执行 → 目标反馈。
@@ -685,6 +837,7 @@ pub async fn run_next_best_action(
         Some(&recommendation.action),
         decided_by,
         Some(&recommendation.reason),
+        serde_json::to_value(recommendation.candidates.clone()).ok(),
     )
     .await?;
     let execution =

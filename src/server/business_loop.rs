@@ -162,6 +162,7 @@ pub(crate) async fn decide(
             body.action.as_deref(),
             &user.username,
             body.reason.as_deref(),
+            None,
         )
         .await
         {
