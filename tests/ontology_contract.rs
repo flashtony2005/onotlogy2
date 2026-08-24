@@ -102,6 +102,7 @@ fn opportunity_rule_requires_complete_and_typed_metadata() {
         "      subject_type: Customer",
         "      urgency_field: days_since_last_contact",
         "      urgency_horizon: 90",
+        "      cost_budget: 25000",
         "      link_edge: targets",
         "      when:",
         "        - field: self.level",
@@ -155,7 +156,16 @@ fn opportunity_rule_requires_complete_and_typed_metadata() {
     assert_eq!(rule.subject_type, "Customer");
     assert_eq!(rule.urgency_field, "days_since_last_contact");
     assert_eq!(rule.urgency_horizon, 90.0);
+    assert_eq!(rule.cost_budget, Some(25_000.0));
     assert_eq!(rule.link_edge, "targets");
+
+    let negative = base
+        .iter()
+        .map(|line| line.replace("cost_budget: 25000", "cost_budget: -1"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let error = parse_odl(&negative).expect_err("负数成本预算必须解析失败");
+    assert!(error.to_string().contains("cost_budget 不能为负或无限"));
     assert_eq!(rule.when.len(), 2);
 }
 

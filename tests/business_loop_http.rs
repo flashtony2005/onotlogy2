@@ -270,6 +270,63 @@ async fn goal_metric_is_declared_and_must_agree_across_evidence_chain() {
 }
 
 #[tokio::test]
+async fn opportunity_cost_budget_blocks_unaffordable_actions() {
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let pack_ontology = std::fs::read_to_string("domain-packs/crm-retention/ontology.odl")
+        .expect("业务包 ODL 应存在");
+    let budgeted_ontology = pack_ontology.replace(
+        "goal_metric: monthly_reactivations\n      evidence:",
+        "goal_metric: monthly_reactivations\n      cost_budget: 4500\n      evidence:",
+    );
+    assert_ne!(budgeted_ontology, pack_ontology, "契约测试必须修改成功");
+    seed_odl_project(
+        &storage,
+        "budget-loop",
+        &budgeted_ontology,
+        "monthly_reactivations",
+    )
+    .await;
+    discover_opportunities(&storage, "budget-loop")
+        .await
+        .expect("预算不阻止机会发现");
+    assert!(
+        recommend_next_actions(&storage, "budget-loop")
+            .await
+            .expect("预算应过滤不可负担候选")
+            .is_empty()
+    );
+    assert!(
+        plan_opportunity_paths(&storage, "budget-loop")
+            .await
+            .expect("预算应过滤不可行路径")
+            .is_empty()
+    );
+    let run = run_next_best_action(&storage, "budget-loop", "contract-test")
+        .await
+        .expect("没有可负担动作时应空闲");
+    assert!(!run.executed);
+
+    let opportunities = storage
+        .list_objects_for_project("budget-loop", "Opportunity")
+        .await
+        .expect("应能读取机会");
+    let error = decide_opportunity(
+        &storage,
+        "budget-loop",
+        &opportunities[0].id,
+        Some("ContactCustomer"),
+        "contract-test",
+        None,
+        None,
+    )
+    .await
+    .expect_err("超过预算的动作必须拒绝决策");
+    assert!(error.to_string().contains("超出机会成本预算"));
+}
+
+#[tokio::test]
 async fn business_loop_discovers_decides_executes_and_replans() {
     let storage = Arc::new(LibSQLStorage::open(":memory:").await.unwrap());
     let addr = common::spawn_server(storage.clone()).await;
@@ -1009,4 +1066,60 @@ relation changed_state:
         .expect("合同应存在");
     assert_eq!(contract.data["status"], json!("Active"));
     assert_eq!(execution["goals"][0]["currentValue"], json!(1.0));
+
+    let budgeted = ontology.replace("cost: 4000", "cost: 6000").replace(
+        "goal_metric: contract_renewals\n      evidence:",
+        "goal_metric: contract_renewals\n      cost_budget: 5000\n      evidence:",
+    );
+    storage
+        .create_project("contract-budget", "预算合同闭环", "成本约束", &budgeted)
+        .await
+        .expect("应能创建预算项目");
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+            object_type: "Contract".into(),
+            id: "contract:beta".into(),
+            data: json!({
+                "title": "BETA 年度合同",
+                "status": "Expiring",
+                "days_to_expiry": 20
+            }),
+            project_id: Some("contract-budget".into()),
+        })
+        .await
+        .expect("应能写入预算合同状态");
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+            object_type: "BusinessGoal".into(),
+            id: "business-goal:contract-budget".into(),
+            data: json!({
+                "target_metric": "contract_renewals",
+                "baseline_value": 0.0,
+                "target_value": 1.0,
+                "current_value": 0.0,
+                "status": "active"
+            }),
+            project_id: Some("contract-budget".into()),
+        })
+        .await
+        .expect("应能写入预算目标");
+    discover_opportunities(&storage, "contract-budget")
+        .await
+        .expect("预算项目应能发现机会");
+    let recommendations = recommend_next_actions(&storage, "contract-budget")
+        .await
+        .expect("预算项目应能推荐可负担动作");
+    assert_eq!(recommendations[0].action, "DraftTerms");
+    let paths = plan_opportunity_paths(&storage, "contract-budget")
+        .await
+        .expect("预算内组合路径应保留");
+    assert_eq!(paths[0].actions, vec!["DraftTerms", "RenewContract"]);
+    let run = run_next_best_action(&storage, "contract-budget", "contract-test")
+        .await
+        .expect("预算内路径应可执行");
+    assert_eq!(
+        run.recommendation.expect("应有推荐").action,
+        "DraftTerms",
+        "超过预算的快捷路径必须让位给低成本组合"
+    );
 }

@@ -337,6 +337,9 @@ pub struct OpportunityRule {
     pub urgency_field: String,
     /// 归一化上限，超过按满紧迫度处理。
     pub urgency_horizon: f64,
+    /// 单个机会允许消耗的成本上限；未声明表示不限制。
+    #[serde(default)]
+    pub cost_budget: Option<f64>,
     /// Opportunity 指向主体的关系边。
     pub link_edge: String,
 }

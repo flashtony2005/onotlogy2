@@ -748,6 +748,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                             goal_metric: None,
                             urgency_field: String::new(),
                             urgency_horizon: 0.0,
+                            cost_budget: None,
                             link_edge: String::new(),
                         },
                     ));
@@ -1099,6 +1100,15 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                             }
                             rule.urgency_horizon = value;
                             opportunity_fields[4] = true;
+                        }
+                        "cost_budget" => {
+                            let value = v.parse::<f64>().map_err(|_| {
+                                invalid(format!("cost_budget 必须是有限数值，得到 `{v}`"))
+                            })?;
+                            if !value.is_finite() || value < 0.0 {
+                                return Err(invalid("cost_budget 不能为负或无限".into()));
+                            }
+                            rule.cost_budget = Some(value);
                         }
                         "link_edge" => {
                             if v.trim().is_empty() {

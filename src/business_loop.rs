@@ -309,6 +309,22 @@ fn action_goal_metric(action: &ActionDef) -> Option<String> {
         .and_then(|planning| planning.goal_metric.clone())
 }
 
+fn validate_action_budget(
+    rule: &OpportunityRule,
+    action: &ActionDef,
+) -> Result<(), BusinessLoopError> {
+    let Some(budget) = rule.cost_budget else {
+        return Ok(());
+    };
+    if action_planning(action)?.cost <= budget {
+        return Ok(());
+    }
+    Err(BusinessLoopError::invalid(format!(
+        "业务动作 {} 超出机会成本预算 {budget}",
+        action.name
+    )))
+}
+
 fn shared_goal_metric(
     ontology: &OntologyIR,
     opportunity_type: &str,
@@ -609,8 +625,16 @@ pub async fn recommend_next_actions(
         let estimated_value = number(&opportunity.data, "estimated_value")?;
         let urgency_value = urgency_value.max(0.0);
         let urgency = (urgency_value.min(rule.urgency_horizon) / rule.urgency_horizon).max(0.1);
-        let mut candidates =
-            evaluate_candidates(&actions, &subject_record.data, estimated_value, &outcomes);
+        let mut candidates = evaluate_candidates(
+            &actions,
+            &subject_record.data,
+            estimated_value,
+            rule.cost_budget,
+            &outcomes,
+        );
+        if candidates.is_empty() {
+            continue;
+        }
         candidates.sort_by(|left, right| {
             right
                 .net_value
@@ -775,6 +799,7 @@ fn search_paths<'a>(
     state: &Value,
     used: &[String],
     visited: &mut std::collections::BTreeSet<String>,
+    budget_left: Option<f64>,
     depth: usize,
 ) -> Result<Vec<ScoredPath>, BusinessLoopError> {
     let PathContext {
@@ -805,6 +830,11 @@ fn search_paths<'a>(
                 .iter()
                 .any(|update| !matches!(update.value, ValueExpr::Literal(_)))
             || !path_precondition_satisfied(action, state)?
+        {
+            continue;
+        }
+        if let Some(budget_left) = budget_left
+            && planning.cost > budget_left
         {
             continue;
         }
@@ -899,7 +929,15 @@ fn search_paths<'a>(
                     .map_or(0.0, |(_, gap)| gap),
             );
         paths.push(candidate);
-        let children = search_paths(context, &next_state, &next_used, visited, depth + 1)?;
+        let child_budget = budget_left.map(|left| left - planning.cost);
+        let children = search_paths(
+            context,
+            &next_state,
+            &next_used,
+            visited,
+            child_budget,
+            depth + 1,
+        )?;
         for mut child in children {
             child.confidence *= step_confidence;
             child.benefit += benefit;
@@ -966,7 +1004,14 @@ pub async fn plan_opportunity_paths(
             goals: &goals,
             outcomes: &outcomes,
         };
-        let mut scored = search_paths(&context, &subject_record.data, &[], &mut visited, 0)?;
+        let mut scored = search_paths(
+            &context,
+            &subject_record.data,
+            &[],
+            &mut visited,
+            rule.cost_budget,
+            0,
+        )?;
         scored.retain(|path| path.net_value > 0.0);
         scored.sort_by(|left, right| {
             right
@@ -1030,6 +1075,7 @@ fn evaluate_candidates(
     actions: &[&ActionDef],
     customer: &Value,
     estimated_value: f64,
+    budget: Option<f64>,
     outcomes: &[crate::storage::ObjectRecord],
 ) -> Vec<ActionCandidate> {
     actions
@@ -1038,9 +1084,12 @@ fn evaluate_candidates(
             if !action_available(definition, customer).ok()? {
                 return None;
             }
+            let cost = action_planning(definition).ok()?.cost;
+            if cost > budget.unwrap_or(f64::INFINITY) {
+                return None;
+            }
             let confidence = action_confidence(definition, outcomes).ok()?;
             let benefit = expected_benefit(definition, estimated_value, customer).ok()?;
-            let cost = action_planning(definition).ok()?.cost;
             Some(ActionCandidate {
                 action: definition.name.to_string(),
                 expected_benefit: benefit,
@@ -1136,7 +1185,7 @@ pub async fn decide_opportunity(
         return Err(BusinessLoopError::invalid("只有 Open 状态的机会可以决策"));
     }
     let opportunity_type = text(&opportunity.data, "opportunity_type")?;
-    let (owner, _) = subject_rule(&ontology, opportunity_type)?;
+    let (owner, rule) = subject_rule(&ontology, opportunity_type)?;
     let actions = planning_actions_for(&ontology, &owner.name)?;
     let action = requested_action.unwrap_or(actions[0].name.as_str());
     let Some(definition) = find_action(&actions, action) else {
@@ -1144,6 +1193,7 @@ pub async fn decide_opportunity(
             "不支持的业务动作 {action}"
         )));
     };
+    validate_action_budget(rule, definition)?;
 
     let subject = text(&opportunity.data, "subject")?.to_string();
     let subjects = storage
@@ -1235,11 +1285,12 @@ pub async fn execute_opportunity(
         .ok_or_else(|| BusinessLoopError::NotFound("机会缺少 Selected 决策".into()))?
         .clone();
     let action = text(&decision.data, "action")?.to_string();
-    let (owner, _) = subject_rule(&ontology, text(&opportunity.data, "opportunity_type")?)?;
+    let (owner, rule) = subject_rule(&ontology, text(&opportunity.data, "opportunity_type")?)?;
     let actions = planning_actions_for(&ontology, &owner.name)?;
     let definition = find_action(&actions, &action)
         .cloned()
         .ok_or_else(|| BusinessLoopError::invalid(format!("不支持的业务动作 {action}")))?;
+    validate_action_budget(rule, &definition)?;
     let planning = action_planning(&definition)?;
 
     let subject = text(&opportunity.data, "subject")?.to_string();
