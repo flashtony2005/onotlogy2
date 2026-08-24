@@ -425,6 +425,19 @@ impl Reasoner {
             .collect())
     }
 
+    /// Every named class the individual belongs to, including inherited
+    /// membership through subsumption.
+    pub fn types_of(&self, individual: &Term) -> Result<BTreeSet<Term>> {
+        let classification = self.classify()?;
+        let mut types = BTreeSet::new();
+        for class in classification.classes() {
+            if self.is_instance_of(class, individual)? {
+                types.insert(class.clone());
+            }
+        }
+        Ok(types)
+    }
+
     /// Complete named-class hierarchy and unsatisfiable-class set.
     pub fn classify(&self) -> Result<ReasonedClassification> {
         self.snapshot
@@ -1662,6 +1675,31 @@ mod tests {
             reasoner
                 .entails_object_property(&has_grandparent, &term("alice"), &term("carol"))
                 .unwrap()
+        );
+    }
+
+    #[test]
+    fn types_of_returns_inherited_class_membership() {
+        let ontology = Ontology::new()
+            .with_axiom(Axiom::subclass(class("Puppy"), class("Dog")))
+            .with_axiom(Axiom::subclass(class("Dog"), class("Animal")))
+            .with_axiom(Axiom::ClassAssertion {
+                class: class("Puppy"),
+                individual: term("rex"),
+            })
+            .with_axiom(Axiom::ClassAssertion {
+                class: class("Cat"),
+                individual: term("whiskers"),
+            });
+
+        let reasoner = Reasoner::new(&ontology).unwrap();
+        assert_eq!(
+            BTreeSet::from([term("Puppy"), term("Dog"), term("Animal")]),
+            reasoner.types_of(&term("rex")).unwrap()
+        );
+        assert_eq!(
+            BTreeSet::from([term("Cat")]),
+            reasoner.types_of(&term("whiskers")).unwrap()
         );
     }
 }
