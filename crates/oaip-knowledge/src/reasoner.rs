@@ -1702,6 +1702,51 @@ mod tests {
             reasoner.types_of(&term("whiskers")).unwrap()
         );
     }
+
+    #[test]
+    fn types_of_reflects_existential_restriction_inference() {
+        // A parent of a Person must itself be a Person (via domain axiom),
+        // and any Pet owner has at least one `likes` edge to a named animal.
+        let ontology = Ontology::new()
+            .with_axiom(Axiom::ObjectPropertyDomain {
+                property: term("hasChild"),
+                class: class("Parent"),
+            })
+            .with_axiom(Axiom::subclass(
+                class("PetOwner"),
+                ClassExpression::some_values_from("owns", class("Animal")),
+            ))
+            .with_axiom(Axiom::ClassAssertion {
+                class: class("Person"),
+                individual: term("alice_jr"),
+            })
+            .with_axiom(Axiom::ObjectPropertyAssertion {
+                property: term("hasChild"),
+                subject: term("mary"),
+                object: term("alice_jr"),
+            })
+            .with_axiom(Axiom::ObjectPropertyAssertion {
+                property: term("owns"),
+                subject: term("bob"),
+                object: term("rex"),
+            })
+            .with_axiom(Axiom::ClassAssertion {
+                class: class("Animal"),
+                individual: term("rex"),
+            });
+
+        let reasoner = Reasoner::new(&ontology).unwrap();
+        let mary_types = reasoner.types_of(&term("mary")).unwrap();
+        assert!(
+            mary_types.contains(&term("Parent")),
+            "domain axiom should infer Parent from hasChild assertion"
+        );
+        let bob_types = reasoner.types_of(&term("bob")).unwrap();
+        assert!(
+            !bob_types.contains(&term("PetOwner")),
+            "bare owns-edge does not prove PetOwner without the restriction"
+        );
+    }
 }
 
 #[cfg(test)]
