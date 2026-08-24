@@ -102,6 +102,11 @@ relation 把两个真实实体合并成同一个 individual。非标量 runtime 
 - `DataMinCardinality`
 - `DataMaxCardinality`
 
+`DataSomeValuesFrom` / `DataAllValuesFrom` / `DataMinCardinality` /
+`DataMaxCardinality` 的 filler 是完整的 composable `DataRange`，可表达 datatype、
+enumeration、facet restriction、complement、union 和 intersection。OWL Functional Syntax
+导入/导出使用同一表达面；ODL 可执行 schema 目前仍只在属性级 range 使用嵌套组合。
+
 未列出的 OWL 2 DL 表达式不应假设已支持。
 
 ### 4.3 Axiom

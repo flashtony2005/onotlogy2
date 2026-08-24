@@ -292,7 +292,7 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
                     ClassExpression::DataMinCardinality {
                         cardinality: min_cardinality,
                         property: term.clone(),
-                        datatype: scalar_datatype(property.ty),
+                        range: ModelDataRange::Datatype(scalar_datatype(property.ty)),
                     },
                 ));
             }
@@ -302,7 +302,7 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
                     ClassExpression::DataMaxCardinality {
                         cardinality: max_cardinality,
                         property: term.clone(),
-                        datatype: scalar_datatype(property.ty),
+                        range: ModelDataRange::Datatype(scalar_datatype(property.ty)),
                     },
                 ));
             }
@@ -389,7 +389,7 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
                 } => ClassExpression::DataMinCardinality {
                     cardinality: *cardinality,
                     property: Term::new(restriction.property.as_str()),
-                    datatype: scalar_datatype(*datatype),
+                    range: ModelDataRange::Datatype(scalar_datatype(*datatype)),
                 },
                 DataRestrictionKind::Max {
                     cardinality,
@@ -397,7 +397,7 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
                 } => ClassExpression::DataMaxCardinality {
                     cardinality: *cardinality,
                     property: Term::new(restriction.property.as_str()),
-                    datatype: scalar_datatype(*datatype),
+                    range: ModelDataRange::Datatype(scalar_datatype(*datatype)),
                 },
                 DataRestrictionKind::Value { literal } => {
                     ClassExpression::has_data(restriction.property.as_str(), data_literal(literal))
@@ -1200,12 +1200,12 @@ pub fn declared_data_cardinality_violations(
             ClassExpression::DataMinCardinality {
                 cardinality,
                 property,
-                datatype,
+                range: ModelDataRange::Datatype(datatype),
             } => (property, datatype, (*cardinality, u32::MAX)),
             ClassExpression::DataMaxCardinality {
                 cardinality,
                 property,
-                datatype,
+                range: ModelDataRange::Datatype(datatype),
             } => (property, datatype, (0, *cardinality)),
             _ => continue,
         };
@@ -1838,7 +1838,7 @@ object ClosedPerson extends Person:
             ClassExpression::DataMinCardinality {
                 cardinality: 1,
                 property: Term::new("phone"),
-                datatype: Datatype::String,
+                range: ModelDataRange::Datatype(Datatype::String),
             }
         )));
         assert!(schema.axioms().contains(&Axiom::subclass(
@@ -1846,7 +1846,7 @@ object ClosedPerson extends Person:
             ClassExpression::DataMaxCardinality {
                 cardinality: 0,
                 property: Term::new("fax"),
-                datatype: Datatype::String,
+                range: ModelDataRange::Datatype(Datatype::String),
             }
         )));
 
@@ -2949,7 +2949,7 @@ object Dog extends Animal:
             ClassExpression::DataMinCardinality {
                 cardinality: 1,
                 property: Term::new("name"),
-                datatype: Datatype::String,
+                range: ModelDataRange::Datatype(Datatype::String),
             }
         )));
 

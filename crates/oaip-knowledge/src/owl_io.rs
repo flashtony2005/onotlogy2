@@ -2,7 +2,8 @@
 
 use crate::error::{KnowledgeError, Result};
 use crate::model::{
-    Axiom, ClassExpression, DataFacet, DataRange, Datatype, FacetValue, Literal, Ontology, Term,
+    Axiom, ClassExpression, DataFacet, DataRange as ModelDataRange, Datatype, FacetValue, Literal,
+    Ontology, Term,
 };
 use crate::reasoner::{display_term, to_horned_owl};
 use chrono::{NaiveDate, SecondsFormat, Utc};
@@ -156,12 +157,12 @@ fn facet(facet: &Facet) -> Option<DataFacet> {
     }
 }
 
-fn data_range(range: &OwlDataRange) -> Result<DataRange> {
+fn data_range(range: &OwlDataRange) -> Result<ModelDataRange> {
     match range {
-        OwlDataRange::Datatype(datatype) => {
-            Ok(DataRange::Datatype(convert_datatype(datatype.0.as_ref())?))
-        }
-        OwlDataRange::DataOneOf(values) => Ok(DataRange::OneOf(
+        OwlDataRange::Datatype(datatype) => Ok(ModelDataRange::Datatype(convert_datatype(
+            datatype.0.as_ref(),
+        )?)),
+        OwlDataRange::DataOneOf(values) => Ok(ModelDataRange::OneOf(
             values.iter().map(literal).collect::<Result<_>>()?,
         )),
         OwlDataRange::DatatypeRestriction(base, restrictions) => {
@@ -174,28 +175,19 @@ fn data_range(range: &OwlDataRange) -> Result<DataRange> {
                         .ok_or_else(|| invalid("unsupported datatype restriction facet"))
                 })
                 .collect::<Result<_>>()?;
-            Ok(DataRange::Restriction {
+            Ok(ModelDataRange::Restriction {
                 datatype: convert_datatype(base.0.as_ref())?,
                 facets,
             })
         }
         OwlDataRange::DataComplementOf(child) => {
-            Ok(DataRange::Complement(Box::new(data_range(child)?)))
+            Ok(ModelDataRange::Complement(Box::new(data_range(child)?)))
         }
-        OwlDataRange::DataUnionOf(children) => Ok(DataRange::Union(
+        OwlDataRange::DataUnionOf(children) => Ok(ModelDataRange::Union(
             children.iter().map(data_range).collect::<Result<_>>()?,
         )),
-        OwlDataRange::DataIntersectionOf(children) => Ok(DataRange::Intersection(
+        OwlDataRange::DataIntersectionOf(children) => Ok(ModelDataRange::Intersection(
             children.iter().map(data_range).collect::<Result<_>>()?,
-        )),
-    }
-}
-
-fn simple_data_range(range: &OwlDataRange) -> Result<Datatype> {
-    match range {
-        OwlDataRange::Datatype(datatype) => convert_datatype(datatype.0.as_ref()),
-        _ => Err(invalid(
-            "complex data ranges in class cardinalities are not supported",
         )),
     }
 }
@@ -272,13 +264,13 @@ fn class_expression(expression: &OwlClassExpression) -> Result<ClassExpression> 
         OwlClassExpression::DataSomeValuesFrom { dp, dr } => {
             Ok(ClassExpression::DataSomeValuesFrom {
                 property: data_property(dp),
-                datatype: simple_data_range(dr)?,
+                range: data_range(dr)?,
             })
         }
         OwlClassExpression::DataAllValuesFrom { dp, dr } => {
             Ok(ClassExpression::DataAllValuesFrom {
                 property: data_property(dp),
-                datatype: simple_data_range(dr)?,
+                range: data_range(dr)?,
             })
         }
         OwlClassExpression::DataHasValue { dp, l } => Ok(ClassExpression::DataHasValue {
@@ -289,14 +281,14 @@ fn class_expression(expression: &OwlClassExpression) -> Result<ClassExpression> 
             Ok(ClassExpression::DataMinCardinality {
                 cardinality: *n,
                 property: data_property(dp),
-                datatype: simple_data_range(dr)?,
+                range: data_range(dr)?,
             })
         }
         OwlClassExpression::DataMaxCardinality { n, dp, dr } => {
             Ok(ClassExpression::DataMaxCardinality {
                 cardinality: *n,
                 property: data_property(dp),
-                datatype: simple_data_range(dr)?,
+                range: data_range(dr)?,
             })
         }
         OwlClassExpression::ObjectHasSelf(_)
@@ -326,7 +318,7 @@ fn property_range_axiom(
                 base.clone(),
                 restrictions.clone(),
             ))?;
-            let DataRange::Restriction { datatype, facets } = range else {
+            let ModelDataRange::Restriction { datatype, facets } = range else {
                 unreachable!("the constructed range is always a restriction");
             };
             Ok(Axiom::DataPropertyRangeRestriction {
@@ -553,6 +545,51 @@ mod tests {
                 Term::new("http://example.com/owl#alice"),
                 Term::new("http://example.com/owl#researcher-1"),
             ]))
+    }
+
+    #[test]
+    fn owl_functional_syntax_round_trips_complex_data_class_ranges() {
+        let ontology = Ontology::new()
+            .with_axiom(Axiom::subclass(
+                ClassExpression::class("Code"),
+                ClassExpression::all_data_range(
+                    "code",
+                    ModelDataRange::union([
+                        ModelDataRange::restriction(
+                            Datatype::String,
+                            vec![FacetValue {
+                                facet: DataFacet::Pattern,
+                                value: Literal::String("[A-Z]{3}-[0-9]{4}".into()),
+                            }],
+                        ),
+                        ModelDataRange::Datatype(Datatype::Integer),
+                    ]),
+                ),
+            ))
+            .with_axiom(Axiom::subclass(
+                ClassExpression::class("Tagged"),
+                ClassExpression::DataMinCardinality {
+                    cardinality: 1,
+                    property: Term::new("tag"),
+                    range: ModelDataRange::one_of([
+                        Literal::String("admin".into()),
+                        Literal::String("guest".into()),
+                    ]),
+                },
+            ));
+
+        let syntax = to_owl_ofn(&ontology).unwrap();
+        let parsed = from_owl_ofn(&syntax).unwrap();
+        assert_eq!(parsed.axioms().len(), ontology.axioms().len());
+        for axiom in ontology.axioms() {
+            assert!(parsed.axioms().contains(axiom));
+        }
+        assert!(Reasoner::new(&parsed).unwrap().is_consistent().unwrap());
+        let round_tripped = from_owl_ofn(&to_owl_ofn(&parsed).unwrap()).unwrap();
+        assert_eq!(round_tripped.axioms().len(), ontology.axioms().len());
+        for axiom in ontology.axioms() {
+            assert!(round_tripped.axioms().contains(axiom));
+        }
     }
 
     #[test]

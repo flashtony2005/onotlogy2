@@ -790,7 +790,7 @@ pub(crate) fn to_horned_owl(ontology: &Ontology) -> Result<SetOntology<ArcStr>> 
             Axiom::DataPropertyRange { property, datatype } => {
                 declare_data_property(&build, &mut out, property);
                 let dp = build.data_property(term_iri(property));
-                let dr = data_range(&build, *datatype);
+                let dr = owl_data_range(&build, &ModelDataRange::Datatype(*datatype));
                 out.insert(DataPropertyRange { dp, dr });
             }
             Axiom::DataPropertyOneOf { property, values } => {
@@ -1056,18 +1056,18 @@ fn class_expression(
                 bce: Box::new(class_expression(value, build, out)),
             }
         }
-        ClassExpression::DataSomeValuesFrom { property, datatype } => {
+        ClassExpression::DataSomeValuesFrom { property, range } => {
             declare_data_property(build, out, property);
             OwlClassExpression::DataSomeValuesFrom {
                 dp: build.data_property(term_iri(property)),
-                dr: data_range(build, *datatype),
+                dr: owl_data_range(build, range),
             }
         }
-        ClassExpression::DataAllValuesFrom { property, datatype } => {
+        ClassExpression::DataAllValuesFrom { property, range } => {
             declare_data_property(build, out, property);
             OwlClassExpression::DataAllValuesFrom {
                 dp: build.data_property(term_iri(property)),
-                dr: data_range(build, *datatype),
+                dr: owl_data_range(build, range),
             }
         }
         ClassExpression::DataHasValue { property, value } => {
@@ -1080,32 +1080,28 @@ fn class_expression(
         ClassExpression::DataMinCardinality {
             cardinality,
             property,
-            datatype,
+            range,
         } => {
             declare_data_property(build, out, property);
             OwlClassExpression::DataMinCardinality {
                 n: *cardinality,
                 dp: build.data_property(term_iri(property)),
-                dr: data_range(build, *datatype),
+                dr: owl_data_range(build, range),
             }
         }
         ClassExpression::DataMaxCardinality {
             cardinality,
             property,
-            datatype,
+            range,
         } => {
             declare_data_property(build, out, property);
             OwlClassExpression::DataMaxCardinality {
                 n: *cardinality,
                 dp: build.data_property(term_iri(property)),
-                dr: data_range(build, *datatype),
+                dr: owl_data_range(build, range),
             }
         }
     }
-}
-
-fn data_range(build: &Build<ArcStr>, datatype: Datatype) -> DataRange<ArcStr> {
-    DataRange::Datatype(owl_datatype(build, datatype))
 }
 
 fn owl_datatype(build: &Build<ArcStr>, datatype: Datatype) -> OwlDatatype<ArcStr> {

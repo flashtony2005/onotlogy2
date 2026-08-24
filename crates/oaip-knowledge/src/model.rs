@@ -173,11 +173,11 @@ pub enum ClassExpression {
     },
     DataSomeValuesFrom {
         property: Term,
-        datatype: Datatype,
+        range: DataRange,
     },
     DataAllValuesFrom {
         property: Term,
-        datatype: Datatype,
+        range: DataRange,
     },
     DataHasValue {
         property: Term,
@@ -186,12 +186,12 @@ pub enum ClassExpression {
     DataMinCardinality {
         cardinality: u32,
         property: Term,
-        datatype: Datatype,
+        range: DataRange,
     },
     DataMaxCardinality {
         cardinality: u32,
         property: Term,
-        datatype: Datatype,
+        range: DataRange,
     },
 }
 
@@ -252,17 +252,30 @@ impl ClassExpression {
     pub fn some_data(property: impl Into<Term>, datatype: Datatype) -> Self {
         Self::DataSomeValuesFrom {
             property: property.into(),
-            datatype,
+            range: DataRange::Datatype(datatype),
+        }
+    }
+
+    pub fn some_data_range(property: impl Into<Term>, range: DataRange) -> Self {
+        Self::DataSomeValuesFrom {
+            property: property.into(),
+            range,
         }
     }
 
     pub fn all_data(property: impl Into<Term>, datatype: Datatype) -> Self {
         Self::DataAllValuesFrom {
             property: property.into(),
-            datatype,
+            range: DataRange::Datatype(datatype),
         }
     }
 
+    pub fn all_data_range(property: impl Into<Term>, range: DataRange) -> Self {
+        Self::DataAllValuesFrom {
+            property: property.into(),
+            range,
+        }
+    }
     pub fn has_data(property: impl Into<Term>, value: Literal) -> Self {
         Self::DataHasValue {
             property: property.into(),

@@ -2406,7 +2406,7 @@ object TaggedPerson extends Person:
             ClassExpression::class(Term::new("TaggedPerson")),
             ClassExpression::DataSomeValuesFrom {
                 property: Term::new("note"),
-                datatype: Datatype::String,
+                range: DataRange::Datatype(Datatype::String),
             }
         )));
         assert!(applied.ontology.axioms().contains(&Axiom::subclass(
@@ -2414,7 +2414,7 @@ object TaggedPerson extends Person:
             ClassExpression::DataMinCardinality {
                 cardinality: 1,
                 property: Term::new("note"),
-                datatype: Datatype::String,
+                range: DataRange::Datatype(Datatype::String),
             }
         )));
         assert!(applied.ontology.axioms().contains(&Axiom::subclass(
@@ -2422,7 +2422,7 @@ object TaggedPerson extends Person:
             ClassExpression::DataMaxCardinality {
                 cardinality: 0,
                 property: Term::new("fax"),
-                datatype: Datatype::String,
+                range: DataRange::Datatype(Datatype::String),
             }
         )));
         assert!(applied.ontology.axioms().contains(&Axiom::subclass(
