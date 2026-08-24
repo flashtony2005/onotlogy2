@@ -592,4 +592,41 @@ mod tests {
                 .any(|index| *index >= ontology.len())
         );
     }
+
+    #[test]
+    fn property_chain_entailment_is_explainable() {
+        let has_parent = Term::new("hasParent");
+        let has_grandparent = Term::new("hasGrandparent");
+        let ontology = Ontology::new()
+            .with_axiom(Axiom::SubObjectPropertyChainOf {
+                properties: vec![has_parent.clone(), has_parent.clone()],
+                super_property: has_grandparent.clone(),
+            })
+            .with_axiom(Axiom::ObjectPropertyAssertion {
+                property: has_parent.clone(),
+                subject: term("alice"),
+                object: term("bob"),
+            })
+            .with_axiom(Axiom::ObjectPropertyAssertion {
+                property: has_parent.clone(),
+                subject: term("bob"),
+                object: term("carol"),
+            });
+
+        let reasoner = Reasoner::new(&ontology).unwrap();
+        assert!(
+            reasoner
+                .entails_object_property(&has_grandparent, &term("alice"), &term("carol"))
+                .unwrap()
+        );
+
+        let explanation = reasoner
+            .explain_object_property(&has_grandparent, &term("alice"), &term("carol"))
+            .unwrap()
+            .expect("chain entailment should be explainable");
+        assert!(
+            explanation.axiom_indices.contains(&0),
+            "the chain axiom must be part of the justification"
+        );
+    }
 }

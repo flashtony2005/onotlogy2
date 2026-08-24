@@ -1945,6 +1945,66 @@ object Cat extends Animal:
     }
 
     #[tokio::test]
+    async fn property_chain_proposal_survives_governance_and_persistence() {
+        let has_parent = Term::new("hasParent");
+        let has_grandparent = Term::new("hasGrandparent");
+        let path = std::env::temp_dir().join(format!(
+            "oaip-ontology-chain-{}-{}.db",
+            std::process::id(),
+            oaip_trace::now_ts()
+        ));
+        let storage = LibSQLStorage::open(path.to_str().unwrap()).await.unwrap();
+        let root = Ontology::new().with_axiom(Axiom::subclass(
+            ClassExpression::class(Term::new("Person")),
+            ClassExpression::Thing,
+        ));
+        storage
+            .initialize_knowledge_version("root", &root, None)
+            .await
+            .unwrap();
+
+        let proposal = OntologyProposal::new("add-grandparent-chain").with_change(
+            OntologyChange::Add(Axiom::SubObjectPropertyChainOf {
+                properties: vec![has_parent.clone(), has_parent.clone()],
+                super_property: has_grandparent.clone(),
+            }),
+        );
+        storage
+            .propose_knowledge_change("root", &proposal, None)
+            .await
+            .unwrap();
+        storage
+            .decide_knowledge_proposal("add-grandparent-chain", true, "alice", None)
+            .await
+            .unwrap();
+        let (_, applied) = storage
+            .apply_knowledge_proposal("add-grandparent-chain", "v2")
+            .await
+            .unwrap();
+        assert_eq!(
+            Some("root".to_owned()),
+            applied.parent_id,
+            "v2 should be derived from root"
+        );
+        assert!(
+            applied
+                .ontology
+                .axioms()
+                .iter()
+                .any(|axiom| matches!(axiom,
+                    Axiom::SubObjectPropertyChainOf { super_property, .. }
+                        if *super_property == has_grandparent
+                )),
+            "applied version must retain the chain axiom"
+        );
+
+        drop(storage);
+        let reopened = LibSQLStorage::open(path.to_str().unwrap()).await.unwrap();
+        let persisted = reopened.current_knowledge_version().await.unwrap().unwrap();
+        assert_eq!("v2", persisted.id);
+    }
+
+    #[tokio::test]
     async fn runtime_relations_validate_live_source_and_target_types() {
         fn relation_ir(target: &str) -> OntologyIR {
             let object = |name: &str| ObjectType {
