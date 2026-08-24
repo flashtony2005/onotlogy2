@@ -267,6 +267,9 @@ pub(crate) enum KnowledgeReasonQuery {
     InstancesOf {
         class: String,
     },
+    TypesOf {
+        individual: String,
+    },
     IsInstanceOf {
         class: String,
         individual: String,
@@ -526,6 +529,12 @@ pub(crate) async fn reason_current_knowledge(
         KnowledgeReasonQuery::InstancesOf { class } => {
             match reasoner.instances_of(&KnowledgeTerm::new(class)) {
                 Ok(instances) => json!({ "instances": instances }),
+                Err(error) => return reasoning_error(error),
+            }
+        }
+        KnowledgeReasonQuery::TypesOf { individual } => {
+            match reasoner.types_of(&KnowledgeTerm::new(individual)) {
+                Ok(types) => json!({ "types": types }),
                 Err(error) => return reasoning_error(error),
             }
         }

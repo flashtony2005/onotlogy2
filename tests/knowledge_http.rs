@@ -184,6 +184,21 @@ async fn knowledge_http_supports_reasoning_governed_evolution_and_rollback() {
         "POST",
         "/api/v1/knowledge/reason",
         Some(json!({
+            "query": "typesOf",
+            "individual": "dog-1"
+        })),
+    )
+    .await;
+    assert_eq!(status, 200, "类型检索失败: {body}");
+    let types = body["data"]["types"].as_array().unwrap();
+    assert!(types.contains(&json!("Dog")));
+    assert!(types.contains(&json!("Animal")));
+
+    let (status, body) = call(
+        addr,
+        "POST",
+        "/api/v1/knowledge/reason",
+        Some(json!({
             "query": "entailsObjectProperty",
             "property": "placed",
             "subject": "customer-1",

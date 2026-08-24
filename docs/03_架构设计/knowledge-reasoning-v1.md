@@ -342,6 +342,7 @@ HTTP `POST /api/v1/knowledge/reason` 支持：
 - subclass entailment
 - object/data property entailment
 - instances / instance check
+- types of an individual（包含继承和表达式蕴含的类型）
 - realization
 
 `GET /api/v1/knowledge/diagnosis` 一次性检查 persisted TBox + current live ABox，输出整体
