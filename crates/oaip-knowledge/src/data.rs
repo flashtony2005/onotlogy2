@@ -43,13 +43,13 @@ pub struct DataConsistencyCacheStats {
     pub exact_hits: u64,
     pub prefix_hits: u64,
     pub rebuilds: u64,
-    pub delta_assertions: u64,
+    pub delta_axioms: u64,
 }
 
 static EXACT_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static PREFIX_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static REBUILDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static DELTA_ASSERTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static DELTA_AXIOMS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Return the lifetime totals recorded by [`validate_data_consistency`].
 pub fn data_consistency_cache_stats() -> DataConsistencyCacheStats {
@@ -57,7 +57,7 @@ pub fn data_consistency_cache_stats() -> DataConsistencyCacheStats {
         exact_hits: EXACT_HITS.load(std::sync::atomic::Ordering::Relaxed),
         prefix_hits: PREFIX_HITS.load(std::sync::atomic::Ordering::Relaxed),
         rebuilds: REBUILDS.load(std::sync::atomic::Ordering::Relaxed),
-        delta_assertions: DELTA_ASSERTIONS.load(std::sync::atomic::Ordering::Relaxed),
+        delta_axioms: DELTA_AXIOMS.load(std::sync::atomic::Ordering::Relaxed),
     }
 }
 
@@ -79,10 +79,10 @@ fn record_rebuild() {
     THREAD_REBUILDS.with(|count| count.set(count.get() + 1));
 }
 
-fn record_delta_assertion() {
-    DELTA_ASSERTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+fn record_delta_axiom() {
+    DELTA_AXIOMS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     #[cfg(feature = "test-util")]
-    THREAD_DELTA_ASSERTIONS.with(|count| count.set(count.get() + 1));
+    THREAD_DELTA_AXIOMS.with(|count| count.set(count.get() + 1));
 }
 
 // Per-thread counters let storage regressions assert cache behavior without
@@ -92,7 +92,7 @@ thread_local! {
     static THREAD_EXACT_HITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static THREAD_PREFIX_HITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static THREAD_REBUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    static THREAD_DELTA_ASSERTIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static THREAD_DELTA_AXIOMS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(feature = "test-util")]
@@ -100,7 +100,7 @@ pub fn reset_data_consistency_thread_stats() {
     THREAD_EXACT_HITS.with(|count| count.set(0));
     THREAD_PREFIX_HITS.with(|count| count.set(0));
     THREAD_REBUILDS.with(|count| count.set(0));
-    THREAD_DELTA_ASSERTIONS.with(|count| count.set(0));
+    THREAD_DELTA_AXIOMS.with(|count| count.set(0));
 }
 
 #[cfg(feature = "test-util")]
@@ -108,12 +108,12 @@ pub fn data_consistency_thread_stats() -> DataConsistencyCacheStats {
     let exact_hits = THREAD_EXACT_HITS.with(std::cell::Cell::get);
     let prefix_hits = THREAD_PREFIX_HITS.with(std::cell::Cell::get);
     let rebuilds = THREAD_REBUILDS.with(std::cell::Cell::get);
-    let delta_assertions = THREAD_DELTA_ASSERTIONS.with(std::cell::Cell::get);
+    let delta_axioms = THREAD_DELTA_AXIOMS.with(std::cell::Cell::get);
     DataConsistencyCacheStats {
         exact_hits,
         prefix_hits,
         rebuilds,
-        delta_assertions,
+        delta_axioms,
     }
 }
 
@@ -937,10 +937,10 @@ impl DataConsistencyState {
         current
     }
 
-    fn insert_positive(&mut self, fact: DataFact) -> Result<()> {
-        validate_literal(&fact.property, &fact.value)?;
-        let individual = self.canonical_individual(&fact.individual);
-
+    /// Check every schema-derived constraint attached to a positive fact.
+    /// Identity lookup and index mutation stay with the caller so the same
+    /// logic can revalidate retained facts after an appended TBox constraint.
+    fn validate_positive_constraints(&self, fact: &DataFact, individual: &Term) -> Result<()> {
         if let Some(candidate_ranges) = self.range_expressions.get(&fact.property) {
             for range in candidate_ranges {
                 if !data_range_admits(range, &fact.value) {
@@ -1002,6 +1002,87 @@ impl DataConsistencyState {
             }
         }
 
+        if let Some(properties) = self.properties_by_individual.get(individual) {
+            for existing in properties {
+                if *existing == fact.property {
+                    continue;
+                }
+                let pair = if existing <= &fact.property {
+                    (existing.clone(), fact.property.clone())
+                } else {
+                    (fact.property.clone(), existing.clone())
+                };
+                if self.disjoint.contains(&pair) {
+                    return Err(KnowledgeError::Invalid(format!(
+                        "data properties `{}` and `{}` are disjoint but both are asserted for `{individual}`",
+                        pair.0, pair.1
+                    )));
+                }
+            }
+        }
+
+        if self.functional.contains(&fact.property)
+            && let Some(existing) = self
+                .functional_values
+                .get(&(individual.clone(), fact.property.clone()))
+            && !literal_equal(existing, &fact.value)
+        {
+            return Err(KnowledgeError::Invalid(format!(
+                "functional data property `{}` has conflicting values for `{individual}`",
+                fact.property
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn revalidate_positive_constraints(&self) -> Result<()> {
+        for fact in &self.positives {
+            let individual = self.canonical_individual(&fact.individual);
+            validate_literal(&fact.property, &fact.value)?;
+            self.validate_positive_constraints(fact, &individual)?;
+        }
+        Ok(())
+    }
+
+    /// Retroactively make a property functional.  Unlike ordinary insertion,
+    /// the retained facts cannot rely on `functional_values`: an earlier
+    /// non-functional snapshot never populated that bucket.
+    fn enforce_functional_property(&mut self, property: &Term) -> Result<()> {
+        self.functional.insert(property.clone());
+        let mut values = BTreeMap::new();
+        for fact in &self.positives {
+            if fact.property != *property {
+                continue;
+            }
+            let key = (
+                self.canonical_individual(&fact.individual),
+                property.clone(),
+            );
+            match values.get(&key) {
+                Some(existing) if literal_equal(existing, &fact.value) => {}
+                Some(_) => {
+                    return Err(KnowledgeError::Invalid(format!(
+                        "functional data property `{}` has conflicting values for `{}`",
+                        property, key.0
+                    )));
+                }
+                None => {
+                    values.insert(key, fact.value.clone());
+                }
+            }
+        }
+        self.functional_values
+            .retain(|(_, existing_property), _| existing_property != property);
+        self.functional_values.extend(values);
+        Ok(())
+    }
+
+    fn insert_positive(&mut self, fact: DataFact) -> Result<()> {
+        validate_literal(&fact.property, &fact.value)?;
+        let individual = self.canonical_individual(&fact.individual);
+        self.validate_positive_constraints(&fact, &individual)?;
+
         let contradicted = self
             .negative_index
             .get(&(individual.clone(), fact.property.clone()))
@@ -1023,39 +1104,13 @@ impl DataConsistencyState {
             .properties_by_individual
             .entry(individual.clone())
             .or_default();
-        if properties.insert(fact.property.clone()) {
-            for existing in properties.iter() {
-                if *existing == fact.property {
-                    continue;
-                }
-                let pair = if existing <= &fact.property {
-                    (existing.clone(), fact.property.clone())
-                } else {
-                    (fact.property.clone(), existing.clone())
-                };
-                if self.disjoint.contains(&pair) {
-                    return Err(KnowledgeError::Invalid(format!(
-                        "data properties `{}` and `{}` are disjoint but both are asserted for `{individual}`",
-                        pair.0, pair.1
-                    )));
-                }
-            }
-        }
+        properties.insert(fact.property.clone());
 
         if self.functional.contains(&fact.property) {
             let key = (individual.clone(), fact.property.clone());
-            match self.functional_values.get(&key) {
-                Some(existing) if literal_equal(existing, &fact.value) => {}
-                Some(_) => {
-                    return Err(KnowledgeError::Invalid(format!(
-                        "functional data property `{}` has conflicting values for `{}`",
-                        fact.property, key.0
-                    )));
-                }
-                None => {
-                    self.functional_values.insert(key, fact.value.clone());
-                }
-            }
+            self.functional_values
+                .entry(key)
+                .or_insert_with(|| fact.value.clone());
         }
 
         let key = (individual, fact.property.clone());
@@ -1262,6 +1317,78 @@ impl DataConsistencyState {
         Ok(())
     }
 
+    /// Apply an appended constraint whose semantics affect only schema buckets
+    /// and positive-fact admission.  Sub-property changes are excluded: they
+    /// can change the ancestor expansion of every retained assertion.
+    fn apply_tbox_delta(&mut self, axiom: &Axiom) -> Result<()> {
+        match axiom {
+            Axiom::DataPropertyDomain { .. } => Ok(()),
+            Axiom::DataPropertyRange { property, datatype } => {
+                let count = {
+                    let allowed = self.ranges.entry(property.clone()).or_default();
+                    allowed.insert(*datatype);
+                    allowed.len()
+                };
+                if count > 1 {
+                    let datatypes = &self.ranges[property];
+                    return Err(KnowledgeError::Invalid(format!(
+                        "data property `{property}` has contradictory ranges: {datatypes:?}"
+                    )));
+                }
+                self.revalidate_positive_constraints()
+            }
+            Axiom::DataPropertyOneOf { property, values } => {
+                self.one_ofs
+                    .entry(property.clone())
+                    .or_default()
+                    .push(values.clone());
+                self.revalidate_positive_constraints()
+            }
+            Axiom::DataPropertyRangeRestriction {
+                property,
+                datatype,
+                facets,
+            } => {
+                let pattern = validate_restriction(property, datatype, facets)?;
+                let restriction_index = self
+                    .restrictions
+                    .values()
+                    .flat_map(|entries| entries.iter().map(|(index, _, _, _)| *index))
+                    .max()
+                    .map_or(0, |index| index + 1);
+                self.restrictions
+                    .entry(property.clone())
+                    .or_default()
+                    .push((restriction_index, *datatype, facets.clone(), pattern));
+                self.revalidate_positive_constraints()
+            }
+            Axiom::DataPropertyDataRange { property, range } => {
+                validate_data_range(range, property)?;
+                self.range_expressions
+                    .entry(property.clone())
+                    .or_default()
+                    .push(range.clone());
+                self.revalidate_positive_constraints()
+            }
+            Axiom::FunctionalDataProperty(property) => self.enforce_functional_property(property),
+            Axiom::DisjointDataProperties(properties) if properties.len() >= 2 => {
+                for left in 0..properties.len() {
+                    for right in left + 1..properties.len() {
+                        let first = &properties[left];
+                        let second = &properties[right];
+                        self.disjoint
+                            .insert((first.min(second).clone(), first.max(second).clone()));
+                    }
+                }
+                self.revalidate_positive_constraints()
+            }
+            Axiom::DisjointDataProperties(_) => Ok(()),
+            _ => Err(KnowledgeError::Invalid(
+                "TBox delta supports only appended data constraints".to_owned(),
+            )),
+        }
+    }
+
     /// Apply an append-only ABox fact to an already indexed snapshot.
     ///
     /// A real SameIndividuals axiom changes the canonical identity of existing
@@ -1271,6 +1398,13 @@ impl DataConsistencyState {
     fn insert_delta(&mut self, axiom: &Axiom) -> Result<()> {
         match axiom {
             Axiom::SameIndividuals(terms) if terms.len() >= 2 => self.merge_same_individuals(terms),
+            Axiom::DataPropertyDomain { .. }
+            | Axiom::DataPropertyRange { .. }
+            | Axiom::DataPropertyOneOf { .. }
+            | Axiom::DataPropertyRangeRestriction { .. }
+            | Axiom::DataPropertyDataRange { .. }
+            | Axiom::FunctionalDataProperty(_)
+            | Axiom::DisjointDataProperties(_) => self.apply_tbox_delta(axiom),
             Axiom::DataPropertyAssertion {
                 property,
                 individual,
@@ -1334,6 +1468,29 @@ fn is_incremental_data_assertion(axiom: &Axiom) -> bool {
 
 fn is_incremental_identity_axiom(axiom: &Axiom) -> bool {
     matches!(axiom, Axiom::SameIndividuals(terms) if terms.len() >= 2)
+}
+
+fn is_incremental_tbox_axiom(axiom: &Axiom) -> bool {
+    matches!(
+        axiom,
+        Axiom::DataPropertyDomain { .. }
+            | Axiom::DataPropertyRange { .. }
+            | Axiom::DataPropertyOneOf { .. }
+            | Axiom::DataPropertyRangeRestriction { .. }
+            | Axiom::DataPropertyDataRange { .. }
+            | Axiom::FunctionalDataProperty(_)
+            | Axiom::DisjointDataProperties(_)
+    )
+}
+
+/// One decision governs both the validator branch and its regression so the
+/// accepted append-only vocabulary cannot silently diverge between the two.
+fn supports_incremental_suffix(suffix: &[&Axiom]) -> bool {
+    suffix.iter().all(|axiom| {
+        is_incremental_data_assertion(axiom)
+            || is_incremental_identity_axiom(axiom)
+            || is_incremental_tbox_axiom(axiom)
+    })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1530,11 +1687,7 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
             return result;
         }
         let suffix = &projection[prefix_length..];
-        if entry.result.is_ok()
-            && suffix.iter().all(|axiom| {
-                is_incremental_data_assertion(axiom) || is_incremental_identity_axiom(axiom)
-            })
-        {
+        if entry.result.is_ok() && supports_incremental_suffix(suffix) {
             // Reuse the retained index in place when this is its last cache
             // reference.  The fallback clone keeps the old prefix available and
             // preserves correctness under the unusual case of a shared state.
@@ -1554,7 +1707,7 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
             for axiom in suffix {
                 match delta_state.insert_delta(axiom) {
                     Ok(()) => {
-                        record_delta_assertion();
+                        record_delta_axiom();
                     }
                     Err(error) => {
                         outcome = Err(error);
@@ -1622,7 +1775,7 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
                     delta_state.remove_positive(&fact)
                 };
                 if removed.is_some() {
-                    record_delta_assertion();
+                    record_delta_axiom();
                 }
             }
             for fact in patch.add_positive {
@@ -1630,7 +1783,7 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
                     outcome = Err(error);
                     break;
                 }
-                record_delta_assertion();
+                record_delta_axiom();
             }
             if outcome.is_ok() {
                 for fact in patch.add_negative {
@@ -1638,7 +1791,7 @@ pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
                         outcome = Err(error);
                         break;
                     }
-                    record_delta_assertion();
+                    record_delta_axiom();
                 }
             }
             cache.put(key, ontology, delta_state, outcome.clone());
@@ -1964,6 +2117,134 @@ mod tests {
                 ]))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn appended_tbox_constraints_revalidate_retained_assertions() {
+        let cases = vec![
+            (
+                Ontology::new()
+                    .with_axiom(fact(
+                        "tbox-functional-a",
+                        "tbox-status",
+                        Literal::String("first".into()),
+                    ))
+                    .with_axiom(fact(
+                        "tbox-functional-a",
+                        "tbox-status",
+                        Literal::String("second".into()),
+                    )),
+                Axiom::FunctionalDataProperty(term("tbox-status")),
+            ),
+            (
+                Ontology::new()
+                    .with_axiom(fact("tbox-disjoint-a", "tbox-age", Literal::Integer(30)))
+                    .with_axiom(fact(
+                        "tbox-disjoint-a",
+                        "tbox-height",
+                        Literal::Integer(180),
+                    )),
+                Axiom::DisjointDataProperties(vec![term("tbox-age"), term("tbox-height")]),
+            ),
+            (
+                Ontology::new().with_axiom(fact("tbox-range-a", "tbox-name", Literal::Integer(30))),
+                Axiom::DataPropertyRange {
+                    property: term("tbox-name"),
+                    datatype: Datatype::String,
+                },
+            ),
+            (
+                Ontology::new().with_axiom(fact(
+                    "tbox-one-of-a",
+                    "tbox-state",
+                    Literal::String("rejected".into()),
+                )),
+                Axiom::DataPropertyOneOf {
+                    property: term("tbox-state"),
+                    values: vec![Literal::String("approved".into())],
+                },
+            ),
+            (
+                Ontology::new().with_axiom(fact(
+                    "tbox-pattern-a",
+                    "tbox-code",
+                    Literal::String("bad".into()),
+                )),
+                Axiom::DataPropertyRangeRestriction {
+                    property: term("tbox-code"),
+                    datatype: Datatype::String,
+                    facets: vec![FacetValue {
+                        facet: DataFacet::Pattern,
+                        value: Literal::String("^good$".into()),
+                    }],
+                },
+            ),
+            (
+                Ontology::new().with_axiom(fact(
+                    "tbox-data-range-a",
+                    "tbox-count",
+                    Literal::Boolean(true),
+                )),
+                Axiom::DataPropertyDataRange {
+                    property: term("tbox-count"),
+                    range: DataRange::Datatype(Datatype::Integer),
+                },
+            ),
+        ];
+
+        for (base, tbox) in cases {
+            assert!(validate_data_consistency(&base).is_ok());
+            let mut state = DataConsistencyState::from_ontology(&base).unwrap();
+            assert!(
+                state.apply_tbox_delta(&tbox).is_err(),
+                "appended {tbox:?} must revalidate retained facts"
+            );
+
+            let extended = base.clone().with_axiom(tbox.clone());
+            let prefix_length = data_consistency_projection(&base).len();
+            assert!(supports_incremental_suffix(
+                &data_consistency_projection(&extended)[prefix_length..]
+            ));
+            assert_eq!(
+                data_consistency_projection(&extended).len(),
+                prefix_length + 1
+            );
+            assert!(validate_data_consistency(&extended).is_err());
+        }
+    }
+
+    #[test]
+    fn appended_functional_tbox_applies_to_later_assertions() {
+        let base = Ontology::new().with_axiom(fact(
+            "tbox-later-a",
+            "tbox-later-status",
+            Literal::String("active".into()),
+        ));
+        let tbox = Axiom::FunctionalDataProperty(term("tbox-later-status"));
+        assert!(validate_data_consistency(&base).is_ok());
+
+        let mut state = DataConsistencyState::from_ontology(&base).unwrap();
+        assert!(state.apply_tbox_delta(&tbox).is_ok());
+        assert!(
+            state
+                .insert_delta(&fact(
+                    "tbox-later-a",
+                    "tbox-later-status",
+                    Literal::String("inactive".into()),
+                ))
+                .is_err()
+        );
+
+        let valid = base.clone().with_axiom(tbox).with_axiom(fact(
+            "tbox-later-c",
+            "tbox-later-status",
+            Literal::String("active".into()),
+        ));
+        let prefix_length = data_consistency_projection(&base).len();
+        assert!(supports_incremental_suffix(
+            &data_consistency_projection(&valid)[prefix_length..]
+        ));
+        assert!(validate_data_consistency(&valid).is_ok());
     }
 
     #[test]

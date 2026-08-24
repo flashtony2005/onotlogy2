@@ -74,7 +74,7 @@ async fn governance_execution_reuses_cached_data_prefixes_and_exact_results() {
             exact_hits: 3,
             prefix_hits: 6,
             rebuilds: 1,
-            delta_assertions: 8,
+            delta_axioms: 8,
         },
         stats
     );
