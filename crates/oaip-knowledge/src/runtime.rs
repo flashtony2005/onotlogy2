@@ -578,6 +578,12 @@ pub fn validate_runtime_ir(ir: &OntologyIR) -> Result<()> {
             )));
         }
     }
+    if let Err(error) = ir.validate_inverse_relations() {
+        return Err(KnowledgeError::Invalid(format!(
+            "relation `{}`: {}",
+            error.relation, error.message
+        )));
+    }
 
     let mut endpoints = ir
         .relations
@@ -2345,6 +2351,20 @@ object Customer:
             .relations
             .push(relation("orphan", Some("missing")));
         assert!(validate_runtime_ir(&unknown_inverse).is_err());
+
+        let mut conflicting_inverse = ir(false);
+        conflicting_inverse.relations = vec![
+            relation("placed", Some("received")),
+            relation("received", Some("other")),
+        ];
+        assert!(validate_runtime_ir(&conflicting_inverse).is_err());
+
+        let mut one_sided_inverse = ir(false);
+        one_sided_inverse.relations = vec![
+            relation("placed", Some("received")),
+            relation("received", None),
+        ];
+        assert!(validate_runtime_ir(&one_sided_inverse).is_ok());
     }
 
     #[test]

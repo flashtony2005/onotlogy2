@@ -756,6 +756,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
         return Err(OdlError::new(E_INVALID_CLASS_GROUP, error.message, line, 1));
     }
 
+    ir.relations = declared_relations.iter().map(|(_, r)| r.clone()).collect();
     let mut endpoints = std::collections::BTreeMap::new();
     let mut seen_relations = std::collections::BTreeSet::new();
     for (ln, relation) in &declared_relations {
@@ -823,6 +824,16 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                     1,
                 ));
             }
+            if let Err(error) = ir.validate_inverse_relations()
+                && error.relation == relation.name
+            {
+                return Err(OdlError::new(
+                    E_RELATION_CONTRADICTION,
+                    format!("relation '{}': {}", relation.name, error.message),
+                    *ln,
+                    1,
+                ));
+            }
         }
         let value = (relation.source.clone(), relation.target.clone());
         if let Some(previous) = endpoints.insert(relation.name.clone(), value.clone())
@@ -836,7 +847,6 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             ));
         }
     }
-    ir.relations = declared_relations.iter().map(|(_, r)| r.clone()).collect();
     ir.relation_hierarchy = declared_sub_relations
         .iter()
         .map(|(_, (sub, sup))| RelationHierarchy {

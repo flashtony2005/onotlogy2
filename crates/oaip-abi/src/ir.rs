@@ -414,6 +414,67 @@ impl OntologyIR {
         Ok(())
     }
 
+    /// Validate that every inverse declaration has a unique target and agrees
+    /// with any reciprocal declaration and typed endpoints at governance
+    /// boundaries.  A one-sided declaration is valid because the OWL axiom is
+    /// inherently symmetric.
+    pub fn validate_inverse_relations(&self) -> Result<(), InverseRelationError> {
+        let by_name = self
+            .relations
+            .iter()
+            .map(|relation| (relation.name.as_str(), relation))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let mut inverse_targets = std::collections::BTreeMap::<&str, &String>::new();
+        for relation in &self.relations {
+            let Some(inverse_name) = relation.inverse_of.as_ref() else {
+                continue;
+            };
+            if inverse_name == &relation.name {
+                return Err(InverseRelationError::new(
+                    &relation.name,
+                    "cannot declare itself as its own inverse",
+                ));
+            }
+            if let std::collections::btree_map::Entry::Occupied(entry) =
+                inverse_targets.entry(inverse_name.as_str())
+                && entry.get().as_str() != relation.name.as_str()
+            {
+                return Err(InverseRelationError::new(
+                    &relation.name,
+                    format!(
+                        "declares inverse '{inverse_name}', but that property is already declared as the inverse of '{}'",
+                        entry.get()
+                    ),
+                ));
+            } else {
+                inverse_targets.insert(inverse_name.as_str(), &relation.name);
+            }
+            let Some(inverse) = by_name.get(inverse_name.as_str()) else {
+                return Err(InverseRelationError::new(
+                    &relation.name,
+                    format!("references undeclared inverse relation '{inverse_name}'"),
+                ));
+            };
+            if inverse.inverse_of.is_some()
+                && inverse.inverse_of.as_deref() != Some(relation.name.as_str())
+            {
+                return Err(InverseRelationError::new(
+                    &relation.name,
+                    format!("is not reciprocated by inverse relation '{inverse_name}'"),
+                ));
+            }
+            if (relation.source.as_str(), relation.target.as_str())
+                != (inverse.target.as_str(), inverse.source.as_str())
+            {
+                return Err(InverseRelationError::new(
+                    &relation.name,
+                    format!("must reverse the endpoints of inverse relation '{inverse_name}'"),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Validate named disjoint/equivalent class groups at both language and
     /// governance boundaries so hand-built serialized IR cannot bypass ODL rules.
     pub fn validate_class_groups(&self) -> Result<(), ClassGroupError> {
@@ -845,6 +906,22 @@ pub struct ClassGroupError {
 pub struct RelationPropertyGroupError {
     pub index: usize,
     pub message: String,
+}
+
+/// An invalid inverse-relation declaration, attributed to its source relation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InverseRelationError {
+    pub relation: String,
+    pub message: String,
+}
+
+impl InverseRelationError {
+    fn new(relation: &str, message: impl Into<String>) -> Self {
+        Self {
+            relation: relation.to_owned(),
+            message: message.into(),
+        }
+    }
 }
 
 /// An invalid data-property hierarchy/group, identified by declaration order.

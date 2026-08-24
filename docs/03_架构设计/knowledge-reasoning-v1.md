@@ -57,6 +57,7 @@ irreflexive、asymmetric、inverse 和 composed-of property chain。
 - action edge 必须有唯一 source/target 类型。
 - action edge 不能与显式 relation 的 endpoint 冲突。
 - 关系不能同时声明 contradictory characteristics，例如 symmetric + asymmetric。
+- `inverse_of` 目标必须唯一；单向声明合法，但端点必须互换。若两端都声明，则必须互逆。
 - canonical replacement 时先移除旧 runtime 投影，再加入新投影，避免版本残留。
 
 ### 3.2 Live world ABox

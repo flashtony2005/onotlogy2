@@ -74,6 +74,50 @@ fn tc001c_parse_typed_relations() {
     assert!(ir.relations[1].irreflexive);
     assert!(codegen::roundtrip_ok(&ir).unwrap());
 
+    let non_reciprocal = [
+        "object Customer:",
+        "  properties:",
+        "    name: string",
+        "object Order:",
+        "  properties:",
+        "    total: int",
+        "relation placed:",
+        "  source: Customer",
+        "  target: Order",
+        "  inverse_of: received_by",
+        "relation received_by:",
+        "  source: Order",
+        "  target: Customer",
+        "  inverse_of: rejected_by",
+        "relation rejected_by:",
+        "  source: Customer",
+        "  target: Order",
+    ]
+    .join("\n");
+    let error = parse_odl(&non_reciprocal).unwrap_err();
+    assert_eq!(1010, error.code);
+    assert_eq!(7, error.line);
+
+    let misdirected = [
+        "object Customer:",
+        "  properties:",
+        "    name: string",
+        "object Order:",
+        "  properties:",
+        "    total: int",
+        "relation placed:",
+        "  source: Customer",
+        "  target: Order",
+        "  inverse_of: received_by",
+        "relation received_by:",
+        "  source: Customer",
+        "  target: Order",
+    ]
+    .join("\n");
+    let error = parse_odl(&misdirected).unwrap_err();
+    assert_eq!(1010, error.code);
+    assert_eq!(7, error.line);
+
     let unknown = parse_odl(
         "object Customer:\n  properties:\n    name: string\nrelation placed:\n  source: Customer\n  target: Order\n",
     )
