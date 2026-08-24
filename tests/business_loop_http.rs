@@ -6,6 +6,7 @@
 
 mod common;
 
+use openaip_os::abi::ir::ActorKind;
 use openaip_os::abi::odl::parse_odl;
 use openaip_os::business_loop::{
     decide_opportunity, discover_opportunities, execute_opportunity, plan_opportunity_paths,
@@ -1286,4 +1287,86 @@ relation changed_state:
         "DraftTerms",
         "超过预算的快捷路径必须让位给低成本组合"
     );
+}
+
+#[tokio::test]
+async fn autonomous_run_gates_actions_by_declared_actor() {
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let pack_ontology = std::fs::read_to_string("domain-packs/crm-retention/ontology.odl")
+        .expect("业务包 ODL 应存在");
+    let ontology = pack_ontology
+        .replacen(
+            "ContactCustomer:\n      planning:\n        cost: 5000",
+            "ContactCustomer:\n      planning:\n        actor: human\n        cost: 100",
+            1,
+        )
+        .replace(
+            "    RetainCustomer:",
+            r#"    AutomatedNudge:
+      planning:
+        cost: 1000
+        prior_confidence: 0.5
+        outcome_timing: immediate
+        goal_metric: monthly_reactivations
+      updates:
+        - field: days_since_last_contact
+          value: 1
+    RetainCustomer:"#,
+        );
+    assert_ne!(ontology, pack_ontology, "契约测试必须修改成功");
+
+    seed_odl_project(&storage, "actor-auto", &ontology, "monthly_reactivations").await;
+    discover_opportunities(&storage, "actor-auto")
+        .await
+        .expect("应能发现人工动作机会");
+    let recommendations = recommend_next_actions(&storage, "actor-auto")
+        .await
+        .expect("应能推荐声明主体的动作");
+    assert_eq!(recommendations[0].action, json!("ContactCustomer"));
+    assert_eq!(recommendations[0].actor, ActorKind::Human);
+
+    let paths = plan_opportunity_paths(&storage, "actor-auto")
+        .await
+        .expect("应能规划声明主体的路径");
+    assert_eq!(paths[0].actions, vec!["ContactCustomer"]);
+    assert!(paths[0].requires_human);
+    assert!(!paths.iter().all(|path| path.requires_human));
+
+    let run = run_next_best_action(&storage, "actor-auto", "contract-test")
+        .await
+        .expect("自动运行必须能选择 Agent 动作");
+    assert!(run.executed);
+    assert_eq!(
+        run.recommendation.expect("应有推荐").action,
+        "AutomatedNudge",
+        "自动执行不能选择 Human 路径"
+    );
+
+    seed_odl_project(
+        &storage,
+        "actor-explicit",
+        &ontology,
+        "monthly_reactivations",
+    )
+    .await;
+    let discovered = discover_opportunities(&storage, "actor-explicit")
+        .await
+        .expect("应能发现显式人工动作机会");
+    let opportunity_id = discovered[0]["id"].as_str().expect("机会必须有 ID");
+    decide_opportunity(
+        &storage,
+        "actor-explicit",
+        opportunity_id,
+        Some("ContactCustomer"),
+        "contract-test",
+        None,
+        None,
+    )
+    .await
+    .expect("显式决策可以选择 Human 动作");
+    execute_opportunity(&storage, "actor-explicit", opportunity_id)
+        .await
+        .expect("显式执行可以执行 Human 动作");
 }

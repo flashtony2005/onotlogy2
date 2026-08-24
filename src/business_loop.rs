@@ -4,7 +4,8 @@
 //! 项目归属、事件溯源和审计链。机会规则集中在本模块，Kernel 不感知具体业务。
 
 use crate::abi::ir::{
-    ActionDef, ActionPlanning, CompareOp, OntologyIR, OpportunityRule, OutcomeTiming, ValueExpr,
+    ActionDef, ActionPlanning, ActorKind, CompareOp, OntologyIR, OpportunityRule, OutcomeTiming,
+    ValueExpr,
 };
 use crate::abi::{DataValidationError, parse_odl, validate_object_data};
 use crate::storage::{LibSQLStorage, ProjectRecord, StorageError, WorldCommand};
@@ -60,6 +61,7 @@ pub struct GoalGap {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ActionRecommendation {
+    pub actor: ActorKind,
     #[serde(rename = "projectId")]
     pub project_id: String,
     #[serde(rename = "opportunityId")]
@@ -75,6 +77,7 @@ pub struct ActionRecommendation {
 #[derive(Debug, Clone, Serialize)]
 pub struct ActionCandidate {
     pub action: String,
+    pub actor: ActorKind,
     #[serde(rename = "expectedBenefit")]
     pub expected_benefit: f64,
     pub cost: f64,
@@ -91,6 +94,8 @@ pub struct OpportunityPath {
     pub opportunity_id: String,
     pub subject: String,
     pub actions: Vec<String>,
+    #[serde(rename = "requiresHuman")]
+    pub requires_human: bool,
     #[serde(rename = "projectedNetValue")]
     pub projected_net_value: f64,
     pub confidence: f64,
@@ -725,6 +730,7 @@ pub async fn recommend_next_actions(
             )
         };
         recommendations.push(ActionRecommendation {
+            actor: selected.actor,
             project_id: project_id.to_string(),
             opportunity_id: opportunity.id.clone(),
             subject,
@@ -750,6 +756,7 @@ pub async fn recommend_next_actions(
 #[derive(Debug, Clone)]
 struct ScoredPath {
     actions: Vec<String>,
+    requires_human: bool,
     benefit: f64,
     cost: f64,
     net_value: f64,
@@ -898,6 +905,7 @@ fn search_paths<'a>(
         };
         let contributes_to_goal = planning.outcome_timing == OutcomeTiming::Immediate
             && shared_goal_metric(ontology, opportunity_type, action).is_some();
+        let requires_human = planning.actor == ActorKind::Human;
 
         // 创建效应是流程终点：其后续结果必须等真实终局证据，不能虚构对象内部状态。
         if !action.creates.is_empty() {
@@ -909,6 +917,7 @@ fn search_paths<'a>(
                 net_value: benefit * step_confidence - planning.cost,
                 confidence: step_confidence,
                 score: f64::NAN,
+                requires_human,
             });
             if let Some(path) = paths.last_mut() {
                 path.score = path.net_value.max(0.0)
@@ -939,6 +948,7 @@ fn search_paths<'a>(
                         active_goal_gap(goals, actions, ontology, opportunity_type, &action.name)?
                             .map_or(0.0, |(_, gap)| gap),
                     ),
+                requires_human,
             });
             continue;
         }
@@ -954,6 +964,7 @@ fn search_paths<'a>(
             net_value: f64::NAN,
             confidence: step_confidence,
             score: f64::NAN,
+            requires_human,
         };
         // 每个可执行前缀本身也是完整路径；继续递归只用于比较更长的替代路线。
         candidate.benefit = benefit;
@@ -978,6 +989,7 @@ fn search_paths<'a>(
             depth + 1,
         )?;
         for mut child in children {
+            child.requires_human |= requires_human;
             child.confidence *= step_confidence;
             child.benefit += benefit;
             child.cost += planning.cost;
@@ -1076,6 +1088,7 @@ pub async fn plan_opportunity_paths(
                 opportunity_id: opportunity.id.clone(),
                 subject: subject.clone(),
                 actions: path.actions,
+                requires_human: path.requires_human,
                 projected_net_value: path.net_value,
                 confidence: path.confidence,
                 score: path.score,
@@ -1137,6 +1150,7 @@ fn evaluate_candidates(
             let benefit = expected_benefit(definition, estimated_value, customer).ok()?;
             Some(ActionCandidate {
                 action: definition.name.to_string(),
+                actor: action_planning(definition).ok()?.actor,
                 expected_benefit: benefit,
                 cost,
                 confidence,
@@ -1775,7 +1789,12 @@ pub async fn run_next_best_action(
     let goals = refresh_goal_progress(storage, project_id).await?;
     let recommendations = recommend_next_actions(storage, project_id).await?;
     let paths = plan_opportunity_paths(storage, project_id).await?;
-    let path_choice = paths.first().and_then(|path| {
+    let agent_paths = paths
+        .iter()
+        .filter(|path| !path.requires_human)
+        .cloned()
+        .collect::<Vec<_>>();
+    let path_choice = agent_paths.first().and_then(|path| {
         let first_action = path.actions.first()?;
         recommendations.iter().find_map(|recommendation| {
             if recommendation.opportunity_id != path.opportunity_id {
@@ -1791,8 +1810,13 @@ pub async fn run_next_best_action(
             Some(selected)
         })
     });
-    let mut recommendation = path_choice.or_else(|| recommendations.into_iter().next());
-    if let Some((recommendation, path)) = recommendation.as_mut().zip(paths.first())
+    let mut recommendation = path_choice.or_else(|| {
+        recommendations
+            .iter()
+            .find(|item| item.actor == ActorKind::Agent)
+            .cloned()
+    });
+    if let Some((recommendation, path)) = recommendation.as_mut().zip(agent_paths.first())
         && recommendation.opportunity_id == path.opportunity_id
     {
         recommendation.reason = format!("{}；路径：{}", recommendation.reason, path.reason);

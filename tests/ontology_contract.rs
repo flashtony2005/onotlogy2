@@ -3,7 +3,7 @@
 
 use openaip_os::abi::codegen;
 use openaip_os::abi::ir::{
-    DataLiteral, DataPropertyHierarchy, DataPropertyRestriction, DataRestrictionKind,
+    ActorKind, DataLiteral, DataPropertyHierarchy, DataPropertyRestriction, DataRestrictionKind,
     DisjointUnionGroup, ObjectOneOfGroup, ObjectPropertyRestriction, ObjectRestrictionKind,
     OntologyIR, PropertyDef, RelationHierarchy, ScalarType,
 };
@@ -1190,4 +1190,54 @@ async fn tc005b_open_rejects_legacy_schema() {
         Err(other) => panic!("旧 schema 应返回 WB2101，实际: {other:?}"),
     }
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn action_actor_is_declared_and_fails_closed() {
+    let odl = [
+        "object Customer:",
+        "  properties:",
+        "    name: string",
+        "  actions:",
+        "    ContactCustomer:",
+        "      planning:",
+        "        cost: 100",
+        "        prior_confidence: 0.5",
+        "        outcome_timing: immediate",
+    ]
+    .join("\n");
+
+    let default = parse_odl(&odl).expect("缺省 actor 应可解析");
+    assert_eq!(
+        default.object_types[0].actions[0]
+            .planning
+            .as_ref()
+            .expect("planning 应存在")
+            .actor,
+        ActorKind::Agent
+    );
+
+    let agent = parse_odl(&format!("{odl}\n        actor: agent")).expect("agent 应可解析");
+    assert_eq!(
+        agent.object_types[0].actions[0]
+            .planning
+            .as_ref()
+            .expect("planning 应存在")
+            .actor,
+        ActorKind::Agent
+    );
+
+    let human = parse_odl(&format!("{odl}\n        actor: human")).expect("human 应可解析");
+    assert_eq!(
+        human.object_types[0].actions[0]
+            .planning
+            .as_ref()
+            .expect("planning 应存在")
+            .actor,
+        ActorKind::Human
+    );
+
+    let error =
+        parse_odl(&format!("{odl}\n        actor: robot")).expect_err("未知 actor 必须解析失败");
+    assert!(error.to_string().contains("actor 只能是 agent 或 human"));
 }

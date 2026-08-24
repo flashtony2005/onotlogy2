@@ -273,6 +273,15 @@ pub struct PolicyDef {
     pub precondition: Vec<Clause>,
 }
 
+/// 动作期望的执行主体；human 只能由显式决策执行，不能被 run-next 自动选择。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ActorKind {
+    #[default]
+    Agent,
+    Human,
+}
+
 /// Business Loop 需要的动作规划元数据；执行效应仍由 updates/creates 声明。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActionPlanning {
@@ -290,6 +299,9 @@ pub struct ActionPlanning {
     /// 该属性值折算为期望收益的系数。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub benefit_factor: Option<f64>,
+    /// 期望执行主体；缺省是 Agent。
+    #[serde(default)]
+    pub actor: ActorKind,
 }
 
 /// 业务结果的产生时机。

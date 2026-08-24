@@ -28,11 +28,11 @@
 use crate::data_range::parse_data_range;
 use crate::data_range::validate_data_range;
 use crate::ir::{
-    ActionDef, ActionPlanning, Clause, CompareOp, CreateEffect, DataLiteral, DataPropertyHierarchy,
-    DataPropertyRestriction, DataRestrictionKind, DisjointUnionGroup, FieldUpdate,
-    ObjectOneOfGroup, ObjectPropertyRestriction, ObjectRestrictionKind, ObjectType, OntologyIR,
-    OpportunityRule, OutcomeTiming, ParamDef, PolicyDef, PropertyDataRange, PropertyDef,
-    PropertyFacet, RelationDef, RelationHierarchy, ScalarType, ValueExpr,
+    ActionDef, ActionPlanning, ActorKind, Clause, CompareOp, CreateEffect, DataLiteral,
+    DataPropertyHierarchy, DataPropertyRestriction, DataRestrictionKind, DisjointUnionGroup,
+    FieldUpdate, ObjectOneOfGroup, ObjectPropertyRestriction, ObjectRestrictionKind, ObjectType,
+    OntologyIR, OpportunityRule, OutcomeTiming, ParamDef, PolicyDef, PropertyDataRange,
+    PropertyDef, PropertyFacet, RelationDef, RelationHierarchy, ScalarType, ValueExpr,
 };
 use crate::validation::validate_property_constraints;
 use std::str::FromStr;
@@ -998,6 +998,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         prior_confidence: 0.0,
                         outcome_timing: OutcomeTiming::Immediate,
                         goal_metric: None,
+                        actor: ActorKind::Agent,
                         benefit_field: None,
                         benefit_factor: None,
                     });
@@ -1037,6 +1038,13 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                                 return Err(invalid("goal_metric 不能为空".to_string()));
                             }
                             planning.goal_metric = Some(v.to_string());
+                        }
+                        "actor" => {
+                            planning.actor = match v {
+                                "agent" => ActorKind::Agent,
+                                "human" => ActorKind::Human,
+                                _ => return Err(invalid("actor 只能是 agent 或 human".into())),
+                            };
                         }
                         "benefit_field" => {
                             if v.trim().is_empty() {
