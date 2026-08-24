@@ -203,13 +203,17 @@ object Parent extends Person:
     child: some Person
     contact: only Person
     guardian: value alice
+    child: min 2 Person
+    contact: max 1 Person
 ```
 
-三条声明分别投影为 `SubClassOf(Parent, ObjectSomeValuesFrom(child, Person))`、
-`SubClassOf(Parent, ObjectAllValuesFrom(contact, Person))` 和
-`SubClassOf(Parent, ObjectHasValue(guardian, alice))`。relation 必须是已声明显式 relation 或
-action link edge；`some` / `only` 的 filler 必须是已声明类，`value` 的 individual 在 TBox 层保持
-开放世界语义。这些限制参与 classification、live-world 一致性、诊断和演化影响分析。
+五条声明分别投影为 `SubClassOf(Parent, ObjectSomeValuesFrom(child, Person))`、
+`SubClassOf(Parent, ObjectAllValuesFrom(contact, Person))`、
+`SubClassOf(Parent, ObjectHasValue(guardian, alice))`、
+`SubClassOf(Parent, ObjectMinCardinality(2, child, Person))` 和
+`SubClassOf(Parent, ObjectMaxCardinality(1, contact, Person))`。relation 必须是已声明显式 relation
+或 action link edge；filler 类必须是已声明 object，cardinality 至少为 1。这些限制参与
+classification、live-world 一致性、诊断和演化影响分析。
 
 对象类型同样可以在 `data_restrictions:` 块直接声明 data-property 必要条件：
 

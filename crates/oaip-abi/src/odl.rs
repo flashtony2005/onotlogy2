@@ -798,12 +798,15 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                     }
                     let Some((kind, filler)) = v.split_once(char::is_whitespace) else {
                         return Err(invalid(
-                            "restriction needs `relation: some Class`, `relation: only Class`, or `relation: value individual`"
+                            "restriction needs `relation: some Class`, `relation: only Class`, `relation: value individual`, `relation: min N Class`, or `relation: max N Class`"
                                 .to_owned(),
                         ));
                     };
                     let filler = filler.trim();
-                    if filler.is_empty() || filler.contains(char::is_whitespace) {
+                    let is_cardinality = kind == "min" || kind == "max";
+                    if filler.is_empty()
+                        || (!is_cardinality && filler.contains(char::is_whitespace))
+                    {
                         return Err(invalid(
                             "restriction filler is empty or contains whitespace".to_owned(),
                         ));
@@ -818,9 +821,38 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         "value" => ObjectRestrictionKind::Value {
                             individual: filler.to_string(),
                         },
+                        "min" | "max" => {
+                            let (num, class) =
+                                filler.split_once(char::is_whitespace).ok_or_else(|| {
+                                    invalid(format!(
+                                        "{kind} cardinality restriction needs `{kind} N Class`"
+                                    ))
+                                })?;
+                            let num = num.trim();
+                            let class = class.trim();
+                            if class.is_empty() || class.contains(char::is_whitespace) {
+                                return Err(invalid(format!(
+                                    "{kind} cardinality restriction class is empty or contains whitespace"
+                                )));
+                            }
+                            let cardinality: u32 = num
+                                .parse()
+                                .map_err(|_| invalid(format!("invalid cardinality '{num}'")))?;
+                            if kind == "min" {
+                                ObjectRestrictionKind::Min {
+                                    cardinality,
+                                    class: class.to_string(),
+                                }
+                            } else {
+                                ObjectRestrictionKind::Max {
+                                    cardinality,
+                                    class: class.to_string(),
+                                }
+                            }
+                        }
                         _ => {
                             return Err(invalid(format!(
-                                "unknown restriction constructor '{kind}'; expected some, only, or value"
+                                "unknown restriction constructor '{kind}'; expected some, only, value, min, or max"
                             )));
                         }
                     };

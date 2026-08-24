@@ -402,6 +402,10 @@ pub enum ObjectRestrictionKind {
     Only { class: String },
     /// `relation: value individual`
     Value { individual: String },
+    /// `relation: min N Class`
+    Min { cardinality: u32, class: String },
+    /// `relation: max N Class`
+    Max { cardinality: u32, class: String },
 }
 
 /// A named-class necessary condition over a declared scalar property.
@@ -524,8 +528,18 @@ impl OntologyIR {
                     });
                 }
                 match &restriction.kind {
+                    ObjectRestrictionKind::Min { cardinality: 0, .. }
+                    | ObjectRestrictionKind::Max { cardinality: 0, .. } => {
+                        return Err(ObjectRestrictionError {
+                            index,
+                            object: object.name.clone(),
+                            message: "cardinality restriction must be at least 1".to_owned(),
+                        });
+                    }
                     ObjectRestrictionKind::Some { class }
-                    | ObjectRestrictionKind::Only { class } => {
+                    | ObjectRestrictionKind::Only { class }
+                    | ObjectRestrictionKind::Min { class, .. }
+                    | ObjectRestrictionKind::Max { class, .. } => {
                         Self::validate_restriction_filler(class, &classes, &mut |message| {
                             ObjectRestrictionError {
                                 index,

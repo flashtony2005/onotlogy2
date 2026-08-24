@@ -344,6 +344,22 @@ pub fn runtime_ir_to_knowledge(ir: &OntologyIR) -> Ontology {
                 ObjectRestrictionKind::Value { individual } => {
                     ClassExpression::has_value(restriction.relation.as_str(), individual.as_str())
                 }
+                ObjectRestrictionKind::Min {
+                    cardinality,
+                    class: filler,
+                } => ClassExpression::min_cardinality(
+                    *cardinality,
+                    restriction.relation.as_str(),
+                    class(filler),
+                ),
+                ObjectRestrictionKind::Max {
+                    cardinality,
+                    class: filler,
+                } => ClassExpression::max_cardinality(
+                    *cardinality,
+                    restriction.relation.as_str(),
+                    class(filler),
+                ),
             };
             ontology.push(Axiom::subclass(source.clone(), expression));
         }
@@ -1616,6 +1632,12 @@ object Parent extends Person:
   restrictions:
     child: some Person
 
+object BigFamily extends Parent:
+  properties:
+    note: string
+  restrictions:
+    child: min 2 Person
+
 object SafeContact extends Person:
   properties:
     note: string
@@ -1647,6 +1669,10 @@ relation guardian:
         assert!(schema.axioms().contains(&Axiom::subclass(
             class("Parent"),
             ClassExpression::some_values_from("child", class("Person"))
+        )));
+        assert!(schema.axioms().contains(&Axiom::subclass(
+            class("BigFamily"),
+            ClassExpression::min_cardinality(2, "child", class("Person"))
         )));
         assert!(schema.axioms().contains(&Axiom::subclass(
             class("SafeContact"),

@@ -568,6 +568,8 @@ fn tc001k_parse_object_property_restrictions() {
         "    child: some Person",
         "    contact: only Person",
         "    guardian: value alice",
+        "    child: min 2 Person",
+        "    contact: max 1 Person",
         "relation child:",
         "  source: Person",
         "  target: Person",
@@ -599,6 +601,20 @@ fn tc001k_parse_object_property_restrictions() {
                 individual: "alice".to_owned(),
             },
         },
+        ObjectPropertyRestriction {
+            relation: "child".to_owned(),
+            kind: ObjectRestrictionKind::Min {
+                cardinality: 2,
+                class: "Person".to_owned(),
+            },
+        },
+        ObjectPropertyRestriction {
+            relation: "contact".to_owned(),
+            kind: ObjectRestrictionKind::Max {
+                cardinality: 1,
+                class: "Person".to_owned(),
+            },
+        },
     ];
     assert_eq!(expected, ir.find("Parent").unwrap().restrictions);
     assert!(codegen::roundtrip_ok(&ir).unwrap());
@@ -628,6 +644,17 @@ fn tc001k_parse_object_property_restrictions() {
     )
     .unwrap_err();
     assert_eq!(1015, invalid_constructor.code);
+
+    let invalid_cardinality = parse_odl(
+        "object Person:\n  properties:\n    name: string\nobject Parent:\n  properties:\n    note: string\n  restrictions:\n    child: min 0 Person\nrelation child:\n  source: Person\n  target: Person\n",
+    )
+    .unwrap_err();
+    assert_eq!(1015, invalid_cardinality.code);
+    assert!(
+        invalid_cardinality
+            .message
+            .contains("cardinality restriction must be at least 1")
+    );
 }
 
 #[test]
