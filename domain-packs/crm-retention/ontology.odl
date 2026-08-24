@@ -22,11 +22,19 @@ object Customer:
     balance: float
     days_since_last_contact: int
   actions:
-    contact:
+    ContactCustomer:
+      planning:
+        cost: 5000
+        prior_confidence: 0.7
+        outcome_timing: immediate
       updates:
         - field: days_since_last_contact
           value: 0
-    retain:
+    RetainCustomer:
+      planning:
+        cost: 20000
+        prior_confidence: 0.6
+        outcome_timing: deferred
       creates:
         - type: RetentionTask
           data:

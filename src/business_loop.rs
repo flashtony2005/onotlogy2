@@ -3,7 +3,7 @@
 //! 闭环对象都是普通世界对象；所有事实写入都经 `WorldCommand`，因此天然获得
 //! 项目归属、事件溯源和审计链。机会规则集中在本模块，Kernel 不感知具体业务。
 
-use crate::abi::ir::OntologyIR;
+use crate::abi::ir::{ActionDef, ActionPlanning, OntologyIR, OutcomeTiming, ValueExpr};
 use crate::abi::{DataValidationError, parse_odl, validate_object_data};
 use crate::storage::{LibSQLStorage, ObjectEngine, ProjectRecord, StorageError, WorldCommand};
 use serde::Serialize;
@@ -22,56 +22,6 @@ const TASK_IN_PROGRESS: &str = "InProgress";
 const TASK_SETTLED_SUCCESS: &str = "Completed";
 const TASK_SETTLED_FAILURE: &str = "Failed";
 
-/// 可比较的业务动作目录。新增动作先扩展这张表，再由引擎和规划器解释执行，
-/// 避免在 handler 或多个业务函数中散落 `match object_type` 规则。
-#[derive(Debug, Clone, Copy)]
-enum ActionEffect {
-    Update { field: &'static str, value: i64 },
-    CreateRetentionTask,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct BusinessAction {
-    name: &'static str,
-    prior_confidence: f64,
-    cost: f64,
-    effect: ActionEffect,
-}
-
-impl BusinessAction {
-    fn expected_benefit(&self, estimated_value: f64, customer: &Value) -> f64 {
-        match self.effect {
-            ActionEffect::Update { .. } => estimated_value,
-            // 挽留的价值主要来自可挽回的存量余额；低余额客户自然不适合支付挽留成本。
-            ActionEffect::CreateRetentionTask => {
-                customer
-                    .get("balance")
-                    .and_then(Value::as_f64)
-                    .unwrap_or_default()
-                    .max(0.0)
-                    * 0.35
-            }
-        }
-    }
-}
-
-const ACTIONS: &[BusinessAction] = &[
-    BusinessAction {
-        name: "ContactCustomer",
-        prior_confidence: 0.7,
-        cost: 5_000.0,
-        effect: ActionEffect::Update {
-            field: "days_since_last_contact",
-            value: 0,
-        },
-    },
-    BusinessAction {
-        name: "RetainCustomer",
-        prior_confidence: 0.6,
-        cost: 20_000.0,
-        effect: ActionEffect::CreateRetentionTask,
-    },
-];
 const GOAL_METRIC: &str = "monthly_reactivations";
 
 #[derive(Debug, Error)]
@@ -177,6 +127,63 @@ fn validate_data(
         .ok_or_else(|| BusinessLoopError::invalid(format!("本体未定义对象类型 {object_type}")))?;
     validate_object_data(definition, data)?;
     Ok(())
+}
+
+/// 从项目当前 ODL 收集参与商业规划的动作；动作目录不再属于 Rust。
+fn planning_actions(ontology: &OntologyIR) -> Result<Vec<&ActionDef>, BusinessLoopError> {
+    let customer = ontology
+        .find("Customer")
+        .ok_or_else(|| BusinessLoopError::invalid("本体未定义业务规划对象类型 Customer"))?;
+    let actions = customer
+        .actions
+        .iter()
+        .filter(|action| action.planning.is_some())
+        .collect::<Vec<_>>();
+    if actions.is_empty() {
+        return Err(BusinessLoopError::invalid(
+            "Customer 本体未声明可规划的 action",
+        ));
+    }
+    Ok(actions)
+}
+
+fn find_action<'a>(actions: &'a [&'a ActionDef], name: &str) -> Option<&'a ActionDef> {
+    actions.iter().copied().find(|action| action.name == name)
+}
+
+fn action_planning(action: &ActionDef) -> Result<&ActionPlanning, BusinessLoopError> {
+    action.planning.as_ref().ok_or_else(|| {
+        BusinessLoopError::invalid(format!("业务动作 {} 缺少 planning 元数据", action.name))
+    })
+}
+
+fn expected_benefit(action: &ActionDef, estimated_value: f64, customer: &Value) -> f64 {
+    // 直接状态更新按机会价值估算；创建后续任务时只计可挽回的存量价值。
+    if action.updates.is_empty() && !action.creates.is_empty() {
+        customer
+            .get("balance")
+            .and_then(Value::as_f64)
+            .unwrap_or_default()
+            .max(0.0)
+            * 0.35
+    } else {
+        estimated_value
+    }
+}
+
+fn evaluate_value(
+    expression: &ValueExpr,
+    subject: &str,
+    subject_data: &Value,
+) -> Result<Value, BusinessLoopError> {
+    match expression {
+        ValueExpr::Literal(value) => Ok(value.clone()),
+        ValueExpr::SelfId => Ok(json!(subject)),
+        ValueExpr::SelfField(field) => Ok(subject_data.get(field).cloned().unwrap_or(Value::Null)),
+        ValueExpr::Param(name) => Err(BusinessLoopError::invalid(format!(
+            "Business Loop 尚未提供动作参数 {name}"
+        ))),
+    }
 }
 
 fn set_status(mut data: Value, status: &str) -> Value {
@@ -336,6 +343,15 @@ pub async fn refresh_goal_progress(
     storage: &LibSQLStorage,
     project_id: &str,
 ) -> Result<Vec<GoalGap>, BusinessLoopError> {
+    let (_, ontology) = project_ontology(storage, project_id).await?;
+    let immediate_actions = planning_actions(&ontology)?
+        .iter()
+        .filter(|action| {
+            action_planning(action)
+                .is_ok_and(|planning| planning.outcome_timing == OutcomeTiming::Immediate)
+        })
+        .map(|action| action.name.as_str())
+        .collect::<Vec<_>>();
     let goals = storage
         .list_objects_for_project(project_id, "BusinessGoal")
         .await?;
@@ -344,7 +360,7 @@ pub async fn refresh_goal_progress(
         .await?;
     let completed_reactivations = outcomes
         .iter()
-        .filter(|outcome| is_counted_reactivation(&outcome.data))
+        .filter(|outcome| is_counted_reactivation(&outcome.data, &immediate_actions))
         .count() as f64;
 
     for goal in goals {
@@ -375,9 +391,12 @@ fn outcome_snapshot_days(outcome: &Value, field: &str) -> Option<i64> {
     snapshot.get("days_since_last_contact")?.as_i64()
 }
 
-fn is_counted_reactivation(outcome: &Value) -> bool {
+fn is_counted_reactivation(outcome: &Value, immediate_actions: &[&str]) -> bool {
     outcome.get("success").and_then(Value::as_bool) == Some(true)
-        && outcome.get("action").and_then(Value::as_str) == Some("ContactCustomer")
+        && outcome
+            .get("action")
+            .and_then(Value::as_str)
+            .is_some_and(|action| immediate_actions.contains(&action))
         && outcome.get("stage").and_then(Value::as_str) == Some(OUTCOME_BUSINESS_RESULT)
         && outcome_snapshot_days(outcome, "before").is_some_and(|days| days > 45)
         && outcome_snapshot_days(outcome, "after") == Some(0)
@@ -388,7 +407,8 @@ pub async fn recommend_next_actions(
     storage: &LibSQLStorage,
     project_id: &str,
 ) -> Result<Vec<ActionRecommendation>, BusinessLoopError> {
-    project_ontology(storage, project_id).await?;
+    let (_, ontology) = project_ontology(storage, project_id).await?;
+    let actions = planning_actions(&ontology)?;
     let goals = storage
         .list_objects_for_project(project_id, "BusinessGoal")
         .await?;
@@ -429,7 +449,8 @@ pub async fn recommend_next_actions(
         let estimated_value = number(&opportunity.data, "estimated_value")?;
         let opportunity_type = text(&opportunity.data, "opportunity_type")?.to_string();
 
-        let mut candidates = evaluate_candidates(&customer.data, estimated_value, &outcomes);
+        let mut candidates =
+            evaluate_candidates(&actions, &customer.data, estimated_value, &outcomes);
         let urgency = (days.min(90) as f64 / 90.0).max(0.1);
         candidates.sort_by(|left, right| {
             right
@@ -440,6 +461,7 @@ pub async fn recommend_next_actions(
         let selected = &candidates[0];
         let score = selected.net_value
             * goal_alignment(
+                &actions,
                 selected.action.as_str(),
                 opportunity_type.as_str(),
                 remaining_gap,
@@ -477,52 +499,63 @@ pub async fn recommend_next_actions(
     Ok(recommendations)
 }
 
-fn action_confidence(action: &str, outcomes: &[crate::storage::ObjectRecord]) -> f64 {
-    let definition = ACTIONS
-        .iter()
-        .find(|candidate| candidate.name == action)
-        .expect("注册表中的动作必然存在");
+fn action_confidence(
+    definition: &ActionDef,
+    outcomes: &[crate::storage::ObjectRecord],
+) -> Result<f64, BusinessLoopError> {
+    let prior_confidence = action_planning(definition)?.prior_confidence;
     let relevant = outcomes
         .iter()
         .filter(|item| {
-            text(&item.data, "action").is_ok_and(|name| name == action)
+            text(&item.data, "action").is_ok_and(|name| name == definition.name)
                 && text(&item.data, "stage").is_ok_and(|stage| stage == OUTCOME_BUSINESS_RESULT)
         })
         .collect::<Vec<_>>();
     if relevant.is_empty() {
-        return definition.prior_confidence;
+        return Ok(prior_confidence);
     }
 
     let success = relevant
         .iter()
         .filter(|item| item.data.get("success").and_then(Value::as_bool) == Some(true))
         .count();
-    success as f64 / relevant.len() as f64
+    Ok(success as f64 / relevant.len() as f64)
 }
 
 fn evaluate_candidates(
+    actions: &[&ActionDef],
     customer: &Value,
     estimated_value: f64,
     outcomes: &[crate::storage::ObjectRecord],
 ) -> Vec<ActionCandidate> {
-    ACTIONS
+    actions
         .iter()
-        .map(|definition| {
-            let confidence = action_confidence(definition.name, outcomes);
-            let expected_benefit = definition.expected_benefit(estimated_value, customer);
-            ActionCandidate {
+        .filter_map(|definition| {
+            let confidence = action_confidence(definition, outcomes).ok()?;
+            let benefit = expected_benefit(definition, estimated_value, customer);
+            let cost = action_planning(definition).ok()?.cost;
+            Some(ActionCandidate {
                 action: definition.name.to_string(),
-                expected_benefit,
-                cost: definition.cost,
+                expected_benefit: benefit,
+                cost,
                 confidence,
-                net_value: expected_benefit * confidence - definition.cost,
-            }
+                net_value: benefit * confidence - cost,
+            })
         })
         .collect()
 }
 
-fn goal_alignment(action: &str, opportunity_type: &str, remaining_gap: f64) -> f64 {
-    if remaining_gap > 0.0 && opportunity_type == "Reactivation" && action == "ContactCustomer" {
+fn goal_alignment(
+    actions: &[&ActionDef],
+    action: &str,
+    opportunity_type: &str,
+    remaining_gap: f64,
+) -> f64 {
+    let immediate = find_action(actions, action).is_some_and(|definition| {
+        action_planning(definition)
+            .is_ok_and(|planning| planning.outcome_timing == OutcomeTiming::Immediate)
+    });
+    if remaining_gap > 0.0 && opportunity_type == "Reactivation" && immediate {
         return 1.0;
     }
     if remaining_gap > 0.0 && opportunity_type == "Reactivation" {
@@ -561,14 +594,14 @@ pub async fn decide_opportunity(
     reason: Option<&str>,
     alternatives: Option<Value>,
 ) -> Result<Value, BusinessLoopError> {
-    let default_action = ACTIONS[0].name;
-    let action = requested_action.unwrap_or(default_action);
-    if !ACTIONS.iter().any(|definition| definition.name == action) {
+    let (_, ontology) = project_ontology(storage, project_id).await?;
+    let actions = planning_actions(&ontology)?;
+    let action = requested_action.unwrap_or(actions[0].name.as_str());
+    if find_action(&actions, action).is_none() {
         return Err(BusinessLoopError::invalid(format!(
             "不支持的业务动作 {action}"
         )));
     }
-    let (_, ontology) = project_ontology(storage, project_id).await?;
     let opportunities = storage
         .list_objects_for_project(project_id, "Opportunity")
         .await?;
@@ -594,7 +627,7 @@ pub async fn decide_opportunity(
     let decision_data = json!({
         "opportunity": opportunity.id,
         "action": action,
-        "reason": reason.unwrap_or("选择客户接触动作以关闭复购风险差距"),
+        "reason": reason.unwrap_or("选择净价值最优业务动作以关闭目标差距"),
         "alternatives": alternatives.unwrap_or_else(|| json!([]).to_string()),
         "decided_by": decided_by,
         "status": DECISION_SELECTED
@@ -663,10 +696,11 @@ pub async fn execute_opportunity(
         .ok_or_else(|| BusinessLoopError::NotFound("机会缺少 Selected 决策".into()))?
         .clone();
     let action = text(&decision.data, "action")?.to_string();
-    let definition = ACTIONS
-        .iter()
-        .find(|candidate| candidate.name == action)
+    let actions = planning_actions(&ontology)?;
+    let definition = find_action(&actions, &action)
+        .cloned()
         .ok_or_else(|| BusinessLoopError::invalid(format!("不支持的业务动作 {action}")))?;
+    let planning = action_planning(&definition)?;
 
     let subject = text(&opportunity.data, "subject")?.to_string();
     let before_record = storage
@@ -675,48 +709,59 @@ pub async fn execute_opportunity(
         .ok_or_else(|| BusinessLoopError::NotFound(subject.clone()))?;
     let mut after_data = before_record.data.clone();
     let mut retention_task_id = None;
-    match definition.effect {
-        ActionEffect::Update { field, value } => {
+    for update in &definition.updates {
+        {
             let after_object = after_data
                 .as_object_mut()
                 .ok_or_else(|| BusinessLoopError::invalid("Customer 数据必须是 JSON object"))?;
-            after_object.insert(field.to_string(), json!(value));
+            let value = evaluate_value(&update.value, &subject, &before_record.data)?;
+            after_object.insert(update.field.clone(), value);
         }
-        ActionEffect::CreateRetentionTask => {
-            let task_id = generated_id("retention-task");
-            let task_data = json!({
-                "title": "客户挽留计划",
-                "customer": subject,
-                "status": "Pending",
-                "priority": "HIGH"
-            });
-            validate_data(&ontology, "RetentionTask", &task_data)?;
-            create_world_object(
-                storage,
-                project_id,
-                "RetentionTask",
-                task_id.clone(),
-                task_data,
-            )
-            .await?;
-            link_world(
-                storage,
-                project_id,
-                subject.clone(),
-                "needs_retention",
-                task_id.clone(),
-            )
-            .await?;
-            link_world(
-                storage,
-                project_id,
-                decision.id.clone(),
-                "produced_task",
-                task_id.clone(),
-            )
-            .await?;
-            retention_task_id = Some(task_id);
+    }
+    if !definition.creates.is_empty() {
+        if definition.creates.len() != 1 {
+            return Err(BusinessLoopError::invalid(
+                "Business Loop 每个动作只支持一个创建效应",
+            ));
         }
+        let effect = &definition.creates[0];
+        if ontology.find(&effect.object_type).is_none() {
+            return Err(BusinessLoopError::invalid(format!(
+                "本体未定义创建对象类型 {}",
+                effect.object_type
+            )));
+        }
+        let mut object_data = serde_json::Map::new();
+        for (field, expression) in &effect.data {
+            let value = evaluate_value(expression, &subject, &before_record.data)?;
+            object_data.insert(field.clone(), value);
+        }
+        let task_data = Value::Object(object_data);
+        validate_data(&ontology, &effect.object_type, &task_data)?;
+        let task_id = effect
+            .id
+            .clone()
+            .unwrap_or_else(|| generated_id("retention-task"));
+        create_world_object(
+            storage,
+            project_id,
+            &effect.object_type,
+            task_id.clone(),
+            task_data,
+        )
+        .await?;
+        if let Some(edge) = &effect.link_edge {
+            link_world(storage, project_id, subject.clone(), edge, task_id.clone()).await?;
+        }
+        link_world(
+            storage,
+            project_id,
+            decision.id.clone(),
+            "produced_task",
+            task_id.clone(),
+        )
+        .await?;
+        retention_task_id = Some(task_id);
     }
 
     let before = serde_json::to_string(&before_record.data)
@@ -746,7 +791,7 @@ pub async fn execute_opportunity(
     validate_data(&ontology, "StateTransition", &transition_data)?;
 
     // 先提交事实变更，再写闭环证据和状态推进；任一后续命令失败时审计链能定位中断点。
-    if matches!(definition.effect, ActionEffect::Update { .. }) {
+    if !definition.updates.is_empty() {
         storage
             .apply_world(WorldCommand::UpdateObject {
                 id: subject.clone(),
@@ -772,7 +817,7 @@ pub async fn execute_opportunity(
         action_outcome_id.clone(),
     )
     .await?;
-    let business_result = if action == "ContactCustomer" {
+    let business_result = if planning.outcome_timing == OutcomeTiming::Immediate {
         let result_id = generated_id("outcome");
         let result_data = json!({
             "action": action,
@@ -915,6 +960,22 @@ pub async fn settle_retention_task(
     success: bool,
 ) -> Result<Value, BusinessLoopError> {
     let (_, ontology) = project_ontology(storage, project_id).await?;
+    let retention_actions = planning_actions(&ontology)?
+        .into_iter()
+        .filter(|action| {
+            action
+                .creates
+                .iter()
+                .any(|effect| effect.object_type == "RetentionTask")
+        })
+        .map(|action| action.name.clone())
+        .collect::<Vec<_>>();
+    let retention_edges = planning_actions(&ontology)?
+        .into_iter()
+        .flat_map(|action| action.creates.iter())
+        .filter(|effect| effect.object_type == "RetentionTask")
+        .filter_map(|effect| effect.link_edge.clone())
+        .collect::<Vec<_>>();
     let task = retention_task(storage, project_id, task_id).await?;
     if text(&task.data, "status")? != TASK_IN_PROGRESS {
         return Err(BusinessLoopError::invalid(
@@ -925,9 +986,9 @@ pub async fn settle_retention_task(
     let relations = storage.list_all_relations().await?;
     let subject = relations
         .iter()
-        .find(|relation| relation.relation == "needs_retention" && relation.target == task.id)
+        .find(|relation| retention_edges.contains(&relation.relation) && relation.target == task.id)
         .map(|relation| relation.source.clone())
-        .ok_or_else(|| BusinessLoopError::invalid("挽留任务缺少 Customer 关系"))?;
+        .ok_or_else(|| BusinessLoopError::invalid("挽留任务缺少 Customer 创建关系"))?;
     if text(&task.data, "customer")? != subject {
         return Err(BusinessLoopError::invalid(
             "挽留任务的 Customer 关系与任务数据不一致",
@@ -945,10 +1006,11 @@ pub async fn settle_retention_task(
         .iter()
         .filter(|item| {
             decision_links.contains(&item.id.as_str())
-                && text(&item.data, "action").is_ok_and(|action| action == "RetainCustomer")
+                && text(&item.data, "action")
+                    .is_ok_and(|action| retention_actions.iter().any(|name| name == action))
         })
         .max_by(|left, right| left.id.cmp(&right.id))
-        .ok_or_else(|| BusinessLoopError::invalid("挽留任务缺少 RetainCustomer 决策"))?
+        .ok_or_else(|| BusinessLoopError::invalid("挽留任务缺少创建动作决策"))?
         .clone();
 
     let settled_status = if success {
@@ -972,7 +1034,7 @@ pub async fn settle_retention_task(
 
     let outcome_id = generated_id("outcome");
     let outcome_data = json!({
-        "action": "RetainCustomer",
+        "action": decision.data["action"],
         "before": before,
         "after": after,
         "success": success,

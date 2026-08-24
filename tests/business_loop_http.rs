@@ -6,6 +6,9 @@
 
 mod common;
 
+use openaip_os::business_loop::{
+    decide_opportunity, discover_opportunities, recommend_next_actions,
+};
 use openaip_os::storage::{LibSQLStorage, ObjectEngine};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -31,6 +34,105 @@ async fn insert_rich_vip(storage: &LibSQLStorage, id: &str) {
         })
         .await
         .expect("应能写入高余额客户状态");
+}
+
+async fn seed_odl_project(storage: &LibSQLStorage, project_id: &str, ontology: &str) -> String {
+    storage
+        .create_project(project_id, "ODL 契约", "验证动作目录由 ODL 驱动", ontology)
+        .await
+        .expect("应能创建项目");
+    let customer_id = format!("customer:{project_id}-vip");
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+            object_type: "Customer".into(),
+            id: customer_id.clone(),
+            data: json!({
+                "name": "ODL 契约 VIP",
+                "level": "VIP",
+                "balance": 100_000.0,
+                "days_since_last_contact": 75
+            }),
+            project_id: Some(project_id.into()),
+        })
+        .await
+        .expect("应能写入客户状态");
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+            object_type: "BusinessGoal".into(),
+            id: format!("business-goal:{project_id}"),
+            data: json!({
+                "target_metric": "monthly_reactivations",
+                "baseline_value": 0.0,
+                "target_value": 1.0,
+                "current_value": 0.0,
+                "status": "active"
+            }),
+            project_id: Some(project_id.into()),
+        })
+        .await
+        .expect("应能写入经营目标");
+    customer_id
+}
+
+#[tokio::test]
+async fn odl_planning_metadata_drives_action_catalog() {
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let pack_ontology = std::fs::read_to_string("domain-packs/crm-retention/ontology.odl")
+        .expect("业务包 ODL 应存在");
+
+    seed_odl_project(&storage, "odl-base", &pack_ontology).await;
+    discover_opportunities(&storage, "odl-base")
+        .await
+        .expect("基础 ODL 应能发现机会");
+    let baseline = recommend_next_actions(&storage, "odl-base")
+        .await
+        .expect("基础 ODL 应能推荐动作");
+    assert_eq!(baseline.len(), 1);
+    assert_eq!(baseline[0].action, "ContactCustomer");
+    assert_eq!(baseline[0].confidence, 0.7);
+    let contact = baseline[0]
+        .candidates
+        .iter()
+        .find(|candidate| candidate.action == "ContactCustomer")
+        .expect("推荐应保留候选明细");
+    assert_eq!(contact.cost, 5_000.0);
+    assert!((contact.net_value - 121_000.0).abs() < 1e-9);
+    let retain = baseline[0]
+        .candidates
+        .iter()
+        .find(|candidate| candidate.action == "RetainCustomer")
+        .expect("推荐应包含 ODL 挽留动作");
+    assert_eq!(retain.confidence, 0.6);
+    assert!((retain.net_value - 1_000.0).abs() < 1e-9);
+
+    let expensive_contact = pack_ontology.replace("cost: 5000", "cost: 500000");
+    assert_ne!(expensive_contact, pack_ontology, "契约测试必须修改成功");
+    seed_odl_project(&storage, "odl-changed", &expensive_contact).await;
+    discover_opportunities(&storage, "odl-changed")
+        .await
+        .expect("变更 ODL 应能发现机会");
+    let changed = recommend_next_actions(&storage, "odl-changed")
+        .await
+        .expect("变更 ODL 应能重新推荐动作");
+    assert_eq!(
+        changed[0].action, "RetainCustomer",
+        "ODL 成本变化应直接改变最优决策"
+    );
+
+    let error = decide_opportunity(
+        &storage,
+        "odl-base",
+        &baseline[0].opportunity_id,
+        Some("refund"),
+        "contract-test",
+        None,
+        None,
+    )
+    .await
+    .expect_err("没有 planning 元数据的 refund 不能进入业务规划");
+    assert!(error.to_string().contains("不支持的业务动作 refund"));
 }
 
 #[tokio::test]

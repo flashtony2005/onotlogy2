@@ -1367,6 +1367,7 @@ mod tests {
                             link_edge: Some("needs_retention".to_owned()),
                         }],
                         policy: Default::default(),
+                        planning: None,
                     }]
                 } else {
                     Vec::new()

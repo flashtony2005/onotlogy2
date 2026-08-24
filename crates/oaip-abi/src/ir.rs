@@ -267,6 +267,23 @@ pub struct PolicyDef {
     pub precondition: Vec<Clause>,
 }
 
+/// Business Loop 需要的动作规划元数据；执行效应仍由 updates/creates 声明。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ActionPlanning {
+    pub cost: f64,
+    #[serde(default)]
+    pub prior_confidence: f64,
+    /// `immediate` 执行后直接产生 BusinessResult；`deferred` 必须等待终局上报。
+    pub outcome_timing: OutcomeTiming,
+}
+
+/// 业务结果的产生时机。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OutcomeTiming {
+    Immediate,
+    Deferred,
+}
+
 /// 动作定义（对应 ODL `actions.<name>`）：对象自有能力，声明式描述其效应与约束。
 ///
 /// 这是 V0.4 把"最小 Action 执行"升级为"完整 Action Engine"的核心：
@@ -284,6 +301,9 @@ pub struct ActionDef {
     /// 动作的 Policy 约束（审批 / 前置条件）；ODL 未声明时为空（无约束，默认允许）。
     #[serde(default)]
     pub policy: PolicyDef,
+    /// 参与商业决策的元数据；普通能力可以不声明。
+    #[serde(default)]
+    pub planning: Option<ActionPlanning>,
 }
 
 /// 对象类型（对应 ODL `object X:`）。

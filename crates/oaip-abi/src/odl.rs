@@ -28,10 +28,10 @@
 use crate::data_range::parse_data_range;
 use crate::data_range::validate_data_range;
 use crate::ir::{
-    ActionDef, Clause, CompareOp, CreateEffect, DataLiteral, DataPropertyHierarchy,
+    ActionDef, ActionPlanning, Clause, CompareOp, CreateEffect, DataLiteral, DataPropertyHierarchy,
     DataPropertyRestriction, DataRestrictionKind, DisjointUnionGroup, FieldUpdate,
     ObjectOneOfGroup, ObjectPropertyRestriction, ObjectRestrictionKind, ObjectType, OntologyIR,
-    ParamDef, PolicyDef, PropertyDataRange, PropertyDef, PropertyFacet, RelationDef,
+    OutcomeTiming, ParamDef, PolicyDef, PropertyDataRange, PropertyDef, PropertyFacet, RelationDef,
     RelationHierarchy, ScalarType, ValueExpr,
 };
 use crate::validation::validate_property_constraints;
@@ -92,6 +92,7 @@ enum Section {
     ActionCreates,
     CreateData,
     ActionPolicy,
+    ActionPlanning,
     ActionPrecondition,
     ObjectRestrictions,
     DataRestrictions,
@@ -677,6 +678,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                             updates: Vec::new(),
                             creates: Vec::new(),
                             policy: PolicyDef::default(),
+                            planning: None,
                         },
                     ));
                     section.push((Section::Action, indent));
@@ -685,6 +687,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                 (Section::Action, "updates") => section.push((Section::ActionUpdates, indent)),
                 (Section::Action, "creates") => section.push((Section::ActionCreates, indent)),
                 (Section::Action, "policy") => section.push((Section::ActionPolicy, indent)),
+                (Section::Action, "planning") => section.push((Section::ActionPlanning, indent)),
                 (Section::ActionCreates, "data") => section.push((Section::CreateData, indent)),
                 (Section::ActionPolicy, "precondition") => {
                     section.push((Section::ActionPrecondition, indent))
@@ -873,6 +876,49 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         && let Some((_, a)) = cur_action.as_mut()
                     {
                         a.policy.require_approval = v == "true";
+                    }
+                }
+                Section::ActionPlanning => {
+                    let invalid = |message: String| {
+                        OdlError::new(E_INVALID_PROPERTY_CONSTRAINT, message, line_no, 1)
+                    };
+                    let Some((_, action)) = cur_action.as_mut() else {
+                        continue;
+                    };
+                    let planning = action.planning.get_or_insert(ActionPlanning {
+                        cost: 0.0,
+                        prior_confidence: 0.0,
+                        outcome_timing: OutcomeTiming::Immediate,
+                    });
+                    match k {
+                        "cost" | "prior_confidence" => {
+                            let value = v
+                                .parse::<f64>()
+                                .map_err(|_| invalid(format!("{k} 必须是有限数值，得到 `{v}`")))?;
+                            if !value.is_finite() || value < 0.0 {
+                                return Err(invalid(format!("{k} 不能为负或无限")));
+                            }
+                            if k == "cost" {
+                                planning.cost = value;
+                            } else {
+                                if value > 1.0 {
+                                    return Err(invalid("prior_confidence 必须在 [0,1] 内".into()));
+                                }
+                                planning.prior_confidence = value;
+                            }
+                        }
+                        "outcome_timing" => {
+                            planning.outcome_timing = match v {
+                                "immediate" => OutcomeTiming::Immediate,
+                                "deferred" => OutcomeTiming::Deferred,
+                                _ => {
+                                    return Err(invalid(
+                                        "outcome_timing 只能是 immediate 或 deferred".into(),
+                                    ));
+                                }
+                            };
+                        }
+                        _ => return Err(invalid(format!("'{k}' 不是 action planning 属性"))),
                     }
                 }
                 Section::ActionPrecondition => {
