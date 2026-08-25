@@ -10,9 +10,9 @@ use openaip_os::abi::ir::ActorKind;
 use openaip_os::abi::odl::parse_odl;
 use openaip_os::business_loop::{
     DecisionOptions, decide_business_approval, decide_opportunity, discover_opportunities,
-    execute_opportunity, list_follow_ups, plan_opportunity_paths, recommend_next_actions,
-    reopen_interrupted_execution, run_business_actions, run_next_best_action, settle_follow_up,
-    start_follow_up,
+    execute_opportunity, list_follow_ups, list_learning_insights, plan_opportunity_paths,
+    recommend_next_actions, reopen_interrupted_execution, run_business_actions,
+    run_next_best_action, settle_follow_up, start_follow_up,
 };
 use openaip_os::plugin::catalog::PluginCatalog;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine};
@@ -576,6 +576,18 @@ async fn deferred_follow_up_evidence_is_declared_and_type_generic() {
     assert_eq!(settled["task"]["type"], json!("FollowUpPlan"));
     assert_eq!(settled["outcome"]["data"]["goal_delta"], json!(250.0));
     assert_eq!(settled["goals"][0]["currentValue"], json!(250.0));
+    let insights = list_learning_insights(&storage, "generic-follow-up")
+        .await
+        .expect("应能读取学习证据");
+    let insight = insights
+        .iter()
+        .find(|item| item.action == "RetainCustomer")
+        .expect("终局后应形成学习证据");
+    assert_eq!(insight.opportunity_type, "Reactivation");
+    assert_eq!(insight.outcome_runs, 1);
+    assert_eq!(insight.outcome_successes, 1);
+    assert!((insight.realized_goal_delta - 250.0).abs() < 1e-9);
+    assert!((insight.successful_average_goal_delta - 250.0).abs() < 1e-9);
 
     // 第二个同类机会必须继承终局收益学习，而不是继续使用静态期望。
     storage
@@ -1232,6 +1244,22 @@ async fn business_loop_discovers_decides_executes_and_replans() {
             .unwrap_or_default()
             .is_empty()
     );
+    let (status, body) = common::http_call(
+        addr,
+        "GET",
+        "/api/v1/business/learning-insights?projectId=crm-retention",
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "应能读取学习证据：{body}");
+    let insights = data(&body).await.as_array().cloned().unwrap_or_default();
+    let retained = insights
+        .iter()
+        .find(|item| item["action"] == json!("RetainCustomer"))
+        .unwrap_or_else(|| panic!("缺少挽留动作证据：{insights:?}"));
+    assert_eq!(retained["opportunityType"], json!("Reactivation"));
+    assert_eq!(retained["outcomeRuns"], json!(1));
+    assert_eq!(retained["outcomeSuccesses"], json!(1));
     let current_relations = storage.list_all_relations().await.unwrap();
     assert!(current_relations.iter().any(|relation| {
         relation.source == retention_decision_id

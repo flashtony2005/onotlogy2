@@ -642,6 +642,15 @@ export interface FollowUpItemDto {
   action?: string
 }
 
+export interface LearningInsightDto {
+  opportunityType: string
+  action: string
+  outcomeRuns: number
+  outcomeSuccesses: number
+  realizedGoalDelta: number
+  successfulAverageGoalDelta: number
+}
+
 export interface BusinessRunDto {
   executed: boolean
   projectId: string

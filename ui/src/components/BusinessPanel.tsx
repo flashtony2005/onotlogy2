@@ -6,6 +6,7 @@ import {
   getExpiredExecutionLeases,
   getBusinessFollowUps,
   getBusinessRecommendations,
+  getBusinessLearningInsights,
   postProjectList,
   runBusinessActions,
   reconcileBusinessExecution,
@@ -21,6 +22,7 @@ import type {
   BusinessRunDto,
   ExecutionLeaseDto,
   FollowUpItemDto,
+  LearningInsightDto,
   ProjectDto,
 } from '../types'
 
@@ -65,6 +67,7 @@ export function BusinessPanel({
   const [portfolio, setPortfolio] = useState<BusinessPathDto[]>([])
   const [interruptedLeases, setInterruptedLeases] = useState<ExecutionLeaseDto[]>([])
   const [followUps, setFollowUps] = useState<FollowUpItemDto[]>([])
+  const [learningInsights, setLearningInsights] = useState<LearningInsightDto[]>([])
   const [run, setRun] = useState<BusinessRunDto | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -73,25 +76,34 @@ export function BusinessPanel({
   const canRun = currentRole.toLowerCase() !== 'executive'
 
   const loadInsight = async (selectedId: string) => {
-    const [goalResult, recommendationResult, portfolioResult, leaseResult, followUpResult] =
-      await Promise.allSettled([
-        getBusinessGoals(selectedId),
-        getBusinessRecommendations(selectedId),
-        getBusinessPortfolio(selectedId),
-        getExpiredExecutionLeases(selectedId),
-        getBusinessFollowUps(selectedId),
-      ])
+    const [
+      goalResult,
+      recommendationResult,
+      portfolioResult,
+      leaseResult,
+      followUpResult,
+      learningResult,
+    ] = await Promise.allSettled([
+      getBusinessGoals(selectedId),
+      getBusinessRecommendations(selectedId),
+      getBusinessPortfolio(selectedId),
+      getExpiredExecutionLeases(selectedId),
+      getBusinessFollowUps(selectedId),
+      getBusinessLearningInsights(selectedId),
+    ])
     setGoals(goalResult.status === 'fulfilled' ? goalResult.value : [])
     setRecommendations(recommendationResult.status === 'fulfilled' ? recommendationResult.value : [])
     setPortfolio(portfolioResult.status === 'fulfilled' ? portfolioResult.value : [])
     setInterruptedLeases(leaseResult.status === 'fulfilled' ? leaseResult.value : [])
     setFollowUps(followUpResult.status === 'fulfilled' ? followUpResult.value : [])
+    setLearningInsights(learningResult.status === 'fulfilled' ? learningResult.value : [])
     const failures = [
       goalResult,
       recommendationResult,
       portfolioResult,
       leaseResult,
       followUpResult,
+      learningResult,
     ].filter((result) => result.status === 'rejected')
     if (failures.length > 0) {
       throw (failures[0] as PromiseRejectedResult).reason
@@ -342,6 +354,27 @@ export function BusinessPanel({
                     </button>
                   </div>
                 )}
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {!loading && learningInsights.length > 0 && (
+        <section className="evo-section">
+          <h4>学习证据</h4>
+          <div className="business-grid">
+            {learningInsights.map((item) => (
+              <article key={`${item.opportunityType}:${item.action}`} className="knowledge-proposal">
+                <div className="knowledge-proposal-head">
+                  <b>{item.opportunityType} · {item.action}</b>
+                  <small>样本 {item.outcomeRuns}</small>
+                </div>
+                <div className="knowledge-meta">
+                  <span>成功 {item.outcomeSuccesses}</span>
+                  <span>实际收益 {number(item.realizedGoalDelta)}</span>
+                  <span>成功均值 {number(item.successfulAverageGoalDelta)}</span>
+                </div>
               </article>
             ))}
           </div>

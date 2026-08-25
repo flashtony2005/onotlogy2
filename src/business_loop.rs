@@ -219,6 +219,22 @@ pub struct FollowUpItem {
     pub action: Option<String>,
 }
 
+/// 可解释的学习证据；只统计能回链 Decision/Opportunity 的 BusinessResult。
+#[derive(Debug, Serialize)]
+pub struct LearningInsight {
+    #[serde(rename = "opportunityType")]
+    pub opportunity_type: String,
+    pub action: String,
+    #[serde(rename = "outcomeRuns")]
+    pub outcome_runs: u64,
+    #[serde(rename = "outcomeSuccesses")]
+    pub outcome_successes: u64,
+    #[serde(rename = "realizedGoalDelta")]
+    pub realized_goal_delta: f64,
+    #[serde(rename = "successfulAverageGoalDelta")]
+    pub successful_average_goal_delta: f64,
+}
+
 fn text<'a>(data: &'a Value, key: &str) -> Result<&'a str, BusinessLoopError> {
     data.get(key)
         .and_then(Value::as_str)
@@ -1052,6 +1068,35 @@ async fn learned_action_stats(
         entry.realized_goal_delta += goal_delta;
     }
     Ok(learned)
+}
+
+/// 将内部学习账本变成可审计证据，解释推荐为什么信任某类动作。
+pub async fn list_learning_insights(
+    storage: &LibSQLStorage,
+    project_id: &str,
+) -> Result<Vec<LearningInsight>, BusinessLoopError> {
+    let mut items = learned_action_stats(storage, project_id)
+        .await?
+        .into_iter()
+        .map(|((opportunity_type, action), stats)| LearningInsight {
+            successful_average_goal_delta: if stats.successes > 0 {
+                stats.realized_goal_delta / stats.successes as f64
+            } else {
+                0.0
+            },
+            opportunity_type,
+            action,
+            outcome_runs: stats.runs,
+            outcome_successes: stats.successes,
+            realized_goal_delta: stats.realized_goal_delta,
+        })
+        .collect::<Vec<_>>();
+    items.sort_by(|left, right| {
+        left.opportunity_type
+            .cmp(&right.opportunity_type)
+            .then_with(|| left.action.cmp(&right.action))
+    });
+    Ok(items)
 }
 
 /// 只屏蔽同一机会上刚失败的候选；其他机会仍可基于自身上下文选择同一动作。

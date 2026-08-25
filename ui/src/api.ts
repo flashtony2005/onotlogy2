@@ -35,6 +35,7 @@ import type {
   BusinessRunDto,
   ExecutionLeaseDto,
   FollowUpItemDto,
+  LearningInsightDto,
   ProjectEventDto,
   SessionDto,
   SessionSummaryDto,
@@ -601,6 +602,11 @@ export async function getExpiredExecutionLeases(projectId: string): Promise<Exec
 export async function getBusinessFollowUps(projectId: string): Promise<FollowUpItemDto[]> {
   const res = await authFetch(`/api/v1/business/follow-ups?projectId=${encodeURIComponent(projectId)}`)
   return unwrap<FollowUpItemDto[]>(res)
+}
+
+export async function getBusinessLearningInsights(projectId: string): Promise<LearningInsightDto[]> {
+  const res = await authFetch(`/api/v1/business/learning-insights?projectId=${encodeURIComponent(projectId)}`)
+  return unwrap<LearningInsightDto[]>(res)
 }
 
 export async function startBusinessFollowUp(id: string): Promise<unknown> {
