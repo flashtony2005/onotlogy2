@@ -18,7 +18,7 @@ use crate::worker_core::registry::WorkerRegistry;
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::LazyLock;
 use std::time::Instant;
 use thiserror::Error;
@@ -1200,13 +1200,33 @@ pub async fn recommend_next_actions(
         });
     }
 
+    // ponytail: 同分时全新机会优先于重试机会，避免失败重试饿死新需求；需更细退避策略再升级。
+    let decided = opportunity_ids_with_decisions(storage, project_id).await?;
     recommendations.sort_by(|left, right| {
         right
             .score
             .total_cmp(&left.score)
+            .then_with(|| {
+                u8::from(decided.contains(&left.opportunity_id))
+                    .cmp(&u8::from(decided.contains(&right.opportunity_id)))
+            })
             .then_with(|| left.opportunity_id.cmp(&right.opportunity_id))
     });
     Ok(recommendations)
+}
+
+async fn opportunity_ids_with_decisions(
+    storage: &LibSQLStorage,
+    project_id: &str,
+) -> Result<BTreeSet<String>, BusinessLoopError> {
+    let decisions = storage
+        .list_objects_for_project(project_id, "Decision")
+        .await?;
+    Ok(decisions
+        .iter()
+        .filter_map(|decision| decision.data.get("opportunity").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect())
 }
 
 /// 有界路径搜索只解释可直接落地的状态更新；创建效应和参数化动作留给执行层扩展。
@@ -1846,11 +1866,19 @@ async fn reserve_business_portfolio(
         }
     }
 
-    Ok(select_business_portfolio(
-        candidates,
-        &metric_limits,
-        &resource_limits,
-    ))
+    let decided = opportunity_ids_with_decisions(storage, project_id).await?;
+    let mut portfolio = select_business_portfolio(candidates, &metric_limits, &resource_limits);
+    portfolio.sort_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| {
+                u8::from(decided.contains(&left.opportunity_id))
+                    .cmp(&u8::from(decided.contains(&right.opportunity_id)))
+            })
+            .then_with(|| left.opportunity_id.cmp(&right.opportunity_id))
+    });
+    Ok(portfolio)
 }
 
 /// 从独立机会路径中选择一个可组合的业务行动组合。
@@ -3032,14 +3060,50 @@ pub async fn settle_follow_up(
         outcome_id.clone(),
     )
     .await?;
+    // 失败不是终点：重新打开同一机会，让学习后的推荐可以在下一轮选择替代动作。
+    // ponytail: 最多重开一次，避免 fail→reopen→fail 死循环；需要策略化退避时再升级。
+    let mut reopened_opportunity = None;
+    if !success {
+        let opportunity_id = text(&decision.data, "opportunity")?;
+        let opportunities = storage
+            .list_objects_for_project(project_id, "Opportunity")
+            .await?;
+        let decisions = storage
+            .list_objects_for_project(project_id, "Decision")
+            .await?;
+        let attempts = decisions
+            .iter()
+            .filter(|item| text(&item.data, "opportunity").is_ok_and(|id| id == opportunity_id))
+            .count();
+        if attempts < 2
+            && let Some(opportunity) = find_record(&opportunities, opportunity_id, "Opportunity")
+            && text(&opportunity.data, "status")? == OPPORTUNITY_EXECUTED
+        {
+            let data = set_status(opportunity.data.clone(), OPPORTUNITY_OPEN);
+            validate_data(&ontology, "Opportunity", &data)?;
+            storage
+                .apply_world(WorldCommand::UpdateObject {
+                    id: opportunity.id.clone(),
+                    data: data.clone(),
+                    project_id: Some(project_id.to_string()),
+                })
+                .await?;
+            reopened_opportunity = Some(json!({ "id": opportunity.id, "data": data }));
+        }
+    }
+
     let goals = refresh_goal_progress(storage, project_id).await?;
 
-    Ok(json!({
+    let mut result = json!({
         "task": { "id": object.id, "type": object.r#type, "data": settled_data },
         "decision": { "id": decision.id, "data": decision.data },
         "outcome": { "id": outcome_id, "data": outcome_data },
         "goals": goals,
-    }))
+    });
+    if let Some(opportunity) = reopened_opportunity {
+        result["reopenedOpportunity"] = opportunity;
+    }
+    Ok(result)
 }
 /// 执行一轮完整再规划：发现 → 选择最优动作 → 决策 → 执行 → 目标反馈。
 pub async fn run_next_best_action(

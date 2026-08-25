@@ -592,6 +592,75 @@ async fn deferred_follow_up_evidence_is_declared_and_type_generic() {
 }
 
 #[tokio::test]
+async fn failed_deferred_outcome_reopens_opportunity_for_replanning() {
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let ontology =
+        std::fs::read_to_string("domain-packs/crm-retention/ontology.odl").expect("业务包应存在");
+    seed_odl_project(
+        &storage,
+        "failure-replan",
+        &ontology,
+        "monthly_reactivations",
+    )
+    .await;
+    let discovered = discover_opportunities(&storage, "failure-replan")
+        .await
+        .expect("应发现机会");
+    let opportunity_id = discovered[0]["id"].as_str().expect("机会必须有 ID");
+    decide_opportunity(
+        &storage,
+        "failure-replan",
+        opportunity_id,
+        "contract-test",
+        DecisionOptions {
+            action: Some("RetainCustomer"),
+            reason: None,
+            alternatives: None,
+            params: None,
+        },
+    )
+    .await
+    .expect("应能决策 Deferred 动作");
+    let execution = execute_opportunity(
+        &storage,
+        &PluginCatalog::new(),
+        &WorkerRegistry::new(),
+        "failure-replan",
+        opportunity_id,
+    )
+    .await
+    .expect("应能创建跟进对象");
+    let task_id = execution["createdObject"]["id"]
+        .as_str()
+        .expect("跟进对象必须有 ID");
+
+    start_follow_up(&storage, "failure-replan", task_id)
+        .await
+        .expect("应能启动跟进对象");
+    let settled = settle_follow_up(&storage, "failure-replan", task_id, false)
+        .await
+        .expect("应能记录失败终局");
+    assert_eq!(settled["outcome"]["data"]["success"], json!(false));
+    assert_eq!(settled["outcome"]["data"]["goal_delta"], json!(0.0));
+    assert_eq!(
+        settled["reopenedOpportunity"]["data"]["status"],
+        json!("Open"),
+        "失败终局应重新打开同一机会以支持替代动作"
+    );
+
+    let rediscovered = discover_opportunities(&storage, "failure-replan")
+        .await
+        .expect("重开后不应创建重复机会");
+    assert!(rediscovered.is_empty());
+    let recommendations = recommend_next_actions(&storage, "failure-replan")
+        .await
+        .expect("失败后应重新推荐");
+    assert_eq!(recommendations[0].action, "ContactCustomer");
+}
+
+#[tokio::test]
 async fn metric_budget_is_shared_across_opportunities() {
     let storage = LibSQLStorage::open(":memory:")
         .await
@@ -1206,6 +1275,24 @@ async fn business_loop_discovers_decides_executes_and_replans() {
         json!("customer:demo-vip-rich3")
     );
     assert_eq!(result["execution"]["businessResult"], json!(null));
+
+    // 全新机会优先后，重开机会按学习证据重新比较；这里 Retain 仍是最高净值，
+    // 但最多只重试一次，不会造成无限循环。
+    let (status, body) = common::http_call(
+        addr,
+        "POST",
+        "/api/v1/business/run-next",
+        Some(&run_next_body),
+    )
+    .await;
+    assert_eq!(status, 200, "应能执行重开机会的最优动作：{body}");
+    let result = data(&body).await;
+    assert_eq!(result["executed"], json!(true));
+    assert_eq!(
+        result["recommendation"]["subject"],
+        json!("customer:demo-vip-rich2")
+    );
+    assert_eq!(result["recommendation"]["action"], json!("RetainCustomer"));
 
     let (status, body) = common::http_call(
         addr,
