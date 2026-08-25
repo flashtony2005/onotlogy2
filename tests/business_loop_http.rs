@@ -1508,6 +1508,7 @@ object Customer:
       link_edge: targets
       goal_metric: monthly_reactivations
       shared_resource_budget: labor=6
+      shared_resource_window_days: 30
       evidence: "客户已 {days_since_last_contact} 天未联系"
       when:
         - field: self.level
@@ -1560,6 +1561,7 @@ object Outcome:
     metric: string
     stage: string
     resources: string
+    executed_at: datetime
 
 object StateTransition:
   properties:

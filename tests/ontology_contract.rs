@@ -237,6 +237,70 @@ fn opportunity_rule_requires_complete_and_typed_metadata() {
 }
 
 #[test]
+fn shared_resource_windows_are_consistent_and_bound_to_budgets() {
+    let make = |second: Option<&str>| {
+        [
+            "relation targets:",
+            "  source: Opportunity",
+            "  target: Customer",
+            "object Customer:",
+            "  properties:",
+            "    name: string",
+            "    days_since_last_contact: int",
+            "  opportunities:",
+            "    Reactivation:",
+            "      estimated_value: 10000",
+            "      goal_metric: revenue",
+            "      evidence: \"VIP {name}\"",
+            "      subject_type: Customer",
+            "      urgency_field: days_since_last_contact",
+            "      urgency_horizon: 90",
+            "      link_edge: targets",
+            "      shared_resource_budget: labor=6",
+            "      shared_resource_window_days: 30",
+            "      when:",
+            "        - field: self.name",
+            "          op: eq",
+            "          value: \"VIP\"",
+            second.unwrap_or_default(),
+            "object Opportunity:",
+            "  properties:",
+            "    subject: string",
+            "    opportunity_type: string",
+            "    status: string",
+            "    estimated_value: decimal",
+            "    evidence: string",
+        ]
+        .join("\n")
+    };
+    let ir = parse_odl(&make(None)).expect("共享资源窗口应可解析");
+    assert_eq!(
+        ir.object_types[0].opportunity_rules[0].shared_resource_window_days,
+        Some(30)
+    );
+
+    let second = [
+        "    Upgrade:",
+        "      estimated_value: 10000",
+        "      goal_metric: revenue",
+        "      evidence: \"VIP {name}\"",
+        "      subject_type: Customer",
+        "      urgency_field: days_since_last_contact",
+        "      urgency_horizon: 90",
+        "      link_edge: targets",
+        "      shared_resource_budget: cash=100",
+        "      shared_resource_window_days: 7",
+        "      when:",
+        "        - field: self.name",
+        "          op: eq",
+        "          value: \"VIP\"",
+    ]
+    .join("\n");
+    let error = parse_odl(&make(Some(&second))).expect_err("冲突窗口必须失败");
+    assert!(error.to_string().contains("共享资源窗口"));
+}
+
+#[test]
 fn goal_metric_is_declared_on_rules_and_actions() {
     let odl = [
         "relation targets:",

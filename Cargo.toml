@@ -19,6 +19,7 @@ futures-util = "0.3"
 libsql = "0.9.30"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+chrono = { workspace = true, features = ["clock"] }
 oaip-abi = { path = "crates/oaip-abi" }
 oaip-eval-core = { path = "crates/oaip-eval-core" }
 oaip-mutation-core = { path = "crates/oaip-mutation-core" }

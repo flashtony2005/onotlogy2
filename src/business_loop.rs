@@ -15,6 +15,7 @@ use crate::storage::{LibSQLStorage, ProjectRecord, StorageError, WorldCommand};
 use crate::worker::policy::WorkerPolicy;
 use crate::worker::router::{RouterCriteria, WorkerRouter};
 use crate::worker_core::registry::WorkerRegistry;
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
@@ -199,6 +200,17 @@ async fn project_ontology(
         }) {
             return Err(BusinessLoopError::invalid(
                 "使用 shared_resource_budget 时 Outcome 必须声明 resources: string",
+            ));
+        }
+        let window = shared_resource_window_days(&ir)?;
+        if window.is_some()
+            && !outcome.properties.iter().any(|property| {
+                property.name == "executed_at"
+                    && property.ty == crate::abi::ir::ScalarType::DateTime
+            })
+        {
+            return Err(BusinessLoopError::invalid(
+                "使用 shared_resource_window_days 时 Outcome 必须声明 executed_at: datetime",
             ));
         }
     }
@@ -545,7 +557,11 @@ fn validate_action_budget(
         }
     }
     let shared = shared_resource_limits(ontology);
-    let spent = consumed_shared_resources(enterprise_outcomes)?;
+    let spent = consumed_shared_resources(
+        enterprise_outcomes,
+        shared_resource_window_days(ontology)?,
+        Utc::now(),
+    )?;
     for (name, amount) in &planning.resources {
         if let Some(limit) = shared.get(name) {
             let remaining = (limit - spent.get(name).copied().unwrap_or_default()).max(0.0);
@@ -571,16 +587,46 @@ fn shared_resource_limits(ontology: &OntologyIR) -> BTreeMap<String, f64> {
         .collect()
 }
 
-/// 从不可变 ActionExecuted 账本重建已消耗共享资源。
+/// 收集企业共享池的滚动窗口；ODL 编译期已保证所有声明一致。
+fn shared_resource_window_days(ontology: &OntologyIR) -> Result<Option<u32>, BusinessLoopError> {
+    let mut window = None;
+    for value in ontology
+        .object_types
+        .iter()
+        .flat_map(|object| object.opportunity_rules.iter())
+        .filter_map(|rule| rule.shared_resource_window_days)
+    {
+        if window.is_some_and(|expected| expected != value) {
+            return Err(BusinessLoopError::invalid(
+                "共享资源窗口在所有机会中必须相同",
+            ));
+        }
+        window.get_or_insert(value);
+    }
+    Ok(window)
+}
+
 /// 从不可变 ActionExecuted 账本重建企业级已消耗共享资源。
 /// `resources` 是执行时的动作规划快照，避免跨项目同名动作误读当前本体。
 fn consumed_shared_resources(
     outcomes: &[crate::storage::ObjectRecord],
+    window_days: Option<u32>,
+    now: DateTime<Utc>,
 ) -> Result<BTreeMap<String, f64>, BusinessLoopError> {
+    let cutoff = window_days.map(|days| now - chrono::Duration::days(i64::from(days)));
     let mut spent = BTreeMap::new();
     for outcome in outcomes.iter().filter(|outcome| {
         text(&outcome.data, "stage").is_ok_and(|stage| stage == OUTCOME_ACTION_EXECUTED)
     }) {
+        if let Some(cutoff) = cutoff {
+            let executed_at = text(&outcome.data, "executed_at")?;
+            let executed_at = DateTime::parse_from_rfc3339(executed_at)
+                .map_err(|_| BusinessLoopError::invalid("Outcome 执行时间必须是 RFC3339"))?
+                .with_timezone(&Utc);
+            if executed_at < cutoff {
+                continue;
+            }
+        }
         let Some(raw) = outcome.data.get("resources").and_then(Value::as_str) else {
             continue;
         };
@@ -627,7 +673,11 @@ fn available_budget(
     let mut resources = rule.resource_budgets.clone();
     let shared_limits = shared_resource_limits(ontology);
     if !shared_limits.is_empty() {
-        let spent = consumed_shared_resources(enterprise_outcomes)?;
+        let spent = consumed_shared_resources(
+            enterprise_outcomes,
+            shared_resource_window_days(ontology)?,
+            Utc::now(),
+        )?;
         for (name, limit) in shared_limits {
             let remaining = (limit - spent.get(&name).copied().unwrap_or_default()).max(0.0);
             resources
@@ -1729,7 +1779,11 @@ async fn reserve_business_portfolio(
     }
 
     let mut resource_limits = shared_resource_limits(&ontology);
-    let spent_resources = consumed_shared_resources(&enterprise_outcomes(storage).await?)?;
+    let spent_resources = consumed_shared_resources(
+        &enterprise_outcomes(storage).await?,
+        shared_resource_window_days(&ontology)?,
+        Utc::now(),
+    )?;
     for (name, spent) in spent_resources {
         if let Some(remaining) = resource_limits.get_mut(&name) {
             *remaining = (*remaining - spent).max(0.0);
@@ -2461,6 +2515,10 @@ pub async fn execute_opportunity(
             .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
         action_outcome_data["resources"] = json!(resources);
     }
+    if shared_resource_window_days(&ontology)?.is_some() {
+        action_outcome_data["executed_at"] =
+            json!(Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true));
+    }
     if let Some(provider_id) = &capability_provider {
         action_outcome_data["provider"] = json!(provider_id);
         if let Some((_, capability_name, _)) = external_capability {
@@ -3001,6 +3059,29 @@ mod tests {
             vec!["combo-left", "combo-right"],
             "组合净值评分应胜过单独最高分机会"
         );
+    }
+
+    #[test]
+    fn shared_resource_window_excludes_expired_outcomes() {
+        let record = |days_ago: i64| crate::storage::ObjectRecord {
+            id: format!("outcome:{days_ago}"),
+            r#type: "Outcome".into(),
+            data: json!({
+                "stage": OUTCOME_ACTION_EXECUTED,
+                "resources": json!({"labor": 6.0}).to_string(),
+                "executed_at": (Utc::now() - chrono::Duration::days(days_ago))
+                    .to_rfc3339_opts(SecondsFormat::Micros, true),
+            }),
+            version: 1,
+        };
+        let outcomes = [record(31), record(29)];
+        let now = Utc::now();
+
+        let rolling = consumed_shared_resources(&outcomes, Some(30), now).expect("账本应有效");
+        assert_eq!(rolling.get("labor"), Some(&6.0));
+
+        let lifetime = consumed_shared_resources(&outcomes, None, now).expect("账本应有效");
+        assert_eq!(lifetime.get("labor"), Some(&12.0));
     }
 
     fn customer_ontology() -> OntologyIR {

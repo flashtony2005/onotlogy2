@@ -755,6 +755,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                             metric_budget: None,
                             resource_budgets: BTreeMap::new(),
                             shared_resource_budgets: BTreeMap::new(),
+                            shared_resource_window_days: None,
                             link_edge: String::new(),
                         },
                     ));
@@ -1202,6 +1203,19 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                                 return Err(invalid(format!("共享资源预算 {name} 重复声明")));
                             }
                         }
+                        "shared_resource_window_days" => {
+                            let value = v.parse::<u32>().map_err(|_| {
+                                invalid(format!(
+                                    "shared_resource_window_days 必须是正整数，得到 `{v}`"
+                                ))
+                            })?;
+                            if value == 0 {
+                                return Err(invalid(
+                                    "shared_resource_window_days 必须大于零".into(),
+                                ));
+                            }
+                            rule.shared_resource_window_days = Some(value);
+                        }
                         "link_edge" => {
                             if v.trim().is_empty() {
                                 return Err(invalid("link_edge 不能为空".into()));
@@ -1494,6 +1508,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
 
     let mut seen_opportunities = std::collections::BTreeSet::new();
     let mut shared_resource_limits = std::collections::BTreeMap::new();
+    let mut shared_resource_window: Option<(u32, u32)> = None;
     for (line_no, object) in &declared {
         for rule in &object.opportunity_rules {
             for (name, limit) in &rule.shared_resource_budgets {
@@ -1508,6 +1523,29 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         1,
                     ));
                 }
+            }
+            if rule.shared_resource_window_days.is_some() && rule.shared_resource_budgets.is_empty()
+            {
+                return Err(OdlError::new(
+                    E_INVALID_PROPERTY_CONSTRAINT,
+                    "shared_resource_window_days 必须与 shared_resource_budget 同时声明"
+                        .to_string(),
+                    *line_no,
+                    1,
+                ));
+            }
+            if let Some(window) = rule.shared_resource_window_days {
+                if let Some((expected, _)) = shared_resource_window
+                    && expected != window
+                {
+                    return Err(OdlError::new(
+                        E_INVALID_PROPERTY_CONSTRAINT,
+                        "共享资源窗口在所有机会中必须相同".to_string(),
+                        *line_no,
+                        1,
+                    ));
+                }
+                shared_resource_window.get_or_insert((window, *line_no));
             }
         }
     }

@@ -380,6 +380,9 @@ pub struct OpportunityRule {
     /// 企业内跨项目共享的命名资源预算；同名维度必须声明相同上限。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub shared_resource_budgets: BTreeMap<String, f64>,
+    /// 企业共享池的滚动统计天数；未声明表示累计池。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_resource_window_days: Option<u32>,
     /// Opportunity 指向主体的关系边。
     pub link_edge: String,
 }
