@@ -15,7 +15,7 @@ use crate::storage::{LibSQLStorage, ProjectRecord, StorageError, WorldCommand};
 use crate::worker_core::registry::WorkerRegistry;
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 use thiserror::Error;
 
@@ -814,6 +814,60 @@ pub async fn goal_gaps(
     Ok(gaps)
 }
 
+/// 按 `(OpportunityType, Action)` 聚合终局成功率，避免不同业务上下文互相污染。
+type ActionLearning = HashMap<(String, String), (u64, u64)>;
+
+/// 只信任 Decision 链回连到 Opportunity 的 BusinessResult；孤立 Outcome 不参与学习。
+async fn learned_action_stats(
+    storage: &LibSQLStorage,
+    project_id: &str,
+) -> Result<ActionLearning, BusinessLoopError> {
+    let outcomes = storage
+        .list_objects_for_project(project_id, "Outcome")
+        .await?;
+    let decisions = storage
+        .list_objects_for_project(project_id, "Decision")
+        .await?;
+    let opportunities = storage
+        .list_objects_for_project(project_id, "Opportunity")
+        .await?;
+    let relations = storage.list_all_relations().await?;
+    let mut learned = ActionLearning::new();
+
+    for outcome in outcomes {
+        if text(&outcome.data, "stage")? != OUTCOME_BUSINESS_RESULT {
+            continue;
+        }
+        let action = text(&outcome.data, "action")?.to_string();
+        let success = outcome.data.get("success").and_then(Value::as_bool);
+        let Some(success) = success else { continue };
+        let decision_id = relations
+            .iter()
+            .filter(|relation| {
+                relation.relation == "produced_outcome" && relation.target == outcome.id
+            })
+            .map(|relation| relation.source.as_str())
+            .next();
+        let Some(decision_id) = decision_id else {
+            continue;
+        };
+        let Some(decision) = find_record(&decisions, decision_id, "Decision") else {
+            continue;
+        };
+        let opportunity_id = text(&decision.data, "opportunity")?;
+        let Some(opportunity) = find_record(&opportunities, opportunity_id, "Opportunity") else {
+            continue;
+        };
+        let opportunity_type = text(&opportunity.data, "opportunity_type")?.to_string();
+        let entry = learned.entry((opportunity_type, action)).or_default();
+        entry.0 += 1;
+        if success {
+            entry.1 += 1;
+        }
+    }
+    Ok(learned)
+}
+
 /// 从不可变的 Outcome 证据重建目标进度，避免执行链中断后重复累加指标。
 pub async fn refresh_goal_progress(
     storage: &LibSQLStorage,
@@ -912,6 +966,7 @@ pub async fn recommend_next_actions(
     let outcomes = storage
         .list_objects_for_project(project_id, "Outcome")
         .await?;
+    let learning = learned_action_stats(storage, project_id).await?;
 
     let mut recommendations = Vec::new();
     for opportunity in opportunities {
@@ -937,7 +992,8 @@ pub async fn recommend_next_actions(
             &subject_record.data,
             estimated_value,
             &available,
-            &outcomes,
+            opportunity_type,
+            &learning,
         );
         if candidates.is_empty() {
             continue;
@@ -1076,7 +1132,7 @@ struct PathContext<'a> {
     estimated_value: f64,
     urgency: f64,
     goals: &'a [crate::storage::ObjectRecord],
-    outcomes: &'a [crate::storage::ObjectRecord],
+    learning: &'a ActionLearning,
 }
 
 fn validate_path_creates(
@@ -1121,7 +1177,7 @@ fn search_paths<'a>(
         estimated_value,
         urgency,
         goals,
-        outcomes,
+        ..
     } = *context;
     if depth >= PATH_MAX_STEPS {
         return Ok(Vec::new());
@@ -1153,7 +1209,8 @@ fn search_paths<'a>(
         apply_path_action(ontology, owner_type, action, &mut next_state)?;
         let mut next_used = used.to_vec();
         next_used.push(action.name.clone());
-        let step_confidence = action_confidence(action, outcomes)?;
+        let step_confidence =
+            action_confidence(action, context.opportunity_type, context.learning)?;
         let benefit = if let Some((field, factor)) = planning
             .benefit_field
             .as_deref()
@@ -1290,6 +1347,7 @@ pub async fn plan_opportunity_paths(
     let opportunities = storage
         .list_objects_for_project(project_id, "Opportunity")
         .await?;
+    let learning = learned_action_stats(storage, project_id).await?;
 
     let mut plans = Vec::new();
     for opportunity in opportunities {
@@ -1323,7 +1381,7 @@ pub async fn plan_opportunity_paths(
             estimated_value: number(&opportunity.data, "estimated_value")?,
             urgency,
             goals: &goals,
-            outcomes: &outcomes,
+            learning: &learning,
         };
         let mut scored = search_paths(
             &context,
@@ -1504,25 +1562,17 @@ pub async fn plan_business_portfolio(
 
 fn action_confidence(
     definition: &ActionDef,
-    outcomes: &[crate::storage::ObjectRecord],
+    opportunity_type: &str,
+    learning: &ActionLearning,
 ) -> Result<f64, BusinessLoopError> {
     let prior_confidence = action_planning(definition)?.prior_confidence;
-    let relevant = outcomes
-        .iter()
-        .filter(|item| {
-            text(&item.data, "action").is_ok_and(|name| name == definition.name)
-                && text(&item.data, "stage").is_ok_and(|stage| stage == OUTCOME_BUSINESS_RESULT)
-        })
-        .collect::<Vec<_>>();
-    if relevant.is_empty() {
+    let Some(&(runs, successes)) =
+        learning.get(&(opportunity_type.to_string(), definition.name.clone()))
+    else {
         return Ok(prior_confidence);
-    }
-
-    let success = relevant
-        .iter()
-        .filter(|item| item.data.get("success").and_then(Value::as_bool) == Some(true))
-        .count();
-    Ok(success as f64 / relevant.len() as f64)
+    };
+    debug_assert!(runs > 0);
+    Ok(successes as f64 / runs as f64)
 }
 
 fn evaluate_candidates(
@@ -1530,7 +1580,8 @@ fn evaluate_candidates(
     customer: &Value,
     estimated_value: f64,
     budget: &AvailableBudget,
-    outcomes: &[crate::storage::ObjectRecord],
+    opportunity_type: &str,
+    learning: &ActionLearning,
 ) -> Vec<ActionCandidate> {
     actions
         .iter()
@@ -1546,7 +1597,7 @@ fn evaluate_candidates(
             if !budget_admits(planning, budget) {
                 return None;
             }
-            let confidence = action_confidence(definition, outcomes).ok()?;
+            let confidence = action_confidence(definition, opportunity_type, learning).ok()?;
             let benefit = expected_benefit(definition, estimated_value, customer).ok()?;
             Some(ActionCandidate {
                 action: definition.name.to_string(),
@@ -2610,7 +2661,19 @@ mod tests {
             }],
             creates: Vec::new(),
             policy: PolicyDef::default(),
-            planning: None,
+            planning: Some(crate::abi::ir::ActionPlanning {
+                cost: 0.0,
+                prior_confidence: 0.0,
+                outcome_timing: OutcomeTiming::Immediate,
+                goal_metric: None,
+                benefit_field: None,
+                benefit_factor: None,
+                actor: ActorKind::Agent,
+                resources: BTreeMap::new(),
+                plugin: None,
+                worker: None,
+                capability: None,
+            }),
         }
     }
 
@@ -2649,6 +2712,28 @@ mod tests {
     fn customer_ontology() -> OntologyIR {
         parse_odl("object Customer:\n  properties:\n    name: string\n    days: int\n")
             .expect("测试本体应可解析")
+    }
+
+    #[test]
+    fn learning_stays_separate_per_opportunity_context() {
+        let definition = action("Touch");
+        let learning = HashMap::from([
+            (("WinBack".to_owned(), "Touch".to_owned()), (2u64, 0u64)),
+            (("Upgrade".to_owned(), "Touch".to_owned()), (2u64, 2u64)),
+        ]);
+
+        assert_eq!(
+            action_confidence(&definition, "WinBack", &learning).expect("学习应可读取"),
+            0.0
+        );
+        assert_eq!(
+            action_confidence(&definition, "Upgrade", &learning).expect("学习应可读取"),
+            1.0
+        );
+        assert_eq!(
+            action_confidence(&definition, "Unknown", &learning).expect("无样本应回退先验"),
+            0.0
+        );
     }
 
     #[test]
