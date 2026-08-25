@@ -126,7 +126,14 @@ export function BusinessPanel({
     try {
       const result = await runBusinessNext(projectId)
       setRun(result)
-      setNotice(result.executed ? '已执行下一步最优动作' : '当前没有可自动执行的净收益动作')
+      const interrupted = result.expiredExecutionLeases?.length ?? 0
+      setNotice(
+        result.executed
+          ? '已执行下一步最优动作'
+          : interrupted > 0
+            ? '发现中断执行，已安全停止；请人工对账'
+            : '当前没有可自动执行的净收益动作',
+      )
       await loadInsight(projectId)
     } catch (e) {
       if (!onAuthError(e)) setError((e as Error).message || '业务动作执行失败')
@@ -236,6 +243,24 @@ export function BusinessPanel({
       {run && (
         <section className="evo-section">
           <h4>最近执行</h4>
+          {(run.expiredExecutionLeases?.length ?? 0) > 0 && (
+            <div className="business-list">
+              {run.expiredExecutionLeases?.map((lease) => (
+                <article key={lease.id} className="knowledge-proposal">
+                  <div className="knowledge-proposal-head">
+                    <b>中断执行 · {lease.opportunityId}</b>
+                    <small>{lease.status}</small>
+                  </div>
+                  <div className="knowledge-meta">
+                    <span>租约 {lease.id}</span>
+                    <span>owner {lease.owner}</span>
+                    <span>过期 {lease.expiresAt}</span>
+                  </div>
+                  <p>外部副作用未知；请先人工对账，再决定是否创建新机会。</p>
+                </article>
+              ))}
+            </div>
+          )}
           {run.recommendation ? (
             <>
               <p><b>{run.recommendation.action}</b> — {run.recommendation.reason}</p>

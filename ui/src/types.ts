@@ -624,9 +624,19 @@ export interface BusinessPathDto {
   reason: string
 }
 
+export interface ExecutionLeaseDto {
+  id: string
+  projectId: string
+  opportunityId: string
+  owner: string
+  status: string
+  expiresAt: string
+}
+
 export interface BusinessRunDto {
   executed: boolean
   projectId: string
+  expiredExecutionLeases?: ExecutionLeaseDto[]
   recommendation?: BusinessRecommendationDto | null
   decision?: unknown
   execution?: unknown
