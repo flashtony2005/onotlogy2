@@ -61,7 +61,7 @@ mac-open:
 	open target/mac/Ontology.app
 
 audit:
-	cd ui && npm audit --audit-level=high
+	cd ui && npm audit --registry=https://registry.npmjs.org/ --audit-level=high
 
 # D7：固定数据规模的四条核心路径基准（结果入 docs/03_架构设计/performance-baseline.md）。
 bench:

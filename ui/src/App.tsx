@@ -7,6 +7,7 @@ import {
   BookOpen,
   Code2,
   Globe2,
+  Compass,
   FolderKanban,
   LayoutDashboard,
   LogOut,
@@ -34,6 +35,7 @@ import { FabricPanel } from './components/FabricPanel'
 import { ProjectPanel } from './components/ProjectPanel'
 import { UserManagementPanel } from './components/UserManagementPanel'
 import { BusinessPackPanel } from './components/BusinessPackPanel'
+import { BusinessPanel } from './components/BusinessPanel'
 import { GovernancePanel } from './components/GovernancePanel'
 import { KnowledgePanel } from './components/KnowledgePanel'
 import { WorldPanel } from './components/WorldPanel'
@@ -44,7 +46,7 @@ import { buildTimeline } from './view'
 import type { AuthUserDto, TraceEventDto, ViewKind } from './types'
 
 const VIEW_GROUPS: { name: string; en: string; items: ViewKind[] }[] = [
-  { name: '运行', en: 'Operations', items: ['overview', 'world', 'runs'] },
+  { name: '运行', en: 'Operations', items: ['overview', 'business', 'world', 'runs'] },
   { name: '学习', en: 'Learning', items: ['workers', 'learning'] },
   { name: '治理', en: 'Governance', items: ['projects', 'knowledge', 'business-packs', 'skills', 'governance', 'fabric', 'developer', 'user-management'] },
 ]
@@ -66,6 +68,14 @@ const VIEWS: ViewMeta[] = [
     icon: LayoutDashboard,
     q: '现在系统怎么样？',
     desc: '整个系统当前状态、运行情况、重要指标、有没有异常',
+  },
+  {
+    key: 'business',
+    label: 'Business',
+    cn: '企业闭环',
+    icon: Compass,
+    q: '下一步该怎么让企业更好？',
+    desc: '目标缺口、机会推荐、约束组合与执行证据',
   },
   {
     key: 'world',
@@ -469,6 +479,9 @@ export default function App() {
           />
         )}
 
+        {view === 'business' && (
+          <BusinessPanel currentRole={user.role} onAuthError={handleAuthError} />
+        )}
         {view === 'world' && <WorldPanel />}
         {view === 'knowledge' && <KnowledgePanel />}
         {view === 'fabric' && <FabricPanel />}

@@ -2,6 +2,7 @@
 
 export type ViewKind =
   | 'overview'
+  | 'business'
   | 'world'
   | 'runs'
   | 'workers'
@@ -565,4 +566,67 @@ export interface OntologyEvolutionRecordDto {
   applied_version_id?: string | null
   created_at: string
   reviewed_at?: string | null
+}
+
+export interface BusinessGoalDto {
+  id: string
+  targetMetric: string
+  targetValue: number
+  currentValue: number
+  gap: number
+  status: string
+}
+
+export type BusinessActor = 'agent' | 'human'
+
+export interface BusinessCandidateDto {
+  action: string
+  actor: BusinessActor
+  requiresApproval: boolean
+  params: unknown[]
+  expectedBenefit: number
+  cost: number
+  confidence: number
+  netValue: number
+  resources?: Record<string, number>
+  plugin?: string
+  worker?: string
+  capability?: string
+}
+
+export interface BusinessRecommendationDto {
+  actor: BusinessActor
+  projectId: string
+  opportunityId: string
+  subject: string
+  action: string
+  score: number
+  confidence: number
+  reason: string
+  candidates: BusinessCandidateDto[]
+}
+
+export interface BusinessPathDto {
+  projectId: string
+  opportunityId: string
+  subject: string
+  actions: string[]
+  requiresHuman: boolean
+  requiresApproval: boolean
+  projectedCost: number
+  projectedNetValue: number
+  resources?: Record<string, number>
+  goalMetric?: string
+  confidence: number
+  score: number
+  reason: string
+}
+
+export interface BusinessRunDto {
+  executed: boolean
+  projectId: string
+  recommendation?: BusinessRecommendationDto | null
+  decision?: unknown
+  execution?: unknown
+  goals: BusinessGoalDto[]
 }

@@ -29,6 +29,10 @@ import type {
   ApprovalDecisionDto,
   ProjectCreateDto,
   ProjectDto,
+  BusinessGoalDto,
+  BusinessPathDto,
+  BusinessRecommendationDto,
+  BusinessRunDto,
   ProjectEventDto,
   SessionDto,
   SessionSummaryDto,
@@ -568,4 +572,30 @@ export async function postRunApprovalDecision(
     },
   )
   return unwrap<ApprovalDecisionDto>(r)
+}
+
+// ── Business Loop：企业状态 → 机会 → 组合选择 → 执行反馈 ──
+
+export async function getBusinessGoals(projectId: string): Promise<BusinessGoalDto[]> {
+  const res = await authFetch(`/api/v1/business/goals?projectId=${encodeURIComponent(projectId)}`)
+  return unwrap<BusinessGoalDto[]>(res)
+}
+
+export async function getBusinessRecommendations(projectId: string): Promise<BusinessRecommendationDto[]> {
+  const res = await authFetch(`/api/v1/business/recommendations?projectId=${encodeURIComponent(projectId)}`)
+  return unwrap<BusinessRecommendationDto[]>(res)
+}
+
+export async function getBusinessPortfolio(projectId: string): Promise<BusinessPathDto[]> {
+  const res = await authFetch(`/api/v1/business/portfolio?projectId=${encodeURIComponent(projectId)}`)
+  return unwrap<BusinessPathDto[]>(res)
+}
+
+export async function runBusinessNext(projectId: string): Promise<BusinessRunDto> {
+  const r = await authFetch('/api/v1/business/run-next', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId }),
+  })
+  return unwrap<BusinessRunDto>(r)
 }
