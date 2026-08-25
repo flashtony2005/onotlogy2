@@ -35,6 +35,7 @@
 | WB2005 | Policy 拒绝 | Action 被 Policy 引擎拒绝，需 Human Approval | 转人工审批 |
 | WB2006 | 轨迹缺对象绑定 | `TraceEvent.objectRefs` 为空，违反可解释性约束 | 写入拦截，补齐 object_refs |
 | WB2007 | 重复关系边 | `link` 相同 (source, edge, target) 已存在（未删） | 去重或先 `unlink` 再重连 |
+| WB2205 | 项目知识版本绑定无效 | 项目 ODL 与请求版本 Runtime IR 不一致、版本缺少 Runtime IR，或绑定版本与 live world 冲突 | 先修正项目 ODL 或选择经过治理且可执行的版本 |
 | WB2101 | 旧 schema 不兼容 | 本地库缺 `wb_meta.schema_version`（旧列 object_type/from_id/to_id/edge_type）或版本号不匹配，`CREATE TABLE IF NOT EXISTS` 无法迁移 | 运行 `oaip db reset` 删除并重建数据库 |
 
 
@@ -52,4 +53,3 @@
 | V1.1 | lushaohui | 2026-08-11 | 新增 Agent 模块错误码 WB2001~WB2006（对应 api-agent-trace.md） |
 | V1.2 | lushaohui | 2026-08-11 | 新增 WB2007（重复关系边，对应 V0.2 Relation 引擎） |
 | V1.3 | lushaohui | 2026-08-12 | 新增 WB2101（旧 schema 不兼容，对应 `oaip db reset` 迁移） |
-

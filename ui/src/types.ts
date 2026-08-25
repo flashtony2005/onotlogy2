@@ -484,6 +484,7 @@ export interface ProjectDto {
   name: string
   description: string
   ontology: string
+  knowledgeVersionId?: string | null
   status: string
   createdAt: string
 }
@@ -493,6 +494,7 @@ export interface ProjectCreateDto {
   name: string
   description?: string
   ontology?: string
+  knowledgeVersionId?: string | null
 }
 
 /// 给项目世界加对象（`oaip facade project event` 的 HTTP 等价）。

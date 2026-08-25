@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 /// 版本化迁移注册表：`(from_version, sql)`，按版本升序执行；每步成功后推进
 /// `wb_meta.schema_version`。迁移在事务内执行（失败整体回滚，版本不推进，可安全重试）。
 /// 新库由 `canonical_schema` 直接建到当前版本，不执行迁移。
-pub(crate) const SCHEMA_VERSION: i64 = 17;
+pub(crate) const SCHEMA_VERSION: i64 = 18;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     // V1 → V2：wb_learned 补 auto_approve_enabled（REQ-018）。
@@ -271,6 +271,11 @@ CREATE INDEX IF NOT EXISTS idx_business_lease_active
 CREATE INDEX IF NOT EXISTS idx_business_lease_expiry
   ON wb_business_execution_lease (status, expires_at);",
     ),
+    // V17 → V18：项目业务本体绑定受治理的知识版本；业务闭环只消费该版本的可执行投影。
+    (
+        17,
+        "ALTER TABLE wb_project ADD COLUMN knowledge_version_id TEXT REFERENCES wb_ontology_version(id)",
+    ),
 ];
 
 const MIGRATION_NAMES: &[(i64, &str)] = &[
@@ -291,6 +296,7 @@ const MIGRATION_NAMES: &[(i64, &str)] = &[
     (15, "ontology_evolution_persistence"),
     (16, "shared_resource_ledger"),
     (17, "business_execution_lease"),
+    (18, "project_knowledge_version_binding"),
 ];
 
 const MIGRATION_DOWNS: &[(i64, &str)] = &[
@@ -365,6 +371,10 @@ DROP TABLE IF EXISTS wb_audit_chain",
         "DROP INDEX IF EXISTS idx_business_lease_active; \
          DROP INDEX IF EXISTS idx_business_lease_expiry; \
          DROP TABLE IF EXISTS wb_business_execution_lease",
+    ),
+    (
+        17,
+        "ALTER TABLE wb_project DROP COLUMN knowledge_version_id",
     ),
 ];
 

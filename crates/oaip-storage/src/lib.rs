@@ -217,6 +217,8 @@ pub struct MemoryRecord {
 pub enum StorageError {
     #[error("数据库错误: {0}")]
     Db(#[from] libsql::Error),
+    #[error("ODL 编译错误: {0}")]
+    Odl(#[from] oaip_abi::odl::OdlError),
     #[error("对象不存在: {0}")]
     NotFound(String),
     #[error("序列化错误: {0}")]

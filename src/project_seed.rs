@@ -14,21 +14,36 @@ use crate::storage::{LibSQLStorage, WorldCommand};
 
 /// OpenAIP-OS 工程本体（ODL 文本；决定项目世界语义——语义是对象的 type/关系）。
 pub const OPENAI_OS_ONTOLOGY: &str = r#"
-object Module:       # 工程模块（crates/ 或 src/ 顶级）
-  properties: name, path
-object File:         # 源文件
-  properties: path, kind
-object Test:         # 测试文件/用例
-  properties: name, kind
-object Task:         # 事情（项目下的任务/事项）
-  properties: title, status
-object CheckRun:     # 工程检查（make check / cargo test 门禁）
-  properties: kind, status, passed, total, failed, duration_ms
-object Commit:       # 工程提交（git）
-  properties: hash, message, author, time
-# 关系：Project --contains--> Module --contains--> File
-#       Module --depends_on--> Module（跨 crate 依赖，后续由依赖图驱动）
-#       root --contains--> CheckRun / Commit（工程健康度时间线）
+object Module:
+  properties:
+    name: string
+    path: string
+object File:
+  properties:
+    path: string
+    kind: string
+object Test:
+  properties:
+    name: string
+    kind: string
+object Task:
+  properties:
+    title: string
+    status: string
+object CheckRun:
+  properties:
+    kind: string
+    status: string
+    passed: int
+    total: int
+    failed: int
+    duration_ms: int
+object Commit:
+  properties:
+    hash: string
+    message: string
+    author: string
+    time: string
 "#;
 
 /// 项目 id（OpenAIP-OS 工程）。
@@ -50,6 +65,7 @@ pub async fn seed_openaip_os(storage: &LibSQLStorage, root: &str) -> Result<usiz
                 "OpenAIP-OS 工程",
                 "第一个项目：用本体论方案管理本工程（模块/文件/测试 → 项目世界）",
                 OPENAI_OS_ONTOLOGY,
+                None,
             )
             .await
             .map_err(|e| e.to_string())?;

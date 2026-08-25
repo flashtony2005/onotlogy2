@@ -515,6 +515,21 @@ export async function postProjectCreate(req: ProjectCreateDto): Promise<ProjectD
   return json.data
 }
 
+/** `POST /api/v1/facade/project/:id/knowledge-version`：重绑定治理本体版本。 */
+export async function postProjectKnowledgeVersion(
+  id: string,
+  versionId: string,
+): Promise<ProjectDto> {
+  const r = await authFetch(`/api/v1/facade/project/${id}/knowledge-version`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ versionId }),
+  })
+  const json: ApiResponse<ProjectDto> = await r.json()
+  if (json.code !== 0 || !json.data) throw new Error(json.msg || '项目知识版本绑定失败')
+  return json.data
+}
+
 /** `POST /api/v1/facade/project/event`：给项目世界加对象（CreateObject + 可选 root --edge）。 */
 export async function postProjectEvent(req: ProjectEventDto): Promise<{ ok: boolean }> {
   const r = await authFetch('/api/v1/facade/project/event', {

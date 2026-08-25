@@ -55,9 +55,9 @@ use automation::{
 };
 use business_loop::{discover, list_goal_gaps, recommendations, run_next};
 use facade::{
-    facade_audit_query, facade_fabric_cancel, facade_fabric_submit, facade_project_create,
-    facade_project_deps, facade_project_event, facade_project_list, facade_project_seed,
-    facade_world_query,
+    facade_audit_query, facade_fabric_cancel, facade_fabric_submit,
+    facade_project_bind_knowledge_version, facade_project_create, facade_project_deps,
+    facade_project_event, facade_project_list, facade_project_seed, facade_world_query,
 };
 use graph::list_graph;
 use ontology::{
@@ -395,6 +395,10 @@ fn router() -> Router<Arc<AppState>> {
         )
         .route("/api/v1/facade/project/create", post(facade_project_create))
         .route("/api/v1/facade/project/list", post(facade_project_list))
+        .route(
+            "/api/v1/facade/project/:id/knowledge-version",
+            post(facade_project_bind_knowledge_version),
+        )
         .route("/api/v1/facade/project/seed", post(facade_project_seed))
         .route("/api/v1/facade/project/event", post(facade_project_event))
         .route("/api/v1/facade/project/deps", post(facade_project_deps))

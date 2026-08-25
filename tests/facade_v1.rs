@@ -389,7 +389,9 @@ async fn tc_p1_project_create_and_list() {
                 id: "openaip-os".into(),
                 name: "OpenAIP-OS 工程".into(),
                 description: "第一个项目：本体论管理本工程".into(),
-                ontology: "object Module { ... }".into(),
+                ontology: "object Module:\n  properties:\n    name: string\n    path: string"
+                    .into(),
+                knowledge_version_id: None,
             })
             .unwrap();
         assert_eq!(p.id, "openaip-os");

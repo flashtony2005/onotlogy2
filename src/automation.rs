@@ -1496,7 +1496,13 @@ mod tests {
 
         let storage = Arc::new(LibSQLStorage::open(":memory:").await.unwrap());
         storage
-            .create_project("lottery-analysis", "彩票", "测试", "ontology")
+            .create_project(
+                "lottery-analysis",
+                "彩票",
+                "测试",
+                "object Lottery:\n  properties:\n    source: string",
+                None,
+            )
             .await
             .unwrap();
         let dir = std::env::temp_dir().join(format!("automation_e2e_{}", std::process::id()));

@@ -136,7 +136,13 @@ async fn tc_sv2b_generic_plugin_catalog_and_invoke() {
             .unwrap(),
     );
     kernel
-        .create_project("lottery-analysis", "彩票", "插件 API 测试", "ontology")
+        .create_project(
+            "lottery-analysis",
+            "彩票",
+            "插件 API 测试",
+            "object Lottery:\n  properties:\n    source: string",
+            None,
+        )
         .await
         .unwrap();
     let path = std::env::temp_dir().join(format!(

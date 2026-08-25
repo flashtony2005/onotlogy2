@@ -897,7 +897,13 @@ mod tests {
     async fn import_analyze_and_backtest_round_trip() {
         let storage = LibSQLStorage::open(":memory:").await.expect("db");
         storage
-            .create_project("lottery-analysis", "彩票", "测试", "ontology")
+            .create_project(
+                "lottery-analysis",
+                "彩票",
+                "测试",
+                "object Lottery:\n  properties:\n    source: string",
+                None,
+            )
             .await
             .expect("project");
         let path = std::env::temp_dir().join(format!("lottery_test_{}.csv", std::process::id()));
@@ -930,7 +936,13 @@ mod tests {
     async fn import_sync_records_hash_batch_and_conflict_without_overwrite() {
         let storage = LibSQLStorage::open(":memory:").await.expect("db");
         storage
-            .create_project("lottery-analysis", "彩票", "冲突测试", "ontology")
+            .create_project(
+                "lottery-analysis",
+                "彩票",
+                "冲突测试",
+                "object Lottery:\n  properties:\n    source: string",
+                None,
+            )
             .await
             .expect("project");
         let path = std::env::temp_dir().join(format!(

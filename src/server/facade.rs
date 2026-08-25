@@ -11,7 +11,10 @@
 use std::sync::Arc;
 
 use crate::auth::AuthUser;
-use crate::facade::{AuditQuery, FabricRequest, OpenAipFacade, ProjectCreate, WorldQuery};
+use crate::facade::{
+    AuditQuery, FabricRequest, OpenAipFacade, ProjectCreate, ProjectKnowledgeVersionBind,
+    WorldQuery,
+};
 use crate::project_seed::{project_add_object, seed_dependencies};
 use axum::Json;
 use axum::extract::{Extension, Path, State};
@@ -158,6 +161,33 @@ pub(crate) async fn facade_project_list(
     match tokio::task::block_in_place(|| st.facade.project_list()) {
         Ok(v) => ApiResponse::ok(v).into_response(),
         Err(e) => ApiResponse::error(5000, format!("项目列表失败: {e}")).into_response(),
+    }
+}
+
+/// project.bind-knowledge-version：把项目运行时切到治理后的不可变知识版本。
+pub(crate) async fn facade_project_bind_knowledge_version(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(project_id): Path<String>,
+    Json(body): Json<ProjectKnowledgeVersionBind>,
+) -> Response {
+    if !user.can_trigger_run() {
+        return forbidden("当前角色无权绑定项目知识版本（需 Operator 及以上）").into_response();
+    }
+    match tokio::task::block_in_place(|| {
+        st.facade
+            .project_bind_knowledge_version(&project_id, &body.version_id)
+    }) {
+        Ok(v) => ApiResponse::ok(v).into_response(),
+        Err(e) => {
+            let text = e.to_string();
+            let code = if text.contains("WB2205") {
+                wb_code("WB2205")
+            } else {
+                5000
+            };
+            ApiResponse::error(code, format!("项目知识版本绑定失败: {e}")).into_response()
+        }
     }
 }
 

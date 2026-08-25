@@ -264,7 +264,7 @@ async fn objects_tx(tx: &libsql::Transaction) -> Result<Vec<super::ObjectRecord>
     Ok(objects)
 }
 
-async fn validate_runtime_ir_against_world(
+pub(crate) async fn validate_runtime_ir_against_world(
     tx: &libsql::Transaction,
     runtime_ir: &OntologyIR,
 ) -> Result<(), StorageError> {

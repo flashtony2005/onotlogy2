@@ -164,7 +164,13 @@ mod tests {
 
         let storage = LibSQLStorage::open(&db).await.expect("db");
         storage
-            .create_project("lottery-analysis", "彩票", "CLI 测试", "ontology")
+            .create_project(
+                "lottery-analysis",
+                "彩票",
+                "CLI 测试",
+                "object Lottery:\n  properties:\n    source: string",
+                None,
+            )
             .await
             .expect("project");
         std::fs::write(

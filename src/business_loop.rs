@@ -8,7 +8,7 @@ use crate::abi::ir::{
     ParamDef, ValueExpr,
 };
 use crate::abi::{DataValidationError, parse_odl, validate_object_data, value_matches_scalar};
-use crate::knowledge::{Reasoner, runtime_ir_to_knowledge, validate_data_consistency};
+use crate::knowledge::{Reasoner, Term, runtime_ir_to_knowledge, validate_data_consistency};
 use crate::knowledge_bridge::world_snapshot_to_knowledge;
 use crate::plugin::catalog::{CatalogError, PluginCatalog};
 use crate::storage::leases::{ExecutionLeaseRecord, LEASE_COMPLETED, LEASE_RELEASED};
@@ -276,7 +276,23 @@ async fn project_ontology(
         .project(project_id)
         .await?
         .ok_or_else(|| BusinessLoopError::NotFound(project_id.to_string()))?;
-    let ir = parse_odl(&project.ontology)?;
+    let current_version = storage.current_knowledge_version().await?;
+    let ir = if let Some(version_id) = project.knowledge_version_id.as_deref() {
+        storage
+            .knowledge_version(version_id)
+            .await?
+            .ok_or_else(|| BusinessLoopError::NotFound(version_id.to_string()))?
+            .runtime_ir
+            .ok_or_else(|| {
+                BusinessLoopError::invalid(format!("本体版本 {version_id} 缺少可执行 Runtime IR"))
+            })?
+    } else if current_version.is_some() {
+        return Err(BusinessLoopError::invalid(
+            "存在治理知识版本时项目必须先绑定本体版本",
+        ));
+    } else {
+        parse_odl(&project.ontology)?
+    };
     if !shared_resource_limits(&ir).is_empty() {
         let outcome = ir.find("Outcome").ok_or_else(|| {
             BusinessLoopError::invalid("shared_resource_budget 需要 Outcome 对象记录资源快照")
@@ -957,13 +973,26 @@ pub async fn discover_opportunities(
     let opportunities = storage
         .list_objects_for_project(project_id, "Opportunity")
         .await?;
+    let schema = runtime_ir_to_knowledge(&ontology);
+    let objects = storage.list_project_objects(project_id).await?;
+    let relations = storage.list_project_relations(project_id).await?;
+    let knowledge_base = world_snapshot_to_knowledge(&schema, &objects, &relations)
+        .map_err(|error| BusinessLoopError::Knowledge(error.to_string()))?;
+    let reasoner = Reasoner::new(&knowledge_base)
+        .map_err(|error| BusinessLoopError::Knowledge(error.to_string()))?;
     let mut created = Vec::new();
     for owner in &ontology.object_types {
         for rule in &owner.opportunity_rules {
-            let subjects = storage
-                .list_objects_for_project(project_id, &owner.name)
-                .await?;
-            for subject in subjects {
+            let subject_ids = reasoner
+                .instances_of(&Term::new(&owner.name))
+                .map_err(|error| BusinessLoopError::Knowledge(error.to_string()))?;
+            for subject_id in subject_ids {
+                let Some(subject) = objects
+                    .iter()
+                    .find(|record| record.id == subject_id.as_str())
+                else {
+                    continue;
+                };
                 if !rule_matches(rule, &subject.data)? {
                     continue;
                 }

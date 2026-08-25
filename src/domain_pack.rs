@@ -182,6 +182,7 @@ impl DomainPack {
                         self.manifest.name, self.manifest.version
                     ),
                     &self.ontology_source,
+                    None,
                 )
                 .await?;
         }

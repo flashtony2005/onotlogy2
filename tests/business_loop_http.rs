@@ -14,6 +14,9 @@ use openaip_os::business_loop::{
     plan_opportunity_paths, recommend_next_actions, reopen_interrupted_execution,
     run_business_actions, run_next_best_action, settle_follow_up, start_follow_up,
 };
+use openaip_os::knowledge::{
+    Axiom, ClassExpression, Ontology, OntologyChange, OntologyProposal, Term,
+};
 use openaip_os::plugin::catalog::PluginCatalog;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine};
 use openaip_os::worker_core::registry::WorkerRegistry;
@@ -50,7 +53,13 @@ async fn seed_odl_project(
     target_metric: &str,
 ) -> String {
     storage
-        .create_project(project_id, "ODL 契约", "验证动作目录由 ODL 驱动", ontology)
+        .create_project(
+            project_id,
+            "ODL 契约",
+            "验证动作目录由 ODL 驱动",
+            ontology,
+            None,
+        )
         .await
         .expect("应能创建项目");
     let customer_id = format!("customer:{project_id}-vip");
@@ -187,6 +196,186 @@ async fn odl_planning_metadata_drives_action_catalog() {
     .await
     .expect_err("声明参数的动作不能缺少输入");
     assert!(error.to_string().contains("动作 refund 缺少参数 amount"));
+}
+
+#[tokio::test]
+async fn opportunity_discovery_uses_reasoner_for_subject_subtypes() {
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let pack_ontology = std::fs::read_to_string("domain-packs/crm-retention/ontology.odl")
+        .expect("业务包 ODL 应存在");
+    let ontology = pack_ontology.replace(
+        "object Customer:",
+        r#"
+object VipCustomer extends Customer:
+  properties:
+    tier_note: string
+
+object Customer:"#,
+    );
+    storage
+        .create_project(
+            "inferred-subtype",
+            "推理机会",
+            "子类应触发父类规则",
+            &ontology,
+            None,
+        )
+        .await
+        .expect("应能创建项目");
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+            object_type: "VipCustomer".into(),
+            id: "customer:inferred-vip".into(),
+            data: json!({
+                "name": "子类 VIP",
+                "level": "VIP",
+                "balance": 100_000.0,
+                "days_since_last_contact": 75,
+                "tier_note": "reasoner"
+            }),
+            project_id: Some("inferred-subtype".into()),
+        })
+        .await
+        .expect("应能写入 VipCustomer");
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+            object_type: "BusinessGoal".into(),
+            id: "business-goal:inferred-subtype".into(),
+            data: json!({
+                "target_metric": "monthly_reactivations",
+                "baseline_value": 0.0,
+                "target_value": 1.0,
+                "current_value": 0.0,
+                "status": "active"
+            }),
+            project_id: Some("inferred-subtype".into()),
+        })
+        .await
+        .expect("应能写入目标");
+
+    let discovered = discover_opportunities(&storage, "inferred-subtype")
+        .await
+        .expect("Reasoner 应通过子类继承发现父类机会");
+    assert_eq!(discovered.len(), 1, "应发现子类实例机会：{discovered:?}");
+    let stored = storage
+        .get("opportunity:inferred-subtype:reactivation:customer-inferred-vip")
+        .await
+        .expect("应能查询机会")
+        .expect("子类实例机会应持久化");
+    assert_eq!(stored.r#type, "Opportunity");
+    assert_eq!(stored.data["subject"], json!("customer:inferred-vip"));
+}
+
+#[tokio::test]
+async fn governed_evolution_rebinds_project_and_changes_discovery_runtime() {
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let source = std::fs::read_to_string("domain-packs/crm-retention/ontology.odl")
+        .expect("业务包 ODL 应存在");
+    let root_ir = parse_odl(&source).expect("根 ODL 应编译");
+    let evolved_source = source.replace(
+        "object Customer:",
+        r#"
+object VipCustomer extends Customer:
+  properties:
+    tier_note: string
+
+object Customer:"#,
+    );
+    let evolved_ir = parse_odl(&evolved_source).expect("演化 ODL 应编译");
+
+    storage
+        .create_project("before-governance", "未绑定", "治理前项目", &source, None)
+        .await
+        .expect("应能创建治理前项目");
+    storage
+        .initialize_knowledge_version("root", &Ontology::new(), Some(&root_ir))
+        .await
+        .expect("应能初始化知识版本");
+    let error = discover_opportunities(&storage, "before-governance")
+        .await
+        .expect_err("存在治理版本时，未绑定项目不能继续用裸 ODL 决策");
+    assert!(error.to_string().contains("必须先绑定本体版本"));
+
+    storage
+        .create_project(
+            "evolving-crm",
+            "演化项目",
+            "项目运行时应跟随治理版本",
+            &source,
+            Some("root"),
+        )
+        .await
+        .expect("应能创建绑定项目");
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+            object_type: "Customer".into(),
+            id: "customer:evolution-vip".into(),
+            data: json!({
+                "name": "演化 VIP",
+                "level": "VIP",
+                "balance": 100_000.0,
+                "days_since_last_contact": 75
+            }),
+            project_id: Some("evolving-crm".into()),
+        })
+        .await
+        .expect("应能写入客户状态");
+    let proposal =
+        OntologyProposal::new("add-vip-subtype").with_change(OntologyChange::Add(Axiom::subclass(
+            ClassExpression::class(Term::new("VipCustomer")),
+            ClassExpression::class(Term::new("Customer")),
+        )));
+    storage
+        .propose_knowledge_change("root", &proposal, Some(&evolved_ir))
+        .await
+        .expect("应能提交本体演化提案");
+    storage
+        .decide_knowledge_proposal("add-vip-subtype", true, "alice", None)
+        .await
+        .expect("应能审批本体演化提案");
+    storage
+        .apply_knowledge_proposal("add-vip-subtype", "v2")
+        .await
+        .expect("应能应用本体演化提案");
+    storage
+        .bind_project_knowledge_version("evolving-crm", "v2")
+        .await
+        .expect("应能重绑定向项目知识版本");
+
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+            object_type: "VipCustomer".into(),
+            id: "customer:evolution-inferred-vip".into(),
+            data: json!({
+                "name": "推理 VIP",
+                "level": "VIP",
+                "balance": 100_000.0,
+                "days_since_last_contact": 75,
+                "tier_note": "governed"
+            }),
+            project_id: Some("evolving-crm".into()),
+        })
+        .await
+        .expect("新版本应允许写入子类实例");
+    let discovered = discover_opportunities(&storage, "evolving-crm")
+        .await
+        .expect("绑定 Runtime IR 应驱动发现");
+    assert!(
+        discovered
+            .iter()
+            .any(|item| item["data"]["subject"] == json!("customer:evolution-inferred-vip")),
+        "演化后的子类实例应被发现：{discovered:?}"
+    );
+    let project = storage
+        .project("evolving-crm")
+        .await
+        .expect("查询项目失败")
+        .expect("项目应存在");
+    assert_eq!(project.knowledge_version_id.as_deref(), Some("v2"));
 }
 
 #[tokio::test]
@@ -1592,7 +1781,13 @@ relation changed_state:
 "#
     .to_owned();
     storage
-        .create_project("contract-loop", "合同闭环", "非 Customer 主体", &ontology)
+        .create_project(
+            "contract-loop",
+            "合同闭环",
+            "非 Customer 主体",
+            &ontology,
+            None,
+        )
         .await
         .expect("应能创建项目");
     storage
@@ -1780,7 +1975,13 @@ relation changed_state:
         "goal_metric: contract_renewals\n      cost_budget: 5000\n      evidence:",
     );
     storage
-        .create_project("contract-budget", "预算合同闭环", "成本约束", &budgeted)
+        .create_project(
+            "contract-budget",
+            "预算合同闭环",
+            "成本约束",
+            &budgeted,
+            None,
+        )
         .await
         .expect("应能创建预算项目");
     storage
@@ -1852,6 +2053,7 @@ relation changed_state:
             "资源预算合同闭环",
             "命名资源约束",
             &resource_ontology,
+            None,
         )
         .await
         .expect("应能创建资源预算项目");

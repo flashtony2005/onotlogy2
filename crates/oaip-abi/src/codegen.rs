@@ -338,6 +338,7 @@ CREATE TABLE IF NOT EXISTS wb_project (
   name        TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   ontology    TEXT NOT NULL DEFAULT '',
+  knowledge_version_id TEXT REFERENCES wb_ontology_version(id),
   status      TEXT NOT NULL DEFAULT 'active',
   created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

@@ -178,6 +178,16 @@ pub struct ProjectCreate {
     /// 项目本体定义（ODL 文本；决定项目世界语义）。
     #[serde(default)]
     pub ontology: String,
+    /// 项目绑定的治理本体版本；缺省时仅在当前版本投影完全一致时自动绑定。
+    #[serde(default)]
+    pub knowledge_version_id: Option<String>,
+}
+
+/// 项目知识版本绑定请求。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectKnowledgeVersionBind {
+    pub version_id: String,
 }
 
 /// 项目视图。
@@ -188,6 +198,7 @@ pub struct ProjectView {
     pub name: String,
     pub description: String,
     pub ontology: String,
+    pub knowledge_version_id: Option<String>,
     pub status: String,
     pub created_at: String,
 }
@@ -201,6 +212,12 @@ pub trait OpenAipFacade {
     fn fabric_submit(&self, request: FabricRequest) -> Result<FabricSubmission, FacadeError>;
     /// Phase 8：创建项目（项目世界的注册）。
     fn project_create(&self, request: ProjectCreate) -> Result<ProjectView, FacadeError>;
+    /// 将项目运行时本体显式重绑定到一个治理知识版本。
+    fn project_bind_knowledge_version(
+        &self,
+        project_id: &str,
+        version_id: &str,
+    ) -> Result<ProjectView, FacadeError>;
     /// Phase 8：列出项目。
     fn project_list(&self) -> Result<Vec<ProjectView>, FacadeError>;
 }
@@ -403,6 +420,7 @@ impl OpenAipFacade for Facade {
                 &request.name,
                 &request.description,
                 &request.ontology,
+                request.knowledge_version_id.as_deref(),
             ))
             .map_err(|e| FacadeError::Fabric(format!("项目创建失败: {e}")))?;
         Ok(rec.into())
@@ -416,6 +434,27 @@ impl OpenAipFacade for Facade {
             .map_err(|e| FacadeError::Fabric(format!("项目列表失败: {e}")))?;
         Ok(recs.into_iter().map(Into::into).collect())
     }
+
+    fn project_bind_knowledge_version(
+        &self,
+        project_id: &str,
+        version_id: &str,
+    ) -> Result<ProjectView, FacadeError> {
+        self.world
+            .handle
+            .block_on(
+                self.storage
+                    .bind_project_knowledge_version(project_id, version_id),
+            )
+            .map_err(|e| FacadeError::Fabric(format!("项目知识版本绑定失败: {e}")))?;
+        let rec = self
+            .world
+            .handle
+            .block_on(self.storage.project(project_id))
+            .map_err(|e| FacadeError::Fabric(format!("项目查询失败: {e}")))?
+            .ok_or_else(|| FacadeError::Fabric(format!("项目不存在: {project_id}")))?;
+        Ok(rec.into())
+    }
 }
 
 impl From<crate::storage::ProjectRecord> for ProjectView {
@@ -425,6 +464,7 @@ impl From<crate::storage::ProjectRecord> for ProjectView {
             name: rec.name,
             description: rec.description,
             ontology: rec.ontology,
+            knowledge_version_id: rec.knowledge_version_id,
             status: rec.status,
             created_at: rec.created_at,
         }
