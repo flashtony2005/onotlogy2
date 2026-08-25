@@ -1021,7 +1021,7 @@ struct ActionOutcomeStats {
 
 type ActionLearning = HashMap<(String, String), ActionOutcomeStats>;
 
-type PathLearning = HashMap<Vec<String>, ActionOutcomeStats>;
+type PathLearning = HashMap<(String, Vec<String>), ActionOutcomeStats>;
 
 /// 只信任 Decision 链回连到 Opportunity 的 BusinessResult；孤立 Outcome 不参与学习。
 async fn learned_action_stats(
@@ -1116,6 +1116,7 @@ struct OutcomeOrder {
 #[derive(Debug)]
 struct OrderedOutcome {
     order: OutcomeOrder,
+    subject_type: String,
     subject: String,
     action: String,
     is_business_result: bool,
@@ -1139,11 +1140,44 @@ fn outcome_order(id: &str) -> OutcomeOrder {
     }
 }
 
-/// 按 subject 把 ActionExecuted 流重放成路径，直到 BusinessResult 终局并聚合完整序列。
+/// 同名动作序列只在同一主体类型内学习，避免跨本体上下文互相污染。
+fn aggregate_path_events(ordered: Vec<OrderedOutcome>) -> PathLearning {
+    let mut ordered = ordered;
+    ordered.sort_unstable_by(|left, right| left.order.cmp(&right.order));
+
+    let mut current = HashMap::<(String, String), Vec<String>>::new();
+    let mut learned = PathLearning::new();
+    for event in ordered {
+        if !event.is_business_result {
+            current
+                .entry((event.subject_type, event.subject))
+                .or_default()
+                .push(event.action);
+            continue;
+        }
+        let key = (event.subject_type.clone(), event.subject.clone());
+        let mut actions = current.remove(&key).unwrap_or_default();
+        if actions.last() != Some(&event.action) {
+            actions.push(event.action);
+        }
+        if actions.is_empty() {
+            continue;
+        }
+        let entry = learned.entry((event.subject_type, actions)).or_default();
+        entry.runs += 1;
+        if event.success {
+            entry.successes += 1;
+        }
+        entry.realized_goal_delta += event.realized_goal_delta;
+    }
+    learned
+}
+
 async fn learned_path_stats(
     storage: &LibSQLStorage,
     project_id: &str,
 ) -> Result<PathLearning, BusinessLoopError> {
+    let (_, ontology) = project_ontology(storage, project_id).await?;
     let outcomes = storage
         .list_objects_for_project(project_id, "Outcome")
         .await?;
@@ -1191,8 +1225,10 @@ async fn learned_path_stats(
         let Some(opportunity) = find_record(&opportunities, opportunity_id, "Opportunity") else {
             continue;
         };
+        let opportunity_type = text(&opportunity.data, "opportunity_type")?;
         ordered.push(OrderedOutcome {
             order: outcome_order(&outcome.id),
+            subject_type: subject_rule(&ontology, opportunity_type)?.0.name.to_owned(),
             subject: text(&opportunity.data, "subject")?.to_owned(),
             action,
             is_business_result,
@@ -1200,30 +1236,7 @@ async fn learned_path_stats(
             realized_goal_delta,
         });
     }
-    ordered.sort_unstable_by(|left, right| left.order.cmp(&right.order));
-
-    let mut current = HashMap::<String, Vec<String>>::new();
-    let mut learned = PathLearning::new();
-    for event in ordered {
-        if !event.is_business_result {
-            current.entry(event.subject).or_default().push(event.action);
-            continue;
-        }
-        let mut actions = current.remove(&event.subject).unwrap_or_default();
-        if actions.last() != Some(&event.action) {
-            actions.push(event.action);
-        }
-        if actions.is_empty() {
-            continue;
-        }
-        let entry = learned.entry(actions).or_default();
-        entry.runs += 1;
-        if event.success {
-            entry.successes += 1;
-        }
-        entry.realized_goal_delta += event.realized_goal_delta;
-    }
-    Ok(learned)
+    Ok(aggregate_path_events(ordered))
 }
 /// 只屏蔽同一机会上刚失败的候选；其他机会仍可基于自身上下文选择同一动作。
 /// ponytail: 用图谱证据做机会级探索约束，跨机会策略退避等真实负载证明需要后再升级。
@@ -1823,7 +1836,8 @@ pub async fn plan_opportunity_paths(
         )?;
         // 完整序列证据用平滑成功率校准规划；单次失败不会把路径置信度压到零。
         for path in &mut scored {
-            if let Some(stats) = path_learning.get(&path.actions)
+            let path_key = (owner.name.to_owned(), path.actions.clone());
+            if let Some(stats) = path_learning.get(&path_key)
                 && stats.runs > 0
             {
                 path.confidence *= (stats.successes + 1) as f64 / (stats.runs + 2) as f64;
@@ -1865,7 +1879,8 @@ pub async fn plan_opportunity_paths(
                 .then_with(|| left.actions.cmp(&right.actions))
         });
         for path in scored.into_iter().take(5) {
-            let path_stats = path_learning.get(&path.actions);
+            let path_key = (owner.name.to_owned(), path.actions.clone());
+            let path_stats = path_learning.get(&path_key);
             let evidence = path_stats.map_or_else(
                 || "无路径样本".to_owned(),
                 |stats| format!("路径样本{}成功{}", stats.runs, stats.successes),
@@ -4108,6 +4123,41 @@ mod tests {
             action_confidence(&definition, "Unknown", &learning).expect("无样本应回退先验"),
             0.0
         );
+    }
+
+    #[test]
+    fn identical_paths_stay_separate_across_subject_types() {
+        let event = |sequence: u64, subject_type: &str, result: bool| OrderedOutcome {
+            order: OutcomeOrder {
+                timestamp: 1,
+                sequence,
+                id: format!("outcome:tr_1_{sequence}"),
+            },
+            subject_type: subject_type.into(),
+            subject: "account:same-id".into(),
+            action: if result { "Finish" } else { "Touch" }.into(),
+            is_business_result: result,
+            success: true,
+            realized_goal_delta: 10.0,
+        };
+
+        let learned = aggregate_path_events(vec![
+            event(1, "Contract", false),
+            event(2, "Vendor", false),
+            event(3, "Contract", true),
+            event(4, "Vendor", true),
+        ]);
+
+        for subject_type in ["Contract", "Vendor"] {
+            let stats = learned
+                .get(&(
+                    subject_type.to_owned(),
+                    vec!["Touch".into(), "Finish".into()],
+                ))
+                .expect("每个主体类型应有独立路径证据");
+            assert_eq!(stats.runs, 1);
+            assert_eq!(stats.successes, 1);
+        }
     }
 
     #[test]
