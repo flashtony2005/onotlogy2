@@ -239,6 +239,21 @@ pub struct LearningInsight {
     pub successful_average_goal_delta: f64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PathInsight {
+    #[serde(rename = "subjectType")]
+    pub subject_type: String,
+    pub actions: Vec<String>,
+    #[serde(rename = "outcomeRuns")]
+    pub outcome_runs: u64,
+    #[serde(rename = "outcomeSuccesses")]
+    pub outcome_successes: u64,
+    #[serde(rename = "realizedGoalDelta")]
+    pub realized_goal_delta: f64,
+    #[serde(rename = "successfulAverageGoalDelta")]
+    pub successful_average_goal_delta: f64,
+}
+
 fn text<'a>(data: &'a Value, key: &str) -> Result<&'a str, BusinessLoopError> {
     data.get(key)
         .and_then(Value::as_str)
@@ -1101,6 +1116,35 @@ pub async fn list_learning_insights(
         left.opportunity_type
             .cmp(&right.opportunity_type)
             .then_with(|| left.action.cmp(&right.action))
+    });
+    Ok(items)
+}
+
+/// 将完整路径账本暴露为可审计证据；历史机会关闭后仍能解释“更优路径”的来源。
+pub async fn list_path_insights(
+    storage: &LibSQLStorage,
+    project_id: &str,
+) -> Result<Vec<PathInsight>, BusinessLoopError> {
+    let mut items = learned_path_stats(storage, project_id)
+        .await?
+        .into_iter()
+        .map(|((subject_type, actions), stats)| PathInsight {
+            successful_average_goal_delta: if stats.successes > 0 {
+                stats.realized_goal_delta / stats.successes as f64
+            } else {
+                0.0
+            },
+            subject_type,
+            actions,
+            outcome_runs: stats.runs,
+            outcome_successes: stats.successes,
+            realized_goal_delta: stats.realized_goal_delta,
+        })
+        .collect::<Vec<_>>();
+    items.sort_by(|left, right| {
+        left.subject_type
+            .cmp(&right.subject_type)
+            .then_with(|| left.actions.cmp(&right.actions))
     });
     Ok(items)
 }

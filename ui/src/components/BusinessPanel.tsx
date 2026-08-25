@@ -7,6 +7,7 @@ import {
   getBusinessFollowUps,
   getBusinessRecommendations,
   getBusinessLearningInsights,
+  getBusinessPathInsights,
   postProjectList,
   runBusinessActions,
   reconcileBusinessExecution,
@@ -23,6 +24,7 @@ import type {
   ExecutionLeaseDto,
   FollowUpItemDto,
   LearningInsightDto,
+  PathInsightDto,
   ProjectDto,
 } from '../types'
 
@@ -68,6 +70,7 @@ export function BusinessPanel({
   const [interruptedLeases, setInterruptedLeases] = useState<ExecutionLeaseDto[]>([])
   const [followUps, setFollowUps] = useState<FollowUpItemDto[]>([])
   const [learningInsights, setLearningInsights] = useState<LearningInsightDto[]>([])
+  const [pathInsights, setPathInsights] = useState<PathInsightDto[]>([])
   const [run, setRun] = useState<BusinessRunDto | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -83,6 +86,7 @@ export function BusinessPanel({
       leaseResult,
       followUpResult,
       learningResult,
+      pathResult,
     ] = await Promise.allSettled([
       getBusinessGoals(selectedId),
       getBusinessRecommendations(selectedId),
@@ -90,6 +94,7 @@ export function BusinessPanel({
       getExpiredExecutionLeases(selectedId),
       getBusinessFollowUps(selectedId),
       getBusinessLearningInsights(selectedId),
+      getBusinessPathInsights(selectedId),
     ])
     setGoals(goalResult.status === 'fulfilled' ? goalResult.value : [])
     setRecommendations(recommendationResult.status === 'fulfilled' ? recommendationResult.value : [])
@@ -97,6 +102,7 @@ export function BusinessPanel({
     setInterruptedLeases(leaseResult.status === 'fulfilled' ? leaseResult.value : [])
     setFollowUps(followUpResult.status === 'fulfilled' ? followUpResult.value : [])
     setLearningInsights(learningResult.status === 'fulfilled' ? learningResult.value : [])
+    setPathInsights(pathResult.status === 'fulfilled' ? pathResult.value : [])
     const failures = [
       goalResult,
       recommendationResult,
@@ -104,6 +110,7 @@ export function BusinessPanel({
       leaseResult,
       followUpResult,
       learningResult,
+      pathResult,
     ].filter((result) => result.status === 'rejected')
     if (failures.length > 0) {
       throw (failures[0] as PromiseRejectedResult).reason
@@ -354,6 +361,27 @@ export function BusinessPanel({
                     </button>
                   </div>
                 )}
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {!loading && pathInsights.length > 0 && (
+        <section className="evo-section">
+          <h4>路径学习证据</h4>
+          <div className="business-grid">
+            {pathInsights.map((item) => (
+              <article key={`${item.subjectType}:${item.actions.join('→')}`} className="knowledge-proposal">
+                <div className="knowledge-proposal-head">
+                  <b>{item.subjectType} · {item.actions.join(' → ')}</b>
+                  <small>样本 {item.outcomeRuns}</small>
+                </div>
+                <div className="knowledge-meta">
+                  <span>成功 {item.outcomeSuccesses}</span>
+                  <span>实际收益 {number(item.realizedGoalDelta)}</span>
+                  <span>成功均值 {number(item.successfulAverageGoalDelta)}</span>
+                </div>
               </article>
             ))}
           </div>

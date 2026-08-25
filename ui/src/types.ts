@@ -653,6 +653,15 @@ export interface LearningInsightDto {
   successfulAverageGoalDelta: number
 }
 
+export interface PathInsightDto {
+  subjectType: string
+  actions: string[]
+  outcomeRuns: number
+  outcomeSuccesses: number
+  realizedGoalDelta: number
+  successfulAverageGoalDelta: number
+}
+
 export interface BusinessRunDto {
   executed: boolean
   projectId: string

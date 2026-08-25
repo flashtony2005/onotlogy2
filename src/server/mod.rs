@@ -418,6 +418,10 @@ fn router() -> Router<Arc<AppState>> {
             get(business_loop::learning_insights),
         )
         .route(
+            "/api/v1/business/path-insights",
+            get(business_loop::path_insights),
+        )
+        .route(
             "/api/v1/business/execution-leases",
             get(business_loop::execution_leases),
         )

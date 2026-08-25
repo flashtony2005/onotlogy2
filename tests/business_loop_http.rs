@@ -10,9 +10,9 @@ use openaip_os::abi::ir::ActorKind;
 use openaip_os::abi::odl::parse_odl;
 use openaip_os::business_loop::{
     DecisionOptions, decide_business_approval, decide_opportunity, discover_opportunities,
-    execute_opportunity, list_follow_ups, list_learning_insights, plan_opportunity_paths,
-    recommend_next_actions, reopen_interrupted_execution, run_business_actions,
-    run_next_best_action, settle_follow_up, start_follow_up,
+    execute_opportunity, list_follow_ups, list_learning_insights, list_path_insights,
+    plan_opportunity_paths, recommend_next_actions, reopen_interrupted_execution,
+    run_business_actions, run_next_best_action, settle_follow_up, start_follow_up,
 };
 use openaip_os::plugin::catalog::PluginCatalog;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine};
@@ -1260,6 +1260,23 @@ async fn business_loop_discovers_decides_executes_and_replans() {
     assert_eq!(retained["opportunityType"], json!("Reactivation"));
     assert_eq!(retained["outcomeRuns"], json!(1));
     assert_eq!(retained["outcomeSuccesses"], json!(1));
+    let (status, body) = common::http_call(
+        addr,
+        "GET",
+        "/api/v1/business/path-insights?projectId=crm-retention",
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "应能读取路径学习证据：{body}");
+    let path_insights = data(&body).await.as_array().cloned().unwrap_or_default();
+    let retained_path = path_insights
+        .iter()
+        .find(|item| {
+            item["subjectType"] == json!("Customer") && item["actions"] == json!(["RetainCustomer"])
+        })
+        .unwrap_or_else(|| panic!("缺少挽留完整路径证据：{path_insights:?}"));
+    assert_eq!(retained_path["outcomeRuns"], json!(1));
+    assert_eq!(retained_path["outcomeSuccesses"], json!(1));
     let current_relations = storage.list_all_relations().await.unwrap();
     assert!(current_relations.iter().any(|relation| {
         relation.source == retention_decision_id
@@ -1746,6 +1763,17 @@ relation changed_state:
         "路径规划必须暴露完整序列证据：{}",
         learned_path.reason
     );
+    let path_insights = list_path_insights(&storage, "contract-loop")
+        .await
+        .expect("应能读取历史路径证据");
+    let contract_path = path_insights
+        .iter()
+        .find(|item| {
+            item.subject_type == "Contract" && item.actions == vec!["DraftTerms", "RenewContract"]
+        })
+        .expect("合同完整路径应成为可审计学习证据");
+    assert_eq!(contract_path.outcome_runs, 1);
+    assert_eq!(contract_path.outcome_successes, 1);
 
     let budgeted = ontology.replace("cost: 4000", "cost: 6000").replace(
         "goal_metric: contract_renewals\n      evidence:",

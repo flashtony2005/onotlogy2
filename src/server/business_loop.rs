@@ -3,7 +3,7 @@
 use crate::auth::AuthUser;
 use crate::business_loop::{
     BusinessLoopError, decide_business_approval, decide_opportunity, discover_opportunities,
-    execute_opportunity, goal_gaps, list_follow_ups, list_learning_insights,
+    execute_opportunity, goal_gaps, list_follow_ups, list_learning_insights, list_path_insights,
     plan_business_portfolio, plan_opportunity_paths, recommend_next_actions,
     reopen_interrupted_execution, run_business_actions, run_next_best_action, settle_follow_up,
     start_follow_up,
@@ -215,6 +215,20 @@ pub(crate) async fn learning_insights(
         return forbidden("当前角色无权读取业务学习证据（需 Operator 及以上）").into_response();
     }
     match list_learning_insights(&st.storage, &query.project_id).await {
+        Ok(items) => ApiResponse::ok(items).into_response(),
+        Err(error) => error_response(error),
+    }
+}
+
+pub(crate) async fn path_insights(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Query(query): Query<ProjectScope>,
+) -> Response {
+    if !user.can_read_evaluation() {
+        return forbidden("当前角色无权读取路径学习证据（需 Operator 及以上）").into_response();
+    }
+    match list_path_insights(&st.storage, &query.project_id).await {
         Ok(items) => ApiResponse::ok(items).into_response(),
         Err(error) => error_response(error),
     }

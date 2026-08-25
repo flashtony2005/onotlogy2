@@ -36,6 +36,7 @@ import type {
   ExecutionLeaseDto,
   FollowUpItemDto,
   LearningInsightDto,
+  PathInsightDto,
   ProjectEventDto,
   SessionDto,
   SessionSummaryDto,
@@ -607,6 +608,11 @@ export async function getBusinessFollowUps(projectId: string): Promise<FollowUpI
 export async function getBusinessLearningInsights(projectId: string): Promise<LearningInsightDto[]> {
   const res = await authFetch(`/api/v1/business/learning-insights?projectId=${encodeURIComponent(projectId)}`)
   return unwrap<LearningInsightDto[]>(res)
+}
+
+export async function getBusinessPathInsights(projectId: string): Promise<PathInsightDto[]> {
+  const res = await authFetch(`/api/v1/business/path-insights?projectId=${encodeURIComponent(projectId)}`)
+  return unwrap<PathInsightDto[]>(res)
 }
 
 export async function startBusinessFollowUp(id: string): Promise<unknown> {
