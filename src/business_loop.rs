@@ -1876,7 +1876,8 @@ fn action_confidence(
     Ok(stats.successes as f64 / stats.runs as f64)
 }
 
-/// 有终局收益契约时，用历史平均实际收益替代静态期望；未量化动作保持原公式。
+/// 有终局收益契约时，用成功样本的历史平均实际收益替代静态期望；
+/// 失败概率由置信度单独折算，避免对失败双重惩罚。未量化动作保持原公式。
 fn learned_expected_benefit(
     definition: &ActionDef,
     opportunity_type: &str,
@@ -1891,7 +1892,11 @@ fn learned_expected_benefit(
         return static_benefit;
     };
     if quantified && stats.runs > 0 {
-        stats.realized_goal_delta / stats.runs as f64
+        if stats.successes > 0 {
+            stats.realized_goal_delta / stats.successes as f64
+        } else {
+            0.0
+        }
     } else {
         static_benefit
     }
@@ -3471,13 +3476,42 @@ mod tests {
 
         assert_eq!(
             learned_expected_benefit(&definition, "WinBack", &learning, 10_000.0),
-            250.0
+            500.0,
+            "条件期望只按成功样本平均；失败率由置信度处理"
         );
 
         definition.creates.clear();
         assert_eq!(
             learned_expected_benefit(&definition, "WinBack", &learning, 10_000.0),
             10_000.0
+        );
+    }
+
+    #[test]
+    fn quantified_action_without_successful_samples_has_zero_learned_benefit() {
+        let mut definition = action("Touch");
+        definition.creates = vec![CreateEffect {
+            object_type: "FollowUp".into(),
+            id: None,
+            data: Vec::new(),
+            link_edge: None,
+            subject_field: None,
+            decision_edge: None,
+            result_benefit_field: Some("recovered_amount".into()),
+            result_benefit_factor: Some(0.5),
+        }];
+        let learning = HashMap::from([(
+            ("WinBack".to_owned(), "Touch".to_owned()),
+            ActionOutcomeStats {
+                runs: 2,
+                successes: 0,
+                realized_goal_delta: 0.0,
+            },
+        )]);
+
+        assert_eq!(
+            learned_expected_benefit(&definition, "WinBack", &learning, 10_000.0),
+            0.0
         );
     }
 
