@@ -2386,14 +2386,12 @@ fn learned_expected_benefit(
     learning: &ActionLearning,
     static_benefit: f64,
 ) -> f64 {
-    let quantified = definition
-        .creates
-        .iter()
-        .any(|created| created.result_benefit_field.is_some());
     let Some(stats) = learning.get(&(opportunity_type.to_string(), definition.name.clone())) else {
         return static_benefit;
     };
-    if quantified && stats.runs > 0 {
+
+    // 推荐与路径必须使用同一收益契约：Immediate 看主体收益字段，Deferred 看终局收益字段。
+    if has_payoff_contract(definition) && stats.runs > 0 {
         if stats.successes > 0 {
             stats.realized_goal_delta / stats.successes as f64
         } else {
@@ -2407,22 +2405,27 @@ fn learned_expected_benefit(
 /// 完整路径只在终局收益单位一致时学习实际均值：
 /// Immediate 沿主体字段折算，Deferred 沿创建效应声明的终局收益折算。
 fn path_payoff_average(final_action: &ActionDef, stats: &ActionOutcomeStats) -> Option<f64> {
-    let planning = final_action.planning.as_ref()?;
-    let quantified = match planning.outcome_timing {
+    if !has_payoff_contract(final_action) || stats.runs == 0 {
+        return None;
+    }
+    Some(if stats.successes > 0 {
+        stats.realized_goal_delta / stats.successes as f64
+    } else {
+        0.0
+    })
+}
+
+fn has_payoff_contract(action: &ActionDef) -> bool {
+    let Some(planning) = action.planning.as_ref() else {
+        return false;
+    };
+    match planning.outcome_timing {
         OutcomeTiming::Immediate => {
             planning.benefit_field.is_some() && planning.benefit_factor.is_some()
         }
-        OutcomeTiming::Deferred => final_action.creates.first().is_some_and(|created| {
+        OutcomeTiming::Deferred => action.creates.first().is_some_and(|created| {
             created.result_benefit_field.is_some() && created.result_benefit_factor.is_some()
         }),
-    };
-    if !quantified || stats.runs == 0 {
-        return None;
-    }
-    if stats.successes > 0 {
-        Some(stats.realized_goal_delta / stats.successes as f64)
-    } else {
-        Some(0.0)
     }
 }
 
@@ -4302,6 +4305,9 @@ mod tests {
     #[test]
     fn quantified_actions_learn_expected_benefit_from_realized_outcomes() {
         let mut definition = action("Touch");
+        if let Some(planning) = definition.planning.as_mut() {
+            planning.outcome_timing = OutcomeTiming::Deferred;
+        }
         definition.creates = vec![CreateEffect {
             object_type: "FollowUp".into(),
             id: None,
@@ -4411,8 +4417,47 @@ mod tests {
     }
 
     #[test]
+    fn recommendations_and_paths_use_the_same_immediate_payoff_contract() {
+        let success_stats = ActionOutcomeStats {
+            runs: 2,
+            successes: 1,
+            realized_goal_delta: 500.0,
+        };
+        let failed_stats = ActionOutcomeStats {
+            runs: 1,
+            successes: 0,
+            ..Default::default()
+        };
+        let mut definition = action("Touch");
+        if let Some(planning) = definition.planning.as_mut() {
+            planning.benefit_field = Some("lifetime_value".into());
+            planning.benefit_factor = Some(0.5);
+        }
+
+        let learning = HashMap::from([(("WinBack".to_owned(), "Touch".to_owned()), success_stats)]);
+        assert_eq!(
+            learned_expected_benefit(&definition, "WinBack", &learning, 10_000.0),
+            learned_path_benefit(&definition, &success_stats, 10_000.0)
+        );
+        assert_eq!(
+            learned_expected_benefit(&definition, "WinBack", &learning, 10_000.0),
+            500.0
+        );
+
+        let failed_learning =
+            HashMap::from([(("WinBack".to_owned(), "Touch".to_owned()), failed_stats)]);
+        assert_eq!(
+            learned_expected_benefit(&definition, "WinBack", &failed_learning, 10_000.0),
+            learned_path_benefit(&definition, &failed_stats, 10_000.0)
+        );
+    }
+
+    #[test]
     fn quantified_action_without_successful_samples_has_zero_learned_benefit() {
         let mut definition = action("Touch");
+        if let Some(planning) = definition.planning.as_mut() {
+            planning.outcome_timing = OutcomeTiming::Deferred;
+        }
         definition.creates = vec![CreateEffect {
             object_type: "FollowUp".into(),
             id: None,
