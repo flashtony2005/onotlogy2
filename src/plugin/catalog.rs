@@ -113,6 +113,12 @@ impl PluginCatalog {
         self.capabilities.contract(capability).is_some()
     }
 
+    pub fn output_schema(&self, capability: &str) -> Option<&serde_json::Value> {
+        self.capabilities
+            .contract(capability)
+            .map(|contract| &contract.output_schema)
+    }
+
     /// 对宿主侧数据源执行插件 manifest 权限前置校验。
     ///
     /// watcher、HTTP 和 CLI 在读取业务包数据前都必须通过这里；权限规则

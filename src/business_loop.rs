@@ -2274,6 +2274,19 @@ pub async fn decide_business_approval(
     Err(BusinessLoopError::NotFound(decision_id.to_string()))
 }
 
+fn validate_capability_output(
+    capability: &str,
+    schema: &Value,
+    output: &Value,
+) -> Result<(), BusinessLoopError> {
+    let validator = jsonschema::validator_for(schema).map_err(|error| {
+        BusinessLoopError::invalid(format!("能力 {capability} 输出契约无效：{error}"))
+    })?;
+    validator.validate(output).map_err(|error| {
+        BusinessLoopError::invalid(format!("能力 {capability} 输出不符合契约：{error}"))
+    })
+}
+
 fn apply_capability_output(
     action: &ActionDef,
     ontology: &OntologyIR,
@@ -2502,11 +2515,21 @@ async fn execute_opportunity_locked(
                     "Worker {provider_id} 执行失败"
                 )));
             }
+            validate_capability_output(
+                capability_name,
+                &worker.manifest().output_schema,
+                &result.output,
+            )?;
             capability_provider = Some(provider_id);
             Some(result.output)
         } else {
+            let output_schema = plugins.output_schema(capability_name).ok_or_else(|| {
+                BusinessLoopError::invalid(format!("能力 {capability_name} 缺少输出契约"))
+            })?;
+            let output = plugins.invoke(provider_id, capability_name, input).await?;
+            validate_capability_output(capability_name, output_schema, &output)?;
             capability_provider = Some(provider_id.to_string());
-            Some(plugins.invoke(provider_id, capability_name, input).await?)
+            Some(output)
         }
     } else {
         None

@@ -2517,6 +2517,93 @@ async fn declared_capability_invokes_plugin_and_projects_declared_output() {
 }
 
 #[tokio::test]
+async fn capability_output_schema_blocks_invalid_plugin_result() {
+    let ontology = capability_ontology("plugin: crm-plugin");
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let mut plugins = PluginCatalog::new();
+    let mut manifest = openaip_os::plugin::PluginManifest::new(
+        "crm-plugin",
+        "CRM",
+        "1",
+        openaip_os::plugin::RuntimeType::Local,
+    );
+    manifest = manifest.with_capability("touch_customer");
+    plugins
+        .register_async(
+            Box::new(CapturingPlugin {
+                manifest,
+                input: Arc::new(tokio::sync::Mutex::new(None)),
+                output: json!({ "days_since_last_contact": "seven" }),
+            }),
+            |capabilities| {
+                capabilities.declare(openaip_os::plugin::capability::CapabilityContract {
+                    capability: "touch_customer".into(),
+                    input_schema: json!({}),
+                    output_schema: json!({
+                        "type": "object",
+                        "required": ["days_since_last_contact"],
+                        "properties": {
+                            "days_since_last_contact": { "type": "integer" }
+                        }
+                    }),
+                    effects: Vec::new(),
+                });
+            },
+        )
+        .expect("应能注册外部能力插件");
+
+    let customer_id = seed_odl_project(
+        &storage,
+        "capability-schema",
+        &ontology,
+        "monthly_reactivations",
+    )
+    .await;
+    let discovered = discover_opportunities(&storage, "capability-schema")
+        .await
+        .expect("应能发现机会");
+    let opportunity_id = discovered[0]["id"].as_str().expect("机会必须有 ID");
+    decide_opportunity(
+        &storage,
+        "capability-schema",
+        opportunity_id,
+        "contract-test",
+        DecisionOptions {
+            action: Some("TouchCustomer"),
+            reason: None,
+            alternatives: None,
+            params: None,
+        },
+    )
+    .await
+    .expect("应能决策外部能力动作");
+
+    let error = execute_opportunity(
+        &storage,
+        &plugins,
+        &WorkerRegistry::new(),
+        "capability-schema",
+        opportunity_id,
+    )
+    .await
+    .expect_err("不符合输出契约的能力结果必须阻止执行");
+    assert!(error.to_string().contains("输出不符合契约"));
+
+    let customer = storage
+        .get(&customer_id)
+        .await
+        .expect("查询客户失败")
+        .expect("客户应存在");
+    assert_eq!(
+        customer.data["days_since_last_contact"],
+        json!(75),
+        "无效能力输出不得改变企业状态"
+    );
+}
+
+#[tokio::test]
 async fn declared_worker_invokes_registry_and_projects_output() {
     let ontology = capability_ontology("worker: crm-worker");
     let storage = LibSQLStorage::open(":memory:")

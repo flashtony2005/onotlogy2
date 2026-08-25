@@ -37,6 +37,7 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 # M4：会话令牌入库前做 SHA-256 哈希（DB 泄漏不直接暴露可用令牌）。
 argon2 = "0.5"
 hex = "0.4"
+jsonschema = { version = "0.51", default-features = false }
 rand_core = { version = "0.6", features = ["getrandom"] }
 sha2 = "0.10"
 
