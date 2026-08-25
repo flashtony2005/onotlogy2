@@ -1410,3 +1410,28 @@ fn deferred_creates_validate_terminal_benefit_contract() {
     let error = parse_odl(&immediate).expect_err("Immediate 创建不能携带终局收益元数据");
     assert!(error.to_string().contains("deferred 证据元数据"));
 }
+
+#[test]
+fn deferred_action_requires_verifiable_follow_up() {
+    let odl = [
+        "object Decision:",
+        "  properties:",
+        "    opportunity: string",
+        "object Customer:",
+        "  properties:",
+        "    name: string",
+        "  actions:",
+        "    DraftTerms:",
+        "      planning:",
+        "        cost: 500",
+        "        prior_confidence: 0.8",
+        "        outcome_timing: deferred",
+        "      updates:",
+        "        - field: name",
+        "          value: \"Negotiated\"",
+    ]
+    .join("\n");
+
+    let error = parse_odl(&odl).expect_err("Deferred 死路必须在编译期拒绝");
+    assert!(error.to_string().contains("可验证跟进对象"));
+}

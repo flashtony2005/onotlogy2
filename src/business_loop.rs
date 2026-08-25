@@ -369,7 +369,9 @@ fn expected_benefit(
         .as_deref()
         .zip(planning.benefit_factor)
     else {
-        if planning.outcome_timing != OutcomeTiming::Immediate {
+        if planning.outcome_timing != OutcomeTiming::Immediate
+            || action_goal_metric(action).is_none()
+        {
             return Ok(0.0);
         }
         return Ok(estimated_value);
@@ -2954,7 +2956,9 @@ async fn execute_opportunity_locked(
             action_outcome_id.clone(),
         )
         .await?;
-        let business_result = if planning.outcome_timing == OutcomeTiming::Immediate {
+        let business_result = if planning.outcome_timing == OutcomeTiming::Immediate
+            && planning.goal_metric.is_some()
+        {
             let result_id = generated_id("outcome");
             let mut result_data = json!({
                 "action": action,

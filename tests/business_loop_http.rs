@@ -1467,7 +1467,7 @@ object Contract:
       planning:
         cost: 500
         prior_confidence: 0.8
-        outcome_timing: deferred
+        outcome_timing: immediate
       updates:
         - field: status
           value: "Negotiated"
@@ -2426,7 +2426,7 @@ async fn explicit_decision_validates_and_executes_declared_action_params() {
     )
     .await
     .expect("合法参数应能执行");
-    assert_eq!(execution["businessResult"]["data"]["success"], json!(true));
+    assert_eq!(execution["actionOutcome"]["data"]["success"], json!(true));
     let customer = storage
         .get("customer:action-params-vip")
         .await
@@ -2531,7 +2531,7 @@ async fn require_approval_action_waits_for_separate_human_evidence() {
     )
     .await
     .expect("Approved 审批后应能执行");
-    assert_eq!(execution["businessResult"]["data"]["success"], json!(true));
+    assert_eq!(execution["actionOutcome"]["data"]["success"], json!(true));
 
     seed_odl_project(
         &storage,

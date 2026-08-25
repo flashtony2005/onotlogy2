@@ -1614,11 +1614,22 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                     1,
                 ));
             }
+            let deferred = action
+                .planning
+                .as_ref()
+                .is_some_and(|planning| planning.outcome_timing == OutcomeTiming::Deferred);
+            if deferred && action.creates.len() != 1 {
+                return Err(OdlError::new(
+                    E_INVALID_PROPERTY_CONSTRAINT,
+                    format!(
+                        "deferred action '{}' 必须创建且只创建一个可验证跟进对象",
+                        action.name
+                    ),
+                    1,
+                    1,
+                ));
+            }
             for created in &action.creates {
-                let deferred = action
-                    .planning
-                    .as_ref()
-                    .is_some_and(|planning| planning.outcome_timing == OutcomeTiming::Deferred);
                 let meta_line = created
                     .decision_edge
                     .as_ref()
