@@ -53,7 +53,7 @@ use auth::auth_rotate_key;
 use automation::{
     cancel_job, get_job, get_pack_status, list_jobs, run_operation, run_pack, scan_pack,
 };
-use business_loop::{discover, list_goal_gaps, recommendations, run_next};
+use business_loop::{discover, list_goal_gaps, optimization_runs, recommendations, run_next};
 use facade::{
     facade_audit_query, facade_fabric_cancel, facade_fabric_submit,
     facade_project_bind_knowledge_version, facade_project_create, facade_project_deps,
@@ -425,6 +425,7 @@ fn router() -> Router<Arc<AppState>> {
             "/api/v1/business/path-insights",
             get(business_loop::path_insights),
         )
+        .route("/api/v1/business/optimization-runs", get(optimization_runs))
         .route(
             "/api/v1/business/execution-leases",
             get(business_loop::execution_leases),

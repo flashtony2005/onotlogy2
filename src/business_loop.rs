@@ -12,7 +12,9 @@ use crate::knowledge::{Reasoner, Term, runtime_ir_to_knowledge, validate_data_co
 use crate::knowledge_bridge::world_snapshot_to_knowledge;
 use crate::plugin::catalog::{CatalogError, PluginCatalog};
 use crate::storage::leases::{ExecutionLeaseRecord, LEASE_COMPLETED, LEASE_RELEASED};
-use crate::storage::{LibSQLStorage, ProjectRecord, StorageError, WorldCommand};
+use crate::storage::{
+    BusinessOptimizationRunRecord, LibSQLStorage, ProjectRecord, StorageError, WorldCommand,
+};
 use crate::worker::policy::WorkerPolicy;
 use crate::worker::router::{RouterCriteria, WorkerRouter};
 use crate::worker_core::registry::WorkerRegistry;
@@ -225,6 +227,9 @@ pub enum OptimizationStopReason {
 /// 目标导向优化运行：每个 cycle 都重新发现、规划和学习，直到目标或硬边界。
 #[derive(Debug, Serialize)]
 pub struct BusinessOptimizationRun {
+    pub id: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
     #[serde(rename = "projectId")]
     pub project_id: String,
     #[serde(rename = "goalMetric", skip_serializing_if = "Option::is_none")]
@@ -3858,28 +3863,38 @@ pub async fn optimize_toward_goals(
 
     let initial_goals = refresh_goal_progress(storage, project_id).await?;
     let Some((goal_metric, initial_gap)) = active_optimization_goal(&initial_goals) else {
-        return Ok(BusinessOptimizationRun {
-            project_id: project_id.to_string(),
-            goal_metric: None,
-            initial_gap: 0.0,
-            final_gap: 0.0,
-            max_cycles,
-            cycles: Vec::new(),
-            executed_actions: Vec::new(),
-            learning_insights: list_learning_insights(storage, project_id).await?,
-            path_insights: list_path_insights(storage, project_id).await?,
-            stopped_because: OptimizationStopReason::NoActiveGoal,
-        });
+        return persist_optimization_run(
+            storage,
+            BusinessOptimizationRun {
+                id: String::new(),
+                created_at: String::new(),
+                project_id: project_id.to_string(),
+                goal_metric: None,
+                initial_gap: 0.0,
+                final_gap: 0.0,
+                max_cycles,
+                cycles: Vec::new(),
+                executed_actions: Vec::new(),
+                learning_insights: list_learning_insights(storage, project_id).await?,
+                path_insights: list_path_insights(storage, project_id).await?,
+                stopped_because: OptimizationStopReason::NoActiveGoal,
+            },
+        )
+        .await;
     };
     if initial_gap <= 0.0 {
-        return optimization_result(
+        return persist_optimization_run(
             storage,
-            project_id,
-            goal_metric,
-            initial_gap,
-            max_cycles,
-            Vec::new(),
-            OptimizationStopReason::GoalReached,
+            optimization_result(
+                storage,
+                project_id,
+                goal_metric,
+                initial_gap,
+                max_cycles,
+                Vec::new(),
+                OptimizationStopReason::GoalReached,
+            )
+            .await?,
         )
         .await;
     }
@@ -3922,16 +3937,38 @@ pub async fn optimize_toward_goals(
         }
     }
 
-    optimization_result(
+    persist_optimization_run(
         storage,
-        project_id,
-        goal_metric,
-        initial_gap,
-        max_cycles,
-        cycles,
-        stopped_because,
+        optimization_result(
+            storage,
+            project_id,
+            goal_metric,
+            initial_gap,
+            max_cycles,
+            cycles,
+            stopped_because,
+        )
+        .await?,
     )
     .await
+}
+
+async fn persist_optimization_run(
+    storage: &LibSQLStorage,
+    mut run: BusinessOptimizationRun,
+) -> Result<BusinessOptimizationRun, BusinessLoopError> {
+    run.id = generated_id("optimization");
+    run.created_at = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true);
+    storage
+        .save_business_optimization_run(&BusinessOptimizationRunRecord {
+            id: run.id.clone(),
+            project_id: run.project_id.clone(),
+            payload: serde_json::to_value(&run)
+                .map_err(|error| BusinessLoopError::Storage(StorageError::Json(error)))?,
+            created_at: run.created_at.clone(),
+        })
+        .await?;
+    Ok(run)
 }
 
 fn active_optimization_goal(goals: &[GoalGap]) -> Option<(&str, f64)> {
@@ -3974,6 +4011,8 @@ async fn optimization_result(
         })
         .collect();
     Ok(BusinessOptimizationRun {
+        id: String::new(),
+        created_at: String::new(),
         project_id: project_id.to_string(),
         goal_metric: Some(goal_metric.to_string()),
         initial_gap,

@@ -8,6 +8,7 @@ import {
   getBusinessRecommendations,
   getBusinessLearningInsights,
   getBusinessPathInsights,
+  getBusinessOptimizationRuns,
   postProjectList,
   optimizeBusinessGoals,
   reconcileBusinessExecution,
@@ -24,6 +25,7 @@ import type {
   ExecutionLeaseDto,
   FollowUpItemDto,
   LearningInsightDto,
+  BusinessOptimizationRunDto,
   PathInsightDto,
   ProjectDto,
 } from '../types'
@@ -71,6 +73,7 @@ export function BusinessPanel({
   const [followUps, setFollowUps] = useState<FollowUpItemDto[]>([])
   const [learningInsights, setLearningInsights] = useState<LearningInsightDto[]>([])
   const [pathInsights, setPathInsights] = useState<PathInsightDto[]>([])
+  const [optimizationRuns, setOptimizationRuns] = useState<BusinessOptimizationRunDto[]>([])
   const [run, setRun] = useState<BusinessRunDto | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -87,6 +90,7 @@ export function BusinessPanel({
       followUpResult,
       learningResult,
       pathResult,
+      optimizationResult,
     ] = await Promise.allSettled([
       getBusinessGoals(selectedId),
       getBusinessRecommendations(selectedId),
@@ -95,6 +99,7 @@ export function BusinessPanel({
       getBusinessFollowUps(selectedId),
       getBusinessLearningInsights(selectedId),
       getBusinessPathInsights(selectedId),
+      getBusinessOptimizationRuns(selectedId),
     ])
     setGoals(goalResult.status === 'fulfilled' ? goalResult.value : [])
     setRecommendations(recommendationResult.status === 'fulfilled' ? recommendationResult.value : [])
@@ -103,6 +108,9 @@ export function BusinessPanel({
     setFollowUps(followUpResult.status === 'fulfilled' ? followUpResult.value : [])
     setLearningInsights(learningResult.status === 'fulfilled' ? learningResult.value : [])
     setPathInsights(pathResult.status === 'fulfilled' ? pathResult.value : [])
+    setOptimizationRuns(
+      optimizationResult.status === 'fulfilled' ? optimizationResult.value : [],
+    )
     const failures = [
       goalResult,
       recommendationResult,
@@ -111,6 +119,7 @@ export function BusinessPanel({
       followUpResult,
       learningResult,
       pathResult,
+      optimizationResult,
     ].filter((result) => result.status === 'rejected')
     if (failures.length > 0) {
       throw (failures[0] as PromiseRejectedResult).reason
@@ -173,6 +182,8 @@ export function BusinessPanel({
             : '当前没有可自动执行的净收益动作',
       )
       await loadInsight(projectId)
+      const history = await getBusinessOptimizationRuns(projectId)
+      setOptimizationRuns(history)
     } catch (e) {
       if (!onAuthError(e)) setError((e as Error).message || '业务动作执行失败')
     } finally {
@@ -400,6 +411,28 @@ export function BusinessPanel({
                   <span>成功 {item.outcomeSuccesses}</span>
                   <span>实际收益 {number(item.realizedGoalDelta)}</span>
                   <span>成功均值 {number(item.successfulAverageGoalDelta)}</span>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {!loading && optimizationRuns.length > 0 && (
+        <section className="evo-section">
+          <h4>优化历史</h4>
+          <div className="business-list">
+            {optimizationRuns.map((item) => (
+              <article key={item.id} className="knowledge-proposal">
+                <div className="knowledge-proposal-head">
+                  <b>{item.goalMetric || '无活动目标'}</b>
+                  <small>{item.stoppedBecause}</small>
+                </div>
+                <div className="knowledge-meta">
+                  <span>{new Date(item.createdAt).toLocaleString('zh-CN')}</span>
+                  <span>缺口 {number(item.initialGap)} → {number(item.finalGap)}</span>
+                  <span>动作 {item.executedActions.length}</span>
+                  <span>循环 {item.cycles.length} / {item.maxCycles}</span>
                 </div>
               </article>
             ))}

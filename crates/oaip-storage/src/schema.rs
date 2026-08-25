@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 /// 版本化迁移注册表：`(from_version, sql)`，按版本升序执行；每步成功后推进
 /// `wb_meta.schema_version`。迁移在事务内执行（失败整体回滚，版本不推进，可安全重试）。
 /// 新库由 `canonical_schema` 直接建到当前版本，不执行迁移。
-pub(crate) const SCHEMA_VERSION: i64 = 18;
+pub(crate) const SCHEMA_VERSION: i64 = 19;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     // V1 → V2：wb_learned 补 auto_approve_enabled（REQ-018）。
@@ -276,6 +276,20 @@ CREATE INDEX IF NOT EXISTS idx_business_lease_expiry
         17,
         "ALTER TABLE wb_project ADD COLUMN knowledge_version_id TEXT REFERENCES wb_ontology_version(id)",
     ),
+    // V18 → V19：目标导向优化运行历史。响应之外保留可回看证据链。
+    (
+        18,
+        "CREATE TABLE IF NOT EXISTS wb_business_optimization_run (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL,
+  goal_metric   TEXT,
+  stopped_as    TEXT NOT NULL,
+  payload       TEXT NOT NULL,
+  created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_business_optimization_project
+  ON wb_business_optimization_run (project_id, created_at DESC);",
+    ),
 ];
 
 const MIGRATION_NAMES: &[(i64, &str)] = &[
@@ -297,6 +311,7 @@ const MIGRATION_NAMES: &[(i64, &str)] = &[
     (16, "shared_resource_ledger"),
     (17, "business_execution_lease"),
     (18, "project_knowledge_version_binding"),
+    (19, "business_optimization_run_history"),
 ];
 
 const MIGRATION_DOWNS: &[(i64, &str)] = &[
@@ -375,6 +390,11 @@ DROP TABLE IF EXISTS wb_audit_chain",
     (
         17,
         "ALTER TABLE wb_project DROP COLUMN knowledge_version_id",
+    ),
+    (
+        18,
+        "DROP INDEX IF EXISTS idx_business_optimization_project; \
+         DROP TABLE IF EXISTS wb_business_optimization_run",
     ),
 ];
 

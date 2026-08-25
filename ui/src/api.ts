@@ -673,6 +673,15 @@ export async function optimizeBusinessGoals(
   return unwrap<BusinessOptimizationRunDto>(res)
 }
 
+export async function getBusinessOptimizationRuns(
+  projectId: string,
+): Promise<BusinessOptimizationRunDto[]> {
+  const res = await authFetch(
+    `/api/v1/business/optimization-runs?projectId=${encodeURIComponent(projectId)}`,
+  )
+  return unwrap<BusinessOptimizationRunDto[]>(res)
+}
+
 export async function reconcileBusinessExecution(
   projectId: string,
   opportunityId: string,

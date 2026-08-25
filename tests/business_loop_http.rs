@@ -929,6 +929,20 @@ async fn optimization_endpoint_runs_goal_directed_cycles() {
     assert_eq!(result["cycles"].as_array().map(Vec::len), Some(1));
     assert_eq!(result["finalGap"], json!(7.0));
     assert_eq!(result["stoppedBecause"], json!("MaxCycles"));
+    assert!(!result["id"].as_str().unwrap_or_default().is_empty());
+
+    let (status, body) = common::http_call(
+        addr,
+        "GET",
+        "/api/v1/business/optimization-runs?projectId=crm-retention",
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "应能读取优化历史：{body}");
+    let history = data(&body).await.as_array().cloned().unwrap_or_default();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0]["id"], result["id"]);
+    assert_eq!(history[0]["stoppedBecause"], json!("MaxCycles"));
 }
 
 #[tokio::test]
@@ -1120,6 +1134,7 @@ async fn bounded_optimization_continues_until_goal_reaches() {
     )
     .await
     .expect("有界优化应继续处理剩余机会");
+    let optimization_id = optimization.id.clone();
     assert_eq!(optimization.cycles.len(), 2);
     assert!(optimization.executed_actions.len() >= 2);
     assert_eq!(
@@ -1138,6 +1153,13 @@ async fn bounded_optimization_continues_until_goal_reaches() {
         2,
         "两个机会都应获得一次执行证据"
     );
+    let history = storage
+        .list_business_optimization_runs("batch-loop", 10)
+        .await
+        .expect("优化历史应可读取");
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].id, optimization_id);
+    assert_eq!(history[0].payload["stoppedBecause"], json!("GoalReached"));
 }
 
 #[tokio::test]

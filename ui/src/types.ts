@@ -683,6 +683,8 @@ export type OptimizationStopReason =
   | 'MaxCycles'
 
 export interface BusinessOptimizationRunDto {
+  id: string
+  createdAt: string
   projectId: string
   goalMetric?: string | null
   initialGap: number

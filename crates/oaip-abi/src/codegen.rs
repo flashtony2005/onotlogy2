@@ -402,6 +402,18 @@ CREATE INDEX IF NOT EXISTS idx_business_lease_active
 CREATE INDEX IF NOT EXISTS idx_business_lease_expiry
   ON wb_business_execution_lease (status, expires_at);
 
+-- 业务优化运行历史：目标、停止原因和完整 cycle 明细可跨请求回看。
+CREATE TABLE IF NOT EXISTS wb_business_optimization_run (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL,
+  goal_metric   TEXT,
+  stopped_as    TEXT NOT NULL,
+  payload       TEXT NOT NULL,
+  created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_business_optimization_project
+  ON wb_business_optimization_run (project_id, created_at DESC);
+
 "#
     .to_string()
 }

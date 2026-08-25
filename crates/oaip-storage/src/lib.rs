@@ -13,6 +13,7 @@ pub mod leases;
 pub mod objects;
 pub use ontology::{OntologyEvolutionRecord, OntologyEvolutionStatus, OntologyVersionRecord};
 pub mod ontology;
+pub mod optimization;
 pub mod projects;
 pub mod relations;
 pub mod resources;
@@ -23,6 +24,7 @@ pub mod worker_stats;
 pub mod world;
 pub use automation::AutomationJob;
 pub use leases::ExecutionLeaseRecord;
+pub use optimization::BusinessOptimizationRunRecord;
 
 mod backup;
 mod schema;
