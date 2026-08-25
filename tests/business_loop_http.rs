@@ -2066,6 +2066,7 @@ async fn autonomous_run_skips_approval_only_candidate() {
 struct CapturingPlugin {
     manifest: openaip_os::plugin::PluginManifest,
     input: Arc<tokio::sync::Mutex<Option<Value>>>,
+    output: Value,
 }
 
 #[async_trait::async_trait]
@@ -2080,7 +2081,7 @@ impl openaip_os::plugin::AsyncPlugin for CapturingPlugin {
         input: Value,
     ) -> Result<Value, openaip_os::plugin::PluginError> {
         *self.input.lock().await = Some(input);
-        Ok(json!({ "days_since_last_contact": 0 }))
+        Ok(self.output.clone())
     }
 }
 
@@ -2196,6 +2197,7 @@ relation changed_state:
             Box::new(CapturingPlugin {
                 manifest,
                 input: captured.clone(),
+                output: json!({ "days_since_last_contact": 7 }),
             }),
             |capabilities| {
                 capabilities.declare(openaip_os::plugin::capability::CapabilityContract {
@@ -2264,5 +2266,9 @@ relation changed_state:
         .await
         .expect("查询客户失败")
         .expect("客户应存在");
-    assert_eq!(customer.data["days_since_last_contact"], json!(0));
+    assert_eq!(
+        customer.data["days_since_last_contact"],
+        json!(7),
+        "外部能力输出应作为声明字段的权威投影"
+    );
 }

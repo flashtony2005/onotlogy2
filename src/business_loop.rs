@@ -1882,6 +1882,8 @@ pub async fn decide_business_approval(
 
 fn apply_capability_output(
     action: &ActionDef,
+    ontology: &OntologyIR,
+    object_type: &str,
     after_data: &mut Value,
     output: Value,
 ) -> Result<(), BusinessLoopError> {
@@ -1900,7 +1902,8 @@ fn apply_capability_output(
             )));
         }
     }
-    if let Some(object) = after_data.as_object_mut() {
+    let mut projected = after_data.clone();
+    if let Some(object) = projected.as_object_mut() {
         for update in &action.updates {
             let value = values.get(&update.field).ok_or_else(|| {
                 BusinessLoopError::invalid(format!("外部能力缺少声明字段 {}", update.field))
@@ -1908,6 +1911,8 @@ fn apply_capability_output(
             object.insert(update.field.clone(), value.clone());
         }
     }
+    validate_data(ontology, object_type, &projected)?;
+    *after_data = projected;
     Ok(())
 }
 
@@ -2029,20 +2034,25 @@ pub async fn execute_opportunity(
         None
     };
     let mut after_data = before_record.data.clone();
+    let mut external_projected = false;
     if let Some(output) = capability_output {
-        apply_capability_output(&definition, &mut after_data, output)?;
+        apply_capability_output(&definition, &ontology, &owner.name, &mut after_data, output)?;
+        external_projected = true;
     }
     let mut created_object: Option<(String, String)> = None;
-    for update in &definition.updates {
-        {
-            let after_object = after_data.as_object_mut().ok_or_else(|| {
-                BusinessLoopError::invalid(format!("{} 数据必须是 JSON object", owner.name))
-            })?;
-            let value =
-                evaluate_value(&update.value, &subject, &before_record.data, &params_value)?;
-            after_object.insert(update.field.clone(), value);
+    if !external_projected {
+        for update in &definition.updates {
+            {
+                let after_object = after_data.as_object_mut().ok_or_else(|| {
+                    BusinessLoopError::invalid(format!("{} 数据必须是 JSON object", owner.name))
+                })?;
+                let value =
+                    evaluate_value(&update.value, &subject, &before_record.data, &params_value)?;
+                after_object.insert(update.field.clone(), value);
+            }
         }
     }
+    validate_data(&ontology, &owner.name, &after_data)?;
     if !definition.creates.is_empty() {
         if definition.creates.len() != 1 {
             return Err(BusinessLoopError::invalid(
@@ -2590,19 +2600,54 @@ mod tests {
         assert_eq!(selected[0].opportunity_id, "opp-b");
     }
 
+    fn customer_ontology() -> OntologyIR {
+        parse_odl("object Customer:\n  properties:\n    name: string\n    days: int\n")
+            .expect("测试本体应可解析")
+    }
+
     #[test]
     fn capability_output_is_limited_to_declared_fields() {
-        let mut after = json!({"days": 75});
-        let error = apply_capability_output(&action("days"), &mut after, json!({"hacked": true}))
-            .expect_err("未声明字段必须拒绝");
+        let ontology = customer_ontology();
+        let mut after = json!({"name": "A", "days": 75});
+        let error = apply_capability_output(
+            &action("days"),
+            &ontology,
+            "Customer",
+            &mut after,
+            json!({"hacked": true}),
+        )
+        .expect_err("未声明字段必须拒绝");
         assert!(error.to_string().contains("未声明字段"));
 
-        let error = apply_capability_output(&action("days"), &mut after, json!({}))
-            .expect_err("缺失声明字段必须拒绝");
+        let error = apply_capability_output(
+            &action("days"),
+            &ontology,
+            "Customer",
+            &mut after,
+            json!({}),
+        )
+        .expect_err("缺失声明字段必须拒绝");
         assert!(error.to_string().contains("缺少声明字段"));
 
-        apply_capability_output(&action("days"), &mut after, json!({"days": 0}))
-            .expect("声明字段应能投影");
+        let error = apply_capability_output(
+            &action("days"),
+            &ontology,
+            "Customer",
+            &mut after,
+            json!({"days": "not-int"}),
+        )
+        .expect_err("类型不符的外部输出必须拒绝");
+        assert!(error.to_string().contains("属性") || error.to_string().contains("days"));
+        assert_eq!(after["days"], json!(75));
+
+        apply_capability_output(
+            &action("days"),
+            &ontology,
+            "Customer",
+            &mut after,
+            json!({"days": 0}),
+        )
+        .expect("声明字段应能投影");
         assert_eq!(after["days"], json!(0));
     }
 }
