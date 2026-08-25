@@ -175,6 +175,24 @@ pub(crate) async fn business_portfolio(
     }
 }
 
+pub(crate) async fn execution_leases(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Query(query): Query<ProjectScope>,
+) -> Response {
+    if !user.can_read_evaluation() {
+        return forbidden("当前角色无权读取执行恢复队列（需 Operator 及以上）").into_response();
+    }
+    match st
+        .storage
+        .list_expired_execution_leases(&query.project_id, 200)
+        .await
+    {
+        Ok(leases) => ApiResponse::ok(leases).into_response(),
+        Err(error) => error_response(error.into()),
+    }
+}
+
 pub(crate) async fn run_next(
     State(st): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,

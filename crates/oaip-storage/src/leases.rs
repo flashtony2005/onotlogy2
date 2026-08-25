@@ -119,6 +119,29 @@ impl LibSQLStorage {
         tx.commit().await?;
         Ok(expired)
     }
+
+    /// 列出待人工对账的过期租约；Completed/Released 是正常终态，不进入恢复队列。
+    pub async fn list_expired_execution_leases(
+        &self,
+        project_id: &str,
+        limit: u32,
+    ) -> Result<Vec<ExecutionLeaseRecord>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, project_id, opportunity_id, owner, status, expires_at \
+                 FROM wb_business_execution_lease \
+                 WHERE project_id=?1 AND status=?2 \
+                 ORDER BY created_at DESC, id DESC LIMIT ?3",
+                params![project_id, LEASE_EXPIRED, i64::from(limit.clamp(1, 200))],
+            )
+            .await?;
+        let mut leases = Vec::new();
+        while let Some(row) = rows.next().await? {
+            leases.push(row_to_lease(&row)?);
+        }
+        Ok(leases)
+    }
 }
 
 fn row_to_lease(row: &libsql::Row) -> Result<ExecutionLeaseRecord, StorageError> {
@@ -211,6 +234,28 @@ mod tests {
         assert_eq!(expired.len(), 1);
         assert_eq!(expired[0].id, "stale");
         assert_eq!(expired[0].status, LEASE_EXPIRED);
+
+        storage
+            .claim_execution_lease(
+                "other",
+                "other-project",
+                "other-opportunity",
+                "worker",
+                "2020-01-01T00:00:00Z",
+            )
+            .await
+            .expect("其他项目过期租约应可创建");
+        let leases = storage
+            .list_expired_execution_leases("project", 200)
+            .await
+            .expect("恢复队列应可读取");
+        assert_eq!(
+            leases
+                .iter()
+                .map(|lease| lease.id.as_str())
+                .collect::<Vec<_>>(),
+            ["stale"]
+        );
         let _ = std::fs::remove_file(path);
     }
 }

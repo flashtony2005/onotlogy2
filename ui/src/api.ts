@@ -33,6 +33,7 @@ import type {
   BusinessPathDto,
   BusinessRecommendationDto,
   BusinessRunDto,
+  ExecutionLeaseDto,
   ProjectEventDto,
   SessionDto,
   SessionSummaryDto,
@@ -589,6 +590,11 @@ export async function getBusinessRecommendations(projectId: string): Promise<Bus
 export async function getBusinessPortfolio(projectId: string): Promise<BusinessPathDto[]> {
   const res = await authFetch(`/api/v1/business/portfolio?projectId=${encodeURIComponent(projectId)}`)
   return unwrap<BusinessPathDto[]>(res)
+}
+
+export async function getExpiredExecutionLeases(projectId: string): Promise<ExecutionLeaseDto[]> {
+  const res = await authFetch(`/api/v1/business/execution-leases?projectId=${encodeURIComponent(projectId)}`)
+  return unwrap<ExecutionLeaseDto[]>(res)
 }
 
 export async function runBusinessNext(projectId: string): Promise<BusinessRunDto> {

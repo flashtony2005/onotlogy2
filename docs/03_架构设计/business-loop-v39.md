@@ -13,6 +13,8 @@
 - `run-next` 先把过期活跃租约标记为 `Expired`。因为外部副作用未知，过期机会保持
   `Executed`，不自动重试；人工对账后再决定是否创建新机会。
 - `run-next` 返回 `expiredExecutionLeases`，让人工对账能直接看到中断机会、owner 和过期时间。
+- `GET /api/v1/business/execution-leases` 提供项目级过期租约恢复队列；Business Panel
+  初始加载即可展示待对账中断，无需先触发执行。
 
 ## 验证
 
