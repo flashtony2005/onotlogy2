@@ -2225,6 +2225,7 @@ impl openaip_os::plugin::AsyncPlugin for CapturingPlugin {
 struct CapturingWorker {
     manifest: openaip_os::worker_core::manifest::WorkerManifest,
     input: Arc<tokio::sync::Mutex<Option<Value>>>,
+    worker_ok: bool,
     output: Value,
 }
 
@@ -2242,9 +2243,18 @@ impl openaip_os::worker_core::sdk::Worker for CapturingWorker {
     {
         let _ = capability;
         *self.input.lock().await = Some(input);
-        Ok(openaip_os::worker_core::sdk::WorkerResult::ok(
-            self.output.clone(),
-        ))
+        if !self.worker_ok {
+            return Err(openaip_os::worker_core::sdk::WorkerError::Execution(
+                "captured failure".into(),
+            ));
+        }
+        Ok(openaip_os::worker_core::sdk::WorkerResult {
+            ok: true,
+            output: self.output.clone(),
+            stderr: None,
+            exit_code: Some(0),
+            duration_ms: 7,
+        })
     }
 }
 
@@ -2364,6 +2374,7 @@ async fn declared_worker_invokes_registry_and_projects_output() {
         .register(Box::new(CapturingWorker {
             manifest,
             input: captured.clone(),
+            worker_ok: true,
             output: json!({ "days_since_last_contact": 7 }),
         }))
         .expect("应能注册外部能力 Worker");
@@ -2423,4 +2434,86 @@ async fn declared_worker_invokes_registry_and_projects_output() {
         json!(7),
         "Worker 输出应作为声明字段的权威投影"
     );
+    let stats = storage.list_worker_stats().await.expect("应能读取执行统计");
+    assert_eq!(stats.len(), 1);
+    assert_eq!(stats[0].capability, "touch_customer");
+    assert_eq!(stats[0].worker_id, "crm-worker");
+    assert_eq!(stats[0].runs, 1);
+    assert_eq!(stats[0].success, 1);
+}
+
+#[tokio::test]
+async fn failed_worker_is_recorded_and_blocks_state_change() {
+    let ontology = capability_ontology("worker: crm-worker");
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let mut workers = WorkerRegistry::new();
+    let manifest = openaip_os::worker_core::manifest::WorkerManifest::new("crm-worker", "test")
+        .with_capabilities(&["touch_customer"]);
+    let captured = Arc::new(tokio::sync::Mutex::new(None));
+    workers
+        .register(Box::new(CapturingWorker {
+            manifest,
+            input: captured,
+            worker_ok: false,
+            output: json!({}),
+        }))
+        .expect("应能注册失败 Worker");
+
+    let customer_id = seed_odl_project(
+        &storage,
+        "worker-failure",
+        &ontology,
+        "monthly_reactivations",
+    )
+    .await;
+    let discovered = discover_opportunities(&storage, "worker-failure")
+        .await
+        .expect("应能发现机会");
+    let opportunity_id = discovered[0]["id"].as_str().expect("机会必须有 ID");
+    decide_opportunity(
+        &storage,
+        "worker-failure",
+        opportunity_id,
+        "contract-test",
+        DecisionOptions {
+            action: Some("TouchCustomer"),
+            reason: None,
+            alternatives: None,
+            params: None,
+        },
+    )
+    .await
+    .expect("应能决策外部能力动作");
+
+    let error = execute_opportunity(
+        &storage,
+        &PluginCatalog::new(),
+        &workers,
+        "worker-failure",
+        opportunity_id,
+    )
+    .await
+    .expect_err("失败 Worker 必须阻止业务执行");
+    assert!(error.to_string().contains("执行失败"));
+
+    let customer = storage
+        .get(&customer_id)
+        .await
+        .expect("查询客户失败")
+        .expect("客户应存在");
+    assert_eq!(customer.data["days_since_last_contact"], json!(75));
+    let outcomes = storage
+        .list_objects_for_project("worker-failure", "Outcome")
+        .await
+        .expect("应能读取 Outcome");
+    assert!(outcomes.is_empty(), "失败 Worker 不能产生业务证据");
+
+    let stats = storage.list_worker_stats().await.expect("应能读取执行统计");
+    assert_eq!(stats.len(), 1);
+    assert_eq!(stats[0].capability, "touch_customer");
+    assert_eq!(stats[0].worker_id, "crm-worker");
+    assert_eq!(stats[0].runs, 1);
+    assert_eq!(stats[0].success, 0);
 }

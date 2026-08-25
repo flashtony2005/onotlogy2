@@ -16,6 +16,7 @@ use crate::worker_core::registry::WorkerRegistry;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::time::Instant;
 use thiserror::Error;
 
 const OPPORTUNITY_OPEN: &str = "Open";
@@ -2041,12 +2042,24 @@ pub async fn execute_opportunity(
                     "Worker {provider_id} 不可用"
                 )));
             }
-            let result = worker
-                .execute(capability_name, input)
-                .await
-                .map_err(|error| {
-                    BusinessLoopError::invalid(format!("Worker {provider_id} 执行失败：{error}"))
-                })?;
+            let started_at = Instant::now();
+            let executed = worker.execute(capability_name, input).await;
+            let result = match executed {
+                Ok(result) => result,
+                Err(error) => {
+                    let duration_ms =
+                        u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    storage
+                        .record_worker_outcome(capability_name, provider_id, false, duration_ms)
+                        .await?;
+                    return Err(BusinessLoopError::invalid(format!(
+                        "Worker {provider_id} 执行失败：{error}"
+                    )));
+                }
+            };
+            storage
+                .record_worker_outcome(capability_name, provider_id, result.ok, result.duration_ms)
+                .await?;
             if !result.ok {
                 return Err(BusinessLoopError::invalid(format!(
                     "Worker {provider_id} 执行失败"
