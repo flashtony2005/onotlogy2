@@ -557,6 +557,34 @@ async fn deferred_follow_up_evidence_is_declared_and_type_generic() {
     assert_eq!(settled["task"]["type"], json!("FollowUpPlan"));
     assert_eq!(settled["outcome"]["data"]["goal_delta"], json!(250.0));
     assert_eq!(settled["goals"][0]["currentValue"], json!(250.0));
+
+    // 第二个同类机会必须继承终局收益学习，而不是继续使用静态期望。
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+            object_type: "Customer".into(),
+            id: "customer:generic-follow-up-vip-2".into(),
+            data: json!({
+                "name": "第二位 VIP",
+                "level": "VIP",
+                "balance": 100000.0,
+                "days_since_last_contact": 80
+            }),
+            project_id: Some("generic-follow-up".into()),
+        })
+        .await
+        .expect("应能写入第二个客户");
+    discover_opportunities(&storage, "generic-follow-up")
+        .await
+        .expect("应发现第二个同类机会");
+    let recommendations = recommend_next_actions(&storage, "generic-follow-up")
+        .await
+        .expect("应能为新机会推荐动作");
+    let retained = recommendations[0]
+        .candidates
+        .iter()
+        .find(|candidate| candidate.action == "RetainCustomer")
+        .expect("推荐应包含挽留候选");
+    assert_eq!(retained.expected_benefit, json!(250.0));
 }
 
 #[tokio::test]

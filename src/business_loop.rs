@@ -936,8 +936,15 @@ pub async fn goal_gaps(
     Ok(gaps)
 }
 
-/// 按 `(OpportunityType, Action)` 聚合终局成功率，避免不同业务上下文互相污染。
-type ActionLearning = HashMap<(String, String), (u64, u64)>;
+/// 按 `(OpportunityType, Action)` 聚合终局结果，避免不同业务上下文互相污染。
+#[derive(Debug, Default, Clone, Copy)]
+struct ActionOutcomeStats {
+    runs: u64,
+    successes: u64,
+    realized_goal_delta: f64,
+}
+
+type ActionLearning = HashMap<(String, String), ActionOutcomeStats>;
 
 /// 只信任 Decision 链回连到 Opportunity 的 BusinessResult；孤立 Outcome 不参与学习。
 async fn learned_action_stats(
@@ -981,11 +988,13 @@ async fn learned_action_stats(
             continue;
         };
         let opportunity_type = text(&opportunity.data, "opportunity_type")?.to_string();
+        let goal_delta = number(&outcome.data, "goal_delta")?;
         let entry = learned.entry((opportunity_type, action)).or_default();
-        entry.0 += 1;
+        entry.runs += 1;
         if success {
-            entry.1 += 1;
+            entry.successes += 1;
         }
+        entry.realized_goal_delta += goal_delta;
     }
     Ok(learned)
 }
@@ -1853,13 +1862,33 @@ fn action_confidence(
     learning: &ActionLearning,
 ) -> Result<f64, BusinessLoopError> {
     let prior_confidence = action_planning(definition)?.prior_confidence;
-    let Some(&(runs, successes)) =
-        learning.get(&(opportunity_type.to_string(), definition.name.clone()))
+    let Some(&stats) = learning.get(&(opportunity_type.to_string(), definition.name.clone()))
     else {
         return Ok(prior_confidence);
     };
-    debug_assert!(runs > 0);
-    Ok(successes as f64 / runs as f64)
+    debug_assert!(stats.runs > 0);
+    Ok(stats.successes as f64 / stats.runs as f64)
+}
+
+/// 有终局收益契约时，用历史平均实际收益替代静态期望；未量化动作保持原公式。
+fn learned_expected_benefit(
+    definition: &ActionDef,
+    opportunity_type: &str,
+    learning: &ActionLearning,
+    static_benefit: f64,
+) -> f64 {
+    let quantified = definition
+        .creates
+        .iter()
+        .any(|created| created.result_benefit_field.is_some());
+    let Some(stats) = learning.get(&(opportunity_type.to_string(), definition.name.clone())) else {
+        return static_benefit;
+    };
+    if quantified && stats.runs > 0 {
+        stats.realized_goal_delta / stats.runs as f64
+    } else {
+        static_benefit
+    }
 }
 
 fn evaluate_candidates(
@@ -1885,7 +1914,12 @@ fn evaluate_candidates(
                 return None;
             }
             let confidence = action_confidence(definition, opportunity_type, learning).ok()?;
-            let benefit = expected_benefit(definition, estimated_value, customer).ok()?;
+            let benefit = learned_expected_benefit(
+                definition,
+                opportunity_type,
+                learning,
+                expected_benefit(definition, estimated_value, customer).ok()?,
+            );
             Some(ActionCandidate {
                 action: definition.name.to_string(),
                 actor: planning.actor,
@@ -3056,6 +3090,7 @@ async fn run_next_best_action_locked(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::abi::CreateEffect;
     use crate::abi::ir::{FieldUpdate, PolicyDef};
 
     fn action(field: &str) -> ActionDef {
@@ -3260,8 +3295,22 @@ mod tests {
     fn learning_stays_separate_per_opportunity_context() {
         let definition = action("Touch");
         let learning = HashMap::from([
-            (("WinBack".to_owned(), "Touch".to_owned()), (2u64, 0u64)),
-            (("Upgrade".to_owned(), "Touch".to_owned()), (2u64, 2u64)),
+            (
+                ("WinBack".to_owned(), "Touch".to_owned()),
+                ActionOutcomeStats {
+                    runs: 2,
+                    successes: 0,
+                    ..Default::default()
+                },
+            ),
+            (
+                ("Upgrade".to_owned(), "Touch".to_owned()),
+                ActionOutcomeStats {
+                    runs: 2,
+                    successes: 2,
+                    ..Default::default()
+                },
+            ),
         ]);
 
         assert_eq!(
@@ -3275,6 +3324,40 @@ mod tests {
         assert_eq!(
             action_confidence(&definition, "Unknown", &learning).expect("无样本应回退先验"),
             0.0
+        );
+    }
+
+    #[test]
+    fn quantified_actions_learn_expected_benefit_from_realized_outcomes() {
+        let mut definition = action("Touch");
+        definition.creates = vec![CreateEffect {
+            object_type: "FollowUp".into(),
+            id: None,
+            data: Vec::new(),
+            link_edge: None,
+            subject_field: None,
+            decision_edge: None,
+            result_benefit_field: Some("recovered_amount".into()),
+            result_benefit_factor: Some(0.5),
+        }];
+        let learning = HashMap::from([(
+            ("WinBack".to_owned(), "Touch".to_owned()),
+            ActionOutcomeStats {
+                runs: 2,
+                successes: 1,
+                realized_goal_delta: 500.0,
+            },
+        )]);
+
+        assert_eq!(
+            learned_expected_benefit(&definition, "WinBack", &learning, 10_000.0),
+            250.0
+        );
+
+        definition.creates.clear();
+        assert_eq!(
+            learned_expected_benefit(&definition, "WinBack", &learning, 10_000.0),
+            10_000.0
         );
     }
 
