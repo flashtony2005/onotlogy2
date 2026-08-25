@@ -12,12 +12,16 @@ use crate::knowledge::{Reasoner, runtime_ir_to_knowledge, validate_data_consiste
 use crate::knowledge_bridge::world_snapshot_to_knowledge;
 use crate::plugin::catalog::{CatalogError, PluginCatalog};
 use crate::storage::{LibSQLStorage, ProjectRecord, StorageError, WorldCommand};
+use crate::worker::policy::WorkerPolicy;
+use crate::worker::router::{RouterCriteria, WorkerRouter};
 use crate::worker_core::registry::WorkerRegistry;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 use thiserror::Error;
+
+const WORKER_ANY: &str = "*";
 
 const OPPORTUNITY_OPEN: &str = "Open";
 const OPPORTUNITY_DECIDED: &str = "Decided";
@@ -1973,6 +1977,38 @@ fn apply_capability_output(
     Ok(())
 }
 
+/// 解析执行者；`*` 用既有 Router 和学习统计在同能力候选中选择。
+async fn resolve_business_worker(
+    storage: &LibSQLStorage,
+    workers: &WorkerRegistry,
+    requested_worker: &str,
+    capability: &str,
+) -> Result<String, BusinessLoopError> {
+    if requested_worker != WORKER_ANY {
+        return Ok(requested_worker.to_string());
+    }
+    let learned_trust = crate::worker::stats::learned_trust_map(storage).await?;
+    let router = WorkerRouter::new(RouterCriteria {
+        learned_trust,
+        ..RouterCriteria::default()
+    });
+    // ODL planning 声明本身就是 Business Loop 的授权；业务审批已在 execute 前置完成。
+    let policy = WorkerPolicy::new().allow(capability);
+    let selected = router
+        .route(workers, capability, &policy)
+        .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
+    let worker = workers.get(&selected.worker_id).ok_or_else(|| {
+        BusinessLoopError::invalid(format!("Worker {} 已消失", selected.worker_id))
+    })?;
+    if !worker.health().await {
+        return Err(BusinessLoopError::invalid(format!(
+            "Worker {} 不可用",
+            selected.worker_id
+        )));
+    }
+    Ok(selected.worker_id)
+}
+
 /// 执行已选动作，记录 Outcome 与 StateTransition，并推进 Opportunity/Decision 状态。
 pub async fn execute_opportunity(
     storage: &LibSQLStorage,
@@ -2060,8 +2096,7 @@ pub async fn execute_opportunity(
         let capability = planning.capability.as_deref()?;
         Some((provider, capability, planning.worker.is_some()))
     });
-    let capability =
-        external_capability.map(|(provider, capability_name, _)| (provider, capability_name));
+    let mut capability_provider = None;
     let capability_output = if let Some((provider_id, capability_name, use_worker)) =
         external_capability
     {
@@ -2085,7 +2120,9 @@ pub async fn execute_opportunity(
             "params": params_value,
         });
         if use_worker {
-            let worker = workers.get(provider_id).ok_or_else(|| {
+            let provider_id =
+                resolve_business_worker(storage, workers, provider_id, capability_name).await?;
+            let worker = workers.get(&provider_id).ok_or_else(|| {
                 BusinessLoopError::invalid(format!("Worker {provider_id} 未注册"))
             })?;
             if !worker.health().await {
@@ -2101,7 +2138,7 @@ pub async fn execute_opportunity(
                     let duration_ms =
                         u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
                     storage
-                        .record_worker_outcome(capability_name, provider_id, false, duration_ms)
+                        .record_worker_outcome(capability_name, &provider_id, false, duration_ms)
                         .await?;
                     return Err(BusinessLoopError::invalid(format!(
                         "Worker {provider_id} 执行失败：{error}"
@@ -2109,15 +2146,17 @@ pub async fn execute_opportunity(
                 }
             };
             storage
-                .record_worker_outcome(capability_name, provider_id, result.ok, result.duration_ms)
+                .record_worker_outcome(capability_name, &provider_id, result.ok, result.duration_ms)
                 .await?;
             if !result.ok {
                 return Err(BusinessLoopError::invalid(format!(
                     "Worker {provider_id} 执行失败"
                 )));
             }
+            capability_provider = Some(provider_id);
             Some(result.output)
         } else {
+            capability_provider = Some(provider_id.to_string());
             Some(plugins.invoke(provider_id, capability_name, input).await?)
         }
     } else {
@@ -2206,9 +2245,11 @@ pub async fn execute_opportunity(
         "metric": rule.goal_metric.clone().unwrap_or_default(),
         "stage": OUTCOME_ACTION_EXECUTED,
     });
-    if let Some((plugin_id, capability_name)) = capability {
-        action_outcome_data["provider"] = json!(plugin_id);
-        action_outcome_data["capability"] = json!(capability_name);
+    if let Some(provider_id) = &capability_provider {
+        action_outcome_data["provider"] = json!(provider_id);
+        if let Some((_, capability_name, _)) = external_capability {
+            action_outcome_data["capability"] = json!(capability_name);
+        }
     }
     if let Some((task_id, task_type)) = &created_object {
         action_outcome_data["before"] = json!(format!(r#"{{"{task_type}":null}}"#));
@@ -2260,9 +2301,11 @@ pub async fn execute_opportunity(
             "metric": rule.goal_metric.clone().unwrap_or_default(),
             "stage": OUTCOME_BUSINESS_RESULT,
         });
-        if let Some((plugin_id, capability_name)) = capability {
-            result_data["provider"] = json!(plugin_id);
-            result_data["capability"] = json!(capability_name);
+        if let Some(provider_id) = &capability_provider {
+            result_data["provider"] = json!(provider_id);
+            if let Some((_, capability_name, _)) = external_capability {
+                result_data["capability"] = json!(capability_name);
+            }
         }
         validate_data(&ontology, "Outcome", &result_data)?;
         create_world_object(
@@ -2712,6 +2755,60 @@ mod tests {
     fn customer_ontology() -> OntologyIR {
         parse_odl("object Customer:\n  properties:\n    name: string\n    days: int\n")
             .expect("测试本体应可解析")
+    }
+
+    struct RoutedWorker(crate::worker_core::manifest::WorkerManifest);
+
+    #[async_trait::async_trait]
+    impl crate::worker_core::sdk::Worker for RoutedWorker {
+        fn manifest(&self) -> &crate::worker_core::manifest::WorkerManifest {
+            &self.0
+        }
+
+        async fn execute(
+            &self,
+            _capability: &str,
+            _input: Value,
+        ) -> Result<crate::worker_core::sdk::WorkerResult, crate::worker_core::sdk::WorkerError>
+        {
+            Ok(crate::worker_core::sdk::WorkerResult::ok(json!({})))
+        }
+    }
+
+    #[tokio::test]
+    async fn wildcard_worker_uses_learned_statistics_to_change_choice() {
+        let storage = LibSQLStorage::open(":memory:")
+            .await
+            .expect("内存库应可打开");
+        let manifest = |id: &str, trust: f64| {
+            crate::worker_core::manifest::WorkerManifest::new(id, "test")
+                .with_capabilities(&["touch_customer"])
+                .with_trust(trust)
+        };
+        let mut workers = crate::worker_core::registry::WorkerRegistry::new();
+        workers
+            .register(Box::new(RoutedWorker(manifest("strong", 0.60))))
+            .expect("应能注册高信任 Worker");
+        workers
+            .register(Box::new(RoutedWorker(manifest("learner", 0.55))))
+            .expect("应能注册低信任 Worker");
+        let select = || resolve_business_worker(&storage, &workers, WORKER_ANY, "touch_customer");
+
+        let selected = select().await.expect("无样本应能路由");
+        assert_eq!(selected, "strong");
+
+        for _ in 0..5 {
+            storage
+                .record_worker_outcome("touch_customer", "strong", false, 100)
+                .await
+                .expect("应能记录失败");
+            storage
+                .record_worker_outcome("touch_customer", "learner", true, 100)
+                .await
+                .expect("应能记录成功");
+        }
+        let selected = select().await.expect("学习后应能路由");
+        assert_eq!(selected, "learner");
     }
 
     #[test]
