@@ -2098,6 +2098,10 @@ async fn expired_execution_lease_does_not_repeat_interrupted_action() {
     .await
     .expect("过期租约后应安全空闲");
     assert!(!run.executed, "未知副作用的过期执行不能自动重试");
+    assert_eq!(run.expired_leases.len(), 1, "恢复结果应暴露中断租约");
+    assert_eq!(run.expired_leases[0].id, "interrupted-lease");
+    assert_eq!(run.expired_leases[0].opportunity_id, opportunity_id);
+    assert_eq!(run.expired_leases[0].status, "Expired");
 
     let opportunities = storage
         .list_objects_for_project("crash-recovery", "Opportunity")
@@ -2109,11 +2113,6 @@ async fn expired_execution_lease_does_not_repeat_interrupted_action() {
         .expect("结果应可读取");
     assert_eq!(opportunities[0].data["status"], json!("Executed"));
     assert!(outcomes.is_empty(), "恢复扫描不得重复产生执行证据");
-    let expired = storage
-        .expire_execution_leases("2099-01-01T00:00:00Z")
-        .await
-        .expect("恢复扫描应可查询");
-    assert!(expired.is_empty(), "run-next 应已把中断租约标记为 Expired");
 }
 
 #[tokio::test]

@@ -11,7 +11,7 @@ use crate::abi::{DataValidationError, parse_odl, validate_object_data, value_mat
 use crate::knowledge::{Reasoner, runtime_ir_to_knowledge, validate_data_consistency};
 use crate::knowledge_bridge::world_snapshot_to_knowledge;
 use crate::plugin::catalog::{CatalogError, PluginCatalog};
-use crate::storage::leases::{LEASE_COMPLETED, LEASE_RELEASED};
+use crate::storage::leases::{ExecutionLeaseRecord, LEASE_COMPLETED, LEASE_RELEASED};
 use crate::storage::{LibSQLStorage, ProjectRecord, StorageError, WorldCommand};
 use crate::worker::policy::WorkerPolicy;
 use crate::worker::router::{RouterCriteria, WorkerRouter};
@@ -194,6 +194,12 @@ pub struct BusinessLoopRun {
     pub executed: bool,
     #[serde(rename = "projectId")]
     pub project_id: String,
+    #[serde(
+        rename = "expiredExecutionLeases",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub expired_leases: Vec<ExecutionLeaseRecord>,
     pub recommendation: Option<ActionRecommendation>,
     pub decision: Option<Value>,
     pub execution: Option<Value>,
@@ -3311,7 +3317,7 @@ async fn run_next_best_action_locked(
     decided_by: &str,
 ) -> Result<BusinessLoopRun, BusinessLoopError> {
     // 过期只标记租约；机会保持 Executed，外部副作用未知时人工对账更安全。
-    storage
+    let expired_leases = storage
         .expire_execution_leases(&Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true))
         .await?;
     discover_opportunities(storage, project_id).await?;
@@ -3365,6 +3371,7 @@ async fn run_next_best_action_locked(
         return Ok(BusinessLoopRun {
             executed: false,
             project_id: project_id.to_string(),
+            expired_leases,
             recommendation: None,
             decision: None,
             execution: None,
@@ -3398,6 +3405,7 @@ async fn run_next_best_action_locked(
     Ok(BusinessLoopRun {
         executed: true,
         project_id: project_id.to_string(),
+        expired_leases,
         recommendation: Some(recommendation),
         decision: Some(decision),
         execution: Some(execution),
