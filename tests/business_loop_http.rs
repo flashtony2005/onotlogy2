@@ -1276,8 +1276,7 @@ async fn business_loop_discovers_decides_executes_and_replans() {
     );
     assert_eq!(result["execution"]["businessResult"], json!(null));
 
-    // 全新机会优先后，重开机会按学习证据重新比较；这里 Retain 仍是最高净值，
-    // 但最多只重试一次，不会造成无限循环。
+    // 同一机会的 Retain 刚失败；存在正净值替代动作时必须先探索 Contact。
     let (status, body) = common::http_call(
         addr,
         "POST",
@@ -1292,7 +1291,7 @@ async fn business_loop_discovers_decides_executes_and_replans() {
         result["recommendation"]["subject"],
         json!("customer:demo-vip-rich2")
     );
-    assert_eq!(result["recommendation"]["action"], json!("RetainCustomer"));
+    assert_eq!(result["recommendation"]["action"], json!("ContactCustomer"));
 
     let (status, body) = common::http_call(
         addr,

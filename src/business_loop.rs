@@ -1003,6 +1003,46 @@ async fn learned_action_stats(
     Ok(learned)
 }
 
+/// 只屏蔽同一机会上刚失败的候选；其他机会仍可基于自身上下文选择同一动作。
+/// ponytail: 用图谱证据做机会级探索约束，跨机会策略退避等真实负载证明需要后再升级。
+async fn failed_opportunity_actions(
+    storage: &LibSQLStorage,
+    project_id: &str,
+) -> Result<BTreeSet<(String, String)>, BusinessLoopError> {
+    let outcomes = storage
+        .list_objects_for_project(project_id, "Outcome")
+        .await?;
+    let decisions = storage
+        .list_objects_for_project(project_id, "Decision")
+        .await?;
+    let relations = storage.list_all_relations().await?;
+    let mut failed = BTreeSet::new();
+    for outcome in &outcomes {
+        if text(&outcome.data, "stage")? != OUTCOME_BUSINESS_RESULT
+            || outcome.data.get("success").and_then(Value::as_bool) != Some(false)
+        {
+            continue;
+        }
+        let decision_id = relations
+            .iter()
+            .filter(|relation| {
+                relation.relation == "produced_outcome" && relation.target == outcome.id
+            })
+            .map(|relation| relation.source.as_str())
+            .next();
+        let Some(decision_id) = decision_id else {
+            continue;
+        };
+        let Some(decision) = find_record(&decisions, decision_id, "Decision") else {
+            continue;
+        };
+        let opportunity_id = text(&decision.data, "opportunity")?;
+        let action = text(&outcome.data, "action")?;
+        failed.insert((opportunity_id.to_owned(), action.to_owned()));
+    }
+    Ok(failed)
+}
+
 /// 从不可变的 Outcome 证据重建目标进度，避免执行链中断后重复累加指标。
 pub async fn refresh_goal_progress(
     storage: &LibSQLStorage,
@@ -1101,6 +1141,7 @@ pub async fn recommend_next_actions(
         .list_objects_for_project(project_id, "Outcome")
         .await?;
     let learning = learned_action_stats(storage, project_id).await?;
+    let failed_actions = failed_opportunity_actions(storage, project_id).await?;
 
     let mut recommendations = Vec::new();
     for opportunity in opportunities {
@@ -1146,7 +1187,18 @@ pub async fn recommend_next_actions(
 
         // 每个候选先按目标对齐加权，再选总分最高者；净价值排序只保留为候选明细。
         let mut scored = Vec::with_capacity(candidates.len());
+        let selectable = candidates
+            .iter()
+            .filter(|candidate| {
+                !failed_actions.contains(&(opportunity.id.clone(), candidate.action.clone()))
+            })
+            .count();
         for candidate in &candidates {
+            if selectable > 0
+                && failed_actions.contains(&(opportunity.id.clone(), candidate.action.clone()))
+            {
+                continue;
+            }
             let active_goal = active_goal_gap(
                 &goals,
                 &actions,
@@ -1507,6 +1559,7 @@ pub async fn plan_opportunity_paths(
         .list_objects_for_project(project_id, "Opportunity")
         .await?;
     let learning = learned_action_stats(storage, project_id).await?;
+    let failed_actions = failed_opportunity_actions(storage, project_id).await?;
 
     let mut plans = Vec::new();
     for opportunity in opportunities {
@@ -1556,6 +1609,23 @@ pub async fn plan_opportunity_paths(
             0,
         )?;
         scored.retain(|path| path.net_value > 0.0);
+        // 同一机会已有替代首步时，不重复从失败动作开始；无替代时仍允许有界重试。
+        let viable_first_actions = scored
+            .iter()
+            .filter_map(|path| path.actions.first())
+            .map(|action| (opportunity.id.clone(), action.clone()))
+            .collect::<BTreeSet<_>>();
+        let unblocked_first_actions = viable_first_actions
+            .iter()
+            .filter(|key| !failed_actions.contains(key))
+            .count();
+        if unblocked_first_actions > 0 {
+            scored.retain(|path| {
+                path.actions.first().is_none_or(|action| {
+                    !failed_actions.contains(&(opportunity.id.clone(), action.clone()))
+                })
+            });
+        }
         scored.sort_by(|left, right| {
             right
                 .score
