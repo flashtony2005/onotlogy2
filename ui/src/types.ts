@@ -622,6 +622,7 @@ export interface BusinessPathDto {
   outcomeRuns: number
   outcomeSuccesses: number
   confidence: number
+  explorationBonus: number
   score: number
   reason: string
 }

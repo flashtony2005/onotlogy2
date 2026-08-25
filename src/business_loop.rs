@@ -190,6 +190,8 @@ pub struct OpportunityPath {
     #[serde(rename = "outcomeSuccesses")]
     pub outcome_successes: u64,
     pub confidence: f64,
+    #[serde(rename = "explorationBonus")]
+    pub exploration_bonus: f64,
     pub score: f64,
     pub reason: String,
 }
@@ -1566,6 +1568,7 @@ struct ScoredPath {
     cost: f64,
     net_value: f64,
     confidence: f64,
+    exploration_bonus: f64,
     score: f64,
 }
 
@@ -1723,6 +1726,7 @@ fn search_paths<'a>(
                 cost: planning.cost,
                 net_value: benefit * step_confidence - planning.cost,
                 confidence: step_confidence,
+                exploration_bonus: 0.0,
                 score: f64::NAN,
                 requires_human,
                 requires_approval,
@@ -1748,6 +1752,7 @@ fn search_paths<'a>(
                 cost: planning.cost,
                 net_value,
                 confidence: step_confidence,
+                exploration_bonus: 0.0,
                 score: net_value.max(0.0)
                     * (0.6 + 0.4 * urgency)
                     * goal_alignment(
@@ -1772,6 +1777,7 @@ fn search_paths<'a>(
             cost: f64::NAN,
             net_value: f64::NAN,
             confidence: step_confidence,
+            exploration_bonus: 0.0,
             score: f64::NAN,
             requires_human,
             requires_approval,
@@ -1881,7 +1887,16 @@ pub async fn plan_opportunity_paths(
         // 完整序列证据用平滑成功率校准规划；单次失败不会把路径置信度压到零。
         for path in &mut scored {
             let path_key = (owner.name.to_owned(), path.actions.clone());
-            if let Some(stats) = path_learning.get(&path_key)
+            let path_stats = path_learning.get(&path_key);
+            let subject_runs = path_learning
+                .keys()
+                .filter(|(subject_type, _)| *subject_type == owner.name)
+                .filter_map(|key| path_learning.get(key))
+                .map(|stats| stats.runs)
+                .sum();
+            path.exploration_bonus =
+                exploration_bonus(subject_runs, path_stats.map_or(0, |s| s.runs));
+            if let Some(stats) = path_stats
                 && stats.runs > 0
             {
                 if let Some(final_action) = path
@@ -1903,7 +1918,10 @@ pub async fn plan_opportunity_paths(
                 ),
                 None => 0.0,
             };
-            path.score = path.net_value.max(0.0) * (0.6 + 0.4 * urgency) * alignment;
+            path.score = path.net_value.max(0.0)
+                * (0.6 + 0.4 * urgency)
+                * alignment
+                * (1.0 + path.exploration_bonus);
         }
         scored.retain(|path| path.net_value > 0.0);
         // 同一机会已有替代首步时，不重复从失败动作开始；无替代时仍允许有界重试。
@@ -1937,6 +1955,11 @@ pub async fn plan_opportunity_paths(
                 .last()
                 .and_then(|name| find_action(&actions, name));
             let evidence = path_evidence(final_action, path_stats);
+            let exploration = if path.exploration_bonus > 0.0 {
+                format!("；探索加权{:.0}%", path.exploration_bonus * 100.0)
+            } else {
+                String::new()
+            };
             let resources = path
                 .actions
                 .iter()
@@ -1953,7 +1976,7 @@ pub async fn plan_opportunity_paths(
                     total
                 });
             let reason = format!(
-                "{}；净值 {:.0}；置信度 {:.2}；{evidence}",
+                "{}；净值 {:.0}；置信度 {:.2}；{evidence}{exploration}",
                 path.actions.join(" → "),
                 path.net_value,
                 path.confidence
@@ -1972,6 +1995,7 @@ pub async fn plan_opportunity_paths(
                 outcome_runs: path_stats.map_or(0, |stats| stats.runs),
                 outcome_successes: path_stats.map_or(0, |stats| stats.successes),
                 confidence: path.confidence,
+                exploration_bonus: path.exploration_bonus,
                 score: path.score,
                 reason,
             });
@@ -2422,6 +2446,21 @@ fn path_evidence(final_action: Option<&ActionDef>, stats: Option<&ActionOutcomeS
         .map(|average| format!("；收益均值{average:.0}"))
         .unwrap_or_default();
     format!("路径样本{}成功{}{payoff}", stats.runs, stats.successes)
+}
+
+/// UCB1 的有界变体：只给正净值且预算内候选最多 20% 排序加权；
+/// 自主执行仍受 actor、审批、预算和失败屏蔽约束。
+fn exploration_bonus(total_runs: u64, runs: u64) -> f64 {
+    if total_runs == 0 {
+        return 0.0;
+    }
+    let evidence = (total_runs as f64 + 2.0).ln();
+    let uncertainty = if runs == 0 {
+        evidence.sqrt()
+    } else {
+        (evidence / runs as f64).sqrt()
+    };
+    (uncertainty * 0.1).min(0.2)
 }
 
 fn evaluate_candidates(
@@ -3957,6 +3996,7 @@ mod tests {
             outcome_runs: 0,
             outcome_successes: 0,
             confidence: 0.9,
+            exploration_bonus: 0.0,
             score,
             reason: "test".into(),
         };
@@ -3995,6 +4035,7 @@ mod tests {
             outcome_runs: 0,
             outcome_successes: 0,
             confidence: 1.0,
+            exploration_bonus: 0.0,
             score,
             reason: "test".into(),
         };
@@ -4036,6 +4077,7 @@ mod tests {
             outcome_runs: 0,
             outcome_successes: 0,
             confidence: 1.0,
+            exploration_bonus: 0.0,
             score,
             reason: "test".into(),
         };
@@ -4077,6 +4119,7 @@ mod tests {
             outcome_runs: 0,
             outcome_successes: 0,
             confidence: 1.0,
+            exploration_bonus: 0.0,
             score,
             reason: "test".into(),
         };
@@ -4353,6 +4396,18 @@ mod tests {
             path_evidence(Some(&immediate), Some(&success_stats)),
             "路径样本2成功1；收益均值500"
         );
+    }
+
+    #[test]
+    fn path_exploration_is_bounded_and_favors_untried_routes() {
+        assert_eq!(exploration_bonus(0, 0), 0.0);
+        assert_eq!(exploration_bonus(100, 0), 0.2);
+        assert!(exploration_bonus(100, 100) < 0.05);
+
+        let known = exploration_bonus(9, 4);
+        let untried = exploration_bonus(9, 0);
+        assert!(untried > known);
+        assert!(known <= 0.2 && untried <= 0.2);
     }
 
     #[test]
