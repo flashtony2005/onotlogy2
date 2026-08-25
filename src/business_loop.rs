@@ -2822,8 +2822,15 @@ struct FollowUpEffect {
     result_benefit_factor: Option<f64>,
 }
 
-/// 从终局对象声明的收益字段折算目标进展；未声明时保持“完成一次”。
-fn terminal_goal_delta(effect: &FollowUpEffect, settled: &Value) -> Result<f64, BusinessLoopError> {
+/// 从终局对象声明的收益字段折算目标进展；失败样本记零，避免污染目标与学习。
+fn terminal_goal_delta(
+    effect: &FollowUpEffect,
+    settled: &Value,
+    success: bool,
+) -> Result<f64, BusinessLoopError> {
+    if !success {
+        return Ok(0.0);
+    }
     let Some((field, factor)) = effect
         .result_benefit_field
         .as_deref()
@@ -3001,7 +3008,7 @@ pub async fn settle_follow_up(
         "success": success,
         "metric": "",
         "stage": OUTCOME_BUSINESS_RESULT,
-        "goal_delta": terminal_goal_delta(&effect, &settled_data)?,
+        "goal_delta": terminal_goal_delta(&effect, &settled_data, success)?,
     });
     validate_data(&ontology, "Outcome", &outcome_data)?;
     create_world_object(
@@ -3169,6 +3176,24 @@ mod tests {
                 capability: None,
             }),
         }
+    }
+
+    #[test]
+    fn failed_deferred_terminal_never_learns_positive_benefit() {
+        let effect = FollowUpEffect {
+            object_type: "FollowUp".into(),
+            link_edge: Some("needs_follow_up".into()),
+            subject_field: "customer".into(),
+            decision_edge: "produced_task".into(),
+            result_benefit_field: Some("recovered_amount".into()),
+            result_benefit_factor: Some(0.5),
+        };
+        let settled = json!({"status": "Failed", "recovered_amount": 500.0});
+
+        assert_eq!(
+            terminal_goal_delta(&effect, &settled, false).expect("失败终局应有效"),
+            0.0
+        );
     }
 
     #[test]
