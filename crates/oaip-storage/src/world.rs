@@ -52,6 +52,13 @@ pub enum WorldCommand {
         data: Value,
         project_id: Option<String>,
     },
+    CompareSetStatus {
+        object_type: String,
+        id: String,
+        project_id: Option<String>,
+        expected_status: String,
+        next_status: String,
+    },
     DeleteObject {
         id: String,
         project_id: Option<String>,
@@ -93,6 +100,22 @@ impl WorldCommand {
                 "ObjectUpdated",
                 vec![id.clone()],
                 Some(json!({ "data": data })),
+                project_id.clone(),
+            ),
+            WorldCommand::CompareSetStatus {
+                object_type,
+                id,
+                project_id,
+                expected_status,
+                next_status,
+            } => (
+                "ObjectUpdated",
+                vec![id.clone()],
+                Some(json!({
+                    "type": object_type,
+                    "expectedStatus": expected_status,
+                    "nextStatus": next_status,
+                })),
                 project_id.clone(),
             ),
             WorldCommand::DeleteObject { id, project_id } => {
@@ -142,7 +165,11 @@ impl LibSQLStorage {
     /// 事件先插（事实先行），对象写随后，事务提交保证原子。
     pub async fn apply_world(&self, cmd: WorldCommand) -> Result<(), StorageError> {
         let _write_txn = self.write_txn_lock.lock().await;
-        let tx = self.conn.transaction().await?;
+        // IMMEDIATE 在写入口获取数据库锁，让状态 CAS 和预算账本一样跨实例安全。
+        let tx = self
+            .conn
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+            .await?;
         let ev = cmd.world_event();
         if let Err(error) = super::events::append_trace_tx(&tx, &ev).await {
             if super::events::is_audit_chain_error(&error) {
@@ -190,6 +217,54 @@ impl LibSQLStorage {
                     params![id.as_str(), project_id.as_deref()],
                 )
                 .await?;
+            }
+            WorldCommand::CompareSetStatus {
+                object_type,
+                id,
+                project_id,
+                expected_status,
+                next_status,
+            } => {
+                let mut rows = tx
+                    .query(
+                        "SELECT data FROM wb_ontology_object WHERE id=?1 AND type=?2 AND is_delete=0 \
+                         AND ((project_id = ?3) OR (project_id IS NULL AND ?3 IS NULL))",
+                        params![id.as_str(), object_type.as_str(), project_id.as_deref()],
+                    )
+                    .await?;
+                let Some(row) = rows.next().await? else {
+                    return Err(StorageError::NotFound(id.to_string()));
+                };
+                let data: String = row.get(0)?;
+                let mut value: Value = serde_json::from_str(&data)?;
+                if value.get("status").and_then(Value::as_str) != Some(expected_status.as_str()) {
+                    return Err(StorageError::Constraint {
+                        code: "WB2009",
+                        message: format!(
+                            "{object_type} {id} 状态不是 {expected_status}，不能变更为 {next_status}"
+                        ),
+                    });
+                }
+                if let Some(status) = value.as_object_mut() {
+                    status.insert("status".into(), json!(next_status));
+                }
+                let data = serde_json::to_string(&value)?;
+                let updated = tx
+                    .execute(
+                        "UPDATE wb_ontology_object SET data=?1, version=version+1, \
+                         update_time=CURRENT_TIMESTAMP WHERE id=?2 AND type=?3 AND is_delete=0 \
+                         AND ((project_id = ?4) OR (project_id IS NULL AND ?4 IS NULL))",
+                        params![
+                            data.as_str(),
+                            id.as_str(),
+                            object_type.as_str(),
+                            project_id.as_deref()
+                        ],
+                    )
+                    .await?;
+                if updated != 1 {
+                    return Err(StorageError::NotFound(id.to_string()));
+                }
             }
             WorldCommand::LinkRelation {
                 source,
@@ -258,5 +333,55 @@ impl LibSQLStorage {
             self.apply_world(cmd.clone()).await?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn status_compare_and_set_is_atomic_across_connections() {
+        let path = std::env::temp_dir().join(format!(
+            "oaip_status_cas_{}_{}.db",
+            std::process::id(),
+            oaip_trace::now_ts()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let db_path = path.to_str().expect("临时路径应有效");
+        let seed = LibSQLStorage::open(db_path).await.expect("数据库应可打开");
+        seed.apply_world(WorldCommand::CreateObject {
+            object_type: "Opportunity".into(),
+            id: "opp-1".into(),
+            data: json!({"status": "Decided"}),
+            project_id: Some("project".into()),
+        })
+        .await
+        .expect("种子机会应创建");
+        let first = LibSQLStorage::open(db_path).await.expect("实例一应打开");
+        let second = LibSQLStorage::open(db_path).await.expect("实例二应打开");
+
+        let claim = |storage: LibSQLStorage| async move {
+            storage
+                .apply_world(WorldCommand::CompareSetStatus {
+                    object_type: "Opportunity".into(),
+                    id: "opp-1".into(),
+                    project_id: Some("project".into()),
+                    expected_status: "Decided".into(),
+                    next_status: "Executed".into(),
+                })
+                .await
+        };
+        let (left, right) = tokio::join!(claim(first.clone()), claim(second.clone()));
+        let ok_count = [left.is_ok(), right.is_ok()]
+            .iter()
+            .filter(|ok| **ok)
+            .count();
+        assert_eq!(ok_count, 1, "跨实例状态 CAS 只能成功一次");
+        let record = seed.get("opp-1").await.expect("对象应可读取").unwrap();
+        assert_eq!(record.data["status"], json!("Executed"));
+        assert_eq!(record.version, 2);
+        drop((first, second, seed));
+        let _ = std::fs::remove_file(path);
     }
 }

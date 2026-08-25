@@ -1951,6 +1951,89 @@ async fn concurrent_runs_cannot_oversubscribe_enterprise_resource() {
 }
 
 #[tokio::test]
+async fn concurrent_executions_claim_one_opportunity_across_instances() {
+    let path = std::env::temp_dir().join(format!(
+        "oaip_execute_claim_{}_{}.db",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("系统时间应晚于 Unix epoch")
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let db_path = path.to_str().expect("临时路径应有效");
+    let seed = LibSQLStorage::open(db_path)
+        .await
+        .expect("共享数据库应可打开");
+    let ontology = std::fs::read_to_string("domain-packs/crm-retention/ontology.odl")
+        .expect("业务包 ODL 应存在");
+    seed_odl_project(&seed, "claim-race", &ontology, "monthly_reactivations").await;
+    let discovered = discover_opportunities(&seed, "claim-race")
+        .await
+        .expect("应发现机会");
+    decide_opportunity(
+        &seed,
+        "claim-race",
+        discovered[0]["id"].as_str().expect("机会必须有 ID"),
+        "contract-test",
+        DecisionOptions {
+            action: Some("ContactCustomer"),
+            reason: None,
+            alternatives: None,
+            params: None,
+        },
+    )
+    .await
+    .expect("应能决策机会");
+    let opportunity_id = discovered[0]["id"].as_str().unwrap().to_string();
+    let first = LibSQLStorage::open(db_path).await.expect("实例一应打开");
+    let second = LibSQLStorage::open(db_path).await.expect("实例二应打开");
+
+    let (left, right) = tokio::join!(
+        async {
+            execute_opportunity(
+                &first,
+                &PluginCatalog::new(),
+                &WorkerRegistry::new(),
+                "claim-race",
+                &opportunity_id,
+            )
+            .await
+        },
+        async {
+            execute_opportunity(
+                &second,
+                &PluginCatalog::new(),
+                &WorkerRegistry::new(),
+                "claim-race",
+                &opportunity_id,
+            )
+            .await
+        }
+    );
+    let results = [left, right];
+    assert_eq!(
+        results.iter().filter(|result| result.is_ok()).count(),
+        1,
+        "跨实例只能执行同一机会一次"
+    );
+    for error in results.into_iter().filter_map(Result::err) {
+        let error = error.to_string();
+        assert!(
+            error.contains("只有 Decided 状态") || error.contains("状态不是 Decided"),
+            "失败只能是执行抢占：{error}"
+        );
+    }
+    let opportunities = seed
+        .list_objects_for_project("claim-race", "Opportunity")
+        .await
+        .expect("机会应可读取");
+    assert_eq!(opportunities[0].data["status"], json!("Executed"));
+    drop((first, second, seed));
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
 async fn autonomous_run_gates_actions_by_declared_actor() {
     let storage = LibSQLStorage::open(":memory:")
         .await

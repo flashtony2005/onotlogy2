@@ -47,6 +47,7 @@ use serde_json::Value;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::time::Duration;
 pub use world::WorldCommand;
 
 static REL_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -353,6 +354,8 @@ impl LibSQLStorage {
         }
         let db = libsql::Builder::new_local(path).build().await?;
         let conn = db.connect()?;
+        conn.busy_timeout(Duration::from_secs(5))
+            .map_err(StorageError::Db)?;
         Self::ensure_schema(&conn).await?;
         let storage = Self {
             conn,
@@ -369,6 +372,8 @@ impl LibSQLStorage {
         let builder = libsql::Builder::new_remote(url.to_string(), token.unwrap_or("").to_string());
         let db = builder.build().await.map_err(StorageError::Db)?;
         let conn = db.connect()?;
+        conn.busy_timeout(Duration::from_secs(5))
+            .map_err(StorageError::Db)?;
         Self::ensure_schema(&conn).await?;
         let storage = Self {
             conn,

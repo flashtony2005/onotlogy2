@@ -2638,279 +2638,256 @@ async fn execute_opportunity_locked(
             "业务动作 {action} 当前不可用"
         )));
     }
-    // 预算校验通过后立即原子入账；后续外部能力或状态写入失败也不释放已耗资源。
-    if !shared_resource_limits(&ontology).is_empty() && !planning.resources.is_empty() {
-        let window = shared_resource_window_days(&ontology)?;
-        let cutoff = window.map(|days| {
-            (Utc::now() - chrono::Duration::days(i64::from(days)))
-                .to_rfc3339_opts(SecondsFormat::Micros, true)
-        });
-        storage
-            .reserve_shared_resources(
-                &generated_id("resource-usage"),
-                project_id,
-                &planning.resources,
-                &shared_resource_limits(&ontology),
-                cutoff.as_deref(),
-                &Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true),
-            )
-            .await?;
-    }
-    let external_capability = definition.planning.as_ref().and_then(|planning| {
-        let provider = planning.worker.as_deref().or(planning.plugin.as_deref())?;
-        let capability = planning.capability.as_deref()?;
-        Some((provider, capability, planning.worker.is_some()))
-    });
-    let mut capability_provider = None;
-    let capability_output = if let Some((provider_id, capability_name, use_worker)) =
-        external_capability
-    {
-        let has_evidence_fields = ontology.find("Outcome").is_some_and(|outcome| {
-            ["provider", "capability"].iter().all(|field| {
-                outcome
-                    .properties
-                    .iter()
-                    .any(|property| property.name == *field)
-            })
-        });
-        if !has_evidence_fields {
-            return Err(BusinessLoopError::invalid(
-                "外部能力动作的 Outcome 必须声明 provider 和 capability",
-            ));
+    // 跨实例抢占机会；后续副作用失败时回滚到 Decided，允许显式重试。
+    storage
+        .apply_world(WorldCommand::CompareSetStatus {
+            object_type: "Opportunity".into(),
+            id: opportunity.id.clone(),
+            project_id: Some(project_id.to_string()),
+            expected_status: OPPORTUNITY_DECIDED.into(),
+            next_status: OPPORTUNITY_EXECUTED.into(),
+        })
+        .await?;
+    let execution = async {
+        // 预算校验通过后立即原子入账；后续外部能力或状态写入失败也不释放已耗资源。
+        if !shared_resource_limits(&ontology).is_empty() && !planning.resources.is_empty() {
+            let window = shared_resource_window_days(&ontology)?;
+            let cutoff = window.map(|days| {
+                (Utc::now() - chrono::Duration::days(i64::from(days)))
+                    .to_rfc3339_opts(SecondsFormat::Micros, true)
+            });
+            storage
+                .reserve_shared_resources(
+                    &generated_id("resource-usage"),
+                    project_id,
+                    &planning.resources,
+                    &shared_resource_limits(&ontology),
+                    cutoff.as_deref(),
+                    &Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true),
+                )
+                .await?;
         }
-        let input = json!({
-            "subject": subject,
-            "objectType": owner.name,
-            "before": before_record.data,
-            "params": params_value,
+        let external_capability = definition.planning.as_ref().and_then(|planning| {
+            let provider = planning.worker.as_deref().or(planning.plugin.as_deref())?;
+            let capability = planning.capability.as_deref()?;
+            Some((provider, capability, planning.worker.is_some()))
         });
-        if use_worker {
-            let provider_id =
-                resolve_business_worker(storage, workers, provider_id, capability_name).await?;
-            let worker = workers.get(&provider_id).ok_or_else(|| {
-                BusinessLoopError::invalid(format!("Worker {provider_id} 未注册"))
-            })?;
-            if !worker.health().await {
-                return Err(BusinessLoopError::invalid(format!(
-                    "Worker {provider_id} 不可用"
-                )));
+        let mut capability_provider = None;
+        let capability_output = if let Some((provider_id, capability_name, use_worker)) =
+            external_capability
+        {
+            let has_evidence_fields = ontology.find("Outcome").is_some_and(|outcome| {
+                ["provider", "capability"].iter().all(|field| {
+                    outcome
+                        .properties
+                        .iter()
+                        .any(|property| property.name == *field)
+                })
+            });
+            if !has_evidence_fields {
+                return Err(BusinessLoopError::invalid(
+                    "外部能力动作的 Outcome 必须声明 provider 和 capability",
+                ));
             }
-            validate_capability_value(
-                capability_name,
-                "输入",
-                &worker.manifest().input_schema,
-                &input,
-            )?;
-            let started_at = Instant::now();
-            let executed = worker.execute(capability_name, input).await;
-            let result = match executed {
-                Ok(result) => result,
-                Err(error) => {
-                    let duration_ms =
-                        u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-                    storage
-                        .record_worker_outcome(capability_name, &provider_id, false, duration_ms)
-                        .await?;
+            let input = json!({
+                "subject": subject,
+                "objectType": owner.name,
+                "before": before_record.data,
+                "params": params_value,
+            });
+            if use_worker {
+                let provider_id =
+                    resolve_business_worker(storage, workers, provider_id, capability_name).await?;
+                let worker = workers.get(&provider_id).ok_or_else(|| {
+                    BusinessLoopError::invalid(format!("Worker {provider_id} 未注册"))
+                })?;
+                if !worker.health().await {
                     return Err(BusinessLoopError::invalid(format!(
-                        "Worker {provider_id} 执行失败：{error}"
+                        "Worker {provider_id} 不可用"
                     )));
                 }
-            };
-            storage
-                .record_worker_outcome(capability_name, &provider_id, result.ok, result.duration_ms)
-                .await?;
-            if !result.ok {
+                validate_capability_value(
+                    capability_name,
+                    "输入",
+                    &worker.manifest().input_schema,
+                    &input,
+                )?;
+                let started_at = Instant::now();
+                let executed = worker.execute(capability_name, input).await;
+                let result = match executed {
+                    Ok(result) => result,
+                    Err(error) => {
+                        let duration_ms =
+                            u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+                        storage
+                            .record_worker_outcome(capability_name, &provider_id, false, duration_ms)
+                            .await?;
+                        return Err(BusinessLoopError::invalid(format!(
+                            "Worker {provider_id} 执行失败：{error}"
+                        )));
+                    }
+                };
+                storage
+                    .record_worker_outcome(capability_name, &provider_id, result.ok, result.duration_ms)
+                    .await?;
+                if !result.ok {
+                    return Err(BusinessLoopError::invalid(format!(
+                        "Worker {provider_id} 执行失败"
+                    )));
+                }
+                validate_capability_value(
+                    capability_name,
+                    "输出",
+                    &worker.manifest().output_schema,
+                    &result.output,
+                )?;
+                capability_provider = Some(provider_id);
+                Some(result.output)
+            } else {
+                let input_schema = plugins.input_schema(capability_name).ok_or_else(|| {
+                    BusinessLoopError::invalid(format!("能力 {capability_name} 缺少输入契约"))
+                })?;
+                validate_capability_value(capability_name, "输入", input_schema, &input)?;
+                let output_schema = plugins.output_schema(capability_name).ok_or_else(|| {
+                    BusinessLoopError::invalid(format!("能力 {capability_name} 缺少输出契约"))
+                })?;
+                let output = plugins.invoke(provider_id, capability_name, input).await?;
+                validate_capability_value(capability_name, "输出", output_schema, &output)?;
+                capability_provider = Some(provider_id.to_string());
+                Some(output)
+            }
+        } else {
+            None
+        };
+        let mut after_data = before_record.data.clone();
+        let mut external_projected = false;
+        if let Some(output) = capability_output {
+            apply_capability_output(&definition, &ontology, &owner.name, &mut after_data, output)?;
+            external_projected = true;
+        }
+        let mut created_object: Option<(String, String)> = None;
+        if !external_projected {
+            for update in &definition.updates {
+                {
+                    let after_object = after_data.as_object_mut().ok_or_else(|| {
+                        BusinessLoopError::invalid(format!("{} 数据必须是 JSON object", owner.name))
+                    })?;
+                    let value =
+                        evaluate_value(&update.value, &subject, &before_record.data, &params_value)?;
+                    after_object.insert(update.field.clone(), value);
+                }
+            }
+        }
+        validate_data(&ontology, &owner.name, &after_data)?;
+        if !definition.creates.is_empty() {
+            if definition.creates.len() != 1 {
+                return Err(BusinessLoopError::invalid(
+                    "Business Loop 每个动作只支持一个创建效应",
+                ));
+            }
+            let effect = &definition.creates[0];
+            if ontology.find(&effect.object_type).is_none() {
                 return Err(BusinessLoopError::invalid(format!(
-                    "Worker {provider_id} 执行失败"
+                    "本体未定义创建对象类型 {}",
+                    effect.object_type
                 )));
             }
-            validate_capability_value(
-                capability_name,
-                "输出",
-                &worker.manifest().output_schema,
-                &result.output,
-            )?;
-            capability_provider = Some(provider_id);
-            Some(result.output)
-        } else {
-            let input_schema = plugins.input_schema(capability_name).ok_or_else(|| {
-                BusinessLoopError::invalid(format!("能力 {capability_name} 缺少输入契约"))
-            })?;
-            validate_capability_value(capability_name, "输入", input_schema, &input)?;
-            let output_schema = plugins.output_schema(capability_name).ok_or_else(|| {
-                BusinessLoopError::invalid(format!("能力 {capability_name} 缺少输出契约"))
-            })?;
-            let output = plugins.invoke(provider_id, capability_name, input).await?;
-            validate_capability_value(capability_name, "输出", output_schema, &output)?;
-            capability_provider = Some(provider_id.to_string());
-            Some(output)
-        }
-    } else {
-        None
-    };
-    let mut after_data = before_record.data.clone();
-    let mut external_projected = false;
-    if let Some(output) = capability_output {
-        apply_capability_output(&definition, &ontology, &owner.name, &mut after_data, output)?;
-        external_projected = true;
-    }
-    let mut created_object: Option<(String, String)> = None;
-    if !external_projected {
-        for update in &definition.updates {
-            {
-                let after_object = after_data.as_object_mut().ok_or_else(|| {
-                    BusinessLoopError::invalid(format!("{} 数据必须是 JSON object", owner.name))
-                })?;
-                let value =
-                    evaluate_value(&update.value, &subject, &before_record.data, &params_value)?;
-                after_object.insert(update.field.clone(), value);
+            let mut object_data = serde_json::Map::new();
+            for (field, expression) in &effect.data {
+                let value = evaluate_value(expression, &subject, &before_record.data, &params_value)?;
+                object_data.insert(field.clone(), value);
             }
-        }
-    }
-    validate_data(&ontology, &owner.name, &after_data)?;
-    if !definition.creates.is_empty() {
-        if definition.creates.len() != 1 {
-            return Err(BusinessLoopError::invalid(
-                "Business Loop 每个动作只支持一个创建效应",
-            ));
-        }
-        let effect = &definition.creates[0];
-        if ontology.find(&effect.object_type).is_none() {
-            return Err(BusinessLoopError::invalid(format!(
-                "本体未定义创建对象类型 {}",
-                effect.object_type
-            )));
-        }
-        let mut object_data = serde_json::Map::new();
-        for (field, expression) in &effect.data {
-            let value = evaluate_value(expression, &subject, &before_record.data, &params_value)?;
-            object_data.insert(field.clone(), value);
-        }
-        let task_data = Value::Object(object_data);
-        validate_data(&ontology, &effect.object_type, &task_data)?;
-        let task_id = effect
-            .id
-            .clone()
-            .unwrap_or_else(|| generated_id("follow-up"));
-        create_world_object(
-            storage,
-            project_id,
-            &effect.object_type,
-            task_id.clone(),
-            task_data,
-        )
-        .await?;
-        if let Some(edge) = &effect.link_edge {
-            link_world(storage, project_id, subject.clone(), edge, task_id.clone()).await?;
-        }
-        if let Some(edge) = &effect.decision_edge {
-            link_world(
+            let task_data = Value::Object(object_data);
+            validate_data(&ontology, &effect.object_type, &task_data)?;
+            let task_id = effect
+                .id
+                .clone()
+                .unwrap_or_else(|| generated_id("follow-up"));
+            create_world_object(
                 storage,
                 project_id,
-                decision.id.clone(),
-                edge,
+                &effect.object_type,
                 task_id.clone(),
+                task_data,
             )
             .await?;
+            if let Some(edge) = &effect.link_edge {
+                link_world(storage, project_id, subject.clone(), edge, task_id.clone()).await?;
+            }
+            if let Some(edge) = &effect.decision_edge {
+                link_world(
+                    storage,
+                    project_id,
+                    decision.id.clone(),
+                    edge,
+                    task_id.clone(),
+                )
+                .await?;
+            }
+            created_object = Some((task_id, effect.object_type.clone()));
         }
-        created_object = Some((task_id, effect.object_type.clone()));
-    }
 
-    let before = serde_json::to_string(&before_record.data)
-        .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
-    let after = serde_json::to_string(&after_data)
-        .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
-    let action_outcome_id = generated_id("outcome");
-    let transition_id = generated_id("state-transition");
-    let mut action_outcome_data = json!({
-        "action": action,
-        "before": before,
-        "after": after,
-        "success": true,
-        "cost": planning.cost,
-        "metric": rule.goal_metric.clone().unwrap_or_default(),
-        "stage": OUTCOME_ACTION_EXECUTED,
-        // ponytail: Deferred 终局暂按一次计数；要精确量化需在跟进对象声明终局收益字段。
-        "goal_delta": if planning.outcome_timing == OutcomeTiming::Immediate {
-            realized_goal_delta(&definition, &before_record.data, &after_data)?
-        } else {
-            1.0
-        },
-    });
-    if shared_resource_window_days(&ontology)?.is_some() {
-        action_outcome_data["executed_at"] =
-            json!(Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true));
-    }
-    if let Some(provider_id) = &capability_provider {
-        action_outcome_data["provider"] = json!(provider_id);
-        if let Some((_, capability_name, _)) = external_capability {
-            action_outcome_data["capability"] = json!(capability_name);
-        }
-    }
-    if let Some((task_id, task_type)) = &created_object {
-        action_outcome_data["before"] = json!(format!(r#"{{"{task_type}":null}}"#));
-        action_outcome_data["after"] = json!(format!(r#"{{"{task_type}":"{task_id}"}}"#));
-    }
-    let transition_data = json!({
-        "subject": subject,
-        "before_data": before,
-        "after_data": after,
-        "at_action": action
-    });
-    validate_data(&ontology, "Outcome", &action_outcome_data)?;
-    validate_data(&ontology, "StateTransition", &transition_data)?;
-
-    // 先提交事实变更，再写闭环证据和状态推进；任一后续命令失败时审计链能定位中断点。
-    if !definition.updates.is_empty() {
-        storage
-            .apply_world(WorldCommand::UpdateObject {
-                id: subject.clone(),
-                data: after_data.clone(),
-                project_id: Some(project_id.to_string()),
-            })
-            .await?;
-    }
-
-    create_world_object(
-        storage,
-        project_id,
-        "Outcome",
-        action_outcome_id.clone(),
-        action_outcome_data.clone(),
-    )
-    .await?;
-    link_world(
-        storage,
-        project_id,
-        decision.id.clone(),
-        "produced_outcome",
-        action_outcome_id.clone(),
-    )
-    .await?;
-    let business_result = if planning.outcome_timing == OutcomeTiming::Immediate {
-        let result_id = generated_id("outcome");
-        let mut result_data = json!({
+        let before = serde_json::to_string(&before_record.data)
+            .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
+        let after = serde_json::to_string(&after_data)
+            .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
+        let action_outcome_id = generated_id("outcome");
+        let transition_id = generated_id("state-transition");
+        let mut action_outcome_data = json!({
             "action": action,
             "before": before,
             "after": after,
             "success": true,
+            "cost": planning.cost,
             "metric": rule.goal_metric.clone().unwrap_or_default(),
-            "stage": OUTCOME_BUSINESS_RESULT,
-            "goal_delta": action_outcome_data["goal_delta"],
+            "stage": OUTCOME_ACTION_EXECUTED,
+            // ponytail: Deferred 终局暂按一次计数；要精确量化需在跟进对象声明终局收益字段。
+            "goal_delta": if planning.outcome_timing == OutcomeTiming::Immediate {
+                realized_goal_delta(&definition, &before_record.data, &after_data)?
+            } else {
+                1.0
+            },
         });
+        if shared_resource_window_days(&ontology)?.is_some() {
+            action_outcome_data["executed_at"] =
+                json!(Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true));
+        }
         if let Some(provider_id) = &capability_provider {
-            result_data["provider"] = json!(provider_id);
+            action_outcome_data["provider"] = json!(provider_id);
             if let Some((_, capability_name, _)) = external_capability {
-                result_data["capability"] = json!(capability_name);
+                action_outcome_data["capability"] = json!(capability_name);
             }
         }
-        validate_data(&ontology, "Outcome", &result_data)?;
+        if let Some((task_id, task_type)) = &created_object {
+            action_outcome_data["before"] = json!(format!(r#"{{"{task_type}":null}}"#));
+            action_outcome_data["after"] = json!(format!(r#"{{"{task_type}":"{task_id}"}}"#));
+        }
+        let transition_data = json!({
+            "subject": subject,
+            "before_data": before,
+            "after_data": after,
+            "at_action": action
+        });
+        validate_data(&ontology, "Outcome", &action_outcome_data)?;
+        validate_data(&ontology, "StateTransition", &transition_data)?;
+
+        // 先提交事实变更，再写闭环证据和状态推进；任一后续命令失败时审计链能定位中断点。
+        if !definition.updates.is_empty() {
+            storage
+                .apply_world(WorldCommand::UpdateObject {
+                    id: subject.clone(),
+                    data: after_data.clone(),
+                    project_id: Some(project_id.to_string()),
+                })
+                .await?;
+        }
+
         create_world_object(
             storage,
             project_id,
             "Outcome",
-            result_id.clone(),
-            result_data.clone(),
+            action_outcome_id.clone(),
+            action_outcome_data.clone(),
         )
         .await?;
         link_world(
@@ -2918,76 +2895,101 @@ async fn execute_opportunity_locked(
             project_id,
             decision.id.clone(),
             "produced_outcome",
-            result_id.clone(),
+            action_outcome_id.clone(),
         )
         .await?;
-        Some(json!({ "id": result_id, "data": result_data }))
-    } else {
-        None
-    };
-    create_world_object(
-        storage,
-        project_id,
-        "StateTransition",
-        transition_id.clone(),
-        transition_data.clone(),
-    )
-    .await?;
-    link_world(
-        storage,
-        project_id,
-        transition_id.clone(),
-        "changed_state",
-        subject.clone(),
-    )
-    .await?;
-    for (id, status) in [
-        (decision.id.clone(), DECISION_EXECUTED),
-        (opportunity.id.clone(), OPPORTUNITY_EXECUTED),
-    ] {
-        let records = storage
-            .list_objects_for_project(
+        let business_result = if planning.outcome_timing == OutcomeTiming::Immediate {
+            let result_id = generated_id("outcome");
+            let mut result_data = json!({
+                "action": action,
+                "before": before,
+                "after": after,
+                "success": true,
+                "metric": rule.goal_metric.clone().unwrap_or_default(),
+                "stage": OUTCOME_BUSINESS_RESULT,
+                "goal_delta": action_outcome_data["goal_delta"],
+            });
+            if let Some(provider_id) = &capability_provider {
+                result_data["provider"] = json!(provider_id);
+                if let Some((_, capability_name, _)) = external_capability {
+                    result_data["capability"] = json!(capability_name);
+                }
+            }
+            validate_data(&ontology, "Outcome", &result_data)?;
+            create_world_object(
+                storage,
                 project_id,
-                if id == decision.id {
-                    "Decision"
-                } else {
-                    "Opportunity"
-                },
+                "Outcome",
+                result_id.clone(),
+                result_data.clone(),
             )
             .await?;
-        let record = find_record(
-            &records,
-            &id,
-            if id == decision.id {
-                "Decision"
-            } else {
-                "Opportunity"
-            },
+            link_world(
+                storage,
+                project_id,
+                decision.id.clone(),
+                "produced_outcome",
+                result_id.clone(),
+            )
+            .await?;
+            Some(json!({ "id": result_id, "data": result_data }))
+        } else {
+            None
+        };
+        create_world_object(
+            storage,
+            project_id,
+            "StateTransition",
+            transition_id.clone(),
+            transition_data.clone(),
         )
-        .ok_or_else(|| BusinessLoopError::NotFound(id.clone()))?;
+        .await?;
+        link_world(
+            storage,
+            project_id,
+            transition_id.clone(),
+            "changed_state",
+            subject.clone(),
+        )
+        .await?;
         storage
-            .apply_world(WorldCommand::UpdateObject {
-                id,
-                data: set_status(record.data.clone(), status),
+            .apply_world(WorldCommand::CompareSetStatus {
+                object_type: "Decision".into(),
+                id: decision.id.clone(),
                 project_id: Some(project_id.to_string()),
+                expected_status: DECISION_SELECTED.into(),
+                next_status: DECISION_EXECUTED.into(),
+            })
+            .await?;
+
+        let goals = refresh_goal_progress(storage, project_id).await?;
+
+        let mut result = json!({
+            "opportunity": { "id": opportunity.id, "data": set_status(opportunity.data, OPPORTUNITY_EXECUTED) },
+            "decision": { "id": decision.id, "data": set_status(decision.data, DECISION_EXECUTED) },
+            "actionOutcome": { "id": action_outcome_id, "data": action_outcome_data },
+            "businessResult": business_result,
+            "stateTransition": { "id": transition_id, "data": transition_data },
+            "goals": goals,
+        });
+        if let Some((task_id, task_type)) = created_object {
+            result["createdObject"] = json!({ "id": task_id, "type": task_type });
+        }
+        Ok(result)
+    }
+    .await;
+    if execution.is_err() {
+        storage
+            .apply_world(WorldCommand::CompareSetStatus {
+                object_type: "Opportunity".into(),
+                id: opportunity.id.clone(),
+                project_id: Some(project_id.to_string()),
+                expected_status: OPPORTUNITY_EXECUTED.into(),
+                next_status: OPPORTUNITY_DECIDED.into(),
             })
             .await?;
     }
-
-    let goals = refresh_goal_progress(storage, project_id).await?;
-
-    let mut result = json!({
-        "opportunity": { "id": opportunity.id, "data": set_status(opportunity.data, OPPORTUNITY_EXECUTED) },
-        "decision": { "id": decision.id, "data": set_status(decision.data, DECISION_EXECUTED) },
-        "actionOutcome": { "id": action_outcome_id, "data": action_outcome_data },
-        "businessResult": business_result,
-        "stateTransition": { "id": transition_id, "data": transition_data },
-        "goals": goals,
-    });
-    if let Some((task_id, task_type)) = created_object {
-        result["createdObject"] = json!({ "id": task_id, "type": task_type });
-    }
-    Ok(result)
+    execution
 }
 
 /// Deferred 创建效应的运行时元数据；终局证据必须沿这些声明边回链。
