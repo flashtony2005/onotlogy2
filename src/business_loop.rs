@@ -1884,6 +1884,13 @@ pub async fn plan_opportunity_paths(
             if let Some(stats) = path_learning.get(&path_key)
                 && stats.runs > 0
             {
+                if let Some(final_action) = path
+                    .actions
+                    .last()
+                    .and_then(|name| find_action(&actions, name))
+                {
+                    path.benefit = learned_path_benefit(final_action, stats, path.benefit);
+                }
                 path.confidence *= (stats.successes + 1) as f64 / (stats.runs + 2) as f64;
             }
             path.net_value = path.benefit * path.confidence - path.cost;
@@ -1925,10 +1932,11 @@ pub async fn plan_opportunity_paths(
         for path in scored.into_iter().take(5) {
             let path_key = (owner.name.to_owned(), path.actions.clone());
             let path_stats = path_learning.get(&path_key);
-            let evidence = path_stats.map_or_else(
-                || "无路径样本".to_owned(),
-                |stats| format!("路径样本{}成功{}", stats.runs, stats.successes),
-            );
+            let final_action = path
+                .actions
+                .last()
+                .and_then(|name| find_action(&actions, name));
+            let evidence = path_evidence(final_action, path_stats);
             let resources = path
                 .actions
                 .iter()
@@ -2370,6 +2378,50 @@ fn learned_expected_benefit(
     } else {
         static_benefit
     }
+}
+
+/// 完整路径只在终局收益单位一致时学习实际均值：
+/// Immediate 沿主体字段折算，Deferred 沿创建效应声明的终局收益折算。
+fn path_payoff_average(final_action: &ActionDef, stats: &ActionOutcomeStats) -> Option<f64> {
+    let planning = final_action.planning.as_ref()?;
+    let quantified = match planning.outcome_timing {
+        OutcomeTiming::Immediate => {
+            planning.benefit_field.is_some() && planning.benefit_factor.is_some()
+        }
+        OutcomeTiming::Deferred => final_action.creates.first().is_some_and(|created| {
+            created.result_benefit_field.is_some() && created.result_benefit_factor.is_some()
+        }),
+    };
+    if !quantified || stats.runs == 0 {
+        return None;
+    }
+    if stats.successes > 0 {
+        Some(stats.realized_goal_delta / stats.successes as f64)
+    } else {
+        Some(0.0)
+    }
+}
+
+fn learned_path_benefit(
+    final_action: &ActionDef,
+    stats: &ActionOutcomeStats,
+    static_benefit: f64,
+) -> f64 {
+    path_payoff_average(final_action, stats).unwrap_or(static_benefit)
+}
+
+fn path_evidence(final_action: Option<&ActionDef>, stats: Option<&ActionOutcomeStats>) -> String {
+    let Some(stats) = stats else {
+        return "无路径样本".to_owned();
+    };
+    if stats.runs == 0 {
+        return "无路径样本".to_owned();
+    }
+    let payoff = final_action
+        .and_then(|action| path_payoff_average(action, stats))
+        .map(|average| format!("；收益均值{average:.0}"))
+        .unwrap_or_default();
+    format!("路径样本{}成功{}{payoff}", stats.runs, stats.successes)
 }
 
 fn evaluate_candidates(
@@ -4236,6 +4288,70 @@ mod tests {
         assert_eq!(
             learned_expected_benefit(&definition, "WinBack", &learning, 10_000.0),
             10_000.0
+        );
+    }
+
+    #[test]
+    fn path_payoff_uses_terminal_declared_units() {
+        let success_stats = ActionOutcomeStats {
+            runs: 2,
+            successes: 1,
+            realized_goal_delta: 500.0,
+        };
+        let failed_stats = ActionOutcomeStats {
+            runs: 1,
+            successes: 0,
+            ..Default::default()
+        };
+
+        let mut immediate = action("Touch");
+        if let Some(planning) = immediate.planning.as_mut() {
+            planning.benefit_field = Some("lifetime_value".into());
+            planning.benefit_factor = Some(0.5);
+        }
+        assert_eq!(
+            learned_path_benefit(&immediate, &success_stats, 10_000.0),
+            500.0
+        );
+
+        let mut deferred = action("Touch");
+        if let Some(planning) = deferred.planning.as_mut() {
+            planning.outcome_timing = OutcomeTiming::Deferred;
+            planning.benefit_field = None;
+            planning.benefit_factor = None;
+        }
+        deferred.creates = vec![CreateEffect {
+            object_type: "FollowUp".into(),
+            id: None,
+            data: Vec::new(),
+            link_edge: None,
+            subject_field: None,
+            decision_edge: None,
+            result_benefit_field: Some("recovered_amount".into()),
+            result_benefit_factor: Some(0.5),
+        }];
+        assert_eq!(
+            learned_path_benefit(&deferred, &success_stats, 10_000.0),
+            500.0
+        );
+
+        let mut unquantified = action("Touch");
+        if let Some(planning) = unquantified.planning.as_mut() {
+            planning.benefit_field = None;
+            planning.benefit_factor = None;
+        }
+        assert_eq!(
+            learned_path_benefit(&unquantified, &success_stats, 10_000.0),
+            10_000.0,
+            "计数型 goal_delta 不能冒充货币收益"
+        );
+        assert_eq!(
+            learned_path_benefit(&immediate, &failed_stats, 10_000.0),
+            0.0
+        );
+        assert_eq!(
+            path_evidence(Some(&immediate), Some(&success_stats)),
+            "路径样本2成功1；收益均值500"
         );
     }
 
