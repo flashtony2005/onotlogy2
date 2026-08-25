@@ -619,6 +619,8 @@ export interface BusinessPathDto {
   projectedNetValue: number
   resources?: Record<string, number>
   goalMetric?: string
+  outcomeRuns: number
+  outcomeSuccesses: number
   confidence: number
   score: number
   reason: string

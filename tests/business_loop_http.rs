@@ -1625,6 +1625,7 @@ relation changed_state:
         .await
         .expect("应能规划合同动作路径");
     assert!(paths.len() > 1);
+    let unlearned_path_confidence = paths[0].confidence;
     assert!(paths.iter().any(|path| path.actions == vec!["QuickClose"]));
     assert_eq!(paths[0].actions, vec!["DraftTerms", "RenewContract"]);
     assert!((paths[0].projected_net_value - 6180.0).abs() < 1e-9);
@@ -1698,6 +1699,53 @@ relation changed_state:
         .expect("合同应存在");
     assert_eq!(contract.data["status"], json!("Active"));
     assert_eq!(execution["goals"][0]["currentValue"], json!(1.0));
+
+    // 完整 DraftTerms → RenewContract 序列形成路径证据，而不是只记住最后一步。
+    let mut goal = storage
+        .get("business-goal:contract-loop")
+        .await
+        .expect("应能查询经营目标")
+        .expect("经营目标应存在");
+    goal.data["target_value"] = json!(2.0);
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::UpdateObject {
+            id: goal.id,
+            data: goal.data,
+            project_id: Some("contract-loop".into()),
+        })
+        .await
+        .expect("应能扩大目标容量");
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+            object_type: "Contract".into(),
+            id: "contract:northwind".into(),
+            data: json!({
+                "title": "NORTHWIND 年度合同",
+                "status": "Expiring",
+                "days_to_expiry": 18
+            }),
+            project_id: Some("contract-loop".into()),
+        })
+        .await
+        .expect("应能写入第二份合同");
+    discover_opportunities(&storage, "contract-loop")
+        .await
+        .expect("应发现第二个合同机会");
+    let learned_paths = plan_opportunity_paths(&storage, "contract-loop")
+        .await
+        .expect("应能用完整路径证据重规划");
+    let learned_path = learned_paths
+        .iter()
+        .find(|path| path.actions == vec!["DraftTerms", "RenewContract"])
+        .expect("成功路径应继续出现在规划中");
+    assert_eq!(learned_path.outcome_runs, 1);
+    assert_eq!(learned_path.outcome_successes, 1);
+    assert!(learned_path.confidence < unlearned_path_confidence);
+    assert!(
+        learned_path.reason.contains("路径样本1成功1"),
+        "路径规划必须暴露完整序列证据：{}",
+        learned_path.reason
+    );
 
     let budgeted = ontology.replace("cost: 4000", "cost: 6000").replace(
         "goal_metric: contract_renewals\n      evidence:",

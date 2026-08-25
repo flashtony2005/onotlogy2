@@ -185,6 +185,10 @@ pub struct OpportunityPath {
         skip_serializing_if = "Option::is_none"
     )]
     pub goal_metric: Option<String>,
+    #[serde(rename = "outcomeRuns")]
+    pub outcome_runs: u64,
+    #[serde(rename = "outcomeSuccesses")]
+    pub outcome_successes: u64,
     pub confidence: f64,
     pub score: f64,
     pub reason: String,
@@ -1017,6 +1021,8 @@ struct ActionOutcomeStats {
 
 type ActionLearning = HashMap<(String, String), ActionOutcomeStats>;
 
+type PathLearning = HashMap<Vec<String>, ActionOutcomeStats>;
+
 /// 只信任 Decision 链回连到 Opportunity 的 BusinessResult；孤立 Outcome 不参与学习。
 async fn learned_action_stats(
     storage: &LibSQLStorage,
@@ -1099,6 +1105,126 @@ pub async fn list_learning_insights(
     Ok(items)
 }
 
+/// Outcome 的执行顺序来自单调 Trace ID，避免依赖数据库返回顺序。
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct OutcomeOrder {
+    timestamp: u128,
+    sequence: u64,
+    id: String,
+}
+
+#[derive(Debug)]
+struct OrderedOutcome {
+    order: OutcomeOrder,
+    subject: String,
+    action: String,
+    is_business_result: bool,
+    success: bool,
+    realized_goal_delta: f64,
+}
+
+fn outcome_order(id: &str) -> OutcomeOrder {
+    let trace = id.rsplit("tr_").next().unwrap_or("");
+    let mut parts = trace.split('_');
+    OutcomeOrder {
+        timestamp: parts
+            .next()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0),
+        sequence: parts
+            .next()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0),
+        id: id.to_owned(),
+    }
+}
+
+/// 按 subject 把 ActionExecuted 流重放成路径，直到 BusinessResult 终局并聚合完整序列。
+async fn learned_path_stats(
+    storage: &LibSQLStorage,
+    project_id: &str,
+) -> Result<PathLearning, BusinessLoopError> {
+    let outcomes = storage
+        .list_objects_for_project(project_id, "Outcome")
+        .await?;
+    let decisions = storage
+        .list_objects_for_project(project_id, "Decision")
+        .await?;
+    let opportunities = storage
+        .list_objects_for_project(project_id, "Opportunity")
+        .await?;
+    let relations = storage.list_all_relations().await?;
+    let mut ordered = Vec::new();
+
+    for outcome in outcomes {
+        let stage = text(&outcome.data, "stage")?;
+        let action = text(&outcome.data, "action")?.to_owned();
+        let (is_business_result, success, realized_goal_delta) = if stage == OUTCOME_ACTION_EXECUTED
+        {
+            (false, true, 0.0)
+        } else if stage == OUTCOME_BUSINESS_RESULT {
+            (
+                true,
+                outcome
+                    .data
+                    .get("success")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                number(&outcome.data, "goal_delta")?,
+            )
+        } else {
+            continue;
+        };
+        let Some(decision_id) = relations
+            .iter()
+            .find(|relation| {
+                relation.relation == "produced_outcome" && relation.target == outcome.id
+            })
+            .map(|relation| relation.source.as_str())
+        else {
+            continue;
+        };
+        let Some(decision) = find_record(&decisions, decision_id, "Decision") else {
+            continue;
+        };
+        let opportunity_id = text(&decision.data, "opportunity")?;
+        let Some(opportunity) = find_record(&opportunities, opportunity_id, "Opportunity") else {
+            continue;
+        };
+        ordered.push(OrderedOutcome {
+            order: outcome_order(&outcome.id),
+            subject: text(&opportunity.data, "subject")?.to_owned(),
+            action,
+            is_business_result,
+            success,
+            realized_goal_delta,
+        });
+    }
+    ordered.sort_unstable_by(|left, right| left.order.cmp(&right.order));
+
+    let mut current = HashMap::<String, Vec<String>>::new();
+    let mut learned = PathLearning::new();
+    for event in ordered {
+        if !event.is_business_result {
+            current.entry(event.subject).or_default().push(event.action);
+            continue;
+        }
+        let mut actions = current.remove(&event.subject).unwrap_or_default();
+        if actions.last() != Some(&event.action) {
+            actions.push(event.action);
+        }
+        if actions.is_empty() {
+            continue;
+        }
+        let entry = learned.entry(actions).or_default();
+        entry.runs += 1;
+        if event.success {
+            entry.successes += 1;
+        }
+        entry.realized_goal_delta += event.realized_goal_delta;
+    }
+    Ok(learned)
+}
 /// 只屏蔽同一机会上刚失败的候选；其他机会仍可基于自身上下文选择同一动作。
 /// ponytail: 用图谱证据做机会级探索约束，跨机会策略退避等真实负载证明需要后再升级。
 async fn failed_opportunity_actions(
@@ -1650,6 +1776,7 @@ pub async fn plan_opportunity_paths(
         .list_objects_for_project(project_id, "Opportunity")
         .await?;
     let learning = learned_action_stats(storage, project_id).await?;
+    let path_learning = learned_path_stats(storage, project_id).await?;
     let failed_actions = failed_opportunity_actions(storage, project_id).await?;
 
     let mut plans = Vec::new();
@@ -1694,6 +1821,25 @@ pub async fn plan_opportunity_paths(
             Some(&path_budget),
             0,
         )?;
+        // 完整序列证据用平滑成功率校准规划；单次失败不会把路径置信度压到零。
+        for path in &mut scored {
+            if let Some(stats) = path_learning.get(&path.actions)
+                && stats.runs > 0
+            {
+                path.confidence *= (stats.successes + 1) as f64 / (stats.runs + 2) as f64;
+            }
+            path.net_value = path.benefit * path.confidence - path.cost;
+            let alignment = match path.actions.first() {
+                Some(action) => goal_alignment(
+                    &actions,
+                    action,
+                    active_goal_gap(&goals, &actions, &ontology, opportunity_type, action)?
+                        .map_or(0.0, |(_, gap)| gap),
+                ),
+                None => 0.0,
+            };
+            path.score = path.net_value.max(0.0) * (0.6 + 0.4 * urgency) * alignment;
+        }
         scored.retain(|path| path.net_value > 0.0);
         // 同一机会已有替代首步时，不重复从失败动作开始；无替代时仍允许有界重试。
         let viable_first_actions = scored
@@ -1719,6 +1865,11 @@ pub async fn plan_opportunity_paths(
                 .then_with(|| left.actions.cmp(&right.actions))
         });
         for path in scored.into_iter().take(5) {
+            let path_stats = path_learning.get(&path.actions);
+            let evidence = path_stats.map_or_else(
+                || "无路径样本".to_owned(),
+                |stats| format!("路径样本{}成功{}", stats.runs, stats.successes),
+            );
             let resources = path
                 .actions
                 .iter()
@@ -1735,7 +1886,7 @@ pub async fn plan_opportunity_paths(
                     total
                 });
             let reason = format!(
-                "{}；净值 {:.0}；置信度 {:.2}",
+                "{}；净值 {:.0}；置信度 {:.2}；{evidence}",
                 path.actions.join(" → "),
                 path.net_value,
                 path.confidence
@@ -1751,6 +1902,8 @@ pub async fn plan_opportunity_paths(
                 projected_net_value: path.net_value,
                 resources,
                 goal_metric: rule.goal_metric.clone(),
+                outcome_runs: path_stats.map_or(0, |stats| stats.runs),
+                outcome_successes: path_stats.map_or(0, |stats| stats.successes),
                 confidence: path.confidence,
                 score: path.score,
                 reason,
@@ -3690,6 +3843,8 @@ mod tests {
             projected_net_value: 900.0,
             resources: BTreeMap::from([("labor".into(), 6.0)]),
             goal_metric: Some("revenue".into()),
+            outcome_runs: 0,
+            outcome_successes: 0,
             confidence: 0.9,
             score,
             reason: "test".into(),
@@ -3726,6 +3881,8 @@ mod tests {
             } else {
                 None
             },
+            outcome_runs: 0,
+            outcome_successes: 0,
             confidence: 1.0,
             score,
             reason: "test".into(),
@@ -3765,6 +3922,8 @@ mod tests {
             projected_net_value: 900.0,
             resources: BTreeMap::new(),
             goal_metric: Some("revenue".into()),
+            outcome_runs: 0,
+            outcome_successes: 0,
             confidence: 1.0,
             score,
             reason: "test".into(),
@@ -3804,6 +3963,8 @@ mod tests {
             } else {
                 None
             },
+            outcome_runs: 0,
+            outcome_successes: 0,
             confidence: 1.0,
             score,
             reason: "test".into(),

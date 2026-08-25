@@ -414,6 +414,8 @@ export function BusinessPanel({
                 <div className="knowledge-meta">
                   <span>成本 {number(path.projectedCost)}</span>
                   <span>置信 {(path.confidence * 100).toFixed(0)}%</span>
+                  <span>路径样本 {path.outcomeRuns}</span>
+                  <span>成功 {path.outcomeSuccesses}</span>
                   {path.goalMetric && <span>目标 {path.goalMetric}</span>}
                   {path.requiresHuman && <span>需要人工</span>}
                   {path.requiresApproval && <span>需要审批</span>}
