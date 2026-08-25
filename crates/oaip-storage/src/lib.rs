@@ -9,6 +9,7 @@
 pub mod automation;
 pub mod evaluation;
 pub mod events;
+pub mod leases;
 pub mod objects;
 pub use ontology::{OntologyEvolutionRecord, OntologyEvolutionStatus, OntologyVersionRecord};
 pub mod ontology;
@@ -21,6 +22,7 @@ pub mod worker_registry;
 pub mod worker_stats;
 pub mod world;
 pub use automation::AutomationJob;
+pub use leases::ExecutionLeaseRecord;
 
 mod backup;
 mod schema;

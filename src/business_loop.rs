@@ -11,6 +11,7 @@ use crate::abi::{DataValidationError, parse_odl, validate_object_data, value_mat
 use crate::knowledge::{Reasoner, runtime_ir_to_knowledge, validate_data_consistency};
 use crate::knowledge_bridge::world_snapshot_to_knowledge;
 use crate::plugin::catalog::{CatalogError, PluginCatalog};
+use crate::storage::leases::{LEASE_COMPLETED, LEASE_RELEASED};
 use crate::storage::{LibSQLStorage, ProjectRecord, StorageError, WorldCommand};
 use crate::worker::policy::WorkerPolicy;
 use crate::worker::router::{RouterCriteria, WorkerRouter};
@@ -42,11 +43,30 @@ const TASK_IN_PROGRESS: &str = "InProgress";
 const TASK_SETTLED_SUCCESS: &str = "Completed";
 const TASK_SETTLED_FAILURE: &str = "Failed";
 const PATH_MAX_STEPS: usize = 3;
+const EXECUTION_LEASE_TTL_SECS: i64 = 600;
 
 /// 同进程业务写入闸门：决策/执行必须串行读取并扣减共享预算。
 /// ponytail: 进程内闸门，多实例部署时升级为数据库事务化资源预留。
 static BUSINESS_LOOP_WRITE_GATE: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// 执行抢占失败或中断后，把机会恢复到可显式重试状态。
+async fn revert_executed_opportunity(
+    storage: &LibSQLStorage,
+    project_id: &str,
+    opportunity_id: &str,
+) -> Result<(), BusinessLoopError> {
+    storage
+        .apply_world(WorldCommand::CompareSetStatus {
+            object_type: "Opportunity".into(),
+            id: opportunity_id.to_string(),
+            project_id: Some(project_id.to_string()),
+            expected_status: OPPORTUNITY_EXECUTED.into(),
+            next_status: OPPORTUNITY_DECIDED.into(),
+        })
+        .await?;
+    Ok(())
+}
 
 #[derive(Debug, Error)]
 pub enum BusinessLoopError {
@@ -2648,6 +2668,23 @@ async fn execute_opportunity_locked(
             next_status: OPPORTUNITY_EXECUTED.into(),
         })
         .await?;
+    let lease_id = generated_id("execution-lease");
+    let lease_owner = text(&decision.data, "decided_by")?.to_string();
+    let lease_expires_at = (Utc::now() + chrono::Duration::seconds(EXECUTION_LEASE_TTL_SECS))
+        .to_rfc3339_opts(SecondsFormat::Micros, true);
+    if let Err(error) = storage
+        .claim_execution_lease(
+            &lease_id,
+            project_id,
+            &opportunity.id,
+            &lease_owner,
+            &lease_expires_at,
+        )
+        .await
+    {
+        revert_executed_opportunity(storage, project_id, &opportunity.id).await?;
+        return Err(error.into());
+    }
     let execution = async {
         // 预算校验通过后立即原子入账；后续外部能力或状态写入失败也不释放已耗资源。
         if !shared_resource_limits(&ontology).is_empty() && !planning.resources.is_empty() {
@@ -2978,16 +3015,17 @@ async fn execute_opportunity_locked(
         Ok(result)
     }
     .await;
+    let terminal_status = if execution.is_ok() {
+        LEASE_COMPLETED
+    } else {
+        LEASE_RELEASED
+    };
+    // ponytail: 终态写入失败不改变执行结果；TTL 过期是保守兜底，长任务需续租。
+    let _ = storage
+        .finish_execution_lease(&lease_id, terminal_status)
+        .await;
     if execution.is_err() {
-        storage
-            .apply_world(WorldCommand::CompareSetStatus {
-                object_type: "Opportunity".into(),
-                id: opportunity.id.clone(),
-                project_id: Some(project_id.to_string()),
-                expected_status: OPPORTUNITY_EXECUTED.into(),
-                next_status: OPPORTUNITY_DECIDED.into(),
-            })
-            .await?;
+        revert_executed_opportunity(storage, project_id, &opportunity.id).await?;
     }
     execution
 }
@@ -3272,6 +3310,10 @@ async fn run_next_best_action_locked(
     project_id: &str,
     decided_by: &str,
 ) -> Result<BusinessLoopRun, BusinessLoopError> {
+    // 过期只标记租约；机会保持 Executed，外部副作用未知时人工对账更安全。
+    storage
+        .expire_execution_leases(&Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true))
+        .await?;
     discover_opportunities(storage, project_id).await?;
     let goals = refresh_goal_progress(storage, project_id).await?;
     let recommendations = recommend_next_actions(storage, project_id).await?;

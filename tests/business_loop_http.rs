@@ -2034,6 +2034,89 @@ async fn concurrent_executions_claim_one_opportunity_across_instances() {
 }
 
 #[tokio::test]
+async fn expired_execution_lease_does_not_repeat_interrupted_action() {
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let ontology = std::fs::read_to_string("domain-packs/crm-retention/ontology.odl")
+        .expect("业务包 ODL 应存在");
+    seed_odl_project(
+        &storage,
+        "crash-recovery",
+        &ontology,
+        "monthly_reactivations",
+    )
+    .await;
+    let discovered = discover_opportunities(&storage, "crash-recovery")
+        .await
+        .expect("应发现机会");
+    let opportunity_id = discovered[0]["id"].as_str().expect("机会必须有 ID");
+    decide_opportunity(
+        &storage,
+        "crash-recovery",
+        opportunity_id,
+        "contract-test",
+        DecisionOptions {
+            action: Some("ContactCustomer"),
+            reason: None,
+            alternatives: None,
+            params: None,
+        },
+    )
+    .await
+    .expect("应能决策机会");
+
+    // 模拟实例在状态抢占后、副作用完成前崩溃。
+    storage
+        .claim_execution_lease(
+            "interrupted-lease",
+            "crash-recovery",
+            opportunity_id,
+            "lost-worker",
+            "2020-01-01T00:00:00Z",
+        )
+        .await
+        .expect("过期租约应能写入");
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CompareSetStatus {
+            object_type: "Opportunity".into(),
+            id: opportunity_id.into(),
+            project_id: Some("crash-recovery".into()),
+            expected_status: "Decided".into(),
+            next_status: "Executed".into(),
+        })
+        .await
+        .expect("中断机会应保持已执行状态");
+
+    let run = run_next_best_action(
+        &storage,
+        &PluginCatalog::new(),
+        &WorkerRegistry::new(),
+        "crash-recovery",
+        "contract-test",
+    )
+    .await
+    .expect("过期租约后应安全空闲");
+    assert!(!run.executed, "未知副作用的过期执行不能自动重试");
+
+    let opportunities = storage
+        .list_objects_for_project("crash-recovery", "Opportunity")
+        .await
+        .expect("机会应可读取");
+    let outcomes = storage
+        .list_objects_for_project("crash-recovery", "Outcome")
+        .await
+        .expect("结果应可读取");
+    assert_eq!(opportunities[0].data["status"], json!("Executed"));
+    assert!(outcomes.is_empty(), "恢复扫描不得重复产生执行证据");
+    let expired = storage
+        .expire_execution_leases("2099-01-01T00:00:00Z")
+        .await
+        .expect("恢复扫描应可查询");
+    assert!(expired.is_empty(), "run-next 应已把中断租约标记为 Expired");
+}
+
+#[tokio::test]
 async fn autonomous_run_gates_actions_by_declared_actor() {
     let storage = LibSQLStorage::open(":memory:")
         .await

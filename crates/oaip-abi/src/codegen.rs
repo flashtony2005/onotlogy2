@@ -385,6 +385,22 @@ CREATE TABLE IF NOT EXISTS wb_shared_resource_usage (
 CREATE INDEX IF NOT EXISTS idx_shared_resource_window
   ON wb_shared_resource_usage (resource_name, executed_at);
 
+-- 业务执行租约：崩溃后区分“仍在执行”与“可恢复中断”，避免盲目重复外部副作用。
+CREATE TABLE IF NOT EXISTS wb_business_execution_lease (
+  id             TEXT PRIMARY KEY,
+  project_id     TEXT NOT NULL,
+  opportunity_id TEXT NOT NULL,
+  owner          TEXT NOT NULL,
+  status         TEXT NOT NULL,
+  expires_at     TEXT NOT NULL,
+  created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_business_lease_active
+  ON wb_business_execution_lease (opportunity_id, status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_business_lease_expiry
+  ON wb_business_execution_lease (status, expires_at);
+
 "#
     .to_string()
 }
