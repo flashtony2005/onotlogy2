@@ -1006,6 +1006,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         benefit_field: None,
                         benefit_factor: None,
                         plugin: None,
+                        worker: None,
                         capability: None,
                     });
                     match k {
@@ -1069,6 +1070,12 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                                 return Err(invalid("plugin 不能为空".to_string()));
                             }
                             planning.plugin = Some(v.to_string());
+                        }
+                        "worker" => {
+                            if v.trim().is_empty() {
+                                return Err(invalid("worker 不能为空".to_string()));
+                            }
+                            planning.worker = Some(v.to_string());
                         }
                         "capability" => {
                             if v.trim().is_empty() {
@@ -1784,11 +1791,13 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     for object in &ir.object_types {
         for action in &object.actions {
             if let Some(planning) = &action.planning
-                && planning.plugin.is_some() != planning.capability.is_some()
+                && ((planning.plugin.is_some() || planning.worker.is_some())
+                    != planning.capability.is_some()
+                    || (planning.plugin.is_some() && planning.worker.is_some()))
             {
                 return Err(OdlError::new(
                     E_INVALID_PROPERTY_CONSTRAINT,
-                    "action planning 的 plugin 与 capability 必须成对声明",
+                    "capability 必须且只能与 plugin 或 worker 成对声明",
                     1,
                     1,
                 ));

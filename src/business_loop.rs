@@ -12,6 +12,7 @@ use crate::knowledge::{Reasoner, runtime_ir_to_knowledge, validate_data_consiste
 use crate::knowledge_bridge::world_snapshot_to_knowledge;
 use crate::plugin::catalog::{CatalogError, PluginCatalog};
 use crate::storage::{LibSQLStorage, ProjectRecord, StorageError, WorldCommand};
+use crate::worker_core::registry::WorkerRegistry;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -115,6 +116,9 @@ pub struct ActionCandidate {
     /// 声明的外部能力宿主；本地动作缺省不展示。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin: Option<String>,
+    /// 声明的 Worker 执行者；本地动作缺省不展示。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<String>,
     /// 声明的外部能力；与 `plugin` 成对出现。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capability: Option<String>,
@@ -1554,6 +1558,7 @@ fn evaluate_candidates(
                 net_value: benefit * confidence - cost,
                 resources: planning.resources.clone(),
                 plugin: planning.plugin.clone(),
+                worker: planning.worker.clone(),
                 capability: planning.capability.clone(),
             })
         })
@@ -1920,6 +1925,7 @@ fn apply_capability_output(
 pub async fn execute_opportunity(
     storage: &LibSQLStorage,
     plugins: &PluginCatalog,
+    workers: &WorkerRegistry,
     project_id: &str,
     opportunity_id: &str,
 ) -> Result<Value, BusinessLoopError> {
@@ -1997,12 +2003,16 @@ pub async fn execute_opportunity(
             "业务动作 {action} 当前不可用"
         )));
     }
-    let capability = definition.planning.as_ref().and_then(|planning| {
-        let plugin = planning.plugin.as_deref()?;
+    let external_capability = definition.planning.as_ref().and_then(|planning| {
+        let provider = planning.worker.as_deref().or(planning.plugin.as_deref())?;
         let capability = planning.capability.as_deref()?;
-        Some((plugin, capability))
+        Some((provider, capability, planning.worker.is_some()))
     });
-    let capability_output = if let Some((plugin_id, capability_name)) = capability {
+    let capability =
+        external_capability.map(|(provider, capability_name, _)| (provider, capability_name));
+    let capability_output = if let Some((provider_id, capability_name, use_worker)) =
+        external_capability
+    {
         let has_evidence_fields = ontology.find("Outcome").is_some_and(|outcome| {
             ["provider", "capability"].iter().all(|field| {
                 outcome
@@ -2016,20 +2026,36 @@ pub async fn execute_opportunity(
                 "外部能力动作的 Outcome 必须声明 provider 和 capability",
             ));
         }
-        Some(
-            plugins
-                .invoke(
-                    plugin_id,
-                    capability_name,
-                    json!({
-                        "subject": subject,
-                        "objectType": owner.name,
-                        "before": before_record.data,
-                        "params": params_value,
-                    }),
-                )
-                .await?,
-        )
+        let input = json!({
+            "subject": subject,
+            "objectType": owner.name,
+            "before": before_record.data,
+            "params": params_value,
+        });
+        if use_worker {
+            let worker = workers.get(provider_id).ok_or_else(|| {
+                BusinessLoopError::invalid(format!("Worker {provider_id} 未注册"))
+            })?;
+            if !worker.health().await {
+                return Err(BusinessLoopError::invalid(format!(
+                    "Worker {provider_id} 不可用"
+                )));
+            }
+            let result = worker
+                .execute(capability_name, input)
+                .await
+                .map_err(|error| {
+                    BusinessLoopError::invalid(format!("Worker {provider_id} 执行失败：{error}"))
+                })?;
+            if !result.ok {
+                return Err(BusinessLoopError::invalid(format!(
+                    "Worker {provider_id} 执行失败"
+                )));
+            }
+            Some(result.output)
+        } else {
+            Some(plugins.invoke(provider_id, capability_name, input).await?)
+        }
     } else {
         None
     };
@@ -2461,6 +2487,7 @@ pub async fn settle_follow_up(
 pub async fn run_next_best_action(
     storage: &LibSQLStorage,
     plugins: &PluginCatalog,
+    workers: &WorkerRegistry,
     project_id: &str,
     decided_by: &str,
 ) -> Result<BusinessLoopRun, BusinessLoopError> {
@@ -2535,8 +2562,14 @@ pub async fn run_next_best_action(
         },
     )
     .await?;
-    let execution =
-        execute_opportunity(storage, plugins, project_id, &recommendation.opportunity_id).await?;
+    let execution = execute_opportunity(
+        storage,
+        plugins,
+        workers,
+        project_id,
+        &recommendation.opportunity_id,
+    )
+    .await?;
     let goals = refresh_goal_progress(storage, project_id).await?;
 
     Ok(BusinessLoopRun {

@@ -21,7 +21,7 @@ use crate::worker_core::registry::WorkerRegistry;
 pub struct V2State {
     pub skills: RwLock<SkillRegistry>,
     pub plugins: RwLock<PluginRegistry>,
-    pub workers: RwLock<WorkerRegistry>,
+    pub workers: tokio::sync::RwLock<WorkerRegistry>,
     pub sessions: Mutex<HashMap<String, SessionLog>>,
 }
 
@@ -290,11 +290,7 @@ pub struct WorkerDto {
 pub async fn list_workers(
     State(state): State<Arc<crate::server::AppState>>,
 ) -> Json<Vec<WorkerDto>> {
-    let reg = state
-        .v2
-        .workers
-        .read()
-        .expect("V2 状态 RwLock 不中毒（读）");
+    let reg = state.v2.workers.read().await;
     let mut out: Vec<WorkerDto> = reg
         .all()
         .into_iter()

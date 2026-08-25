@@ -183,9 +183,11 @@ pub(crate) async fn run_next(
     if let Some(response) = write_denied(&user) {
         return response;
     }
+    let workers = st.v2.workers.read().await;
     match run_next_best_action(
         &st.storage,
         &st.plugin_catalog,
+        &workers,
         &body.project_id,
         &user.username,
     )
@@ -253,7 +255,9 @@ pub(crate) async fn execute(
         Err(error) => return error_response(error.into()),
     };
     for project_id in project_ids {
-        match execute_opportunity(&st.storage, &st.plugin_catalog, &project_id, &id).await {
+        let workers = st.v2.workers.read().await;
+        match execute_opportunity(&st.storage, &st.plugin_catalog, &workers, &project_id, &id).await
+        {
             Ok(result) => return ApiResponse::ok(result).into_response(),
             Err(BusinessLoopError::NotFound(_)) => continue,
             Err(error) => return error_response(error),

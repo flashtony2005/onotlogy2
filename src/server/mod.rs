@@ -685,7 +685,7 @@ pub async fn serve_with_facade(
     recover(&state).await;
     recover_fabric_pending(&state).await;
     // V10.1：预置 Worker（echo / git / codex / claude 壳）。
-    bootstrap_v2_workers(&state);
+    bootstrap_v2_workers(&state).await;
     state
         .automation
         .start()
@@ -777,12 +777,12 @@ fn build_facade(
     )
 }
 
-fn bootstrap_v2_workers(state: &Arc<AppState>) {
+async fn bootstrap_v2_workers(state: &Arc<AppState>) {
     use crate::worker::adapters::{claude_worker, codex_worker};
     use crate::worker::process::ProcessWorker;
     use crate::worker_core::manifest::{ExecutionProtocol, WorkerManifest};
 
-    let mut reg = state.v2.workers.write().unwrap();
+    let mut reg = state.v2.workers.write().await;
     // echo CLI（text.echo）
     let mut echo_m = WorkerManifest::new("echo", "cli").with_capabilities(&["text.echo"]);
     echo_m.execution = ExecutionProtocol::Process;

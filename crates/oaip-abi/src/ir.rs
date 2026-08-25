@@ -306,9 +306,12 @@ pub struct ActionPlanning {
     /// 除货币成本外的资源消耗；键是本体声明的预算维度。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub resources: BTreeMap<String, f64>,
-    /// 外部能力宿主插件；与 `capability` 成对声明。
+    /// 外部能力宿主插件；与 `capability` 成对声明，且不能同时声明 `worker`。
     #[serde(default)]
     pub plugin: Option<String>,
+    /// WorkerRegistry 中的外部执行者；与 `capability` 成对声明。
+    #[serde(default)]
+    pub worker: Option<String>,
     /// 行动执行时调用的外部能力；与 `plugin` 成对声明。
     #[serde(default)]
     pub capability: Option<String>,
