@@ -1451,9 +1451,161 @@ pub async fn plan_opportunity_paths(
     Ok(plans)
 }
 
+/// 小规模组合先精确求优；超过上限退回贪心，避免候选数量放大成指数扫描。
+// ponytail: 精确搜索只保证前 8 个机会；更大规模等真实负载证明需要后再分治/ILP。
+const EXACT_PORTFOLIO_LIMIT: usize = 8;
+
 /// 有界组合选择：同主体互斥，并预留跨机会共享资源与指标预算。
-// ponytail: 贪心保留最高分路径；需要精确组合优化时再换分支定界。
 fn select_business_portfolio(
+    paths: Vec<OpportunityPath>,
+    metric_limits: &BTreeMap<String, f64>,
+    resource_limits: &BTreeMap<String, f64>,
+) -> Vec<OpportunityPath> {
+    let mut opportunities = std::collections::BTreeMap::<String, Vec<usize>>::new();
+    for (index, path) in paths
+        .iter()
+        .enumerate()
+        .filter(|(_, path)| path.projected_net_value > 0.0)
+    {
+        opportunities
+            .entry(path.opportunity_id.clone())
+            .or_default()
+            .push(index);
+    }
+    if opportunities.len() <= EXACT_PORTFOLIO_LIMIT {
+        let groups = opportunities.into_values().collect::<Vec<_>>();
+        let selected_indices =
+            exact_portfolio_search(&paths, &groups, metric_limits, resource_limits);
+        let mut selected = selected_indices
+            .into_iter()
+            .map(|index| paths[index].clone())
+            .collect::<Vec<_>>();
+        selected.sort_by(compare_paths);
+        return selected;
+    }
+    select_portfolio_greedy(paths, metric_limits, resource_limits)
+}
+
+fn compare_paths(left: &OpportunityPath, right: &OpportunityPath) -> std::cmp::Ordering {
+    right
+        .score
+        .total_cmp(&left.score)
+        .then_with(|| left.opportunity_id.cmp(&right.opportunity_id))
+        .then_with(|| left.actions.cmp(&right.actions))
+}
+
+#[derive(Clone)]
+struct PortfolioProgress {
+    score: f64,
+    subjects: std::collections::BTreeSet<String>,
+    metrics: BTreeMap<String, f64>,
+    resources: BTreeMap<String, f64>,
+    selected: Vec<usize>,
+}
+
+impl PortfolioProgress {
+    fn admits(
+        &self,
+        path: &OpportunityPath,
+        metric_limits: &BTreeMap<String, f64>,
+        resource_limits: &BTreeMap<String, f64>,
+    ) -> bool {
+        if self.subjects.contains(&path.subject) {
+            return false;
+        }
+        if let Some(metric) = &path.goal_metric
+            && let Some(limit) = metric_limits.get(metric)
+        {
+            let spent = self.metrics.get(metric).copied().unwrap_or_default();
+            if spent + path.projected_cost > *limit {
+                return false;
+            }
+        }
+        resource_limits.iter().all(|(name, limit)| {
+            self.resources.get(name).copied().unwrap_or_default()
+                + path.resources.get(name).copied().unwrap_or_default()
+                <= *limit
+        })
+    }
+}
+
+fn portfolio_upper_bound(paths: &[OpportunityPath], groups: &[Vec<usize>], depth: usize) -> f64 {
+    groups[depth..]
+        .iter()
+        .filter_map(|group| {
+            group.iter().fold(None::<f64>, |max, index| {
+                let score = paths[*index].score;
+                Some(max.map_or(score, |current| current.max(score)))
+            })
+        })
+        .sum()
+}
+
+struct PortfolioSearch<'a> {
+    paths: &'a [OpportunityPath],
+    groups: &'a [Vec<usize>],
+    metric_limits: &'a BTreeMap<String, f64>,
+    resource_limits: &'a BTreeMap<String, f64>,
+    bounds: &'a [f64],
+}
+
+impl<'a> PortfolioSearch<'a> {
+    fn visit(&self, depth: usize, current: PortfolioProgress, best: &mut PortfolioProgress) {
+        if current.score > best.score {
+            *best = current.clone();
+        }
+        if depth >= self.groups.len() || current.score + self.bounds[depth] <= best.score {
+            return;
+        }
+        for &index in &self.groups[depth] {
+            let path = &self.paths[index];
+            if !current.admits(path, self.metric_limits, self.resource_limits) {
+                continue;
+            }
+            let mut next = current.clone();
+            next.score += path.score;
+            next.subjects.insert(path.subject.clone());
+            if let Some(metric) = &path.goal_metric {
+                *next.metrics.entry(metric.clone()).or_default() += path.projected_cost;
+            }
+            for (name, amount) in &path.resources {
+                *next.resources.entry(name.clone()).or_default() += amount;
+            }
+            next.selected.push(index);
+            self.visit(depth + 1, next, best);
+        }
+        self.visit(depth + 1, current, best);
+    }
+}
+
+fn exact_portfolio_search(
+    paths: &[OpportunityPath],
+    groups: &[Vec<usize>],
+    metric_limits: &BTreeMap<String, f64>,
+    resource_limits: &BTreeMap<String, f64>,
+) -> Vec<usize> {
+    let bounds = (0..=groups.len())
+        .map(|depth| portfolio_upper_bound(paths, groups, depth))
+        .collect::<Vec<_>>();
+    let search = PortfolioSearch {
+        paths,
+        groups,
+        metric_limits,
+        resource_limits,
+        bounds: &bounds,
+    };
+    let mut best = PortfolioProgress {
+        score: 0.0,
+        subjects: std::collections::BTreeSet::new(),
+        metrics: BTreeMap::new(),
+        resources: BTreeMap::new(),
+        selected: Vec::new(),
+    };
+    search.visit(0, best.clone(), &mut best);
+    best.selected
+}
+
+fn select_portfolio_greedy(
     paths: Vec<OpportunityPath>,
     metric_limits: &BTreeMap<String, f64>,
     resource_limits: &BTreeMap<String, f64>,
@@ -2750,6 +2902,41 @@ mod tests {
 
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].opportunity_id, "opp-b");
+    }
+
+    #[test]
+    fn small_portfolio_chooses_optimal_combination_not_greedy_prefix() {
+        let path = |id: &str, subject: &str, score: f64, cost: f64| OpportunityPath {
+            project_id: "project".into(),
+            opportunity_id: id.into(),
+            subject: subject.into(),
+            actions: vec!["Touch".into()],
+            requires_human: false,
+            requires_approval: false,
+            projected_cost: cost,
+            projected_net_value: 900.0,
+            resources: BTreeMap::new(),
+            goal_metric: Some("revenue".into()),
+            confidence: 1.0,
+            score,
+            reason: "test".into(),
+        };
+        let paths = vec![
+            path("greedy-best", "customer:a", 90.0, 150.0),
+            path("combo-left", "customer:b", 60.0, 100.0),
+            path("combo-right", "customer:c", 50.0, 50.0),
+        ];
+        let metric_limits = BTreeMap::from([("revenue".to_owned(), 150.0)]);
+        let selected = select_business_portfolio(paths, &metric_limits, &BTreeMap::new());
+
+        assert_eq!(
+            selected
+                .iter()
+                .map(|path| path.opportunity_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["combo-left", "combo-right"],
+            "组合净值评分应胜过单独最高分机会"
+        );
     }
 
     fn customer_ontology() -> OntologyIR {
