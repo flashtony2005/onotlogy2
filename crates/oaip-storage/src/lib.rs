@@ -14,6 +14,7 @@ pub use ontology::{OntologyEvolutionRecord, OntologyEvolutionStatus, OntologyVer
 pub mod ontology;
 pub mod projects;
 pub mod relations;
+pub mod resources;
 pub mod runs;
 pub mod users;
 pub mod worker_registry;

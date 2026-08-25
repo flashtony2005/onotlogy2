@@ -1883,9 +1883,20 @@ async fn shared_resource_budget_spans_projects() {
 
 #[tokio::test]
 async fn concurrent_runs_cannot_oversubscribe_enterprise_resource() {
-    let storage = LibSQLStorage::open(":memory:")
+    // 两个独立连接模拟两个服务实例；共享资源仲裁必须落在数据库层。
+    let path = std::env::temp_dir().join(format!(
+        "oaip_shared_resource_{}_{}.db",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("系统时间应晚于 Unix epoch")
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let db_path = path.to_str().expect("临时路径应有效");
+    let storage = LibSQLStorage::open(db_path)
         .await
-        .expect("内存库应可打开");
+        .expect("共享数据库应可打开");
     for project_id in ["concurrent-one", "concurrent-two"] {
         seed_odl_project(
             &storage,
@@ -1896,8 +1907,17 @@ async fn concurrent_runs_cannot_oversubscribe_enterprise_resource() {
         .await;
     }
 
-    let runs = ["concurrent-one", "concurrent-two"].map(|project_id| {
-        let storage = storage.clone();
+    let runs = [
+        (
+            "concurrent-one",
+            LibSQLStorage::open(db_path).await.expect("实例一应可打开"),
+        ),
+        (
+            "concurrent-two",
+            LibSQLStorage::open(db_path).await.expect("实例二应可打开"),
+        ),
+    ]
+    .map(|(project_id, storage)| {
         tokio::spawn(async move {
             run_next_best_action(
                 &storage,
@@ -1907,15 +1927,27 @@ async fn concurrent_runs_cannot_oversubscribe_enterprise_resource() {
                 "agent",
             )
             .await
-            .expect("并发闭环应返回结果")
+            .map_err(|error| error.to_string())
         })
     });
-    let executed = futures_util::future::join_all(runs)
+    let results = futures_util::future::join_all(runs)
         .await
         .into_iter()
-        .filter(|result| result.as_ref().expect("任务不应崩溃").executed)
+        .map(|result| result.expect("任务不应崩溃"))
+        .collect::<Vec<_>>();
+    let executed = results
+        .iter()
+        .filter_map(|result| result.as_ref().ok())
+        .filter(|result| result.executed)
         .count();
     assert_eq!(executed, 1, "企业共享池只允许一笔 labor=6 执行");
+    for error in results.into_iter().filter_map(|result| result.err()) {
+        assert!(
+            error.contains("超出共享资源"),
+            "失败只能是资源仲裁：{error}"
+        );
+    }
+    let _ = std::fs::remove_file(path);
 }
 
 #[tokio::test]

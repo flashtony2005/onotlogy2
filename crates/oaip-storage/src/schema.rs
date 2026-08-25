@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 /// 版本化迁移注册表：`(from_version, sql)`，按版本升序执行；每步成功后推进
 /// `wb_meta.schema_version`。迁移在事务内执行（失败整体回滚，版本不推进，可安全重试）。
 /// 新库由 `canonical_schema` 直接建到当前版本，不执行迁移。
-pub(crate) const SCHEMA_VERSION: i64 = 15;
+pub(crate) const SCHEMA_VERSION: i64 = 16;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     // V1 → V2：wb_learned 补 auto_approve_enabled（REQ-018）。
@@ -238,6 +238,21 @@ CREATE TABLE IF NOT EXISTS wb_ontology_proposal (
 CREATE INDEX IF NOT EXISTS idx_ontology_proposal_status
   ON wb_ontology_proposal (status, created_at);",
     ),
+    // V15 → V16：企业共享资源预留账本。事务化写入是跨实例预算仲裁的事实源。
+    (
+        15,
+        "CREATE TABLE IF NOT EXISTS wb_shared_resource_usage (
+  id             TEXT NOT NULL,
+  project_id     TEXT NOT NULL,
+  resource_name  TEXT NOT NULL,
+  amount         REAL NOT NULL,
+  executed_at    TEXT NOT NULL,
+  created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id, resource_name)
+);
+CREATE INDEX IF NOT EXISTS idx_shared_resource_window
+  ON wb_shared_resource_usage (resource_name, executed_at);",
+    ),
 ];
 
 const MIGRATION_NAMES: &[(i64, &str)] = &[
@@ -256,6 +271,7 @@ const MIGRATION_NAMES: &[(i64, &str)] = &[
     (13, "audit_integrity_hash_chain"),
     (14, "automation_job_queue"),
     (15, "ontology_evolution_persistence"),
+    (16, "shared_resource_ledger"),
 ];
 
 const MIGRATION_DOWNS: &[(i64, &str)] = &[
@@ -319,6 +335,11 @@ DROP TABLE IF EXISTS wb_audit_chain",
     (
         14,
         "DROP TABLE IF EXISTS wb_ontology_proposal; DROP TABLE IF EXISTS wb_ontology_version",
+    ),
+    (
+        15,
+        "DROP INDEX IF EXISTS idx_shared_resource_window; \
+         DROP TABLE IF EXISTS wb_shared_resource_usage",
     ),
 ];
 

@@ -563,11 +563,11 @@ fn subtract_budget(planning: &ActionPlanning, budget: &AvailableBudget) -> Avail
     }
 }
 
-fn validate_action_budget(
+async fn validate_action_budget(
+    storage: &LibSQLStorage,
     ontology: &OntologyIR,
     rule: &OpportunityRule,
     action: &ActionDef,
-    enterprise_outcomes: &[crate::storage::ObjectRecord],
 ) -> Result<(), BusinessLoopError> {
     let planning = action_planning(action)?;
     if planning.cost > rule.cost_budget.unwrap_or(f64::INFINITY) {
@@ -591,11 +591,7 @@ fn validate_action_budget(
         }
     }
     let shared = shared_resource_limits(ontology);
-    let spent = consumed_shared_resources(
-        enterprise_outcomes,
-        shared_resource_window_days(ontology)?,
-        Utc::now(),
-    )?;
+    let spent = shared_resource_spent(storage, ontology).await?;
     for (name, amount) in &planning.resources {
         if let Some(limit) = shared.get(name) {
             let remaining = (limit - spent.get(name).copied().unwrap_or_default()).max(0.0);
@@ -691,11 +687,11 @@ fn consumed_shared_resources(
     Ok(spent)
 }
 
-fn available_budget(
+async fn available_budget(
+    storage: &LibSQLStorage,
     ontology: &OntologyIR,
     rule: &OpportunityRule,
     outcomes: &[crate::storage::ObjectRecord],
-    enterprise_outcomes: &[crate::storage::ObjectRecord],
 ) -> Result<AvailableBudget, BusinessLoopError> {
     let metric_budget = metric_budget_remaining(rule, outcomes);
     let money = match (rule.cost_budget, metric_budget) {
@@ -707,11 +703,7 @@ fn available_budget(
     let mut resources = rule.resource_budgets.clone();
     let shared_limits = shared_resource_limits(ontology);
     if !shared_limits.is_empty() {
-        let spent = consumed_shared_resources(
-            enterprise_outcomes,
-            shared_resource_window_days(ontology)?,
-            Utc::now(),
-        )?;
+        let spent = shared_resource_spent(storage, ontology).await?;
         for (name, limit) in shared_limits {
             let remaining = (limit - spent.get(&name).copied().unwrap_or_default()).max(0.0);
             resources
@@ -721,6 +713,24 @@ fn available_budget(
         }
     }
     Ok(AvailableBudget { money, resources })
+}
+
+/// 新账本与历史 Outcome 快照共同构成资源消耗；v36 后新动作只写账本。
+async fn shared_resource_spent(
+    storage: &LibSQLStorage,
+    ontology: &OntologyIR,
+) -> Result<BTreeMap<String, f64>, BusinessLoopError> {
+    let window = shared_resource_window_days(ontology)?;
+    let mut spent =
+        consumed_shared_resources(&enterprise_outcomes(storage).await?, window, Utc::now())?;
+    let cutoff = window.map(|days| {
+        (Utc::now() - chrono::Duration::days(i64::from(days)))
+            .to_rfc3339_opts(SecondsFormat::Micros, true)
+    });
+    for (name, amount) in storage.shared_resource_usage(cutoff.as_deref()).await? {
+        *spent.entry(name).or_default() += amount;
+    }
+    Ok(spent)
 }
 
 fn metric_budget_remaining(
@@ -1161,12 +1171,7 @@ pub async fn recommend_next_actions(
         let estimated_value = number(&opportunity.data, "estimated_value")?;
         let urgency_value = urgency_value.max(0.0);
         let urgency = (urgency_value.min(rule.urgency_horizon) / rule.urgency_horizon).max(0.1);
-        let available = available_budget(
-            &ontology,
-            rule,
-            &outcomes,
-            &enterprise_outcomes(storage).await?,
-        )?;
+        let available = available_budget(storage, &ontology, rule, &outcomes).await?;
         let mut candidates = evaluate_candidates(
             &actions,
             &subject_record.data,
@@ -1580,12 +1585,7 @@ pub async fn plan_opportunity_paths(
         let outcomes = storage
             .list_objects_for_project(project_id, "Outcome")
             .await?;
-        let path_budget = available_budget(
-            &ontology,
-            rule,
-            &outcomes,
-            &enterprise_outcomes(storage).await?,
-        )?;
+        let path_budget = available_budget(storage, &ontology, rule, &outcomes).await?;
         let initial_key = serde_json::to_string(&subject_record.data)
             .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
         let mut visited = std::collections::BTreeSet::from([initial_key]);
@@ -1913,11 +1913,7 @@ async fn reserve_business_portfolio(
     }
 
     let mut resource_limits = shared_resource_limits(&ontology);
-    let spent_resources = consumed_shared_resources(
-        &enterprise_outcomes(storage).await?,
-        shared_resource_window_days(&ontology)?,
-        Utc::now(),
-    )?;
+    let spent_resources = shared_resource_spent(storage, &ontology).await?;
     for (name, spent) in spent_resources {
         if let Some(remaining) = resource_limits.get_mut(&name) {
             *remaining = (*remaining - spent).max(0.0);
@@ -2163,12 +2159,7 @@ async fn decide_opportunity_locked(
     let outcomes = storage
         .list_objects_for_project(project_id, "Outcome")
         .await?;
-    validate_action_budget(
-        &ontology,
-        rule,
-        definition,
-        &enterprise_outcomes(storage).await?,
-    )?;
+    validate_action_budget(storage, &ontology, rule, definition).await?;
     validate_metric_budget(definition, metric_budget_remaining(rule, &outcomes))?;
 
     let subject = text(&opportunity.data, "subject")?.to_string();
@@ -2531,12 +2522,7 @@ async fn execute_opportunity_locked(
     let outcomes = storage
         .list_objects_for_project(project_id, "Outcome")
         .await?;
-    validate_action_budget(
-        &ontology,
-        rule,
-        &definition,
-        &enterprise_outcomes(storage).await?,
-    )?;
+    validate_action_budget(storage, &ontology, rule, &definition).await?;
     validate_metric_budget(&definition, metric_budget_remaining(rule, &outcomes))?;
     if definition.policy.require_approval {
         let relations = storage.list_all_relations().await?;
@@ -2573,6 +2559,24 @@ async fn execute_opportunity_locked(
         return Err(BusinessLoopError::invalid(format!(
             "业务动作 {action} 当前不可用"
         )));
+    }
+    // 预算校验通过后立即原子入账；后续外部能力或状态写入失败也不释放已耗资源。
+    if !shared_resource_limits(&ontology).is_empty() && !planning.resources.is_empty() {
+        let window = shared_resource_window_days(&ontology)?;
+        let cutoff = window.map(|days| {
+            (Utc::now() - chrono::Duration::days(i64::from(days)))
+                .to_rfc3339_opts(SecondsFormat::Micros, true)
+        });
+        storage
+            .reserve_shared_resources(
+                &generated_id("resource-usage"),
+                project_id,
+                &planning.resources,
+                &shared_resource_limits(&ontology),
+                cutoff.as_deref(),
+                &Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true),
+            )
+            .await?;
     }
     let external_capability = definition.planning.as_ref().and_then(|planning| {
         let provider = planning.worker.as_deref().or(planning.plugin.as_deref())?;
@@ -2755,12 +2759,6 @@ async fn execute_opportunity_locked(
             1.0
         },
     });
-    // ponytail: OWL 数据面只收标量，资源快照先作为 JSON 字符串入账；需要查询时再升级为标量列。
-    if !shared_resource_limits(&ontology).is_empty() {
-        let resources = serde_json::to_string(&planning.resources)
-            .map_err(|error| BusinessLoopError::invalid(error.to_string()))?;
-        action_outcome_data["resources"] = json!(resources);
-    }
     if shared_resource_window_days(&ontology)?.is_some() {
         action_outcome_data["executed_at"] =
             json!(Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true));

@@ -2208,7 +2208,7 @@ mod tests {
     fn repeated_consistency_calls_reuse_the_exact_result() {
         let ontology = Ontology::new().with_axiom(fact(
             "cache-candidate",
-            "status",
+            "repeated-consistency-status",
             Literal::String("active".into()),
         ));
         let key = ontology_fingerprint(&ontology);

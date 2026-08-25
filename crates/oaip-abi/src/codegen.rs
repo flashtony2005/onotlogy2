@@ -371,6 +371,20 @@ CREATE TABLE IF NOT EXISTS wb_ontology_proposal (
 CREATE INDEX IF NOT EXISTS idx_ontology_proposal_status
   ON wb_ontology_proposal (status, created_at);
 
+-- 企业共享资源账本：一条动作可包含多个资源维度；写入时用 IMMEDIATE 事务
+-- 做限额仲裁，读取时按 ODL 声明的滚动窗口聚合。
+CREATE TABLE IF NOT EXISTS wb_shared_resource_usage (
+  id             TEXT NOT NULL,
+  project_id     TEXT NOT NULL,
+  resource_name  TEXT NOT NULL,
+  amount         REAL NOT NULL,
+  executed_at    TEXT NOT NULL,
+  created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id, resource_name)
+);
+CREATE INDEX IF NOT EXISTS idx_shared_resource_window
+  ON wb_shared_resource_usage (resource_name, executed_at);
+
 "#
     .to_string()
 }
