@@ -2274,16 +2274,17 @@ pub async fn decide_business_approval(
     Err(BusinessLoopError::NotFound(decision_id.to_string()))
 }
 
-fn validate_capability_output(
+fn validate_capability_value(
     capability: &str,
+    stage: &str,
     schema: &Value,
-    output: &Value,
+    value: &Value,
 ) -> Result<(), BusinessLoopError> {
     let validator = jsonschema::validator_for(schema).map_err(|error| {
-        BusinessLoopError::invalid(format!("能力 {capability} 输出契约无效：{error}"))
+        BusinessLoopError::invalid(format!("能力 {capability} {stage}契约无效：{error}"))
     })?;
-    validator.validate(output).map_err(|error| {
-        BusinessLoopError::invalid(format!("能力 {capability} 输出不符合契约：{error}"))
+    validator.validate(value).map_err(|error| {
+        BusinessLoopError::invalid(format!("能力 {capability} {stage}不符合契约：{error}"))
     })
 }
 
@@ -2492,6 +2493,12 @@ async fn execute_opportunity_locked(
                     "Worker {provider_id} 不可用"
                 )));
             }
+            validate_capability_value(
+                capability_name,
+                "输入",
+                &worker.manifest().input_schema,
+                &input,
+            )?;
             let started_at = Instant::now();
             let executed = worker.execute(capability_name, input).await;
             let result = match executed {
@@ -2515,19 +2522,24 @@ async fn execute_opportunity_locked(
                     "Worker {provider_id} 执行失败"
                 )));
             }
-            validate_capability_output(
+            validate_capability_value(
                 capability_name,
+                "输出",
                 &worker.manifest().output_schema,
                 &result.output,
             )?;
             capability_provider = Some(provider_id);
             Some(result.output)
         } else {
+            let input_schema = plugins.input_schema(capability_name).ok_or_else(|| {
+                BusinessLoopError::invalid(format!("能力 {capability_name} 缺少输入契约"))
+            })?;
+            validate_capability_value(capability_name, "输入", input_schema, &input)?;
             let output_schema = plugins.output_schema(capability_name).ok_or_else(|| {
                 BusinessLoopError::invalid(format!("能力 {capability_name} 缺少输出契约"))
             })?;
             let output = plugins.invoke(provider_id, capability_name, input).await?;
-            validate_capability_output(capability_name, output_schema, &output)?;
+            validate_capability_value(capability_name, "输出", output_schema, &output)?;
             capability_provider = Some(provider_id.to_string());
             Some(output)
         }

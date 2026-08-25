@@ -113,6 +113,12 @@ impl PluginCatalog {
         self.capabilities.contract(capability).is_some()
     }
 
+    pub fn input_schema(&self, capability: &str) -> Option<&serde_json::Value> {
+        self.capabilities
+            .contract(capability)
+            .map(|contract| &contract.input_schema)
+    }
+
     pub fn output_schema(&self, capability: &str) -> Option<&serde_json::Value> {
         self.capabilities
             .contract(capability)
