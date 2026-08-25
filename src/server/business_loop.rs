@@ -4,9 +4,8 @@ use crate::auth::AuthUser;
 use crate::business_loop::{
     BusinessLoopError, decide_business_approval, decide_opportunity, discover_opportunities,
     execute_opportunity, goal_gaps, list_follow_ups, list_learning_insights, list_path_insights,
-    plan_business_portfolio, plan_opportunity_paths, recommend_next_actions,
-    reopen_interrupted_execution, run_business_actions, run_next_best_action, settle_follow_up,
-    start_follow_up,
+    optimize_toward_goals, plan_business_portfolio, plan_opportunity_paths, recommend_next_actions,
+    reopen_interrupted_execution, run_next_best_action, settle_follow_up, start_follow_up,
 };
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -61,9 +60,9 @@ pub(crate) struct ReconcileBody {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct BusinessBatchBody {
+pub(crate) struct BusinessOptimizationBody {
     pub project_id: String,
-    pub max_steps: Option<u32>,
+    pub max_cycles: Option<u32>,
 }
 
 fn error_response(error: BusinessLoopError) -> Response {
@@ -339,22 +338,22 @@ pub(crate) async fn decide(
     error_response(BusinessLoopError::NotFound(id))
 }
 
-pub(crate) async fn run_batch(
+pub(crate) async fn optimize(
     State(st): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
-    Json(body): Json<BusinessBatchBody>,
+    Json(body): Json<BusinessOptimizationBody>,
 ) -> Response {
     if let Some(response) = write_denied(&user) {
         return response;
     }
     let workers = st.v2.workers.read().await;
-    match run_business_actions(
+    match optimize_toward_goals(
         &st.storage,
         &st.plugin_catalog,
         &workers,
         &body.project_id,
         &user.username,
-        body.max_steps.unwrap_or(5),
+        body.max_cycles.unwrap_or(5),
     )
     .await
     {

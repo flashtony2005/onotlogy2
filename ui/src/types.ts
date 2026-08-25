@@ -674,3 +674,23 @@ export interface BusinessRunDto {
   execution?: unknown
   goals: BusinessGoalDto[]
 }
+
+export type OptimizationStopReason =
+  | 'GoalReached'
+  | 'NoSafeCandidate'
+  | 'BlockedByApproval'
+  | 'NoActiveGoal'
+  | 'MaxCycles'
+
+export interface BusinessOptimizationRunDto {
+  projectId: string
+  goalMetric?: string | null
+  initialGap: number
+  finalGap: number
+  maxCycles: number
+  cycles: BusinessRunDto[]
+  executedActions: string[]
+  learningInsights: LearningInsightDto[]
+  pathInsights: PathInsightDto[]
+  stoppedBecause: OptimizationStopReason
+}

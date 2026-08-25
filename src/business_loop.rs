@@ -213,6 +213,39 @@ pub struct BusinessLoopRun {
     pub goals: Vec<GoalGap>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum OptimizationStopReason {
+    GoalReached,
+    NoSafeCandidate,
+    BlockedByApproval,
+    NoActiveGoal,
+    MaxCycles,
+}
+
+/// 目标导向优化运行：每个 cycle 都重新发现、规划和学习，直到目标或硬边界。
+#[derive(Debug, Serialize)]
+pub struct BusinessOptimizationRun {
+    #[serde(rename = "projectId")]
+    pub project_id: String,
+    #[serde(rename = "goalMetric", skip_serializing_if = "Option::is_none")]
+    pub goal_metric: Option<String>,
+    #[serde(rename = "initialGap")]
+    pub initial_gap: f64,
+    #[serde(rename = "finalGap")]
+    pub final_gap: f64,
+    #[serde(rename = "maxCycles")]
+    pub max_cycles: u32,
+    pub cycles: Vec<BusinessLoopRun>,
+    #[serde(rename = "executedActions")]
+    pub executed_actions: Vec<String>,
+    #[serde(rename = "learningInsights")]
+    pub learning_insights: Vec<LearningInsight>,
+    #[serde(rename = "pathInsights")]
+    pub path_insights: Vec<PathInsight>,
+    #[serde(rename = "stoppedBecause")]
+    pub stopped_because: OptimizationStopReason,
+}
+
 #[derive(Debug, Serialize)]
 pub struct FollowUpItem {
     pub id: String,
@@ -3811,28 +3844,147 @@ pub async fn run_next_best_action(
     run_next_best_action_locked(storage, plugins, workers, project_id, decided_by).await
 }
 
-/// 连续执行有界多轮自主闭环；无安全候选、需审批或出现中断恢复时立即停止。
-pub async fn run_business_actions(
+/// 连续执行目标导向优化闭环；每个 cycle 都基于最新状态和学习证据重新规划。
+pub async fn optimize_toward_goals(
     storage: &LibSQLStorage,
     plugins: &PluginCatalog,
     workers: &WorkerRegistry,
     project_id: &str,
     decided_by: &str,
-    max_steps: u32,
-) -> Result<Vec<BusinessLoopRun>, BusinessLoopError> {
-    let max_steps = max_steps.clamp(1, BUSINESS_LOOP_MAX_BATCH as u32) as usize;
+    max_cycles: u32,
+) -> Result<BusinessOptimizationRun, BusinessLoopError> {
+    let max_cycles = max_cycles.clamp(1, BUSINESS_LOOP_MAX_BATCH as u32);
     let _gate = BUSINESS_LOOP_WRITE_GATE.lock().await;
-    let mut runs = Vec::with_capacity(max_steps);
-    for _ in 0..max_steps {
+
+    let initial_goals = refresh_goal_progress(storage, project_id).await?;
+    let Some((goal_metric, initial_gap)) = active_optimization_goal(&initial_goals) else {
+        return Ok(BusinessOptimizationRun {
+            project_id: project_id.to_string(),
+            goal_metric: None,
+            initial_gap: 0.0,
+            final_gap: 0.0,
+            max_cycles,
+            cycles: Vec::new(),
+            executed_actions: Vec::new(),
+            learning_insights: list_learning_insights(storage, project_id).await?,
+            path_insights: list_path_insights(storage, project_id).await?,
+            stopped_because: OptimizationStopReason::NoActiveGoal,
+        });
+    };
+    if initial_gap <= 0.0 {
+        return optimization_result(
+            storage,
+            project_id,
+            goal_metric,
+            initial_gap,
+            max_cycles,
+            Vec::new(),
+            OptimizationStopReason::GoalReached,
+        )
+        .await;
+    }
+
+    let mut cycles = Vec::new();
+    let mut stopped_because = OptimizationStopReason::MaxCycles;
+    for _ in 0..max_cycles {
         let run =
             run_next_best_action_locked(storage, plugins, workers, project_id, decided_by).await?;
-        let executed = run.executed;
-        runs.push(run);
-        if !executed {
+        if !run.executed {
+            let paths = plan_opportunity_paths(storage, project_id).await?;
+            let recommendations = recommend_next_actions(storage, project_id).await?;
+            let has_approval_candidate = paths.iter().any(|path| path.requires_approval)
+                || recommendations.iter().any(|recommendation| {
+                    recommendation
+                        .candidates
+                        .iter()
+                        .any(|candidate| candidate.requires_approval)
+                });
+            stopped_because = if has_approval_candidate {
+                OptimizationStopReason::BlockedByApproval
+            } else {
+                OptimizationStopReason::NoSafeCandidate
+            };
+            cycles.push(run);
+            break;
+        }
+        let remaining_gap = run
+            .goals
+            .iter()
+            .filter(|goal| {
+                goal.target_metric == goal_metric && goal.status.eq_ignore_ascii_case("active")
+            })
+            .map(|goal| goal.gap)
+            .fold(0.0_f64, f64::max);
+        cycles.push(run);
+        if remaining_gap <= 0.0 {
+            stopped_because = OptimizationStopReason::GoalReached;
             break;
         }
     }
-    Ok(runs)
+
+    optimization_result(
+        storage,
+        project_id,
+        goal_metric,
+        initial_gap,
+        max_cycles,
+        cycles,
+        stopped_because,
+    )
+    .await
+}
+
+fn active_optimization_goal(goals: &[GoalGap]) -> Option<(&str, f64)> {
+    goals
+        .iter()
+        .filter(|goal| goal.status.eq_ignore_ascii_case("active"))
+        .filter(|goal| goal.gap > 0.0)
+        .max_by(|left, right| {
+            left.gap
+                .partial_cmp(&right.gap)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|goal| (goal.target_metric.as_str(), goal.gap))
+}
+
+async fn optimization_result(
+    storage: &LibSQLStorage,
+    project_id: &str,
+    goal_metric: &str,
+    initial_gap: f64,
+    max_cycles: u32,
+    cycles: Vec<BusinessLoopRun>,
+    stopped_because: OptimizationStopReason,
+) -> Result<BusinessOptimizationRun, BusinessLoopError> {
+    let final_goals = refresh_goal_progress(storage, project_id).await?;
+    let final_gap = final_goals
+        .iter()
+        .filter(|goal| {
+            goal.target_metric == goal_metric && goal.status.eq_ignore_ascii_case("active")
+        })
+        .map(|goal| goal.gap)
+        .fold(0.0_f64, f64::max);
+    let executed_actions = cycles
+        .iter()
+        .filter_map(|cycle| {
+            cycle
+                .recommendation
+                .as_ref()
+                .map(|item| item.action.clone())
+        })
+        .collect();
+    Ok(BusinessOptimizationRun {
+        project_id: project_id.to_string(),
+        goal_metric: Some(goal_metric.to_string()),
+        initial_gap,
+        final_gap,
+        max_cycles,
+        cycles,
+        executed_actions,
+        learning_insights: list_learning_insights(storage, project_id).await?,
+        path_insights: list_path_insights(storage, project_id).await?,
+        stopped_because,
+    })
 }
 
 async fn run_next_best_action_locked(

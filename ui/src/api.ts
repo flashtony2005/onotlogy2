@@ -30,6 +30,7 @@ import type {
   ProjectCreateDto,
   ProjectDto,
   BusinessGoalDto,
+  BusinessOptimizationRunDto,
   BusinessPathDto,
   BusinessRecommendationDto,
   BusinessRunDto,
@@ -660,13 +661,16 @@ export async function runBusinessNext(projectId: string): Promise<BusinessRunDto
   return unwrap<BusinessRunDto>(r)
 }
 
-export async function runBusinessActions(projectId: string, maxSteps: number): Promise<BusinessRunDto[]> {
-  const res = await authFetch('/api/v1/business/run-batch', {
+export async function optimizeBusinessGoals(
+  projectId: string,
+  maxCycles: number,
+): Promise<BusinessOptimizationRunDto> {
+  const res = await authFetch('/api/v1/business/optimize', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectId, maxSteps }),
+    body: JSON.stringify({ projectId, maxCycles }),
   })
-  return unwrap<BusinessRunDto[]>(res)
+  return unwrap<BusinessOptimizationRunDto>(res)
 }
 
 export async function reconcileBusinessExecution(

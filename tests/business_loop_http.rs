@@ -11,8 +11,8 @@ use openaip_os::abi::odl::parse_odl;
 use openaip_os::business_loop::{
     DecisionOptions, decide_business_approval, decide_opportunity, discover_opportunities,
     execute_opportunity, list_follow_ups, list_learning_insights, list_path_insights,
-    plan_opportunity_paths, recommend_next_actions, reopen_interrupted_execution,
-    run_business_actions, run_next_best_action, settle_follow_up, start_follow_up,
+    optimize_toward_goals, plan_opportunity_paths, recommend_next_actions,
+    reopen_interrupted_execution, run_next_best_action, settle_follow_up, start_follow_up,
 };
 use openaip_os::knowledge::{
     Axiom, ClassExpression, Ontology, OntologyChange, OntologyProposal, Term,
@@ -878,6 +878,94 @@ async fn failed_deferred_outcome_reopens_opportunity_for_replanning() {
         .await
         .expect("失败后应重新推荐");
     assert_eq!(recommendations[0].action, "ContactCustomer");
+
+    let optimization = optimize_toward_goals(
+        &storage,
+        &PluginCatalog::new(),
+        &WorkerRegistry::new(),
+        "failure-replan",
+        "agent",
+        1,
+    )
+    .await
+    .expect("失败终局后目标优化应能重规划");
+    assert_eq!(
+        optimization.goal_metric.as_deref(),
+        Some("monthly_reactivations")
+    );
+    assert_eq!(optimization.executed_actions, vec!["ContactCustomer"]);
+    assert_eq!(optimization.cycles.len(), 1);
+    assert_eq!(
+        optimization.stopped_because,
+        openaip_os::business_loop::OptimizationStopReason::GoalReached
+    );
+}
+
+#[tokio::test]
+async fn optimization_endpoint_runs_goal_directed_cycles() {
+    let storage = Arc::new(LibSQLStorage::open(":memory:").await.unwrap());
+    let addr = common::spawn_server(storage.clone()).await;
+    let (_, body) = common::http_call(
+        addr,
+        "POST",
+        "/api/v1/domain-packs/crm-retention/install",
+        None,
+    )
+    .await;
+    assert!(body.contains("\"code\":0"), "业务包应安装成功：{body}");
+
+    let (status, body) = common::http_call(
+        addr,
+        "POST",
+        "/api/v1/business/optimize",
+        Some(r#"{"projectId":"crm-retention","maxCycles":1}"#),
+    )
+    .await;
+    assert_eq!(status, 200, "目标优化 API 应执行成功：{body}");
+    let result = data(&body).await;
+    assert_eq!(result["goalMetric"], json!("monthly_reactivations"));
+    assert_eq!(result["initialGap"], json!(8.0));
+    assert_eq!(result["executedActions"], json!(["ContactCustomer"]));
+    assert_eq!(result["cycles"].as_array().map(Vec::len), Some(1));
+    assert_eq!(result["finalGap"], json!(7.0));
+    assert_eq!(result["stoppedBecause"], json!("MaxCycles"));
+}
+
+#[tokio::test]
+async fn optimization_stops_fail_closed_for_approval_only_candidate() {
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let pack_ontology = std::fs::read_to_string("domain-packs/crm-retention/ontology.odl")
+        .expect("业务包 ODL 应存在");
+    let ontology = pack_ontology.replace(
+        "goal_metric: monthly_reactivations\n      evidence:",
+        "goal_metric: monthly_reactivations\n      cost_budget: 4999\n      evidence:",
+    );
+    seed_odl_project(
+        &storage,
+        "optimization-approval",
+        &ontology,
+        "monthly_reactivations",
+    )
+    .await;
+
+    let optimization = optimize_toward_goals(
+        &storage,
+        &PluginCatalog::new(),
+        &WorkerRegistry::new(),
+        "optimization-approval",
+        "agent",
+        1,
+    )
+    .await
+    .expect("审批-only 优化应安全返回");
+    assert_eq!(optimization.cycles.len(), 1);
+    assert!(!optimization.cycles[0].executed);
+    assert_eq!(
+        optimization.stopped_because,
+        openaip_os::business_loop::OptimizationStopReason::BlockedByApproval
+    );
 }
 
 #[tokio::test]
@@ -986,13 +1074,27 @@ async fn metric_budget_is_shared_across_opportunities() {
 }
 
 #[tokio::test]
-async fn bounded_batch_continues_until_no_safe_candidate_remains() {
+async fn bounded_optimization_continues_until_goal_reaches() {
     let storage = LibSQLStorage::open(":memory:")
         .await
         .expect("内存库应可打开");
     let ontology = std::fs::read_to_string("domain-packs/crm-retention/ontology.odl")
         .expect("业务包 ODL 应存在");
     seed_odl_project(&storage, "batch-loop", &ontology, "monthly_reactivations").await;
+    let mut goal = storage
+        .get("business-goal:batch-loop")
+        .await
+        .expect("应能读取业务目标")
+        .expect("种子项目应有目标");
+    goal.data["target_value"] = json!(2.0);
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::UpdateObject {
+            id: goal.id.clone(),
+            data: goal.data.clone(),
+            project_id: Some("batch-loop".into()),
+        })
+        .await
+        .expect("应能把目标调整为两个完成量");
     storage
         .apply_world(openaip_os::storage::WorldCommand::CreateObject {
             object_type: "Customer".into(),
@@ -1008,20 +1110,7 @@ async fn bounded_batch_continues_until_no_safe_candidate_remains() {
         .await
         .expect("应能写入第二位客户状态");
 
-    let first = run_business_actions(
-        &storage,
-        &PluginCatalog::new(),
-        &WorkerRegistry::new(),
-        "batch-loop",
-        "contract-test",
-        1,
-    )
-    .await
-    .expect("单步批量应可执行");
-    assert_eq!(first.len(), 1);
-    assert!(first[0].executed);
-
-    let runs = run_business_actions(
+    let optimization = optimize_toward_goals(
         &storage,
         &PluginCatalog::new(),
         &WorkerRegistry::new(),
@@ -1030,9 +1119,13 @@ async fn bounded_batch_continues_until_no_safe_candidate_remains() {
         20,
     )
     .await
-    .expect("有界批量应继续处理剩余机会");
-    assert!(runs.len() >= 2, "第二个机会后还应有一轮安全空闲");
-    assert!(!runs.last().expect("批量不能为空").executed);
+    .expect("有界优化应继续处理剩余机会");
+    assert_eq!(optimization.cycles.len(), 2);
+    assert!(optimization.executed_actions.len() >= 2);
+    assert_eq!(
+        optimization.stopped_because,
+        openaip_os::business_loop::OptimizationStopReason::GoalReached
+    );
     let outcomes = storage
         .list_objects_for_project("batch-loop", "Outcome")
         .await

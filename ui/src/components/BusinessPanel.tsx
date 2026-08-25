@@ -9,7 +9,7 @@ import {
   getBusinessLearningInsights,
   getBusinessPathInsights,
   postProjectList,
-  runBusinessActions,
+  optimizeBusinessGoals,
   reconcileBusinessExecution,
   runBusinessNext,
   settleBusinessFollowUp,
@@ -200,17 +200,15 @@ export function BusinessPanel({
     setError(null)
     setNotice(null)
     try {
-      const runs = await runBusinessActions(projectId, 5)
-      setRun(runs[runs.length - 1] ?? null)
-      const executed = runs.filter((run) => run.executed).length
+      const optimization = await optimizeBusinessGoals(projectId, 5)
+      setRun(optimization.cycles[optimization.cycles.length - 1] ?? null)
+      const executed = optimization.executedActions.length
       setNotice(
-        executed > 0
-          ? `已连续执行 ${executed} 个安全动作`
-          : '当前没有可自动执行的净收益动作',
+        `已执行 ${executed} 个动作；剩余差距 ${number(optimization.finalGap)}，停止原因：${optimization.stoppedBecause}`,
       )
       await loadInsight(projectId)
     } catch (e) {
-      if (!onAuthError(e)) setError((e as Error).message || '连续业务执行失败')
+      if (!onAuthError(e)) setError((e as Error).message || '目标优化失败')
     } finally {
       setBusy(false)
     }
