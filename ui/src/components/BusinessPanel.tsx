@@ -6,6 +6,7 @@ import {
   getExpiredExecutionLeases,
   getBusinessRecommendations,
   postProjectList,
+  runBusinessActions,
   reconcileBusinessExecution,
   runBusinessNext,
 } from '../api'
@@ -163,6 +164,27 @@ export function BusinessPanel({
     }
   }
 
+  const runBatch = async () => {
+    setBusy(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const runs = await runBusinessActions(projectId, 5)
+      setRun(runs[runs.length - 1] ?? null)
+      const executed = runs.filter((run) => run.executed).length
+      setNotice(
+        executed > 0
+          ? `已连续执行 ${executed} 个安全动作`
+          : '当前没有可自动执行的净收益动作',
+      )
+      await loadInsight(projectId)
+    } catch (e) {
+      if (!onAuthError(e)) setError((e as Error).message || '连续业务执行失败')
+    } finally {
+      setBusy(false)
+    }
+    }
+
   return (
     <div className="knowledge-panel">
       <div className="evo-head">
@@ -186,6 +208,9 @@ export function BusinessPanel({
         </label>
         <button className="primary" disabled={!canRun || busy || !projectId} onClick={() => void execute()}>
           <Play size={13} /> {busy ? '执行中…' : '执行下一步'}
+        </button>
+        <button disabled={!canRun || busy || !projectId} onClick={() => void runBatch()}>
+          执行至多 5 步
         </button>
       </section>
 

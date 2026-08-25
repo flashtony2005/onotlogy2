@@ -606,6 +606,15 @@ export async function runBusinessNext(projectId: string): Promise<BusinessRunDto
   return unwrap<BusinessRunDto>(r)
 }
 
+export async function runBusinessActions(projectId: string, maxSteps: number): Promise<BusinessRunDto[]> {
+  const res = await authFetch('/api/v1/business/run-batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId, maxSteps }),
+  })
+  return unwrap<BusinessRunDto[]>(res)
+}
+
 export async function reconcileBusinessExecution(
   projectId: string,
   opportunityId: string,

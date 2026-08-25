@@ -11,7 +11,8 @@ use openaip_os::abi::odl::parse_odl;
 use openaip_os::business_loop::{
     DecisionOptions, decide_business_approval, decide_opportunity, discover_opportunities,
     execute_opportunity, plan_opportunity_paths, recommend_next_actions,
-    reopen_interrupted_execution, run_next_best_action, settle_follow_up, start_follow_up,
+    reopen_interrupted_execution, run_business_actions, run_next_best_action, settle_follow_up,
+    start_follow_up,
 };
 use openaip_os::plugin::catalog::PluginCatalog;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine};
@@ -763,6 +764,68 @@ async fn metric_budget_is_shared_across_opportunities() {
     .await
     .expect_err("显式决策不能绕过共享预算");
     assert!(error.to_string().contains("指标剩余成本预算"));
+}
+
+#[tokio::test]
+async fn bounded_batch_continues_until_no_safe_candidate_remains() {
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let ontology = std::fs::read_to_string("domain-packs/crm-retention/ontology.odl")
+        .expect("业务包 ODL 应存在");
+    seed_odl_project(&storage, "batch-loop", &ontology, "monthly_reactivations").await;
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::CreateObject {
+            object_type: "Customer".into(),
+            id: "customer:batch-vip-2".into(),
+            data: json!({
+                "name": "第二位 VIP",
+                "level": "VIP",
+                "balance": 120_000.0,
+                "days_since_last_contact": 80
+            }),
+            project_id: Some("batch-loop".into()),
+        })
+        .await
+        .expect("应能写入第二位客户状态");
+
+    let first = run_business_actions(
+        &storage,
+        &PluginCatalog::new(),
+        &WorkerRegistry::new(),
+        "batch-loop",
+        "contract-test",
+        1,
+    )
+    .await
+    .expect("单步批量应可执行");
+    assert_eq!(first.len(), 1);
+    assert!(first[0].executed);
+
+    let runs = run_business_actions(
+        &storage,
+        &PluginCatalog::new(),
+        &WorkerRegistry::new(),
+        "batch-loop",
+        "contract-test",
+        20,
+    )
+    .await
+    .expect("有界批量应继续处理剩余机会");
+    assert!(runs.len() >= 2, "第二个机会后还应有一轮安全空闲");
+    assert!(!runs.last().expect("批量不能为空").executed);
+    let outcomes = storage
+        .list_objects_for_project("batch-loop", "Outcome")
+        .await
+        .expect("结果应可读取");
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| outcome.data["stage"] == json!("ActionExecuted"))
+            .count(),
+        2,
+        "两个机会都应获得一次执行证据"
+    );
 }
 
 #[tokio::test]

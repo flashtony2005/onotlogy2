@@ -415,6 +415,7 @@ fn router() -> Router<Arc<AppState>> {
         )
         .route("/api/v1/business/discover-opportunities", post(discover))
         .route("/api/v1/business/run-next", post(run_next))
+        .route("/api/v1/business/run-batch", post(business_loop::run_batch))
         .route(
             "/api/v1/business/opportunities/:id/decide",
             post(business_loop::decide),

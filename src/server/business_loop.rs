@@ -4,8 +4,8 @@ use crate::auth::AuthUser;
 use crate::business_loop::{
     BusinessLoopError, decide_business_approval, decide_opportunity, discover_opportunities,
     execute_opportunity, goal_gaps, plan_business_portfolio, plan_opportunity_paths,
-    recommend_next_actions, reopen_interrupted_execution, run_next_best_action, settle_follow_up,
-    start_follow_up,
+    recommend_next_actions, reopen_interrupted_execution, run_business_actions,
+    run_next_best_action, settle_follow_up, start_follow_up,
 };
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -56,6 +56,13 @@ pub(crate) struct ReconcileBody {
     pub project_id: String,
     pub lease_id: String,
     pub acknowledged_no_side_effect: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BusinessBatchBody {
+    pub project_id: String,
+    pub max_steps: Option<u32>,
 }
 
 fn error_response(error: BusinessLoopError) -> Response {
@@ -287,6 +294,30 @@ pub(crate) async fn decide(
         }
     }
     error_response(BusinessLoopError::NotFound(id))
+}
+
+pub(crate) async fn run_batch(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<BusinessBatchBody>,
+) -> Response {
+    if let Some(response) = write_denied(&user) {
+        return response;
+    }
+    let workers = st.v2.workers.read().await;
+    match run_business_actions(
+        &st.storage,
+        &st.plugin_catalog,
+        &workers,
+        &body.project_id,
+        &user.username,
+        body.max_steps.unwrap_or(5),
+    )
+    .await
+    {
+        Ok(runs) => ApiResponse::ok(runs).into_response(),
+        Err(error) => error_response(error),
+    }
 }
 
 pub(crate) async fn execute(

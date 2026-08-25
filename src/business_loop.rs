@@ -44,6 +44,7 @@ const TASK_SETTLED_SUCCESS: &str = "Completed";
 const TASK_SETTLED_FAILURE: &str = "Failed";
 const PATH_MAX_STEPS: usize = 3;
 const EXECUTION_LEASE_TTL_SECS: i64 = 600;
+pub const BUSINESS_LOOP_MAX_BATCH: usize = 20;
 
 /// 同进程业务写入闸门：决策/执行必须串行读取并扣减共享预算。
 /// ponytail: 进程内闸门，多实例部署时升级为数据库事务化资源预留。
@@ -3356,6 +3357,30 @@ pub async fn run_next_best_action(
 ) -> Result<BusinessLoopRun, BusinessLoopError> {
     let _gate = BUSINESS_LOOP_WRITE_GATE.lock().await;
     run_next_best_action_locked(storage, plugins, workers, project_id, decided_by).await
+}
+
+/// 连续执行有界多轮自主闭环；无安全候选、需审批或出现中断恢复时立即停止。
+pub async fn run_business_actions(
+    storage: &LibSQLStorage,
+    plugins: &PluginCatalog,
+    workers: &WorkerRegistry,
+    project_id: &str,
+    decided_by: &str,
+    max_steps: u32,
+) -> Result<Vec<BusinessLoopRun>, BusinessLoopError> {
+    let max_steps = max_steps.clamp(1, BUSINESS_LOOP_MAX_BATCH as u32) as usize;
+    let _gate = BUSINESS_LOOP_WRITE_GATE.lock().await;
+    let mut runs = Vec::with_capacity(max_steps);
+    for _ in 0..max_steps {
+        let run =
+            run_next_best_action_locked(storage, plugins, workers, project_id, decided_by).await?;
+        let executed = run.executed;
+        runs.push(run);
+        if !executed {
+            break;
+        }
+    }
+    Ok(runs)
 }
 
 async fn run_next_best_action_locked(
