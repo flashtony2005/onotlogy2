@@ -4,11 +4,14 @@ import {
   getBusinessGoals,
   getBusinessPortfolio,
   getExpiredExecutionLeases,
+  getBusinessFollowUps,
   getBusinessRecommendations,
   postProjectList,
   runBusinessActions,
   reconcileBusinessExecution,
   runBusinessNext,
+  settleBusinessFollowUp,
+  startBusinessFollowUp,
 } from '../api'
 import type {
   BusinessCandidateDto,
@@ -17,6 +20,7 @@ import type {
   BusinessRecommendationDto,
   BusinessRunDto,
   ExecutionLeaseDto,
+  FollowUpItemDto,
   ProjectDto,
 } from '../types'
 
@@ -60,6 +64,7 @@ export function BusinessPanel({
   const [recommendations, setRecommendations] = useState<BusinessRecommendationDto[]>([])
   const [portfolio, setPortfolio] = useState<BusinessPathDto[]>([])
   const [interruptedLeases, setInterruptedLeases] = useState<ExecutionLeaseDto[]>([])
+  const [followUps, setFollowUps] = useState<FollowUpItemDto[]>([])
   const [run, setRun] = useState<BusinessRunDto | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -68,19 +73,26 @@ export function BusinessPanel({
   const canRun = currentRole.toLowerCase() !== 'executive'
 
   const loadInsight = async (selectedId: string) => {
-    const [goalResult, recommendationResult, portfolioResult, leaseResult] = await Promise.allSettled([
-      getBusinessGoals(selectedId),
-      getBusinessRecommendations(selectedId),
-      getBusinessPortfolio(selectedId),
-      getExpiredExecutionLeases(selectedId),
-    ])
+    const [goalResult, recommendationResult, portfolioResult, leaseResult, followUpResult] =
+      await Promise.allSettled([
+        getBusinessGoals(selectedId),
+        getBusinessRecommendations(selectedId),
+        getBusinessPortfolio(selectedId),
+        getExpiredExecutionLeases(selectedId),
+        getBusinessFollowUps(selectedId),
+      ])
     setGoals(goalResult.status === 'fulfilled' ? goalResult.value : [])
     setRecommendations(recommendationResult.status === 'fulfilled' ? recommendationResult.value : [])
     setPortfolio(portfolioResult.status === 'fulfilled' ? portfolioResult.value : [])
     setInterruptedLeases(leaseResult.status === 'fulfilled' ? leaseResult.value : [])
-    const failures = [goalResult, recommendationResult, portfolioResult, leaseResult].filter(
-      (result) => result.status === 'rejected',
-    )
+    setFollowUps(followUpResult.status === 'fulfilled' ? followUpResult.value : [])
+    const failures = [
+      goalResult,
+      recommendationResult,
+      portfolioResult,
+      leaseResult,
+      followUpResult,
+    ].filter((result) => result.status === 'rejected')
     if (failures.length > 0) {
       throw (failures[0] as PromiseRejectedResult).reason
     }
@@ -183,7 +195,22 @@ export function BusinessPanel({
     } finally {
       setBusy(false)
     }
+  }
+
+  const updateFollowUp = async (operation: () => Promise<unknown>, message: string) => {
+    setBusy(true)
+    setError(null)
+    setNotice(null)
+    try {
+      await operation()
+      setNotice(message)
+      await loadInsight(projectId)
+    } catch (e) {
+      if (!onAuthError(e)) setError((e as Error).message || '跟进验证失败')
+    } finally {
+      setBusy(false)
     }
+  }
 
   return (
     <div className="knowledge-panel">
@@ -257,6 +284,64 @@ export function BusinessPanel({
                 <button disabled={!canRun || busy} onClick={() => void reconcile(lease.id, lease.opportunityId)}>
                   确认无副作用并重开
                 </button>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {!loading && followUps.length > 0 && (
+        <section className="evo-section">
+          <h4>验证队列</h4>
+          <div className="business-list">
+            {followUps.map((item) => (
+              <article key={item.id} className="knowledge-proposal">
+                <div className="knowledge-proposal-head">
+                  <b>{item.subject || item.id} · {item.action ?? item.objectType}</b>
+                  <small>{item.status}</small>
+                </div>
+                <div className="knowledge-meta">
+                  <span>{item.objectType}</span>
+                  {item.decisionId && <span>决策 {item.decisionId}</span>}
+                </div>
+                {item.status === 'Pending' ? (
+                  <button
+                    disabled={!canRun || busy}
+                    onClick={() =>
+                      void updateFollowUp(
+                        () => startBusinessFollowUp(item.id),
+                        '跟进已启动',
+                      )
+                    }
+                  >
+                    启动验证
+                  </button>
+                ) : (
+                  <div className="business-controls">
+                    <button
+                      disabled={!canRun || busy}
+                      onClick={() =>
+                        void updateFollowUp(
+                          () => settleBusinessFollowUp(item.id, true),
+                          '已记录成功终局',
+                        )
+                      }
+                    >
+                      成功
+                    </button>
+                    <button
+                      disabled={!canRun || busy}
+                      onClick={() =>
+                        void updateFollowUp(
+                          () => settleBusinessFollowUp(item.id, false),
+                          '已记录失败终局',
+                        )
+                      }
+                    >
+                      失败
+                    </button>
+                  </div>
+                )}
               </article>
             ))}
           </div>

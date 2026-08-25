@@ -633,6 +633,15 @@ export interface ExecutionLeaseDto {
   expiresAt: string
 }
 
+export interface FollowUpItemDto {
+  id: string
+  objectType: string
+  subject: string
+  status: string
+  decisionId?: string
+  action?: string
+}
+
 export interface BusinessRunDto {
   executed: boolean
   projectId: string

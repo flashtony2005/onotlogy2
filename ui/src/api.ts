@@ -34,6 +34,7 @@ import type {
   BusinessRecommendationDto,
   BusinessRunDto,
   ExecutionLeaseDto,
+  FollowUpItemDto,
   ProjectEventDto,
   SessionDto,
   SessionSummaryDto,
@@ -595,6 +596,32 @@ export async function getBusinessPortfolio(projectId: string): Promise<BusinessP
 export async function getExpiredExecutionLeases(projectId: string): Promise<ExecutionLeaseDto[]> {
   const res = await authFetch(`/api/v1/business/execution-leases?projectId=${encodeURIComponent(projectId)}`)
   return unwrap<ExecutionLeaseDto[]>(res)
+}
+
+export async function getBusinessFollowUps(projectId: string): Promise<FollowUpItemDto[]> {
+  const res = await authFetch(`/api/v1/business/follow-ups?projectId=${encodeURIComponent(projectId)}`)
+  return unwrap<FollowUpItemDto[]>(res)
+}
+
+export async function startBusinessFollowUp(id: string): Promise<unknown> {
+  const res = await authFetch(`/api/v1/business/follow-ups/${encodeURIComponent(id)}/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  })
+  return unwrap(res)
+}
+
+export async function settleBusinessFollowUp(
+  id: string,
+  success: boolean,
+): Promise<unknown> {
+  const res = await authFetch(`/api/v1/business/follow-ups/${encodeURIComponent(id)}/result`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ success }),
+  })
+  return unwrap(res)
 }
 
 export async function runBusinessNext(projectId: string): Promise<BusinessRunDto> {

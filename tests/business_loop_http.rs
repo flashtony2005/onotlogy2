@@ -10,7 +10,7 @@ use openaip_os::abi::ir::ActorKind;
 use openaip_os::abi::odl::parse_odl;
 use openaip_os::business_loop::{
     DecisionOptions, decide_business_approval, decide_opportunity, discover_opportunities,
-    execute_opportunity, plan_opportunity_paths, recommend_next_actions,
+    execute_opportunity, list_follow_ups, plan_opportunity_paths, recommend_next_actions,
     reopen_interrupted_execution, run_business_actions, run_next_best_action, settle_follow_up,
     start_follow_up,
 };
@@ -535,9 +535,23 @@ async fn deferred_follow_up_evidence_is_declared_and_type_generic() {
     assert_eq!(created["type"], json!("FollowUpPlan"));
     let task_id = created["id"].as_str().expect("跟进对象必须有 ID");
 
+    let queue = list_follow_ups(&storage, "generic-follow-up")
+        .await
+        .expect("应能读取验证队列");
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue[0].id, task_id);
+    assert_eq!(queue[0].object_type, "FollowUpPlan");
+    assert_eq!(queue[0].subject, "customer:generic-follow-up-vip");
+    assert_eq!(queue[0].status, "Pending");
+    assert_eq!(queue[0].action.as_deref(), Some("RetainCustomer"));
+
     start_follow_up(&storage, "generic-follow-up", task_id)
         .await
         .expect("应能启动任意声明的跟进对象");
+    let running = list_follow_ups(&storage, "generic-follow-up")
+        .await
+        .expect("启动后应能读取验证队列");
+    assert_eq!(running[0].status, "InProgress");
     let mut running = storage
         .get(task_id)
         .await
@@ -555,6 +569,10 @@ async fn deferred_follow_up_evidence_is_declared_and_type_generic() {
     let settled = settle_follow_up(&storage, "generic-follow-up", task_id, true)
         .await
         .expect("应能为任意声明对象记录终局");
+    let completed = list_follow_ups(&storage, "generic-follow-up")
+        .await
+        .expect("终局后应能读取验证队列");
+    assert!(completed.is_empty(), "终局对象不应继续占用队列");
     assert_eq!(settled["task"]["type"], json!("FollowUpPlan"));
     assert_eq!(settled["outcome"]["data"]["goal_delta"], json!(250.0));
     assert_eq!(settled["goals"][0]["currentValue"], json!(250.0));
@@ -1132,6 +1150,22 @@ async fn business_loop_discovers_decides_executes_and_replans() {
         .as_str()
         .expect("挽留动作应创建 RetentionTask")
         .to_string();
+    let (status, body) = common::http_call(
+        addr,
+        "GET",
+        "/api/v1/business/follow-ups?projectId=crm-retention",
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "应能读取验证队列：{body}");
+    let follow_ups = data(&body).await.as_array().cloned().unwrap_or_default();
+    assert_eq!(follow_ups.len(), 1);
+    assert_eq!(follow_ups[0]["id"], json!(task_id));
+    assert_eq!(follow_ups[0]["objectType"], json!("RetentionTask"));
+    assert_eq!(follow_ups[0]["subject"], json!("customer:demo-vip-rich"));
+    assert_eq!(follow_ups[0]["status"], json!("Pending"));
+    assert_eq!(follow_ups[0]["action"], json!("RetainCustomer"));
+
     assert_eq!(
         result["execution"]["actionOutcome"]["data"]["stage"],
         json!("ActionExecuted")
@@ -1181,6 +1215,22 @@ async fn business_loop_discovers_decides_executes_and_replans() {
         settled["goals"][0]["currentValue"],
         json!(14.0),
         "挽留成功按 ODL 声明的同一目标指标计入进度"
+    );
+    let (status, body) = common::http_call(
+        addr,
+        "GET",
+        "/api/v1/business/follow-ups?projectId=crm-retention",
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "终局后应仍可读取验证队列：{body}");
+    assert!(
+        data(&body)
+            .await
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .is_empty()
     );
     let current_relations = storage.list_all_relations().await.unwrap();
     assert!(current_relations.iter().any(|relation| {

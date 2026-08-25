@@ -410,6 +410,10 @@ fn router() -> Router<Arc<AppState>> {
             get(business_loop::business_portfolio),
         )
         .route(
+            "/api/v1/business/follow-ups",
+            get(business_loop::follow_ups),
+        )
+        .route(
             "/api/v1/business/execution-leases",
             get(business_loop::execution_leases),
         )

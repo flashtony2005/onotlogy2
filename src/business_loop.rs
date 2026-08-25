@@ -207,6 +207,18 @@ pub struct BusinessLoopRun {
     pub goals: Vec<GoalGap>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct FollowUpItem {
+    pub id: String,
+    #[serde(rename = "objectType")]
+    pub object_type: String,
+    pub subject: String,
+    pub status: String,
+    #[serde(rename = "decisionId", skip_serializing_if = "Option::is_none")]
+    pub decision_id: Option<String>,
+    pub action: Option<String>,
+}
+
 fn text<'a>(data: &'a Value, key: &str) -> Result<&'a str, BusinessLoopError> {
     data.get(key)
         .and_then(Value::as_str)
@@ -3084,6 +3096,62 @@ pub async fn reopen_interrupted_execution(
         "opportunity": { "id": opportunity.id, "data": set_status(opportunity.data.clone(), OPPORTUNITY_OPEN) },
         "executionLease": { "id": lease.id, "status": lease.status },
     }))
+}
+
+pub async fn list_follow_ups(
+    storage: &LibSQLStorage,
+    project_id: &str,
+) -> Result<Vec<FollowUpItem>, BusinessLoopError> {
+    let (_, ontology) = project_ontology(storage, project_id).await?;
+    let effects = follow_up_effects(&ontology);
+    // ponytail: 当前项目规模下全量关系扫描最简单；规模变大时改为按 target/project 索引查询。
+    let relations = storage.list_all_relations().await?;
+    let decisions = storage
+        .list_objects_for_project(project_id, "Decision")
+        .await?;
+    let mut items = Vec::new();
+
+    for effect in &effects {
+        let objects = storage
+            .list_objects_for_project(project_id, &effect.object_type)
+            .await?;
+        for object in objects {
+            let status = text(&object.data, "status")?.to_string();
+            if status != TASK_PENDING && status != TASK_IN_PROGRESS {
+                continue;
+            }
+            let subject = relations
+                .iter()
+                .find(|relation| {
+                    effect.link_edge.as_deref() == Some(relation.relation.as_str())
+                        && relation.target == object.id
+                })
+                .map(|relation| relation.source.clone());
+            let decision = relations
+                .iter()
+                .find(|relation| {
+                    effect.decision_edge == relation.relation && relation.target == object.id
+                })
+                .and_then(|relation| decisions.iter().find(|item| item.id == relation.source));
+            items.push(FollowUpItem {
+                id: object.id,
+                object_type: object.r#type,
+                subject: subject.unwrap_or_default(),
+                status,
+                decision_id: decision.map(|decision| decision.id.clone()),
+                action: decision
+                    .and_then(|decision| text(&decision.data, "action").ok())
+                    .map(str::to_owned),
+            });
+        }
+    }
+    items.sort_by(|left, right| {
+        right
+            .status
+            .cmp(&left.status)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(items)
 }
 
 /// Deferred 创建效应的运行时元数据；终局证据必须沿这些声明边回链。

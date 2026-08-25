@@ -3,9 +3,9 @@
 use crate::auth::AuthUser;
 use crate::business_loop::{
     BusinessLoopError, decide_business_approval, decide_opportunity, discover_opportunities,
-    execute_opportunity, goal_gaps, plan_business_portfolio, plan_opportunity_paths,
-    recommend_next_actions, reopen_interrupted_execution, run_business_actions,
-    run_next_best_action, settle_follow_up, start_follow_up,
+    execute_opportunity, goal_gaps, list_follow_ups, plan_business_portfolio,
+    plan_opportunity_paths, recommend_next_actions, reopen_interrupted_execution,
+    run_business_actions, run_next_best_action, settle_follow_up, start_follow_up,
 };
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -187,6 +187,20 @@ pub(crate) async fn business_portfolio(
     }
     match plan_business_portfolio(&st.storage, &query.project_id).await {
         Ok(portfolio) => ApiResponse::ok(portfolio).into_response(),
+        Err(error) => error_response(error),
+    }
+}
+
+pub(crate) async fn follow_ups(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Query(query): Query<ProjectScope>,
+) -> Response {
+    if !user.can_read_evaluation() {
+        return forbidden("当前角色无权读取业务验证队列（需 Operator 及以上）").into_response();
+    }
+    match list_follow_ups(&st.storage, &query.project_id).await {
+        Ok(items) => ApiResponse::ok(items).into_response(),
         Err(error) => error_response(error),
     }
 }
