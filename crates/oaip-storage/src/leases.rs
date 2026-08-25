@@ -23,6 +23,7 @@ pub const LEASE_CLAIMED: &str = "Claimed";
 pub const LEASE_COMPLETED: &str = "Completed";
 pub const LEASE_RELEASED: &str = "Released";
 pub const LEASE_EXPIRED: &str = "Expired";
+pub const LEASE_REOPENED: &str = "Reopened";
 
 impl LibSQLStorage {
     /// 原子声明执行租约；同一 Opportunity 只允许一条未过期租约。
@@ -142,6 +143,39 @@ impl LibSQLStorage {
         }
         Ok(leases)
     }
+
+    /// 人工确认后消费过期租约；调用方负责先把机会恢复到可规划状态。
+    pub async fn reopen_execution_lease(
+        &self,
+        id: &str,
+    ) -> Result<ExecutionLeaseRecord, StorageError> {
+        let _write_txn = self.write_txn_lock.lock().await;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await?;
+        let mut rows = tx
+            .query(
+                "SELECT id, project_id, opportunity_id, owner, status, expires_at \
+                 FROM wb_business_execution_lease WHERE id=?1 AND status=?2",
+                params![id, LEASE_EXPIRED],
+            )
+            .await?;
+        let Some(row) = rows.next().await? else {
+            return Err(StorageError::NotFound(id.to_string()));
+        };
+        let mut lease = row_to_lease(&row)?;
+        drop(rows);
+        tx.execute(
+            "UPDATE wb_business_execution_lease SET status=?1, updated_at=CURRENT_TIMESTAMP \
+             WHERE id=?2 AND status=?3",
+            params![LEASE_REOPENED, lease.id.clone(), LEASE_EXPIRED],
+        )
+        .await?;
+        lease.status = LEASE_REOPENED.into();
+        tx.commit().await?;
+        Ok(lease)
+    }
 }
 
 fn row_to_lease(row: &libsql::Row) -> Result<ExecutionLeaseRecord, StorageError> {
@@ -256,6 +290,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["stale"]
         );
+
+        let reopened = storage
+            .reopen_execution_lease("stale")
+            .await
+            .expect("过期租约应可重开");
+        assert_eq!(reopened.status, LEASE_REOPENED);
+        assert!(matches!(
+            storage.reopen_execution_lease("stale").await,
+            Err(StorageError::NotFound(_))
+        ));
         let _ = std::fs::remove_file(path);
     }
 }

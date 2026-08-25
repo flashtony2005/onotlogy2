@@ -6,6 +6,7 @@ import {
   getExpiredExecutionLeases,
   getBusinessRecommendations,
   postProjectList,
+  reconcileBusinessExecution,
   runBusinessNext,
 } from '../api'
 import type {
@@ -147,6 +148,21 @@ export function BusinessPanel({
     }
   }
 
+  const reconcile = async (leaseId: string, opportunityId: string) => {
+    setBusy(true)
+    setError(null)
+    setNotice(null)
+    try {
+      await reconcileBusinessExecution(projectId, opportunityId, leaseId)
+      setNotice('已确认无副作用并重开机会')
+      await loadInsight(projectId)
+    } catch (e) {
+      if (!onAuthError(e)) setError((e as Error).message || '中断执行处理失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="knowledge-panel">
       <div className="evo-head">
@@ -213,6 +229,9 @@ export function BusinessPanel({
                   <span>过期 {lease.expiresAt}</span>
                 </div>
                 <p>外部副作用未知；请先人工对账，再决定是否创建新机会。</p>
+                <button disabled={!canRun || busy} onClick={() => void reconcile(lease.id, lease.opportunityId)}>
+                  确认无副作用并重开
+                </button>
               </article>
             ))}
           </div>

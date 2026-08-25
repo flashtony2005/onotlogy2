@@ -4,7 +4,8 @@ use crate::auth::AuthUser;
 use crate::business_loop::{
     BusinessLoopError, decide_business_approval, decide_opportunity, discover_opportunities,
     execute_opportunity, goal_gaps, plan_business_portfolio, plan_opportunity_paths,
-    recommend_next_actions, run_next_best_action, settle_follow_up, start_follow_up,
+    recommend_next_actions, reopen_interrupted_execution, run_next_best_action, settle_follow_up,
+    start_follow_up,
 };
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -47,6 +48,14 @@ pub(crate) struct ApprovalDecisionBody {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct FollowUpResultBody {
     pub success: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReconcileBody {
+    pub project_id: String,
+    pub lease_id: String,
+    pub acknowledged_no_side_effect: bool,
 }
 
 fn error_response(error: BusinessLoopError) -> Response {
@@ -208,6 +217,29 @@ pub(crate) async fn run_next(
         &workers,
         &body.project_id,
         &user.username,
+    )
+    .await
+    {
+        Ok(result) => ApiResponse::ok(result).into_response(),
+        Err(error) => error_response(error),
+    }
+}
+
+pub(crate) async fn reconcile_opportunity(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(id): Path<String>,
+    Json(body): Json<ReconcileBody>,
+) -> Response {
+    if let Some(response) = write_denied(&user) {
+        return response;
+    }
+    match reopen_interrupted_execution(
+        &st.storage,
+        &body.project_id,
+        &id,
+        &body.lease_id,
+        body.acknowledged_no_side_effect,
     )
     .await
     {

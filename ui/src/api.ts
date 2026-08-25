@@ -605,3 +605,20 @@ export async function runBusinessNext(projectId: string): Promise<BusinessRunDto
   })
   return unwrap<BusinessRunDto>(r)
 }
+
+export async function reconcileBusinessExecution(
+  projectId: string,
+  opportunityId: string,
+  leaseId: string,
+): Promise<unknown> {
+  const res = await authFetch(`/api/v1/business/opportunities/${encodeURIComponent(opportunityId)}/reconcile`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      projectId,
+      leaseId,
+      acknowledgedNoSideEffect: true,
+    }),
+  })
+  return unwrap(res)
+}

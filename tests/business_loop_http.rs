@@ -10,8 +10,8 @@ use openaip_os::abi::ir::ActorKind;
 use openaip_os::abi::odl::parse_odl;
 use openaip_os::business_loop::{
     DecisionOptions, decide_business_approval, decide_opportunity, discover_opportunities,
-    execute_opportunity, plan_opportunity_paths, recommend_next_actions, run_next_best_action,
-    settle_follow_up, start_follow_up,
+    execute_opportunity, plan_opportunity_paths, recommend_next_actions,
+    reopen_interrupted_execution, run_next_best_action, settle_follow_up, start_follow_up,
 };
 use openaip_os::plugin::catalog::PluginCatalog;
 use openaip_os::storage::{LibSQLStorage, ObjectEngine};
@@ -2103,6 +2103,28 @@ async fn expired_execution_lease_does_not_repeat_interrupted_action() {
     assert_eq!(run.expired_leases[0].opportunity_id, opportunity_id);
     assert_eq!(run.expired_leases[0].status, "Expired");
 
+    let rejected = reopen_interrupted_execution(
+        &storage,
+        "crash-recovery",
+        opportunity_id,
+        "interrupted-lease",
+        false,
+    )
+    .await;
+    assert!(rejected.is_err(), "未确认无副作用时必须拒绝重开");
+
+    let reopened = reopen_interrupted_execution(
+        &storage,
+        "crash-recovery",
+        opportunity_id,
+        "interrupted-lease",
+        true,
+    )
+    .await
+    .expect("确认无副作用后应重开机会");
+    assert_eq!(reopened["opportunity"]["data"]["status"], json!("Open"));
+    assert_eq!(reopened["executionLease"]["status"], json!("Reopened"));
+
     let opportunities = storage
         .list_objects_for_project("crash-recovery", "Opportunity")
         .await
@@ -2111,8 +2133,13 @@ async fn expired_execution_lease_does_not_repeat_interrupted_action() {
         .list_objects_for_project("crash-recovery", "Outcome")
         .await
         .expect("结果应可读取");
-    assert_eq!(opportunities[0].data["status"], json!("Executed"));
+    assert_eq!(opportunities[0].data["status"], json!("Open"));
     assert!(outcomes.is_empty(), "恢复扫描不得重复产生执行证据");
+    let leases = storage
+        .list_expired_execution_leases("crash-recovery", 200)
+        .await
+        .expect("恢复队列应可读取");
+    assert!(leases.is_empty(), "重开后应消费过期恢复记录");
 }
 
 #[tokio::test]

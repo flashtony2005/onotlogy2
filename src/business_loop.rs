@@ -3036,6 +3036,55 @@ async fn execute_opportunity_locked(
     execution
 }
 
+/// 人工确认中断执行无副作用后，恢复机会并消费恢复队列记录。
+pub async fn reopen_interrupted_execution(
+    storage: &LibSQLStorage,
+    project_id: &str,
+    opportunity_id: &str,
+    lease_id: &str,
+    acknowledged_no_side_effect: bool,
+) -> Result<Value, BusinessLoopError> {
+    let _gate = BUSINESS_LOOP_WRITE_GATE.lock().await;
+    if !acknowledged_no_side_effect {
+        return Err(BusinessLoopError::invalid(
+            "只有人工确认无副作用后才能重开机会",
+        ));
+    }
+
+    let opportunities = storage
+        .list_objects_for_project(project_id, "Opportunity")
+        .await?;
+    let opportunity = find_record(&opportunities, opportunity_id, "Opportunity")
+        .ok_or_else(|| BusinessLoopError::NotFound(opportunity_id.to_string()))?;
+    if text(&opportunity.data, "status")? != OPPORTUNITY_EXECUTED {
+        return Err(BusinessLoopError::invalid(
+            "只有 Executed 状态的中断机会可以重开",
+        ));
+    }
+    let expired = storage
+        .list_expired_execution_leases(project_id, 200)
+        .await?;
+    expired
+        .iter()
+        .find(|lease| lease.id == lease_id && lease.opportunity_id == opportunity.id)
+        .ok_or_else(|| BusinessLoopError::NotFound(lease_id.to_string()))?;
+
+    storage
+        .apply_world(WorldCommand::CompareSetStatus {
+            object_type: "Opportunity".into(),
+            id: opportunity.id.clone(),
+            project_id: Some(project_id.to_string()),
+            expected_status: OPPORTUNITY_EXECUTED.into(),
+            next_status: OPPORTUNITY_OPEN.into(),
+        })
+        .await?;
+    let lease = storage.reopen_execution_lease(lease_id).await?;
+    Ok(json!({
+        "opportunity": { "id": opportunity.id, "data": set_status(opportunity.data.clone(), OPPORTUNITY_OPEN) },
+        "executionLease": { "id": lease.id, "status": lease.status },
+    }))
+}
+
 /// Deferred 创建效应的运行时元数据；终局证据必须沿这些声明边回链。
 #[derive(Clone)]
 struct FollowUpEffect {
