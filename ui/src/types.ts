@@ -588,6 +588,8 @@ export interface BusinessCandidateDto {
   cost: number
   confidence: number
   netValue: number
+  outcomeRuns: number
+  outcomeSuccesses: number
   resources?: Record<string, number>
   plugin?: string
   worker?: string

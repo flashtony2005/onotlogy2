@@ -585,6 +585,10 @@ async fn deferred_follow_up_evidence_is_declared_and_type_generic() {
         .find(|candidate| candidate.action == "RetainCustomer")
         .expect("推荐应包含挽留候选");
     assert_eq!(retained.expected_benefit, json!(250.0));
+    assert_eq!(retained.outcome_runs, 1);
+    assert_eq!(retained.outcome_successes, 1);
+    let reason = recommendations[0].reason.as_str();
+    assert!(reason.contains("样本1成功1"), "学习证据应可解释：{reason}");
 }
 
 #[tokio::test]

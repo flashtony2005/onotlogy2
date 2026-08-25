@@ -30,6 +30,7 @@ function CandidateCard({ item }: { item: BusinessCandidateDto }) {
       <span>收益 {number(item.expectedBenefit)} / 成本 {number(item.cost)}</span>
       <span>置信 {(item.confidence * 100).toFixed(0)}%</span>
       <span>{item.actor === 'human' ? '人工' : '自动'}</span>
+      <span>样本 {item.outcomeRuns} · 成功 {item.outcomeSuccesses}</span>
       {item.requiresApproval && <span className="approval">需审批</span>}
       {item.worker && <code>worker: {item.worker}</code>}
       {item.plugin && <code>plugin: {item.plugin}</code>}

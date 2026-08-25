@@ -122,6 +122,10 @@ pub struct ActionCandidate {
     pub confidence: f64,
     #[serde(rename = "netValue")]
     pub net_value: f64,
+    #[serde(rename = "outcomeRuns")]
+    pub outcome_runs: u64,
+    #[serde(rename = "outcomeSuccesses")]
+    pub outcome_successes: u64,
     /// 除货币外的资源需求；空表示只消耗货币。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub resources: BTreeMap<String, f64>,
@@ -1913,6 +1917,7 @@ fn evaluate_candidates(
             if !budget_admits(planning, budget) {
                 return None;
             }
+            let stats = learning.get(&(opportunity_type.to_string(), definition.name.clone()));
             let confidence = action_confidence(definition, opportunity_type, learning).ok()?;
             let benefit = learned_expected_benefit(
                 definition,
@@ -1921,6 +1926,8 @@ fn evaluate_candidates(
                 expected_benefit(definition, estimated_value, customer).ok()?,
             );
             Some(ActionCandidate {
+                outcome_runs: stats.map_or(0, |stats| stats.runs),
+                outcome_successes: stats.map_or(0, |stats| stats.successes),
                 action: definition.name.to_string(),
                 actor: planning.actor,
                 requires_approval: definition.policy.require_approval,
@@ -1984,8 +1991,16 @@ fn active_goal_gap(
 
 fn candidate_reason(candidates: &[ActionCandidate]) -> String {
     let parts = candidates.iter().map(|candidate| {
+        let evidence = if candidate.outcome_runs == 0 {
+            "无样本".to_string()
+        } else {
+            format!(
+                "样本{}成功{}",
+                candidate.outcome_runs, candidate.outcome_successes
+            )
+        };
         format!(
-            "{} 净价值 {:.0}（置信度 {:.2}）",
+            "{} 净价值 {:.0}（置信度 {:.2}，{evidence}）",
             candidate.action, candidate.net_value, candidate.confidence
         )
     });
