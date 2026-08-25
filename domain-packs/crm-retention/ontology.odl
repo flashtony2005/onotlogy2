@@ -184,6 +184,7 @@ object Outcome:
     cost: float
     metric: string
     stage: string one_of [ActionExecuted,BusinessResult]
+    goal_delta: float
 
 object StateTransition:
   properties:

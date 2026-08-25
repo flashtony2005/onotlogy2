@@ -366,6 +366,92 @@ async fn opportunity_cost_budget_blocks_unaffordable_actions() {
 }
 
 #[tokio::test]
+async fn goal_progress_uses_declared_subject_benefit_change() {
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    let pack_ontology = std::fs::read_to_string("domain-packs/crm-retention/ontology.odl")
+        .expect("业务包 ODL 应存在");
+    let ontology = pack_ontology
+        .replace(
+            "    balance: float\n    days_since_last_contact: int",
+            "    balance: float\n    lifetime_value: float\n    days_since_last_contact: int",
+        )
+        .replace(
+            "    ContactCustomer:\n      planning:\n        cost: 5000",
+            "    ContactCustomer:\n      planning:\n        cost: 5000\n        benefit_field: lifetime_value\n        benefit_factor: 0.5",
+        )
+        .replacen(
+            "      updates:\n        - field: days_since_last_contact\n          value: 0",
+            "      updates:\n        - field: days_since_last_contact\n          value: 0\n        - field: lifetime_value\n          value: 1500",
+            1,
+        );
+    assert_ne!(ontology, pack_ontology, "收益契约测试必须修改成功");
+
+    let customer_id = seed_odl_project(
+        &storage,
+        "quantified-goal",
+        &ontology,
+        "monthly_reactivations",
+    )
+    .await;
+    let mut customer = storage
+        .get(&customer_id)
+        .await
+        .expect("应能读取客户")
+        .expect("客户应存在")
+        .data;
+    customer["lifetime_value"] = json!(1000.0);
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::UpdateObject {
+            id: customer_id.clone(),
+            data: customer,
+            project_id: Some("quantified-goal".into()),
+        })
+        .await
+        .expect("应能写入量化收益基线");
+
+    let discovered = discover_opportunities(&storage, "quantified-goal")
+        .await
+        .expect("应发现量化收益机会");
+    let opportunity_id = discovered[0]["id"].as_str().expect("机会必须有 ID");
+    let decision = decide_opportunity(
+        &storage,
+        "quantified-goal",
+        opportunity_id,
+        "contract-test",
+        DecisionOptions {
+            action: Some("ContactCustomer"),
+            reason: None,
+            alternatives: None,
+            params: None,
+        },
+    )
+    .await
+    .expect("应能决策量化收益动作");
+    assert_eq!(decision["data"]["action"], json!("ContactCustomer"));
+    let execution = execute_opportunity(
+        &storage,
+        &PluginCatalog::new(),
+        &WorkerRegistry::new(),
+        "quantified-goal",
+        opportunity_id,
+    )
+    .await
+    .expect("应能执行量化收益动作");
+    assert_eq!(execution["goals"][0]["currentValue"], json!(250.0));
+
+    let outcomes = storage
+        .list_objects_for_project("quantified-goal", "Outcome")
+        .await
+        .expect("应能读取结果账本");
+    assert!(outcomes.iter().any(|outcome| {
+        outcome.data["stage"] == json!("BusinessResult")
+            && outcome.data["goal_delta"] == json!(250.0)
+    }));
+}
+
+#[tokio::test]
 async fn deferred_follow_up_evidence_is_declared_and_type_generic() {
     let storage = LibSQLStorage::open(":memory:")
         .await
@@ -1175,6 +1261,7 @@ object Outcome:
     cost: float
     metric: string
     stage: string one_of [ActionExecuted,BusinessResult]
+    goal_delta: float
 
 object StateTransition:
   properties:
@@ -1556,6 +1643,7 @@ object Outcome:
     cost: float
     metric: string
     stage: string
+    goal_delta: float
     resources: string
     executed_at: datetime
 
@@ -2182,6 +2270,7 @@ object Outcome:
     cost: float
     metric: string
     stage: string
+    goal_delta: float
     provider: string
     capability: string
 

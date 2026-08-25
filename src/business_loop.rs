@@ -334,6 +334,30 @@ fn expected_benefit(
     Ok(number(subject, field)?.max(0.0) * factor)
 }
 
+/// 从动作声明和主体状态变化推导目标收益；未声明量化字段时保持“完成一次”。
+fn realized_goal_delta(
+    action: &ActionDef,
+    before: &Value,
+    after: &Value,
+) -> Result<f64, BusinessLoopError> {
+    let planning = action_planning(action)?;
+    let Some((field, factor)) = planning
+        .benefit_field
+        .as_deref()
+        .zip(planning.benefit_factor)
+    else {
+        return Ok(1.0);
+    };
+    let delta = (number(after, field)? - number(before, field)?) * factor;
+    if !delta.is_finite() {
+        return Err(BusinessLoopError::invalid(format!(
+            "业务动作 {} 的目标收益必须是有限数值",
+            action.name
+        )));
+    }
+    Ok(delta)
+}
+
 fn subject_preconditions_satisfied(
     action: &ActionDef,
     subject: &Value,
@@ -989,7 +1013,25 @@ pub async fn refresh_goal_progress(
     let opportunities = storage
         .list_objects_for_project(project_id, "Opportunity")
         .await?;
-    let mut completed_by_metric = std::collections::HashMap::<String, u64>::new();
+    let mut executed_delta_by_decision = std::collections::BTreeMap::<&str, f64>::new();
+    for relation in &relations {
+        let Some(outcome) = outcomes
+            .iter()
+            .find(|outcome| outcome.id == relation.target)
+        else {
+            continue;
+        };
+        if outcome.r#type != "Outcome"
+            || outcome.data.get("stage").and_then(Value::as_str) != Some(OUTCOME_ACTION_EXECUTED)
+        {
+            continue;
+        }
+        executed_delta_by_decision.insert(
+            relation.source.as_str(),
+            number(&outcome.data, "goal_delta")?,
+        );
+    }
+    let mut completed_by_metric = std::collections::BTreeMap::<String, f64>::new();
     for outcome in outcomes {
         if outcome.data.get("success").and_then(Value::as_bool) != Some(true)
             || text(&outcome.data, "stage")? != OUTCOME_BUSINESS_RESULT
@@ -1021,15 +1063,18 @@ pub async fn refresh_goal_progress(
             action,
         );
         if let Some(metric) = metric {
-            *completed_by_metric.entry(metric).or_default() += 1;
+            let delta = executed_delta_by_decision
+                .get(decision.id.as_str())
+                .copied()
+                .unwrap_or(1.0);
+            *completed_by_metric.entry(metric).or_default() += delta;
         }
     }
 
     for goal in goals {
         let baseline = number(&goal.data, "baseline_value")?;
         let metric = text(&goal.data, "target_metric")?;
-        let current =
-            baseline + completed_by_metric.get(metric).copied().unwrap_or_default() as f64;
+        let current = baseline + completed_by_metric.get(metric).copied().unwrap_or_default();
         if number(&goal.data, "current_value")? == current {
             continue;
         }
@@ -2536,6 +2581,12 @@ async fn execute_opportunity_locked(
         "cost": planning.cost,
         "metric": rule.goal_metric.clone().unwrap_or_default(),
         "stage": OUTCOME_ACTION_EXECUTED,
+        // ponytail: Deferred 终局暂按一次计数；要精确量化需在跟进对象声明终局收益字段。
+        "goal_delta": if planning.outcome_timing == OutcomeTiming::Immediate {
+            realized_goal_delta(&definition, &before_record.data, &after_data)?
+        } else {
+            1.0
+        },
     });
     // ponytail: OWL 数据面只收标量，资源快照先作为 JSON 字符串入账；需要查询时再升级为标量列。
     if !shared_resource_limits(&ontology).is_empty() {
@@ -2602,6 +2653,7 @@ async fn execute_opportunity_locked(
             "success": true,
             "metric": rule.goal_metric.clone().unwrap_or_default(),
             "stage": OUTCOME_BUSINESS_RESULT,
+            "goal_delta": action_outcome_data["goal_delta"],
         });
         if let Some(provider_id) = &capability_provider {
             result_data["provider"] = json!(provider_id);
@@ -3031,6 +3083,29 @@ mod tests {
                 capability: None,
             }),
         }
+    }
+
+    #[test]
+    fn goal_delta_uses_declared_subject_change() {
+        let mut action = action("lifetime_value");
+        {
+            let planning = action.planning.as_mut().expect("测试动作应有规划");
+            planning.benefit_field = Some("lifetime_value".into());
+            planning.benefit_factor = Some(0.5);
+        }
+        let before = json!({"lifetime_value": 1000.0});
+        let after = json!({"lifetime_value": 1500.0});
+
+        let delta =
+            realized_goal_delta(&action, &before, &after).expect("状态变化应可折算目标收益");
+        assert_eq!(delta, 250.0);
+
+        action.planning.as_mut().unwrap().benefit_field = None;
+        action.planning.as_mut().unwrap().benefit_factor = None;
+        assert_eq!(
+            realized_goal_delta(&action, &before, &after).expect("默认收益应有效"),
+            1.0
+        );
     }
 
     #[test]
