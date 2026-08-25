@@ -405,6 +405,10 @@ fn router() -> Router<Arc<AppState>> {
             "/api/v1/business/opportunity-paths",
             get(business_loop::opportunity_paths),
         )
+        .route(
+            "/api/v1/business/portfolio",
+            get(business_loop::business_portfolio),
+        )
         .route("/api/v1/business/discover-opportunities", post(discover))
         .route("/api/v1/business/run-next", post(run_next))
         .route(

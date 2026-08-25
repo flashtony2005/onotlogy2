@@ -756,6 +756,27 @@ async fn business_loop_discovers_decides_executes_and_replans() {
     let (status, body) = common::http_call(
         addr,
         "GET",
+        "/api/v1/business/portfolio?projectId=crm-retention",
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "应能读取业务组合：{body}");
+    let portfolio = data(&body).await.as_array().cloned().unwrap_or_default();
+    assert_eq!(portfolio.len(), 2, "两个主体应可组合：{portfolio:?}");
+    assert!(
+        portfolio
+            .iter()
+            .any(|path| path["subject"] == json!("customer:demo-vip-late"))
+    );
+    assert!(
+        portfolio
+            .iter()
+            .any(|path| path["subject"] == json!("customer:demo-vip-rich"))
+    );
+
+    let (status, body) = common::http_call(
+        addr,
+        "GET",
         "/api/v1/business/recommendations?projectId=crm-retention",
         None,
     )

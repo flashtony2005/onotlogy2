@@ -3,8 +3,8 @@
 use crate::auth::AuthUser;
 use crate::business_loop::{
     BusinessLoopError, decide_business_approval, decide_opportunity, discover_opportunities,
-    execute_opportunity, goal_gaps, plan_opportunity_paths, recommend_next_actions,
-    run_next_best_action, settle_follow_up, start_follow_up,
+    execute_opportunity, goal_gaps, plan_business_portfolio, plan_opportunity_paths,
+    recommend_next_actions, run_next_best_action, settle_follow_up, start_follow_up,
 };
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -157,6 +157,20 @@ pub(crate) async fn opportunity_paths(
     }
     match plan_opportunity_paths(&st.storage, &query.project_id).await {
         Ok(paths) => ApiResponse::ok(paths).into_response(),
+        Err(error) => error_response(error),
+    }
+}
+
+pub(crate) async fn business_portfolio(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Query(query): Query<ProjectScope>,
+) -> Response {
+    if !user.can_read_evaluation() {
+        return forbidden("当前角色无权读取业务组合（需 Operator 及以上）").into_response();
+    }
+    match plan_business_portfolio(&st.storage, &query.project_id).await {
+        Ok(portfolio) => ApiResponse::ok(portfolio).into_response(),
         Err(error) => error_response(error),
     }
 }

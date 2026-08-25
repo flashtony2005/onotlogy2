@@ -132,8 +132,18 @@ pub struct OpportunityPath {
     pub requires_human: bool,
     #[serde(rename = "requiresApproval")]
     pub requires_approval: bool,
+    #[serde(rename = "projectedCost")]
+    pub projected_cost: f64,
     #[serde(rename = "projectedNetValue")]
     pub projected_net_value: f64,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub resources: BTreeMap<String, f64>,
+    #[serde(
+        rename = "goalMetric",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub goal_metric: Option<String>,
     pub confidence: f64,
     pub score: f64,
     pub reason: String,
@@ -1325,26 +1335,44 @@ pub async fn plan_opportunity_paths(
                 .total_cmp(&left.score)
                 .then_with(|| left.actions.cmp(&right.actions))
         });
-        plans.extend(scored.into_iter().take(5).map(|path| {
+        for path in scored.into_iter().take(5) {
+            let resources = path
+                .actions
+                .iter()
+                .filter_map(|name| find_action(&actions, name))
+                .flat_map(|action| {
+                    action
+                        .planning
+                        .as_ref()
+                        .map(|planning| planning.resources.iter())
+                        .unwrap_or_default()
+                })
+                .fold(BTreeMap::new(), |mut total, (name, amount)| {
+                    *total.entry(name.clone()).or_default() += amount;
+                    total
+                });
             let reason = format!(
                 "{}；净值 {:.0}；置信度 {:.2}",
                 path.actions.join(" → "),
                 path.net_value,
                 path.confidence
             );
-            OpportunityPath {
+            plans.push(OpportunityPath {
                 project_id: project_id.to_string(),
                 opportunity_id: opportunity.id.clone(),
                 subject: subject.clone(),
                 actions: path.actions,
                 requires_human: path.requires_human,
                 requires_approval: path.requires_approval,
+                projected_cost: path.cost,
                 projected_net_value: path.net_value,
+                resources,
+                goal_metric: rule.goal_metric.clone(),
                 confidence: path.confidence,
                 score: path.score,
                 reason,
-            }
-        }));
+            });
+        }
     }
 
     plans.sort_by(|left, right| {
@@ -1354,6 +1382,119 @@ pub async fn plan_opportunity_paths(
             .then_with(|| left.opportunity_id.cmp(&right.opportunity_id))
     });
     Ok(plans)
+}
+
+/// 有界组合选择：同主体互斥，并预留跨机会共享资源与指标预算。
+// ponytail: 贪心保留最高分路径；需要精确组合优化时再换分支定界。
+fn select_business_portfolio(
+    paths: Vec<OpportunityPath>,
+    metric_limits: &BTreeMap<String, f64>,
+    resource_limits: &BTreeMap<String, f64>,
+) -> Vec<OpportunityPath> {
+    let mut used_opportunities = std::collections::BTreeSet::new();
+    let mut used_subjects = std::collections::BTreeSet::new();
+    let mut metric_spent: BTreeMap<String, f64> = BTreeMap::new();
+    let mut resource_spent: BTreeMap<String, f64> = BTreeMap::new();
+    let mut selected = Vec::new();
+
+    for path in paths {
+        if path.projected_net_value <= 0.0
+            || !used_opportunities.insert(path.opportunity_id.clone())
+            || !used_subjects.insert(path.subject.clone())
+        {
+            continue;
+        }
+        let mut reserved_metric = None;
+        if let Some(metric) = &path.goal_metric
+            && let Some(limit) = metric_limits.get(metric)
+        {
+            let spent = metric_spent.get(metric).copied().unwrap_or_default();
+            let total = spent + path.projected_cost;
+            if total > *limit {
+                continue;
+            }
+            reserved_metric = Some((metric.clone(), total));
+        }
+        let resource_ok = resource_limits.iter().all(|(name, limit)| {
+            resource_spent.get(name).copied().unwrap_or_default()
+                + path.resources.get(name).copied().unwrap_or_default()
+                <= *limit
+        });
+        if !resource_ok {
+            continue;
+        }
+        if let Some((metric, total)) = reserved_metric {
+            metric_spent.insert(metric, total);
+        }
+        for (name, amount) in &path.resources {
+            *resource_spent.entry(name.clone()).or_default() += amount;
+        }
+        selected.push(path);
+    }
+    selected
+}
+
+/// 为候选路径计算共享预算余量并做组合预留。
+async fn reserve_business_portfolio(
+    storage: &LibSQLStorage,
+    project_id: &str,
+    candidates: Vec<OpportunityPath>,
+) -> Result<Vec<OpportunityPath>, BusinessLoopError> {
+    let (_, ontology) = project_ontology(storage, project_id).await?;
+    let outcomes = storage
+        .list_objects_for_project(project_id, "Outcome")
+        .await?;
+
+    let mut metric_limits = BTreeMap::new();
+    for object in &ontology.object_types {
+        for rule in &object.opportunity_rules {
+            let Some(metric) = rule.goal_metric.as_deref() else {
+                continue;
+            };
+            let Some(budget) = rule.metric_budget else {
+                continue;
+            };
+            metric_limits
+                .entry(metric.to_string())
+                .and_modify(|limit: &mut f64| *limit = limit.min(budget))
+                .or_insert(budget);
+        }
+    }
+
+    let mut resource_limits = shared_resource_limits(&ontology);
+    let spent_resources = consumed_shared_resources(&ontology, &outcomes)?;
+    for (name, spent) in spent_resources {
+        if let Some(remaining) = resource_limits.get_mut(&name) {
+            *remaining = (*remaining - spent).max(0.0);
+        }
+    }
+    for outcome in outcomes.iter().filter(|outcome| {
+        text(&outcome.data, "stage").is_ok_and(|stage| stage == OUTCOME_ACTION_EXECUTED)
+    }) {
+        let Some(metric) = outcome.data.get("metric").and_then(Value::as_str) else {
+            continue;
+        };
+        if let Some(limit) = metric_limits.get_mut(metric)
+            && let Ok(cost) = number(&outcome.data, "cost")
+        {
+            *limit = (*limit - cost).max(0.0);
+        }
+    }
+
+    Ok(select_business_portfolio(
+        candidates,
+        &metric_limits,
+        &resource_limits,
+    ))
+}
+
+/// 从独立机会路径中选择一个可组合的业务行动组合。
+pub async fn plan_business_portfolio(
+    storage: &LibSQLStorage,
+    project_id: &str,
+) -> Result<Vec<OpportunityPath>, BusinessLoopError> {
+    let candidates = plan_opportunity_paths(storage, project_id).await?;
+    reserve_business_portfolio(storage, project_id, candidates).await
 }
 
 fn action_confidence(
@@ -2316,12 +2457,13 @@ pub async fn run_next_best_action(
     discover_opportunities(storage, project_id).await?;
     let goals = refresh_goal_progress(storage, project_id).await?;
     let recommendations = recommend_next_actions(storage, project_id).await?;
-    let paths = plan_opportunity_paths(storage, project_id).await?;
-    let agent_paths = paths
+    let all_paths = plan_opportunity_paths(storage, project_id).await?;
+    let agent_candidates = all_paths
         .iter()
         .filter(|path| !path.requires_human && !path.requires_approval)
         .cloned()
         .collect::<Vec<_>>();
+    let agent_paths = reserve_business_portfolio(storage, project_id, agent_candidates).await?;
     let autonomous_candidate = |recommendation: &ActionRecommendation, action: &str| {
         recommendation.candidates.iter().any(|candidate| {
             candidate.action == action
@@ -2414,6 +2556,38 @@ mod tests {
             policy: PolicyDef::default(),
             planning: None,
         }
+    }
+
+    #[test]
+    fn portfolio_reserves_shared_resources_and_subject_slots() {
+        let base = |id: &str, subject: &str, score: f64| OpportunityPath {
+            project_id: "project".into(),
+            opportunity_id: id.into(),
+            subject: subject.into(),
+            actions: vec!["Touch".into()],
+            requires_human: false,
+            requires_approval: false,
+            projected_cost: 100.0,
+            projected_net_value: 900.0,
+            resources: BTreeMap::from([("labor".into(), 6.0)]),
+            goal_metric: Some("revenue".into()),
+            confidence: 0.9,
+            score,
+            reason: "test".into(),
+        };
+        let metric_limits = BTreeMap::from([("revenue".to_owned(), 1_000.0)]);
+        let resource_limits = BTreeMap::from([("labor".to_owned(), 6.0)]);
+        let selected = select_business_portfolio(
+            vec![
+                base("opp-b", "customer:a", 20.0),
+                base("opp-a", "customer:a", 10.0),
+            ],
+            &metric_limits,
+            &resource_limits,
+        );
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].opportunity_id, "opp-b");
     }
 
     #[test]
