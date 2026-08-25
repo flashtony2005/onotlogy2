@@ -1758,8 +1758,8 @@ fn select_portfolio_greedy(
 
     for path in paths {
         if path.projected_net_value <= 0.0
-            || !used_opportunities.insert(path.opportunity_id.clone())
-            || !used_subjects.insert(path.subject.clone())
+            || used_opportunities.contains(&path.opportunity_id)
+            || used_subjects.contains(&path.subject)
         {
             continue;
         }
@@ -1788,6 +1788,8 @@ fn select_portfolio_greedy(
         for (name, amount) in &path.resources {
             *resource_spent.entry(name.clone()).or_default() += amount;
         }
+        used_opportunities.insert(path.opportunity_id.clone());
+        used_subjects.insert(path.subject.clone());
         selected.push(path);
     }
     selected
@@ -3222,6 +3224,49 @@ mod tests {
 
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].opportunity_id, "opp-b");
+    }
+
+    #[test]
+    fn large_portfolio_still_considers_affordable_alternative_after_rejection() {
+        let path = |id: &str, subject: &str, score: f64, cost: f64| OpportunityPath {
+            project_id: "project".into(),
+            opportunity_id: id.into(),
+            subject: subject.into(),
+            actions: vec!["Touch".into()],
+            requires_human: false,
+            requires_approval: false,
+            projected_cost: cost,
+            projected_net_value: score,
+            resources: BTreeMap::new(),
+            goal_metric: if cost > 0.0 {
+                Some("revenue".into())
+            } else {
+                None
+            },
+            confidence: 1.0,
+            score,
+            reason: "test".into(),
+        };
+        let mut paths = vec![path("target", "customer:target", 80.0, 200.0)];
+        for index in 0..8 {
+            paths.push(path(
+                &format!("filler-{index}"),
+                &format!("customer:filler-{index}"),
+                1.0,
+                0.0,
+            ));
+        }
+        paths.push(path("target", "customer:target", 70.0, 100.0));
+        let metric_limits = BTreeMap::from([("revenue".to_owned(), 100.0)]);
+        let selected = select_business_portfolio(paths, &metric_limits, &BTreeMap::new());
+
+        assert_eq!(selected.len(), 9);
+        assert!(
+            selected
+                .iter()
+                .any(|path| path.score == 70.0 && path.opportunity_id == "target"),
+            "超限组合仍应尝试同一机会的可负担替代路径"
+        );
     }
 
     #[test]
