@@ -1681,9 +1681,10 @@ pub async fn plan_opportunity_paths(
     Ok(plans)
 }
 
-/// 小规模组合先精确求优；超过上限退回贪心，避免候选数量放大成指数扫描。
-// ponytail: 精确搜索只保证前 8 个机会；更大规模等真实负载证明需要后再分治/ILP。
+/// 小规模组合先精确求优；超过上限用贪心加有界交换改进，避免候选数量放大成指数扫描。
+// ponytail: 精确搜索只保证前 8 个机会；更大规模先做 3 轮 1-swap，证明不足再升级分治/ILP。
 const EXACT_PORTFOLIO_LIMIT: usize = 8;
+const PORTFOLIO_SWAP_PASSES: usize = 3;
 
 /// 有界组合选择：同主体互斥，并预留跨机会共享资源与指标预算。
 fn select_business_portfolio(
@@ -1713,7 +1714,12 @@ fn select_business_portfolio(
         selected.sort_by(compare_paths);
         return selected;
     }
-    select_portfolio_greedy(paths, metric_limits, resource_limits)
+    let mut selected = select_portfolio_greedy_indices(&paths, metric_limits, resource_limits);
+    improve_portfolio_by_swaps(&paths, &mut selected, metric_limits, resource_limits);
+    selected
+        .into_iter()
+        .map(|index| paths[index].clone())
+        .collect()
 }
 
 fn compare_paths(left: &OpportunityPath, right: &OpportunityPath) -> std::cmp::Ordering {
@@ -1724,7 +1730,7 @@ fn compare_paths(left: &OpportunityPath, right: &OpportunityPath) -> std::cmp::O
         .then_with(|| left.actions.cmp(&right.actions))
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct PortfolioProgress {
     score: f64,
     subjects: std::collections::BTreeSet<String>,
@@ -1835,18 +1841,18 @@ fn exact_portfolio_search(
     best.selected
 }
 
-fn select_portfolio_greedy(
-    paths: Vec<OpportunityPath>,
+fn select_portfolio_greedy_indices(
+    paths: &[OpportunityPath],
     metric_limits: &BTreeMap<String, f64>,
     resource_limits: &BTreeMap<String, f64>,
-) -> Vec<OpportunityPath> {
+) -> Vec<usize> {
     let mut used_opportunities = std::collections::BTreeSet::new();
     let mut used_subjects = std::collections::BTreeSet::new();
     let mut metric_spent: BTreeMap<String, f64> = BTreeMap::new();
     let mut resource_spent: BTreeMap<String, f64> = BTreeMap::new();
     let mut selected = Vec::new();
 
-    for path in paths {
+    for (index, path) in paths.iter().enumerate() {
         if path.projected_net_value <= 0.0
             || used_opportunities.contains(&path.opportunity_id)
             || used_subjects.contains(&path.subject)
@@ -1880,9 +1886,81 @@ fn select_portfolio_greedy(
         }
         used_opportunities.insert(path.opportunity_id.clone());
         used_subjects.insert(path.subject.clone());
-        selected.push(path);
+        selected.push(index);
     }
     selected
+}
+
+/// 对大规模贪心解做有界 1-swap：移除一个已选路径后，尝试换入更高分的可行路径。
+fn improve_portfolio_by_swaps(
+    paths: &[OpportunityPath],
+    selected: &mut [usize],
+    metric_limits: &BTreeMap<String, f64>,
+    resource_limits: &BTreeMap<String, f64>,
+) {
+    for _ in 0..PORTFOLIO_SWAP_PASSES {
+        let mut improved = false;
+        for slot in 0..selected.len() {
+            let removed_index = selected[slot];
+            let retained = selected
+                .iter()
+                .copied()
+                .enumerate()
+                .filter(|(position, _)| *position != slot)
+                .map(|(_, index)| index);
+            let mut current = PortfolioProgress::default();
+            for index in retained {
+                let path = &paths[index];
+                current.score += path.score;
+                current.subjects.insert(path.subject.clone());
+                if let Some(metric) = &path.goal_metric {
+                    *current.metrics.entry(metric.clone()).or_default() += path.projected_cost;
+                }
+                for (name, amount) in &path.resources {
+                    *current.resources.entry(name.clone()).or_default() += amount;
+                }
+            }
+            let retained_opps = retained_opportunities(paths, selected, slot);
+            let mut best: Option<(usize, f64)> = None;
+            for (candidate_index, candidate) in paths.iter().enumerate() {
+                if selected.contains(&candidate_index)
+                    || candidate.projected_net_value <= 0.0
+                    || retained_opps.contains(candidate.opportunity_id.as_str())
+                    || !current.admits(candidate, metric_limits, resource_limits)
+                {
+                    continue;
+                }
+                let gain = candidate.score - paths[removed_index].score;
+                if gain <= f64::EPSILON {
+                    continue;
+                }
+                if best.is_none_or(|(_, best_gain)| gain > best_gain) {
+                    best = Some((candidate_index, gain));
+                }
+            }
+            if let Some((candidate_index, _)) = best {
+                selected[slot] = candidate_index;
+                improved = true;
+            }
+        }
+        if !improved {
+            break;
+        }
+    }
+}
+
+fn retained_opportunities<'a>(
+    paths: &'a [OpportunityPath],
+    selected: &'a [usize],
+    excluded_slot: usize,
+) -> BTreeSet<&'a str> {
+    selected
+        .iter()
+        .enumerate()
+        .filter(|(position, _)| *position != excluded_slot)
+        .filter_map(|(_, index)| paths.get(*index))
+        .map(|path| path.opportunity_id.as_str())
+        .collect()
 }
 
 /// 为候选路径计算共享预算余量并做组合预留。
@@ -3463,6 +3541,50 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["combo-left", "combo-right"],
             "组合净值评分应胜过单独最高分机会"
+        );
+    }
+
+    #[test]
+    fn large_portfolio_improves_greedy_with_bounded_swap() {
+        let path = |id: &str, subject: &str, score: f64, cost: f64| OpportunityPath {
+            project_id: "project".into(),
+            opportunity_id: id.into(),
+            subject: subject.into(),
+            actions: vec!["Touch".into()],
+            requires_human: false,
+            requires_approval: false,
+            projected_cost: cost,
+            projected_net_value: score,
+            resources: BTreeMap::new(),
+            goal_metric: if cost > 0.0 {
+                Some("revenue".into())
+            } else {
+                None
+            },
+            confidence: 1.0,
+            score,
+            reason: "test".into(),
+        };
+        // 贪心先选 5 个 filler 并耗尽预算；有界交换移除一个 filler 换入高价值机会。
+        let mut paths = Vec::new();
+        for index in 0..9 {
+            paths.push(path(
+                &format!("filler-{index}"),
+                &format!("customer:filler-{index}"),
+                1.0,
+                0.2,
+            ));
+        }
+        paths.push(path("high-value", "customer:high", 50.0, 0.2));
+        let metric_limits = BTreeMap::from([("revenue".to_owned(), 1.0)]);
+        let selected = select_business_portfolio(paths, &metric_limits, &BTreeMap::new());
+
+        assert_eq!(selected.len(), 5);
+        assert!(
+            selected
+                .iter()
+                .any(|path| path.opportunity_id == "high-value"),
+            "有界交换应改进大规模贪心组合"
         );
     }
 
