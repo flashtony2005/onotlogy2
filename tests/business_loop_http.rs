@@ -1487,12 +1487,8 @@ relation changed_state:
     );
 }
 
-#[tokio::test]
-async fn shared_resource_budget_spans_projects() {
-    let storage = LibSQLStorage::open(":memory:")
-        .await
-        .expect("内存库应可打开");
-    let ontology = r#"
+fn shared_resource_project_ontology() -> &'static str {
+    r#"
 object Customer:
   properties:
     name: string
@@ -1585,9 +1581,22 @@ relation produced_outcome:
 relation changed_state:
   source: StateTransition
   target: Customer
-"#;
+"#
+}
+
+#[tokio::test]
+async fn shared_resource_budget_spans_projects() {
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
     for project_id in ["enterprise-one", "enterprise-two"] {
-        seed_odl_project(&storage, project_id, ontology, "monthly_reactivations").await;
+        seed_odl_project(
+            &storage,
+            project_id,
+            shared_resource_project_ontology(),
+            "monthly_reactivations",
+        )
+        .await;
     }
 
     let first = run_next_best_action(
@@ -1636,6 +1645,43 @@ relation changed_state:
     .await
     .expect_err("企业共享资源耗尽后显式决策必须拒绝");
     assert!(error.to_string().contains("超出共享资源 labor"));
+}
+
+#[tokio::test]
+async fn concurrent_runs_cannot_oversubscribe_enterprise_resource() {
+    let storage = LibSQLStorage::open(":memory:")
+        .await
+        .expect("内存库应可打开");
+    for project_id in ["concurrent-one", "concurrent-two"] {
+        seed_odl_project(
+            &storage,
+            project_id,
+            shared_resource_project_ontology(),
+            "monthly_reactivations",
+        )
+        .await;
+    }
+
+    let runs = ["concurrent-one", "concurrent-two"].map(|project_id| {
+        let storage = storage.clone();
+        tokio::spawn(async move {
+            run_next_best_action(
+                &storage,
+                &PluginCatalog::new(),
+                &WorkerRegistry::new(),
+                project_id,
+                "agent",
+            )
+            .await
+            .expect("并发闭环应返回结果")
+        })
+    });
+    let executed = futures_util::future::join_all(runs)
+        .await
+        .into_iter()
+        .filter(|result| result.as_ref().expect("任务不应崩溃").executed)
+        .count();
+    assert_eq!(executed, 1, "企业共享池只允许一笔 labor=6 执行");
 }
 
 #[tokio::test]

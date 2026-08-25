@@ -19,6 +19,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
+use std::sync::LazyLock;
 use std::time::Instant;
 use thiserror::Error;
 
@@ -41,6 +42,11 @@ const TASK_IN_PROGRESS: &str = "InProgress";
 const TASK_SETTLED_SUCCESS: &str = "Completed";
 const TASK_SETTLED_FAILURE: &str = "Failed";
 const PATH_MAX_STEPS: usize = 3;
+
+/// 同进程业务写入闸门：决策/执行必须串行读取并扣减共享预算。
+/// ponytail: 进程内闸门，多实例部署时升级为数据库事务化资源预留。
+static BUSINESS_LOOP_WRITE_GATE: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 #[derive(Debug, Error)]
 pub enum BusinessLoopError {
@@ -1947,6 +1953,17 @@ pub async fn decide_opportunity(
     decided_by: &str,
     options: DecisionOptions<'_>,
 ) -> Result<Value, BusinessLoopError> {
+    let _gate = BUSINESS_LOOP_WRITE_GATE.lock().await;
+    decide_opportunity_locked(storage, project_id, opportunity_id, decided_by, options).await
+}
+
+async fn decide_opportunity_locked(
+    storage: &LibSQLStorage,
+    project_id: &str,
+    opportunity_id: &str,
+    decided_by: &str,
+    options: DecisionOptions<'_>,
+) -> Result<Value, BusinessLoopError> {
     let (_, ontology) = project_ontology(storage, project_id).await?;
     ensure_project_consistent(storage, project_id, &ontology).await?;
     let opportunities = storage
@@ -2270,6 +2287,17 @@ async fn resolve_business_worker(
 
 /// 执行已选动作，记录 Outcome 与 StateTransition，并推进 Opportunity/Decision 状态。
 pub async fn execute_opportunity(
+    storage: &LibSQLStorage,
+    plugins: &PluginCatalog,
+    workers: &WorkerRegistry,
+    project_id: &str,
+    opportunity_id: &str,
+) -> Result<Value, BusinessLoopError> {
+    let _gate = BUSINESS_LOOP_WRITE_GATE.lock().await;
+    execute_opportunity_locked(storage, plugins, workers, project_id, opportunity_id).await
+}
+
+async fn execute_opportunity_locked(
     storage: &LibSQLStorage,
     plugins: &PluginCatalog,
     workers: &WorkerRegistry,
@@ -2872,6 +2900,17 @@ pub async fn run_next_best_action(
     project_id: &str,
     decided_by: &str,
 ) -> Result<BusinessLoopRun, BusinessLoopError> {
+    let _gate = BUSINESS_LOOP_WRITE_GATE.lock().await;
+    run_next_best_action_locked(storage, plugins, workers, project_id, decided_by).await
+}
+
+async fn run_next_best_action_locked(
+    storage: &LibSQLStorage,
+    plugins: &PluginCatalog,
+    workers: &WorkerRegistry,
+    project_id: &str,
+    decided_by: &str,
+) -> Result<BusinessLoopRun, BusinessLoopError> {
     discover_opportunities(storage, project_id).await?;
     let goals = refresh_goal_progress(storage, project_id).await?;
     let recommendations = recommend_next_actions(storage, project_id).await?;
@@ -2930,7 +2969,7 @@ pub async fn run_next_best_action(
         });
     };
 
-    let decision = decide_opportunity(
+    let decision = decide_opportunity_locked(
         storage,
         project_id,
         &recommendation.opportunity_id,
@@ -2943,7 +2982,7 @@ pub async fn run_next_best_action(
         },
     )
     .await?;
-    let execution = execute_opportunity(
+    let execution = execute_opportunity_locked(
         storage,
         plugins,
         workers,
