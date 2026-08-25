@@ -1395,6 +1395,8 @@ mod tests {
                             link_edge: Some("needs_retention".to_owned()),
                             subject_field: None,
                             decision_edge: None,
+                            result_benefit_field: None,
+                            result_benefit_factor: None,
                         }],
                         policy: Default::default(),
                         planning: None,

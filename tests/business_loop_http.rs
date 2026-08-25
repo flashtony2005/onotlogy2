@@ -481,7 +481,20 @@ async fn deferred_follow_up_evidence_is_declared_and_type_generic() {
     let error = parse_odl(&immediate).expect_err("immediate 创建不能携带终局元数据");
     assert!(error.to_string().contains("deferred 证据元数据"));
 
-    let generic = pack_ontology.replace("RetentionTask", "FollowUpPlan");
+    let generic = pack_ontology
+        .replace("RetentionTask", "FollowUpPlan")
+        .replace(
+            "          decision_edge: produced_task",
+            "          decision_edge: produced_task\n          result_benefit_field: recovered_amount\n          result_benefit_factor: 0.5",
+        )
+        .replace(
+            "    priority: string\n  actions:",
+            "    priority: string\n    recovered_amount: float\n  actions:",
+        )
+        .replace(
+            "            priority: \"MEDIUM\"",
+            "            priority: \"MEDIUM\"\n            recovered_amount: 500",
+        );
     assert_ne!(generic, pack_ontology, "契约测试必须修改成功");
     seed_odl_project(
         &storage,
@@ -524,11 +537,26 @@ async fn deferred_follow_up_evidence_is_declared_and_type_generic() {
     start_follow_up(&storage, "generic-follow-up", task_id)
         .await
         .expect("应能启动任意声明的跟进对象");
+    let mut running = storage
+        .get(task_id)
+        .await
+        .expect("应能读取跟进对象")
+        .expect("跟进对象应存在");
+    running.data["recovered_amount"] = json!(500.0);
+    storage
+        .apply_world(openaip_os::storage::WorldCommand::UpdateObject {
+            id: task_id.to_string(),
+            data: running.data,
+            project_id: Some("generic-follow-up".into()),
+        })
+        .await
+        .expect("应能记录终局收益");
     let settled = settle_follow_up(&storage, "generic-follow-up", task_id, true)
         .await
         .expect("应能为任意声明对象记录终局");
     assert_eq!(settled["task"]["type"], json!("FollowUpPlan"));
-    assert_eq!(settled["goals"][0]["currentValue"], json!(1.0));
+    assert_eq!(settled["outcome"]["data"]["goal_delta"], json!(250.0));
+    assert_eq!(settled["goals"][0]["currentValue"], json!(250.0));
 }
 
 #[tokio::test]

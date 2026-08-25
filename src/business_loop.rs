@@ -1013,24 +1013,6 @@ pub async fn refresh_goal_progress(
     let opportunities = storage
         .list_objects_for_project(project_id, "Opportunity")
         .await?;
-    let mut executed_delta_by_decision = std::collections::BTreeMap::<&str, f64>::new();
-    for relation in &relations {
-        let Some(outcome) = outcomes
-            .iter()
-            .find(|outcome| outcome.id == relation.target)
-        else {
-            continue;
-        };
-        if outcome.r#type != "Outcome"
-            || outcome.data.get("stage").and_then(Value::as_str) != Some(OUTCOME_ACTION_EXECUTED)
-        {
-            continue;
-        }
-        executed_delta_by_decision.insert(
-            relation.source.as_str(),
-            number(&outcome.data, "goal_delta")?,
-        );
-    }
     let mut completed_by_metric = std::collections::BTreeMap::<String, f64>::new();
     for outcome in outcomes {
         if outcome.data.get("success").and_then(Value::as_bool) != Some(true)
@@ -1063,11 +1045,7 @@ pub async fn refresh_goal_progress(
             action,
         );
         if let Some(metric) = metric {
-            let delta = executed_delta_by_decision
-                .get(decision.id.as_str())
-                .copied()
-                .unwrap_or(1.0);
-            *completed_by_metric.entry(metric).or_default() += delta;
+            *completed_by_metric.entry(metric).or_default() += number(&outcome.data, "goal_delta")?;
         }
     }
 
@@ -2754,6 +2732,24 @@ struct FollowUpEffect {
     link_edge: Option<String>,
     subject_field: String,
     decision_edge: String,
+    result_benefit_field: Option<String>,
+    result_benefit_factor: Option<f64>,
+}
+
+/// 从终局对象声明的收益字段折算目标进展；未声明时保持“完成一次”。
+fn terminal_goal_delta(effect: &FollowUpEffect, settled: &Value) -> Result<f64, BusinessLoopError> {
+    let Some((field, factor)) = effect
+        .result_benefit_field
+        .as_deref()
+        .zip(effect.result_benefit_factor)
+    else {
+        return Ok(1.0);
+    };
+    let delta = number(settled, field)? * factor;
+    if !delta.is_finite() {
+        return Err(BusinessLoopError::invalid("终局目标收益必须是有限数值"));
+    }
+    Ok(delta)
 }
 
 fn follow_up_effects(ontology: &OntologyIR) -> Vec<FollowUpEffect> {
@@ -2771,6 +2767,8 @@ fn follow_up_effects(ontology: &OntologyIR) -> Vec<FollowUpEffect> {
             link_edge: effect.link_edge.clone(),
             subject_field: effect.subject_field.clone().unwrap_or_default(),
             decision_edge: effect.decision_edge.clone().unwrap_or_default(),
+            result_benefit_field: effect.result_benefit_field.clone(),
+            result_benefit_factor: effect.result_benefit_factor,
         })
         .collect()
 }
@@ -2917,6 +2915,7 @@ pub async fn settle_follow_up(
         "success": success,
         "metric": "",
         "stage": OUTCOME_BUSINESS_RESULT,
+        "goal_delta": terminal_goal_delta(&effect, &settled_data)?,
     });
     validate_data(&ontology, "Outcome", &outcome_data)?;
     create_world_object(

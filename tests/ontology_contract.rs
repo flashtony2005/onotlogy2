@@ -1361,3 +1361,52 @@ fn action_actor_is_declared_and_fails_closed() {
         parse_odl(&format!("{odl}\n        actor: robot")).expect_err("未知 actor 必须解析失败");
     assert!(error.to_string().contains("actor 只能是 agent 或 human"));
 }
+#[test]
+fn deferred_creates_validate_terminal_benefit_contract() {
+    let odl = [
+        "object Decision:",
+        "  properties:",
+        "    opportunity: string",
+        "object Customer:",
+        "  properties:",
+        "    name: string",
+        "  actions:",
+        "    RetainCustomer:",
+        "      planning:",
+        "        cost: 1",
+        "        prior_confidence: 0.5",
+        "        outcome_timing: deferred",
+        "      creates:",
+        "        - type: FollowUpPlan",
+        "          data:",
+        "            customer: self",
+        "          subject_field: customer",
+        "          decision_edge: produced_task",
+        "          result_benefit_field: recovered_amount",
+        "          result_benefit_factor: 0.5",
+        "object FollowUpPlan:",
+        "  properties:",
+        "    customer: string",
+        "    recovered_amount: float",
+        "relation produced_task:",
+        "  source: Decision",
+        "  target: FollowUpPlan",
+    ]
+    .join("\n");
+
+    let ir = parse_odl(&odl).expect("终局收益契约应可解析");
+    let effect = &ir.find("Customer").expect("Customer 应存在").actions[0].creates[0];
+    assert_eq!(
+        effect.result_benefit_field.as_deref(),
+        Some("recovered_amount")
+    );
+    assert_eq!(effect.result_benefit_factor, Some(0.5));
+
+    let missing_factor = odl.replace("          result_benefit_factor: 0.5\n", "");
+    let error = parse_odl(&missing_factor).expect_err("收益字段必须成对声明");
+    assert!(error.to_string().contains("成对"));
+
+    let immediate = odl.replace("outcome_timing: deferred", "outcome_timing: immediate");
+    let error = parse_odl(&immediate).expect_err("Immediate 创建不能携带终局收益元数据");
+    assert!(error.to_string().contains("deferred 证据元数据"));
+}

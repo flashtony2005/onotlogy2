@@ -240,6 +240,12 @@ pub struct CreateEffect {
     /// Decision 指向创建对象的证据边；Deferred 动作必须声明。
     #[serde(default)]
     pub decision_edge: Option<String>,
+    /// 终局对象上保存实际收益的字段；与 factor 成对声明。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_benefit_field: Option<String>,
+    /// 终局收益折算系数；取值必须在 [0,1]。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_benefit_factor: Option<f64>,
 }
 
 /// 比较运算符（Policy precondition 子句使用）。

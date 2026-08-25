@@ -655,6 +655,8 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                             link_edge: None,
                             subject_field: None,
                             decision_edge: None,
+                            result_benefit_field: None,
+                            result_benefit_factor: None,
                         });
                     }
                 }
@@ -981,6 +983,38 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         }
                         c.decision_edge = Some(v.to_string());
                         link_lines.insert(v.to_string(), line_no);
+                    } else if k == "result_benefit_field"
+                        && let Some(c) = cur_create.as_mut()
+                    {
+                        if v.trim().is_empty() {
+                            return Err(OdlError::new(
+                                E_INVALID_PROPERTY_CONSTRAINT,
+                                "result_benefit_field 不能为空".to_string(),
+                                line_no,
+                                1,
+                            ));
+                        }
+                        c.result_benefit_field = Some(v.to_string());
+                    } else if k == "result_benefit_factor"
+                        && let Some(c) = cur_create.as_mut()
+                    {
+                        let value = v.parse::<f64>().map_err(|_| {
+                            OdlError::new(
+                                E_INVALID_PROPERTY_CONSTRAINT,
+                                format!("result_benefit_factor 必须是有限数值，得到 `{v}`"),
+                                line_no,
+                                1,
+                            )
+                        })?;
+                        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                            return Err(OdlError::new(
+                                E_INVALID_PROPERTY_CONSTRAINT,
+                                "result_benefit_factor 必须在 [0,1] 内".to_string(),
+                                line_no,
+                                1,
+                            ));
+                        }
+                        c.result_benefit_factor = Some(value);
                     }
                 }
                 Section::ActionPolicy => {
@@ -1592,7 +1626,11 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                     .copied()
                     .unwrap_or(1);
                 if !deferred {
-                    if created.subject_field.is_some() || created.decision_edge.is_some() {
+                    if created.subject_field.is_some()
+                        || created.decision_edge.is_some()
+                        || created.result_benefit_field.is_some()
+                        || created.result_benefit_factor.is_some()
+                    {
                         return Err(OdlError::new(
                             E_INVALID_PROPERTY_CONSTRAINT,
                             format!(
@@ -1623,11 +1661,24 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                     .decision_edge
                     .as_ref()
                     .is_some_and(|edge| relation_matches(edge, "Decision", &created.object_type));
-                if !valid_subject || !valid_decision {
+                let valid_benefit_pair =
+                    created.result_benefit_field.as_ref().is_none_or(|field| {
+                        matches!(
+                            target.and_then(|item| {
+                                item.properties
+                                    .iter()
+                                    .find(|property| &property.name == field)
+                                    .map(|property| property.ty)
+                            }),
+                            Some(ScalarType::Int | ScalarType::Float)
+                        )
+                    }) && (created.result_benefit_field.is_some()
+                        == created.result_benefit_factor.is_some());
+                if !valid_subject || !valid_decision || !valid_benefit_pair {
                     return Err(OdlError::new(
                         E_INVALID_PROPERTY_CONSTRAINT,
                         format!(
-                            "deferred action '{}' 的创建效应必须声明 self 主体字段和 Decision 证据边",
+                            "deferred action '{}' 的创建效应必须声明 self 主体字段、Decision 证据边，且终局收益字段必须是成对的 int/float 属性",
                             action.name
                         ),
                         meta_line,
