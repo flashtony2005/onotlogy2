@@ -201,3 +201,38 @@ Phase 2.6.3 完成；当前趋势为最近任务窗口的本地派生视图。�
   全量计数、marker、抽样 ID 与 payload 长度一致，auditChain valid。
 - 明确边界：本次是静默快照完整性/RTO 冒烟；生产 RPO 仍需外部 15 分钟调度与真实写入窗口证据，
   正式发布还需 1 GiB 演练。
+
+## 执行日志(2026-08-26 · Reasoner 规模化基准)
+
+### 已完成
+1. 新增受控规模探针 `benches/reasoner-scale.rs`，测量完整管线：
+   事实生成 → `runtime_world_to_knowledge()` → `Reasoner::new() + is_consistent()`
+2. Apple M4 release 模式实测数据：
+
+| 规模 | KB 公理 | 转换耗时 | 推理一致性耗时 |
+|------|---------|----------|---------------|
+| 100 | 203 | 0.3ms | 3.0ms |
+| 500 | 1,003 | 0.4ms | 34.5ms |
+| 1k | 2,003 | 0.4ms | 118.5ms |
+| 5k | 10,003 | 1.6ms | 10,901ms (~11s) |
+| 10k | 20,003 | 8.4ms | 84,230ms (~84s) |
+
+3. 增长曲线确认二次方：5k→10k（2×）→推理时间 7.7×
+
+### 根因定位
+- 瓶颈完全在 `Reasoner::new() + is_consistent()`，转换是微秒级
+- `runtime_world_to_knowledge()` 将所有对象 ID 放入单个 `DifferentIndividuals`
+- 上游 owl-dl-reasoner 将 N 元不同性展开为 N²/2 对 pair（lib.rs:L2124-L2131）
+- Business Loop discover/decide/execute 均走 whole-world 一致性 gate
+
+### 结论
+- 本体论建模和演化功能正确；分析在小规模（≤500 对象）可用
+- 企业级规模（≥1k）时一致性检查成为吞吐瓶颈
+
+### 下一步方向（待决策）
+1. 仅对参与功能/基数/身份敏感约束的个体生成不同性（而非全局 N 个 ID）
+2. 引入分区推理或 bounded/projected reasoning
+3. 顶层一致性加 fail-closed 超时
+4. 常规业务健康检查与完整 DL reasoning 解耦
+
+约束：不得通过静默削弱正确性来提速。
