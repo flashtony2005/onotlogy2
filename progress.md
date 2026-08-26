@@ -309,3 +309,31 @@ Phase 2.6.3 完成；当前趋势为最近任务窗口的本地派生视图。�
 - 本次 1 GiB 规模档仍是停止服务后的静默快照完整性/RTO 演练。
 - 生产 RPO ≤15 分钟还需要外部调度器成功执行记录、失败告警证据，以及一次真实写入窗口
   内的恢复验证。
+
+## 执行日志(2026-08-26 · S5a 从零部署演练收口)
+
+### 已完成
+1. 消除部署文档与产物的镜像版本漂移：Compose 固定标签更新为 `openaip-os:0.14.1`；
+   container smoke 和 release manifest 默认镜像改从根 `Cargo.toml` 动态取工作区版本。
+2. Compose 冒烟从“容器健康”升级为真实持久化演练：登录后创建 `persist-test` 项目、写入
+   Customer 事件，先断言 `module:root --contains--> cust-persist-001`，再执行
+   `compose stop --timeout 15 → compose up --detach`，重启后重新登录并按同一 world query 读回。
+3. 增加 Compose 镜像标签和工作区应用版本的一致性守卫，并要求 `jq`；API 响应非零码时输出
+   response body，避免 HTTP 4xx 被 curl 静默吞掉后无法定位。
+4. 修复计划外发现的 API 契约缺陷：浏览器 UI 发送 camelCase 的 `objectType`，但
+   `ProjectEventReq` 只接受裸 snake_case 字段，导致项目面板“添加对象”实际返回 422。
+   服务端 DTO 现声明 `#[serde(rename_all = "camelCase")]`，并用 `tc_sf7` 钉住 create → event →
+   world query 全链路。
+
+### 验证
+- `bash -n scripts/compose-smoke.sh scripts/container-smoke.sh scripts/release-manifest.sh`: PASS。
+- `make compose-smoke`: PASS；真实镜像构建约 2 分钟，覆盖 healthcheck、世界写入、
+  `stop → start` 后 named volume 数据读回和资源清理。
+- `cargo test tc_sf7_project_event_accepts_camel_case_contract`: PASS。
+- `make release-manifest`: PASS，`container.image=openaip-os:0.14.1` 与工作区版本一致。
+- S5a 提交门禁：pre-commit fmt/clippy/workspace tests PASS；提交为 `04b6597`。
+
+### 边界
+- 本次 S5a 以仓库提供的生产 Compose 路径为准验证“文档指引 → 生产实例”；尚未在另一台
+  物理空机器上重复人工执行。
+- 外部 15 分钟备份调度、失败告警和真实写入窗口 RPO 证据仍归入运营验收。

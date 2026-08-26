@@ -117,5 +117,9 @@ GS-1 定义 → GS-2 执行 → GS-3 治理 → GS-4 演化 → GS-5 恢复;每�
 - 1 GiB 规模档备份/恢复通过:31,226 对象、源库+sidecar 1020.292969 MiB、backup 9.636102s、
   restore CLI 5.996403s、报告总 RTO 15.701049s;全量计数/marker/payload 和审计链校验一致。
 
-剩余不是阶段 3 工程缺口,而是对外与运营收尾:S5a 从零部署演练、S5b 正式声明文案、
-S5c DoD 全量复核/changelog;以及目标环境的外部 15 分钟备份调度器、失败告警和真实写入窗口 RPO 证据。
+S5a 从零部署演练已收口:Compose 生产路径完成镜像构建、版本一致性、healthcheck、真实世界写入、
+`stop → start` 后 named volume 读回和清理。演练发现并修复镜像标签漂移，以及 UI camelCase 与
+`ProjectEventReq` snake_case 不一致导致 project/event 在浏览器路径 422 的契约缺陷。
+
+剩余对外与运营收尾是 S5b 正式声明文案、S5c DoD 全量复核/changelog;以及目标环境的外部
+15 分钟备份调度器、失败告警和真实写入窗口 RPO 证据。
