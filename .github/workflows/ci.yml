@@ -40,7 +40,7 @@ jobs:
         run: cargo test --workspace --all-targets
 
       - name: reasoner scale SLA
-        run: make reasoner-scale-sla
+        run: make reasoner-scale-ci
 
       - name: Phase 1 golden scenario
         run: make golden
@@ -126,3 +126,20 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm audit --audit-level=high
+
+  dsh-integration:
+    needs: rust
+    if: github.event_name == 'workflow_dispatch' && vars.OAIP_DSH_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    env:
+      OAIP_DSH_COMMAND: ${{ secrets.OAIP_DSH_COMMAND }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-17
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Real dsh golden scenario
+        run: make golden-external

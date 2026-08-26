@@ -1,6 +1,6 @@
 [package]
 name = "oaip-trace"
-version = "0.14.0"
+version = "0.14.1"
 edition = "2024"
 description = "OpenAIP-OS 观察层 —— TraceEvent 单词汇表 + 三层视图钳制"
 

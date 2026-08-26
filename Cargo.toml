@@ -7,7 +7,7 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 
 [package]
 name = "openaip-os"
-version = "0.14.0"
+version = "0.14.1"
 edition = "2024"
 
 [dependencies]

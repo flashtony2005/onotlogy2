@@ -1995,7 +1995,7 @@ dependencies = [
 
 [[package]]
 name = "oaip-abi"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "chrono",
  "regex",
@@ -2006,7 +2006,7 @@ dependencies = [
 
 [[package]]
 name = "oaip-eval-core"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "oaip-kernel",
  "oaip-session",
@@ -2016,7 +2016,7 @@ dependencies = [
 
 [[package]]
 name = "oaip-kernel"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "libsql",
  "serde",
@@ -2026,21 +2026,23 @@ dependencies = [
 
 [[package]]
 name = "oaip-knowledge"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "chrono",
+ "hex",
  "horned-owl",
  "oaip-abi",
  "owl-dl-reasoner",
  "regex",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.20",
 ]
 
 [[package]]
 name = "oaip-mutation-core"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "oaip-eval-core",
  "serde",
@@ -2050,7 +2052,7 @@ dependencies = [
 
 [[package]]
 name = "oaip-session"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "oaip-kernel",
  "serde",
@@ -2059,7 +2061,7 @@ dependencies = [
 
 [[package]]
 name = "oaip-storage"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "async-trait",
  "hex",
@@ -2079,7 +2081,7 @@ dependencies = [
 
 [[package]]
 name = "oaip-trace"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "oaip-session",
  "serde",
@@ -2088,7 +2090,7 @@ dependencies = [
 
 [[package]]
 name = "oaip-worker-core"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "async-trait",
  "serde",
@@ -2116,7 +2118,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "openaip-os"
-version = "0.14.0"
+version = "0.14.1"
 dependencies = [
  "argon2",
  "async-trait",

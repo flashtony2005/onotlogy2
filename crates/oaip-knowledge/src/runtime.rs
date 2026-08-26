@@ -13,6 +13,7 @@ use crate::model::{
 };
 use crate::reasoner::Reasoner;
 use chrono::{NaiveDate, SecondsFormat, Utc};
+use hex::encode as hex_encode;
 use oaip_abi::data_range::range_has_extra_base;
 use oaip_abi::{
     canonical_decimal,
@@ -24,6 +25,7 @@ use oaip_abi::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn class(name: impl Into<String>) -> ClassExpression {
@@ -1026,7 +1028,11 @@ fn runtime_object_axioms(
 /// correct, but reasoners expand it into N*(N-1)/2 pairs.  A binary code has
 /// the same entailment: two individuals with different bits share a disjoint
 /// partition in at least one bit and therefore cannot denote the same entity.
-fn identity_partition_axioms(objects: &[RuntimeObjectFact]) -> Vec<Axiom> {
+///
+/// Synthetic classes live under the `urn:oaip:internal:identity-v1:` reserved
+/// namespace.  The input-sensitive SHA-256 segment prevents a user-declared or
+/// previously projected term from being reinterpreted as an identity partition.
+fn identity_partition_axioms(objects: &[RuntimeObjectFact], namespace: &str) -> Vec<Axiom> {
     let unique_ids = objects
         .iter()
         .map(|object| &object.id)
@@ -1040,8 +1046,8 @@ fn identity_partition_axioms(objects: &[RuntimeObjectFact]) -> Vec<Axiom> {
 
     let mut axioms = Vec::new();
     for bit in 0..bit_count {
-        let zero = Term::new(format!("urn:oaip:identity:{bit}:0"));
-        let one = Term::new(format!("urn:oaip:identity:{bit}:1"));
+        let zero = Term::new(format!("{namespace}:{bit}:0"));
+        let one = Term::new(format!("{namespace}:{bit}:1"));
         axioms.push(Axiom::DisjointClasses(vec![
             class(zero.as_str()),
             class(one.as_str()),
@@ -1052,7 +1058,7 @@ fn identity_partition_axioms(objects: &[RuntimeObjectFact]) -> Vec<Axiom> {
         for bit in 0..bit_count {
             let partition = if code & (1 << bit) == 0 { "0" } else { "1" };
             axioms.push(Axiom::ClassAssertion {
-                class: class(format!("urn:oaip:identity:{bit}:{partition}")),
+                class: class(format!("{namespace}:{bit}:{partition}")),
                 individual: Term::new(&object.id),
             });
         }
@@ -1081,9 +1087,10 @@ pub fn runtime_world_to_knowledge(
             knowledge_base.push(axiom);
         }
     }
+    let identity_namespace = identity_partition_namespace(ontology, objects, relations);
     // Storage identifiers name distinct real-world entities.  Without these
     // partitions, OWL may satisfy a functional relation by identifying IDs.
-    knowledge_base.extend(identity_partition_axioms(objects));
+    knowledge_base.extend(identity_partition_axioms(objects, &identity_namespace));
     for relation in relations {
         knowledge_base.push(Axiom::ObjectPropertyAssertion {
             property: Term::new(&relation.relation),
@@ -1092,6 +1099,25 @@ pub fn runtime_world_to_knowledge(
         });
     }
     Ok(knowledge_base)
+}
+
+/// Name identity partitions against the exact schema/world being validated.
+///
+/// SHA-256 makes deliberate aliasing computationally infeasible while keeping
+/// repeated validation of identical inputs deterministic.
+fn identity_partition_namespace(
+    ontology: &Ontology,
+    objects: &[RuntimeObjectFact],
+    relations: &[RuntimeRelationFact],
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(format!("{:?}", ontology.axioms()));
+    hasher.update(format!("{:?}", objects));
+    hasher.update(format!("{:?}", relations));
+    format!(
+        "urn:oaip:internal:identity-v1:{}",
+        hex_encode(hasher.finalize())
+    )
 }
 
 /// Validate the canonical TBox with the mature reasoner before persistence.
@@ -2364,6 +2390,50 @@ relation parent:
                 .is_consistent()
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn identity_partitions_are_absent_without_an_identity_choice() {
+        let namespace = "urn:oaip:internal:identity-v1:test";
+        assert!(identity_partition_axioms(&[], namespace).is_empty());
+
+        let one = [RuntimeObjectFact {
+            id: "only".to_owned(),
+            object_type: "Thing".to_owned(),
+            data: serde_json::json!({}),
+        }];
+        assert!(identity_partition_axioms(&one, namespace).is_empty());
+    }
+
+    #[test]
+    fn identity_partition_names_do_not_alias_legacy_synthetic_classes() {
+        let legacy = class("urn:oaip:identity:0:0");
+        let schema = Ontology::new().with_axiom(Axiom::ClassAssertion {
+            class: legacy.clone(),
+            individual: Term::new("legacy"),
+        });
+        let objects = [
+            RuntimeObjectFact {
+                id: "one".to_owned(),
+                object_type: "Thing".to_owned(),
+                data: serde_json::json!({}),
+            },
+            RuntimeObjectFact {
+                id: "two".to_owned(),
+                object_type: "Thing".to_owned(),
+                data: serde_json::json!({}),
+            },
+        ];
+
+        let world = runtime_world_to_knowledge(&schema, &objects, &[]).unwrap();
+        assert!(
+            !world.axioms().iter().any(|axiom| matches!(
+                axiom,
+                Axiom::DisjointClasses(expressions) if expressions.contains(&legacy)
+            )),
+            "identity partitions must not reuse the legacy fixed namespace"
+        );
+        assert!(Reasoner::new(&world).unwrap().is_consistent().unwrap());
     }
 
     #[test]

@@ -106,8 +106,9 @@ world projection、OWL conversion 和 `Reasoner::new() + is_consistent()`：
 | 1,000 | 12,012 | 1.4 ms | 33.4 ms |
 | 5,000 | 75,015 | 6.1 ms | 211.1 ms |
 
-修复前同一 5k 负载约需 80.65 秒。CI 通过 `make reasoner-scale-sla` 固定
-`5,000 objects <= 1,000 ms` 门禁；这是本机回归红线，仍不等同于跨硬件生产合同 SLA。
+修复前同一 5k 负载约需 80.65 秒。`make reasoner-scale-sla` 对推理一致性阶段固定
+`5,000 objects <= 1,000 ms` 本机回归红线；CI 通过 `make reasoner-scale-ci` 使用 3,000ms，
+为共享 runner 噪声留出余量。两者都不是跨硬件生产合同 SLA。
 
 ## 复现方式
 

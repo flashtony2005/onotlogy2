@@ -1,6 +1,6 @@
 [package]
 name = "oaip-eval-core"
-version = "0.14.0"
+version = "0.14.1"
 edition = "2024"
 description = "OpenAIP-OS 评估核心 —— Evaluation = Pure Function(EventLog) 的类型与 Reducer"
 

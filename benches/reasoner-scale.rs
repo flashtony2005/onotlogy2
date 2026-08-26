@@ -39,7 +39,7 @@ struct PhaseTiming {
     duration_ms: f64,
 }
 
-fn run_probe(scale: usize) -> f64 {
+fn run_probe(scale: usize) -> (f64, f64) {
     let mut timings = Vec::<PhaseTiming>::new();
 
     let t0 = Instant::now();
@@ -92,12 +92,19 @@ fn run_probe(scale: usize) -> f64 {
     for t in &timings {
         println!("  {}: {:.1}ms", t.label, t.duration_ms);
     }
-    total
+    (
+        timings
+            .iter()
+            .find(|timing| timing.label == "reasoner_new_plus_consistency")
+            .map(|timing| timing.duration_ms)
+            .unwrap_or(f64::INFINITY),
+        total,
+    )
 }
 
 fn main() {
     let scales = [100usize, 500, 1_000, 5_000];
-    let totals = scales
+    let timings = scales
         .iter()
         .map(|scale| {
             println!("\n=== scale={scale} ===");
@@ -107,11 +114,13 @@ fn main() {
 
     if let Ok(sla_ms) = std::env::var("REASONER_SCALE_SLA_MS") {
         let sla_ms = sla_ms.parse::<f64>().expect("SLA must be milliseconds");
-        let actual_ms = totals[&5_000];
-        println!("\n5k SLA: {actual_ms:.1}ms <= {sla_ms}ms");
+        let (reasoning_ms, total_ms) = timings[&5_000];
+        println!(
+            "\n5k reasoning SLA: {reasoning_ms:.1}ms <= {sla_ms}ms (full pipeline: {total_ms:.1}ms)"
+        );
         assert!(
-            actual_ms <= sla_ms,
-            "5k reasoning took {actual_ms:.1}ms, exceeding the {sla_ms}ms SLA"
+            reasoning_ms <= sla_ms,
+            "5k reasoning took {reasoning_ms:.1}ms, exceeding the {sla_ms}ms SLA"
         );
     }
 }

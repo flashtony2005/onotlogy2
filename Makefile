@@ -3,7 +3,7 @@
 # 需 nightly（见 rust-toolchain.toml）；若 PATH 无 cargo，用 rustup 工具链 bin。
 
 CARGO ?= cargo
-.PHONY: ui
+.PHONY: golden golden-external ui reasoner-scale-sla reasoner-scale-ci
 LOAD_REQUESTS ?= 10
 LOAD_CONCURRENCY ?= 5
 LOAD_WS_CLIENTS ?= 3
@@ -11,6 +11,7 @@ SOAK_DURATION ?= 3600
 SOAK_CONCURRENCY ?= 4
 SOAK_MUTATION_INTERVAL ?= 5
 SOAK_MEMORY_WARMUP ?= 60
+REASONER_SCALE_SLA_MS ?= 1000
 export PATH := $(HOME)/.rustup/toolchains/nightly-2026-07-17-aarch64-apple-darwin/bin:$(HOME)/.cargo/bin:$(PATH)
 
 fmt:
@@ -30,6 +31,13 @@ golden:
 	$(CARGO) build --bin oaip
 	./scripts/golden-scenario.sh
 
+golden-external:
+	@test -n "$$OAIP_DSH_COMMAND" || { \
+		echo 'golden-external requires OAIP_DSH_COMMAND' >&2; \
+		exit 64; \
+	}
+	$(CARGO) build --bin oaip
+	./scripts/golden-scenario.sh
 # Phase 3：release binary + real HTTP probes + SIGTERM graceful shutdown.
 ops-smoke:
 	./scripts/phase3-smoke.sh
@@ -70,7 +78,12 @@ bench:
 
 # D7：5k world identity projection + whole-world consistency 的回归红线。
 reasoner-scale-sla:
-	REASONER_SCALE_SLA_MS=1000 $(CARGO) test --release --bench reasoner-scale -- --nocapture
+	REASONER_SCALE_SLA_MS=$(REASONER_SCALE_SLA_MS) $(CARGO) test --release --bench reasoner-scale -- --nocapture
+
+# Shared CI hardware gets noise headroom; the strict 1s local budget remains the
+# default target above.
+reasoner-scale-ci:
+	$(MAKE) reasoner-scale-sla REASONER_SCALE_SLA_MS=3000
 
 # D7/S4b：真实二进制并发 submit/approve + WebSocket 流基线。
 load-baseline:

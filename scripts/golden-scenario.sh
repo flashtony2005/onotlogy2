@@ -34,7 +34,8 @@ if [[ ! -x "$OAIP_BIN" ]]; then
   exit 1
 fi
 
-if [[ -z "${OAIP_DSH_COMMAND+x}" ]]; then
+if [[ -z "${OAIP_DSH_COMMAND:-}" ]]; then
+  echo "golden: using deterministic process executor; set OAIP_DSH_COMMAND to test an external agent" >&2
   DSH_SHIM="$TMP/process-executor"
   cat >"$DSH_SHIM" <<'SHIM'
 #!/bin/sh
@@ -74,6 +75,8 @@ esac
 SHIM
   chmod +x "$DSH_SHIM"
   export OAIP_DSH_COMMAND="$DSH_SHIM"
+else
+  echo "golden: using explicit external executor" >&2
 fi
 
 cat >"$ODL_V1" <<'ODL'
