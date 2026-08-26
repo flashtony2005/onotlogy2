@@ -421,6 +421,12 @@ impl LibSQLStorage {
         }
     }
 
+    /// 克隆共享连接，测试可模拟多个服务实例访问同一数据库。
+    #[doc(hidden)]
+    pub fn test_shared_connection(&self) -> Self {
+        Self::from_connection(self.conn.clone())
+    }
+
     /// 返回最近一次启动/深度校验与热路径校验得到的审计健康状态。
     pub fn audit_chain_health(&self) -> AuditChainHealth {
         AuditChainHealth::from_code(self.audit_health.load(Ordering::Acquire))

@@ -58,6 +58,10 @@ fn row_to_job(row: &libsql::Row) -> Result<AutomationJob, StorageError> {
 
 const JOB_COLUMNS: &str = "id, pack_id, job_type, dedupe_key, payload, status, attempt, max_attempts, available_at, started_at, finished_at, last_error, result, created_at, updated_at";
 
+fn is_unique_violation(error: &libsql::Error) -> bool {
+    error.to_string().contains("UNIQUE constraint failed")
+}
+
 impl LibSQLStorage {
     /// 幂等入队。相同业务包、任务类型和去重键只产生一个任务。
     pub async fn enqueue_automation_job(
@@ -76,10 +80,10 @@ impl LibSQLStorage {
         }
         let now = now_ts();
         let id = format!("automation:{pack_id}:{job_type}:{dedupe_key}");
-        let inserted = self
+        let insert = self
             .conn
             .execute(
-                "INSERT OR IGNORE INTO wb_automation_job \
+                "INSERT INTO wb_automation_job \
                  (id, pack_id, job_type, dedupe_key, payload, status, attempt, max_attempts, available_at, created_at, updated_at) \
                  VALUES (?1,?2,?3,?4,?5,'queued',0,?6,?7,?7,?7)",
                 params![
@@ -92,7 +96,22 @@ impl LibSQLStorage {
                     now.clone()
                 ],
             )
-            .await?;
+            .await
+            ;
+        let inserted = match insert {
+            Ok(inserted) => inserted,
+            Err(error) if is_unique_violation(&error) => {
+                let text = error.to_string();
+                if !text.contains("uq_automation_active_business_optimization_project") {
+                    return Ok((self.get_automation_job(&id).await?.unwrap(), false));
+                }
+                return Err(StorageError::Constraint {
+                    code: "WB2112",
+                    message: "活跃业务任务违反项目唯一约束".into(),
+                });
+            }
+            Err(error) => return Err(StorageError::Db(error)),
+        };
         let job = self
             .get_automation_job(&id)
             .await?
@@ -303,6 +322,42 @@ mod tests {
                 .status,
             "succeeded"
         );
+    }
+
+    #[tokio::test]
+    async fn active_business_optimization_projects_are_unique_across_instances() {
+        let shared = LibSQLStorage::open(":memory:").await.unwrap();
+        let first = LibSQLStorage::from_connection(shared.conn.clone());
+        let second = LibSQLStorage::from_connection(shared.conn.clone());
+        let payload = serde_json::json!({"projectId": "crm-retention"});
+
+        let (job, created) = first
+            .enqueue_automation_job("business-loop", "optimize", "first-instance", &payload, 1)
+            .await
+            .unwrap();
+        assert!(created);
+
+        let duplicate = second
+            .enqueue_automation_job("business-loop", "optimize", "second-instance", &payload, 1)
+            .await
+            .unwrap_err();
+        let StorageError::Constraint { code, .. } = duplicate else {
+            panic!("第二个实例必须被数据库唯一索引拒绝: {duplicate:?}");
+        };
+        assert_eq!(code, "WB2112");
+
+        second.cancel_automation_job(&job.id).await.unwrap();
+        let requeued = second
+            .enqueue_automation_job(
+                "business-loop",
+                "optimize",
+                "after-terminal-status",
+                &payload,
+                1,
+            )
+            .await
+            .unwrap();
+        assert!(requeued.1);
     }
 
     #[tokio::test]

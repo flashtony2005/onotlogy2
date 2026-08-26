@@ -82,7 +82,7 @@ fn gen_struct(ot: &ObjectType) -> Result<String, CodegenError> {
 
 /// 规范化核心表 DDL（与 sql-script.md 一致）。存储统一，不按类型分表。
 pub fn canonical_schema() -> String {
-    r#"-- 元数据：schema 版本（open 据此拦截旧库，避免 CREATE TABLE IF NOT EXISTS 不迁移的坑）
+    r##"-- 元数据：schema 版本（open 据此拦截旧库，避免 CREATE TABLE IF NOT EXISTS 不迁移的坑）
 CREATE TABLE IF NOT EXISTS wb_meta (
   key    TEXT PRIMARY KEY,
   value  TEXT
@@ -295,6 +295,12 @@ CREATE TABLE IF NOT EXISTS wb_automation_job (
 );
 CREATE INDEX IF NOT EXISTS idx_automation_job_status_available
   ON wb_automation_job (status, available_at, created_at);
+-- 业务目标优化的活跃任务按项目唯一；数据库约束是多实例部署下的正确性边界。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_active_business_optimization_project
+  ON wb_automation_job (json_extract(payload, '$.projectId'))
+  WHERE pack_id = 'business-loop'
+    AND job_type = 'optimize'
+    AND status IN ('queued', 'running');
 
 -- V0.7 认证与授权（P0 风险「无认证」）：本地账号 + 不透明会话令牌。
 -- 不依赖外键（libsql 默认 foreign_keys=OFF）；用户禁用时由应用层级联清理会话（delete_sessions_for_user）。
@@ -414,8 +420,8 @@ CREATE TABLE IF NOT EXISTS wb_business_optimization_run (
 CREATE INDEX IF NOT EXISTS idx_business_optimization_project
   ON wb_business_optimization_run (project_id, created_at DESC);
 
-"#
-    .to_string()
+"##
+.to_string()
 }
 
 /// 便捷：直接序列化 IR 为 JSON（供 ontology.json 写盘）。

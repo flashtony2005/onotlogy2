@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 /// 版本化迁移注册表：`(from_version, sql)`，按版本升序执行；每步成功后推进
 /// `wb_meta.schema_version`。迁移在事务内执行（失败整体回滚，版本不推进，可安全重试）。
 /// 新库由 `canonical_schema` 直接建到当前版本，不执行迁移。
-pub(crate) const SCHEMA_VERSION: i64 = 19;
+pub(crate) const SCHEMA_VERSION: i64 = 20;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     // V1 → V2：wb_learned 补 auto_approve_enabled（REQ-018）。
@@ -290,6 +290,15 @@ CREATE INDEX IF NOT EXISTS idx_business_lease_expiry
 CREATE INDEX IF NOT EXISTS idx_business_optimization_project
   ON wb_business_optimization_run (project_id, created_at DESC);",
     ),
+    // V19 → V20：活跃业务优化任务的数据库唯一边界，防止多进程入队竞态。
+    (
+        19,
+        r#"CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_active_business_optimization_project
+         ON wb_automation_job (json_extract(payload, '$.projectId'))
+         WHERE pack_id = 'business-loop'
+           AND job_type = 'optimize'
+           AND status IN ('queued', 'running');"#,
+    ),
 ];
 
 const MIGRATION_NAMES: &[(i64, &str)] = &[
@@ -312,6 +321,7 @@ const MIGRATION_NAMES: &[(i64, &str)] = &[
     (17, "business_execution_lease"),
     (18, "project_knowledge_version_binding"),
     (19, "business_optimization_run_history"),
+    (20, "active_business_optimization_project_uniqueness"),
 ];
 
 const MIGRATION_DOWNS: &[(i64, &str)] = &[
@@ -395,6 +405,10 @@ DROP TABLE IF EXISTS wb_audit_chain",
         18,
         "DROP INDEX IF EXISTS idx_business_optimization_project; \
          DROP TABLE IF EXISTS wb_business_optimization_run",
+    ),
+    (
+        19,
+        "DROP INDEX IF EXISTS uq_automation_active_business_optimization_project",
     ),
 ];
 

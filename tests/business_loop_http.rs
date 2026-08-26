@@ -964,6 +964,23 @@ async fn optimization_enqueue_rejects_duplicate_active_project() {
 }
 
 #[tokio::test]
+async fn optimization_enqueue_database_boundary_blocks_parallel_writers() {
+    let storage = LibSQLStorage::open(":memory:").await.unwrap();
+    let (_, created) =
+        enqueue_business_optimization_job(&storage, "crm-retention", "contract-test", 1)
+            .await
+            .unwrap();
+    assert!(created);
+
+    // 直接构造第二个“实例”连接，绕过进程内状态，验证数据库唯一边界。
+    let second = storage.test_shared_connection();
+    let error = enqueue_business_optimization_job(&second, "crm-retention", "contract-test", 1)
+        .await
+        .expect_err("第二个实例必须被数据库唯一边界拒绝");
+    assert!(error.to_string().contains("该项目已有进行中的目标优化任务"));
+}
+
+#[tokio::test]
 async fn optimization_job_scheduler_persists_history() {
     let storage = Arc::new(LibSQLStorage::open(":memory:").await.unwrap());
     let addr = common::spawn_server(storage.clone()).await;

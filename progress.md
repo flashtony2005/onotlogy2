@@ -165,3 +165,20 @@ Phase 2.6.3 完成；当前趋势为最近任务窗口的本地派生视图。�
 - `make check`、`make golden`(GS-1~GS-5)、`make ops-smoke` 全部通过。
 - S4b/S4c 收口:负载基线、控制面 token bucket 边界、WS best-effort 与 `after_id`
   最终一致语义已入档 `docs/03_架构设计/performance-baseline.md`。
+
+## 会话 6(2026-08-26):活跃目标优化的数据库唯一边界
+
+### 已完成
+1. 将同一项目只允许一个 `queued/running` 目标优化任务的约束从进程内 mutex 升级为 SQLite/libSQL 部分唯一索引。
+2. Schema 版本从 19 提升到 20，提供 V19→V20 迁移和回滚；canonical schema 保持一致。
+3. 入队路径改为普通 INSERT，识别活跃项目唯一冲突后返回 `WB2112`，Business Loop 映射为明确的用户错误。
+4. 移除优化入队的进程内闸门与全量列表扫描；普通 dedupe-key 冲突仍保持既有幂等语义。
+5. 增加存储层多实例共享连接回归和 HTTP 集成测试，覆盖第二个写入者拒绝与取消后重新入队。
+
+### 验证
+- `cargo fmt --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test --workspace --all-targets -q`
+- `cd ui && npm run typecheck && npm test`(40 passed)
+- 真实二进制黄金场景 GS-1~GS-5
+- `make ci`

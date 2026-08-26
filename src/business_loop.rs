@@ -51,9 +51,6 @@ pub const BUSINESS_LOOP_MAX_BATCH: usize = 20;
 pub const BUSINESS_OPTIMIZATION_PACK_ID: &str = "business-loop";
 pub const BUSINESS_OPTIMIZATION_JOB_TYPE: &str = "optimize";
 
-static BUSINESS_OPTIMIZATION_ENQUEUE_GATE: LazyLock<tokio::sync::Mutex<()>> =
-    LazyLock::new(|| tokio::sync::Mutex::new(()));
-
 /// 同进程业务写入闸门：决策/执行必须串行读取并扣减共享预算。
 /// ponytail: 进程内闸门，多实例部署时升级为数据库事务化资源预留。
 static BUSINESS_LOOP_WRITE_GATE: LazyLock<tokio::sync::Mutex<()>> =
@@ -4005,25 +4002,12 @@ pub async fn enqueue_business_optimization_job(
         return Err(BusinessLoopError::invalid("requestedBy 不能为空"));
     }
 
-    let _gate = BUSINESS_OPTIMIZATION_ENQUEUE_GATE.lock().await;
-    let active_job = storage
-        .list_automation_jobs(Some(BUSINESS_OPTIMIZATION_PACK_ID), 200)
-        .await?
-        .into_iter()
-        .find(|job| {
-            job.payload.get("projectId").and_then(Value::as_str) == Some(project_id)
-                && (job.status == "queued" || job.status == "running")
-        });
-    if active_job.is_some() {
-        return Err(BusinessLoopError::invalid("该项目已有进行中的目标优化任务"));
-    }
-
     let payload = json!({
         "projectId": project_id,
         "decidedBy": requested_by,
         "maxCycles": max_cycles.clamp(1, BUSINESS_LOOP_MAX_BATCH as u32),
     });
-    storage
+    let result = storage
         .enqueue_automation_job(
             BUSINESS_OPTIMIZATION_PACK_ID,
             BUSINESS_OPTIMIZATION_JOB_TYPE,
@@ -4031,8 +4015,14 @@ pub async fn enqueue_business_optimization_job(
             &payload,
             3,
         )
-        .await
-        .map_err(BusinessLoopError::from)
+        .await;
+    match result {
+        Ok(value) => Ok(value),
+        Err(StorageError::Constraint { code: "WB2112", .. }) => {
+            Err(BusinessLoopError::invalid("该项目已有进行中的目标优化任务"))
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 async fn optimization_result(
