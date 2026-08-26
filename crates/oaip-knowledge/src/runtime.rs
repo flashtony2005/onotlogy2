@@ -1087,7 +1087,7 @@ pub fn runtime_world_to_knowledge(
             knowledge_base.push(axiom);
         }
     }
-    let identity_namespace = identity_partition_namespace(ontology, objects, relations);
+    let identity_namespace = identity_partition_namespace(ontology, objects);
     // Storage identifiers name distinct real-world entities.  Without these
     // partitions, OWL may satisfy a functional relation by identifying IDs.
     knowledge_base.extend(identity_partition_axioms(objects, &identity_namespace));
@@ -1105,15 +1105,24 @@ pub fn runtime_world_to_knowledge(
 ///
 /// SHA-256 makes deliberate aliasing computationally infeasible while keeping
 /// repeated validation of identical inputs deterministic.
-fn identity_partition_namespace(
-    ontology: &Ontology,
-    objects: &[RuntimeObjectFact],
-    relations: &[RuntimeRelationFact],
-) -> String {
+fn identity_partition_namespace(ontology: &Ontology, objects: &[RuntimeObjectFact]) -> String {
+    // Partition axioms depend only on the schema and the set of storage IDs.
+    // Length-prefixing keeps concatenated inputs unambiguous without building
+    // a multi-megabyte debug representation of the world.
     let mut hasher = Sha256::new();
-    hasher.update(format!("{:?}", ontology.axioms()));
-    hasher.update(format!("{:?}", objects));
-    hasher.update(format!("{:?}", relations));
+    hasher.update((ontology.axioms().len() as u64).to_be_bytes());
+    serde_json::to_writer(&mut hasher, ontology.axioms())
+        .expect("ontology axioms serialize to JSON");
+    let unique_ids = objects
+        .iter()
+        .map(|object| object.id.as_str())
+        .collect::<BTreeSet<_>>();
+    hasher.update((unique_ids.len() as u64).to_be_bytes());
+    for id in unique_ids {
+        hasher.update((id.len() as u64).to_be_bytes());
+        hasher.update(id.as_bytes());
+    }
+
     format!(
         "urn:oaip:internal:identity-v1:{}",
         hex_encode(hasher.finalize())
@@ -2434,6 +2443,50 @@ relation parent:
             "identity partitions must not reuse the legacy fixed namespace"
         );
         assert!(Reasoner::new(&world).unwrap().is_consistent().unwrap());
+    }
+
+    #[test]
+    fn identity_names_depend_only_on_schema_and_unique_object_ids() {
+        let schema = Ontology::new().with_axiom(Axiom::subclass(class("Child"), class("Person")));
+        let object = |id: &str, data: Value| RuntimeObjectFact {
+            id: id.to_owned(),
+            object_type: "Thing".to_owned(),
+            data,
+        };
+        let objects = [
+            object("two", serde_json::json!({"size": 2})),
+            object("one", serde_json::json!({})),
+        ];
+        let baseline = identity_partition_namespace(&schema, &objects);
+        let reordered = {
+            let mut objects = objects.clone();
+            objects.reverse();
+            identity_partition_namespace(&schema, &objects)
+        };
+        let changed_payload = {
+            let mut objects = objects.clone();
+            objects[0].data = serde_json::json!({"ignored": true});
+            identity_partition_namespace(&schema, &objects)
+        };
+        let duplicated = {
+            let mut objects = objects.to_vec();
+            objects.push(objects[0].clone());
+            identity_partition_namespace(&schema, &objects)
+        };
+
+        assert_eq!(baseline, reordered);
+        assert_eq!(baseline, changed_payload);
+        assert_eq!(baseline, duplicated);
+        assert_ne!(
+            baseline,
+            identity_partition_namespace(
+                &schema,
+                &[
+                    object("one", serde_json::json!({})),
+                    object("three", serde_json::json!({}))
+                ]
+            )
+        );
     }
 
     #[test]

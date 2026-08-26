@@ -27,6 +27,11 @@ struct DataFact {
 /// Number of immutable data-consistency conclusions retained across calls.
 const DATA_CONSISTENCY_CACHE_CAPACITY: usize = 32;
 
+/// Do not retain very large immutable snapshots: their cloned ontologies can
+/// dominate process memory while exact reuse becomes less likely as snapshots
+/// grow.  Prefix/patch reuse remains available from smaller live worlds.
+const DATA_CONSISTENCY_CACHE_MAX_AXIOMS: usize = 20_000;
+
 #[derive(Debug)]
 struct DataConsistencyCacheEntry {
     fingerprint: u64,
@@ -168,6 +173,10 @@ impl DataConsistencyLru {
         state: DataConsistencyState,
         result: Result<()>,
     ) {
+        if ontology.len() > DATA_CONSISTENCY_CACHE_MAX_AXIOMS {
+            return;
+        }
+
         self.entries.push_back(DataConsistencyCacheEntry {
             fingerprint: key,
             ontology: Arc::new(ontology.clone()),
@@ -2890,6 +2899,25 @@ mod tests {
             Some(Ok(())),
             cache.get(42, &candidate).map(|(result, _)| result)
         );
+    }
+
+    #[test]
+    fn oversized_snapshots_are_not_retained_by_the_consistency_cache() {
+        let ontology =
+            (0..=DATA_CONSISTENCY_CACHE_MAX_AXIOMS).fold(Ontology::new(), |ontology, index| {
+                ontology.with_axiom(fact(
+                    "large-world",
+                    &format!("property-{index}"),
+                    Literal::Integer(index as i64),
+                ))
+            });
+        let key = ontology_fingerprint(&ontology);
+        let mut cache = DataConsistencyLru::new(4);
+
+        cache.put(key, &ontology, DataConsistencyState::default(), Ok(()));
+
+        assert_eq!(0, cache.len());
+        assert!(cache.get(key, &ontology).is_none());
     }
 
     #[test]
