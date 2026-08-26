@@ -48,6 +48,19 @@
 ## 4. 详细设计/内容
 > 产品版本采用 V0.1~V0.6 路线（见 sprint-plan.md），以下按产品里程碑记录，固定三级分类：新增功能 / Bug 修复 / 优化调整。
 
+## V0.14.1（发布证据链收口，2026-08-26）
+
+### Bug 修复
+1. 身份投影合成类改用基于 schema 内容指纹的 `urn:oaip:internal:identity-v1:*` 命名空间，
+   消除固定 `urn:oaip:identity:*` 与用户本体冲突的风险；新增 N=0/1 和旧名不别名回归测试。
+
+### 加固
+2. `reasoner-scale` SLA 明确拆分推理阶段与全管线耗时；CI 使用 3000ms 共享 runner 预算，
+   本机严格红线保持 `REASONER_SCALE_SLA_MS=1000`。实测 5k 推理阶段 233.0ms。
+3. Golden 场景显式提示当前使用确定性 process executor；新增 opt-in 的真实 DSH 集成 CI job，
+   并对空的 `OAIP_DSH_COMMAND` 快速失败。
+4. Rust workspace、UI 和 macOS bundle 版本统一为 `0.14.1`，发布 manifest 可绑定最终提交与 tag。
+
 ## V2 架构落地（可执行本体内核 + V2 认知闭环 + 投影体系，2026-08-15 ~ 08-17）
 > 架构版本 V2（区别于产品版本号 V0.x）。本周期完成 V1 planner 退役、演化引擎归一，
 > 并落地 World Model 投影体系（Phase 5–8）与 Agent Fabric 审批 / 异步 / 增量三阶段。
@@ -259,3 +272,4 @@
 | V1.3 | lushaohui | 2026-08-18 | 补 V2 架构落地条目（M1/M2 退役 V1 planner + 演化归一、Phase 5–8 投影、T1/T2b/P3），并诚实声明存储/投影/Facade 三项仍存缺口 |
 | V1.4 | lushaohui | 2026-08-18 | 修复 V1.3 声明三项缺口（fix/survivor-gaps）：① `link()` 加 `uq_edge_active` 部分唯一索引杜绝并发双插、`update()` 加 `WHERE version` 乐观锁 + `Conflict`；② 投影写 `Relation.metadata` 保留数值类型、`EntityView` 出边优先取 metadata；③ Facade 暴露 `fabric.cancel/stream`/`capability.discover`/`session.get`（facade-v1.md V1.4）；全部钉测试（storage 并发 link/update、tc_o4、facade/session 单测） |
 | V1.5 | lushaohui | 2026-08-18 | 新增 V0.11.0 条目：宣布技术债 M0–M8 正式关闭 + 项目进入「治理闭环 + 实时可观察」；T1（bridge+UI）与 T2a Cancel MVP 已合 master 收口记录；V2 架构落地章节补 T1 合入标记、新增 T2a、修正 T2b 误挂 tc_f9 |
+| V1.6 | lushaohui | 2026-08-26 | 新增 V0.14.1 发布收口条目：身份命名空间隔离、SLA 口径与 CI 预算分层、Golden 执行器显式化、跨端版本对齐 |
