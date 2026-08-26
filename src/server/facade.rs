@@ -215,6 +215,7 @@ pub(crate) async fn facade_project_seed(
 
 /// project.event 请求体（与 CLI `oaip facade project event` 同语义；HTTP 用 JSON 对象而非字符串）。
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct ProjectEventReq {
     object_type: String,
     id: String,

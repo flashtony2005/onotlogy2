@@ -32,6 +32,10 @@ if ! command -v curl >/dev/null 2>&1; then
   echo "curl is required for Compose smoke; install it and retry" >&2
   exit 2
 fi
+if ! command -v jq >/dev/null 2>&1; then
+  echo "jq is required for Compose smoke persistence checks; install it and retry" >&2
+  exit 2
+fi
 if ! docker info >/dev/null 2>&1; then
   echo "Docker daemon is unavailable; start Docker and retry" >&2
   exit 2
@@ -54,6 +58,14 @@ compose() {
     --env-file "${ENV_FILE}" \
     "$@"
 }
+
+app_version="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "${ROOT_DIR}/Cargo.toml" | head -1)"
+expected_image="openaip-os:${app_version}"
+configured_image="$(cd "${ROOT_DIR}" && compose config --format json | jq -r '.services.app.image')"
+if [[ "${configured_image}" != "${expected_image}" ]]; then
+  echo "Compose image is ${configured_image}; expected the released application image ${expected_image}" >&2
+  exit 1
+fi
 
 COMPOSE_ACTIVE=1
 (
@@ -112,5 +124,80 @@ if [[ "${health}" != "healthy" ]]; then
   exit 1
 fi
 
+base_url="http://127.0.0.1:${PORT}"
+auth_json="$(curl --connect-timeout 1 --max-time 5 --silent \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"compose-smoke-admin","password":"compose-smoke-password"}' \
+  "${base_url}/api/v1/wb/auth/login")"
+if [[ "$(jq -r '.code' <<<"${auth_json}")" != "0" ]]; then
+  echo "Compose smoke login failed: ${auth_json}" >&2
+  exit 1
+fi
+token="$(jq -r '.data.token' <<<"${auth_json}")"
+
+create_json="$(curl --connect-timeout 1 --max-time 5 --silent \
+  -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' \
+  -d '{"id":"persist-test","name":"Persist Test"}' \
+  "${base_url}/api/v1/facade/project/create")"
+if [[ "$(jq -r '.code' <<<"${create_json}")" != "0" ]]; then
+  echo "Compose smoke project creation failed: ${create_json}" >&2
+  exit 1
+fi
+
+event_json="$(curl --connect-timeout 1 --max-time 5 --silent \
+  -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' \
+  -d '{"objectType":"Customer","id":"cust-persist-001","project":"persist-test","input":{"name":"Alice"},"edge":"contains"}' \
+  "${base_url}/api/v1/facade/project/event")"
+if [[ "$(jq -r '.code' <<<"${event_json}")" != "0" ]]; then
+  echo "Compose smoke world event failed: ${event_json}" >&2
+  exit 1
+fi
+
+before_json="$(curl --connect-timeout 1 --max-time 5 --silent \
+  -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' \
+  -d '{"projectId":"persist-test","predicate":"contains","limit":100}' \
+  "${base_url}/api/v1/facade/world/query")"
+jq -e '.code == 0 and ([.data.relations[]? | select(.source == "module:root" and .target == "cust-persist-001")] | length > 0)' \
+  <<<"${before_json}" >/dev/null || {
+  echo "Compose smoke object did not land before restart: ${before_json}" >&2
+  exit 1
+}
+
 (cd "${ROOT_DIR}" && compose stop --timeout 15) >/dev/null
+(cd "${ROOT_DIR}" && compose up --detach) >/dev/null
+
+ready=0
+for _ in $(seq 1 60); do
+  if curl --connect-timeout 1 --max-time 5 --fail --silent \
+    "http://127.0.0.1:${PORT}/readyz" >/dev/null; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+if [[ "${ready}" -ne 1 ]]; then
+  echo "Compose service did not become ready after restart within 60 seconds" >&2
+  (cd "${ROOT_DIR}" && compose logs --no-color) >&2 || true
+  exit 1
+fi
+
+auth_json="$(curl --connect-timeout 1 --max-time 5 --silent \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"compose-smoke-admin","password":"compose-smoke-password"}' \
+  "http://127.0.0.1:${PORT}/api/v1/wb/auth/login")"
+if [[ "$(jq -r '.code' <<<"${auth_json}")" != "0" ]]; then
+  echo "Compose smoke login failed after restart: ${auth_json}" >&2
+  exit 1
+fi
+token="$(jq -r '.data.token' <<<"${auth_json}")"
+after_json="$(curl --connect-timeout 1 --max-time 5 --silent \
+  -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' \
+  -d '{"projectId":"persist-test","predicate":"contains","limit":100}' \
+  "http://127.0.0.1:${PORT}/api/v1/facade/world/query")"
+jq -e '.code == 0 and ([.data.relations[]? | select(.source == "module:root" and .target == "cust-persist-001")] | length > 0)' \
+  <<<"${after_json}" >/dev/null || {
+  echo "Compose named volume did not preserve the world event across restart: ${after_json}" >&2
+  exit 1
+}
+
 echo "Compose smoke test passed: project=${PROJECT} port=${PORT}"

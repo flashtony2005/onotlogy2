@@ -1,6 +1,6 @@
 services:
   app:
-    image: openaip-os:0.1.0
+    image: openaip-os:0.14.1
     build:
       context: .
       dockerfile: Dockerfile

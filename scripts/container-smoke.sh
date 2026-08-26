@@ -4,7 +4,8 @@ set -euo pipefail
 # S3a/S3b container smoke: build the production Dockerfile, start the real
 # image, probe the public operational endpoints, then stop and remove it.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="${OAIP_IMAGE:-openaip-os:0.1.0}"
+APP_VERSION="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "${ROOT_DIR}/Cargo.toml" | head -1)"
+IMAGE="${OAIP_IMAGE:-openaip-os:${APP_VERSION}}"
 PORT="${OAIP_CONTAINER_SMOKE_PORT:-18081}"
 NAME="oaip-container-smoke-$$"
 VOLUME="oaip-container-smoke-$$"

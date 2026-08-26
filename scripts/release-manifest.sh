@@ -7,7 +7,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="${OAIP_BIN:-${ROOT_DIR}/target/release/oaip}"
 OUT="${OAIP_RELEASE_MANIFEST:-${ROOT_DIR}/target/release-manifest.json}"
-IMAGE="${OAIP_IMAGE:-openaip-os:0.1.0}"
+APP_VERSION="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "${ROOT_DIR}/Cargo.toml" | head -1)"
+IMAGE="${OAIP_IMAGE:-openaip-os:${APP_VERSION}}"
 TAG="${OAIP_RELEASE_TAG:-}"
 
 if [[ ! -x "${BIN}" ]]; then

@@ -397,3 +397,68 @@ async fn tc_sf6_run_shell_executes_via_shell_exec_provider() {
         "审批后世界应见 fabric.status=completed: {w}"
     );
 }
+
+// ── tc_sf7：project.event 的 HTTP 契约与 UI/Facade DTO 一致（camelCase）──
+// ProjectCreate 已是 camelCase；本测试钉住 ProjectEventReq 不再使用私有 snake_case
+// 例外，防止浏览器端合法请求被 422 拒绝。
+#[tokio::test(flavor = "multi_thread")]
+async fn tc_sf7_project_event_accepts_camel_case_contract() {
+    let kernel = std::sync::Arc::new(
+        openaip_os::storage::LibSQLStorage::open(":memory:")
+            .await
+            .unwrap(),
+    );
+    let addr = common::spawn_server(kernel).await;
+
+    let (code, created) = call(
+        addr,
+        "POST",
+        "/api/v1/facade/project/create",
+        Some(json!({ "id": "camel-project", "name": "Camel Project" })),
+    )
+    .await;
+    assert_eq!(code, 200);
+    assert_eq!(
+        created["code"], 0,
+        "project create should succeed: {created}"
+    );
+
+    let (code, event) = call(
+        addr,
+        "POST",
+        "/api/v1/facade/project/event",
+        Some(json!({
+            "objectType": "Customer",
+            "id": "customer-camel-1",
+            "project": "camel-project",
+            "input": { "name": "Alice" },
+            "edge": "contains"
+        })),
+    )
+    .await;
+    assert_eq!(code, 200);
+    assert_eq!(
+        event["code"], 0,
+        "camelCase event should be accepted: {event}"
+    );
+
+    let (_, world) = call(
+        addr,
+        "POST",
+        "/api/v1/facade/world/query",
+        Some(json!({
+            "projectId": "camel-project",
+            "predicate": "contains",
+            "limit": 10
+        })),
+    )
+    .await;
+    assert!(
+        world["data"]["relations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["source"] == "module:root" && r["target"] == "customer-camel-1"),
+        "root edge should enter the projected project world: {world}"
+    );
+}
