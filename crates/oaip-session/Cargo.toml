@@ -1,6 +1,6 @@
 [package]
 name = "oaip-session"
-version = "0.14.1"
+version = "0.14.2"
 edition = "2024"
 description = "OpenAIP-OS Session 层 —— Session Event Log（不可变事实源）+ run 生命周期语义"
 

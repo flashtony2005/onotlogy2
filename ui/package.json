@@ -1,7 +1,7 @@
 {
   "name": "openaip-os-agent-ui",
   "private": true,
-  "version": "0.14.1",
+  "version": "0.14.2",
   "type": "module",
   "description": "OpenAIP-OS Agent 认知观察 UI（三层视图 + WebSocket 实时流）",
   "scripts": {

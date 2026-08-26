@@ -24,7 +24,7 @@ curl --fail http://127.0.0.1:8080/readyz
 
 ## 2. 固定版本与配置
 
-- `docker-compose.yml` 使用固定镜像标签 `openaip-os:0.14.1`，禁止 `latest`。
+- `docker-compose.yml` 使用固定镜像标签 `openaip-os:0.14.2`，禁止 `latest`。
 - HTTP 默认绑定 `127.0.0.1:8080`；实机冒烟通过 `OAIP_HTTP_PORT` 使用临时宿主机端口，
   不改变容器内的 `8080`。
 - `Dockerfile` 使用固定的 Node、Rust、Debian 版本标签，并在构建阶段安装仓库声明的

@@ -19,7 +19,7 @@ make compose-smoke
 
 直接容器检查会：
 
-1. 构建仓库根目录 `Dockerfile`，默认标签取自工作区版本（当前为 `openaip-os:0.14.1`）；
+1. 构建仓库根目录 `Dockerfile`，默认标签取自工作区版本（当前为 `openaip-os:0.14.2`）；
 2. 创建临时 named volume，并断言容器以非 root 用户 `oaip` 运行；
 3. 将容器端口临时映射到宿主机 `127.0.0.1:18081`；
 4. 注入一次性 smoke 管理员凭据；
@@ -64,7 +64,7 @@ preflight 日志记录 Docker client/server、daemon 和 Compose v2 版本，随
 ```bash
 docker ps -a --filter name=oaip-container-smoke-
 docker logs <container>
-docker image inspect openaip-os:0.14.1
+docker image inspect openaip-os:0.14.2
 docker volume ls --filter name=oaip-container-smoke-
 ```
 

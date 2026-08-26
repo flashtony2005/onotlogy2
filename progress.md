@@ -337,3 +337,28 @@ Phase 2.6.3 完成；当前趋势为最近任务窗口的本地派生视图。�
 - 本次 S5a 以仓库提供的生产 Compose 路径为准验证“文档指引 → 生产实例”；尚未在另一台
   物理空机器上重复人工执行。
 - 外部 15 分钟备份调度、失败告警和真实写入窗口 RPO 证据仍归入运营验收。
+
+## 执行日志(2026-08-26 · V0.14.2 生产核心 GA 收口)
+
+### 已完成
+1. 将未发布的 `04b6597` 和 `ac2cf07` 归入新的正式版本 `v0.14.2`;保留既有 `v0.14.1`
+   tag 作为历史锚点,不移动、不改写。
+2. 工作区、全部 crate、UI 包、Compose 与部署文档版本统一升级到 `0.14.2`,并同步
+   Cargo.lock;schema 保持 20。
+3. 新增 `release-note-v0.14.2.md`,正式声明单机 Local-First 生产核心 GA,同时显式
+   排除多区域 HA、跨硬件 SLA 和生产 RPO 运营证据。
+4. 新增 `dod-review-v0.14.2.md`,逐项勾验 D1–D12;D10 记录为工程/单机演练关闭,
+   生产 RPO 仍需外部调度器成功记录、失败告警和真实写入窗口恢复证据。
+5. 更新版本变更日志,记录 Compose 持久化演练、camelCase 契约修复、镜像一致性守卫
+   以及本版本收口。
+
+### 验证
+- `make ci`: PASS。覆盖 fmt、clippy、workspace tests、unwrap budget、UI build/audit、
+  golden、ops rehearsal/smoke、release manifest、coverage、audit 和 Reasoner SLA。
+- Release 5k 本机实测:推理一致性 221.0ms,全管线 231.3ms,低于 1000ms 红线;
+  CI 使用 3000ms 宽松预算。
+- UI production build: 1827 modules;`npm audit --audit-level=high`: 0 vulnerabilities。
+
+### 边界
+- 本次 GA 是单机 Local-First 生产核心验收,不宣称跨硬件性能合同和多区域 HA。
+- 生产 RPO ≤15 分钟需要目标环境外部调度器证据;该证据在仓库外,作为运营验收边界。

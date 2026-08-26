@@ -48,6 +48,26 @@
 ## 4. 详细设计/内容
 > 产品版本采用 V0.1~V0.6 路线（见 sprint-plan.md），以下按产品里程碑记录，固定三级分类：新增功能 / Bug 修复 / 优化调整。
 
+## V0.14.2（生产可用核心 GA · S5 对外闭环收口，2026-08-26）
+
+### 新增功能
+1. 建立 D1–D12 生产可用全量勾验表和正式发布说明；发布清单必须绑定干净工作树、
+   最终 commit 和 `v0.14.2` tag，避免把候选构建误称为正式产物。
+2. Compose 冒烟升级为真实持久化演练：创建项目并写入 Customer 世界事件，断言
+   `module:root --contains--> cust-persist-001` 后执行 `stop → start`，重启后重新登录并读回同一关系。
+
+### Bug 修复
+3. `ProjectEventReq` 增加 `#[serde(rename_all = "camelCase")]`，修复浏览器 UI 发送 `objectType`
+   时 project/event 返回 422 的契约断裂；新增 `tc_sf7_project_event_accepts_camel_case_contract`
+   钉住 create → event → world query 全链路。
+4. 修复部署镜像版本漂移：container smoke 和 release manifest 默认标签从根 `Cargo.toml`
+   动态读取；Compose 固定标签与工作区版本一致，并在冒烟前做一致性守卫。
+
+### 优化调整
+5. API 冒烟失败时输出 response body，并用 jq 校验业务返回码；HTTP 4xx 不再被
+   `curl --fail --silent` 静默吞掉。
+6. Rust workspace、UI 版本统一为 `0.14.2`；schema 保持 20，`v0.14.x` 同 schema 升级路径继续有效。
+
 ## V0.14.1（发布证据链收口，2026-08-26）
 
 ### Bug 修复
@@ -273,3 +293,4 @@
 | V1.4 | lushaohui | 2026-08-18 | 修复 V1.3 声明三项缺口（fix/survivor-gaps）：① `link()` 加 `uq_edge_active` 部分唯一索引杜绝并发双插、`update()` 加 `WHERE version` 乐观锁 + `Conflict`；② 投影写 `Relation.metadata` 保留数值类型、`EntityView` 出边优先取 metadata；③ Facade 暴露 `fabric.cancel/stream`/`capability.discover`/`session.get`（facade-v1.md V1.4）；全部钉测试（storage 并发 link/update、tc_o4、facade/session 单测） |
 | V1.5 | lushaohui | 2026-08-18 | 新增 V0.11.0 条目：宣布技术债 M0–M8 正式关闭 + 项目进入「治理闭环 + 实时可观察」；T1（bridge+UI）与 T2a Cancel MVP 已合 master 收口记录；V2 架构落地章节补 T1 合入标记、新增 T2a、修正 T2b 误挂 tc_f9 |
 | V1.6 | lushaohui | 2026-08-26 | 新增 V0.14.1 发布收口条目：身份命名空间隔离、SLA 口径与 CI 预算分层、Golden 执行器显式化、跨端版本对齐 |
+| V1.7 | lushaohui | 2026-08-26 | 新增 V0.14.2 生产核心 GA 条目：Compose 持久化演练、镜像版本守卫、ProjectEventReq camelCase 契约修复、D1–D12 DoD 全量勾验和正式发布说明 |
