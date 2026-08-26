@@ -67,6 +67,8 @@
 5. API 冒烟失败时输出 response body，并用 jq 校验业务返回码；HTTP 4xx 不再被
    `curl --fail --silent` 静默吞掉。
 6. Rust workspace、UI 版本统一为 `0.14.2`；schema 保持 20，`v0.14.x` 同 schema 升级路径继续有效。
+7. 发布清单默认在仓库 `target/` 构建 release binary，消除开发者全局 Cargo target 配置导致
+   清单绑定旧产物的问题；同时补齐 UI lockfile 与 macOS bundle 版本锚点。
 
 ## V0.14.1（发布证据链收口，2026-08-26）
 

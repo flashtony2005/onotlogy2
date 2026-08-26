@@ -351,6 +351,9 @@ Phase 2.6.3 完成；当前趋势为最近任务窗口的本地派生视图。�
    生产 RPO 仍需外部调度器成功记录、失败告警和真实写入窗口恢复证据。
 5. 更新版本变更日志,记录 Compose 持久化演练、camelCase 契约修复、镜像一致性守卫
    以及本版本收口。
+6. 发布前复核发现全局 Cargo target 目录会让 `make release-manifest` 绑定仓库内旧
+   binary。修复为默认强制构建仓库 `target/release/oaip`,显式 `OAIP_BIN` 才使用外部
+   产物;同步补齐 UI lockfile 和 macOS bundle 的版本锚点。
 
 ### 验证
 - `make ci`: PASS。覆盖 fmt、clippy、workspace tests、unwrap budget、UI build/audit、

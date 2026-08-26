@@ -5,11 +5,19 @@ set -euo pipefail
 # dirty worktree is deliberately represented as a candidate, never as a
 # release, so this command cannot silently bless an uncommitted deployment.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="${OAIP_BIN:-${ROOT_DIR}/target/release/oaip}"
 OUT="${OAIP_RELEASE_MANIFEST:-${ROOT_DIR}/target/release-manifest.json}"
 APP_VERSION="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "${ROOT_DIR}/Cargo.toml" | head -1)"
 IMAGE="${OAIP_IMAGE:-openaip-os:${APP_VERSION}}"
 TAG="${OAIP_RELEASE_TAG:-}"
+
+# Keep the default artifact at the documented repository path even when the
+# developer's Cargo config redirects builds to a shared target directory.
+if [[ -z "${OAIP_BIN:-}" ]]; then
+  cargo build --release --target-dir "${ROOT_DIR}/target" --bin oaip
+  BIN="${ROOT_DIR}/target/release/oaip"
+else
+  BIN="${OAIP_BIN}"
+fi
 
 if [[ ! -x "${BIN}" ]]; then
   echo "release binary is not executable: ${BIN}" >&2

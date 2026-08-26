@@ -12,7 +12,7 @@
 | D5 | 一条命令运维 | ✅ | `make ops-smoke`、`make container-smoke`、`make compose-smoke`、`make backup-rehearsal`、`make release-manifest`；Compose 入口见 deploy steps。 | 启动、探针、停止、备份、恢复和发布清单均为命令级操作；S5a Compose 持久化演练通过。 |
 | D6 | 升级回滚演练过 | ✅ | CI 执行 `OAIP_BASE_REF=HEAD^ make ops-rehearsal`；`upgrade-rollback-rehearsal.md` 记录 19→20、v0.14.0→修复候选、降级拒绝和快照回滚。 | 至少一次真实 v1→v2→回滚路径已验证；同 schema 直读回滚也单独演练。 |
 | D7 | 性能有基线 | ✅ | Criterion 四条核心路径、HTTP/WS 负载基线和 Reasoner scale 表入档 `performance-baseline.md`；CI 执行 `reasoner-scale-ci`。 | 5k 推理阶段本机约 211–233ms；本机红线 1000ms，CI 预算 3000ms。数字非跨硬件合同。 |
-| D8 | 发布有产物 | ✅ | Dockerfile、Compose、release binary、UI build 和 `target/release-manifest.json` 由脚本生成；manifest 绑定 version/schema/commit/SHA/image，脏树强制 candidate。 | 正式产物由干净工作树 + `v0.14.2` tag + release manifest 锚定。 |
+| D8 | 发布有产物 | ✅ | Dockerfile、Compose、release binary、UI build 和 `target/release-manifest.json` 由脚本生成；manifest 默认构建并绑定仓库 `target/release/oaip` 的 version/schema/commit/SHA/image，脏树强制 candidate。 | 正式产物由干净工作树 + `v0.14.2` tag + release manifest 锚定。 |
 | D9 | 资源与供应链边界 | ✅ | `crates/oaip-storage/src/lib.rs::io_faults_preserve_world_and_trace_atomicity` 注入磁盘满/只读；workspace/timeout/rate-limit/process-group 有契约测试；CI 执行 cargo audit 白名单门禁。 | IO 故障不产生半写状态；执行资源、网络和供应链审计有自动化边界。 |
 | D10 | 备份有 RPO/RTO 语义 | ✅/⚠️ | `backup-restore.md` 定义 RPO 15 分钟、RTO 5 分钟；`make backup-rehearsal BACKUP_TARGET_MIB=1016` 实测 31,226 对象、1020 MiB、总 RTO 15.701s；Compose 重启读回验证 volume 持久化。 | 工程/单机演练关闭。生产 RPO 仍需目标环境的 15 分钟外部调度器成功记录、失败告警和真实写入窗口恢复证据。 |
 | D11 | 黄金场景业务验收 | ✅ | `scripts/golden-scenario.sh` 用真实 binary 和确定性 process executor 跑 GS-1~GS-5：ODL 定义、动作执行、审批/审计、本体演化、kill 恢复；CI 接入 `make golden`。 | 业务链路不是孤立函数测试；真实 HTTP/WS/存储/进程边界均被脚本覆盖。 |

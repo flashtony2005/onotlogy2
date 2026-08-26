@@ -4,10 +4,10 @@
 
 当前 Phase 3 交付两个可复制入口：
 
-- 宿主机 release binary：`cargo build --release --bin oaip`；
+- 宿主机 release binary：由 `make release-manifest` 默认构建到仓库 `target/release/oaip`；
 - 容器编排：仓库根目录 `Dockerfile` + `docker-compose.yml`。
 
-构建后先生成发布证据清单：
+该命令会先构建默认产物，再生成发布证据清单；显式提供 `OAIP_BIN` 时使用外部产物：
 
 ```bash
 make release-manifest
