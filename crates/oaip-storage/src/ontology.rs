@@ -253,7 +253,7 @@ async fn update_review_tx(
 async fn objects_tx(tx: &libsql::Transaction) -> Result<Vec<super::ObjectRecord>, StorageError> {
     let mut rows = tx
         .query(
-            "SELECT id, type, data, version FROM wb_ontology_object WHERE is_delete=0",
+            "SELECT id, type, data, version FROM wb_ontology_object WHERE is_delete=0 ORDER BY id",
             params![],
         )
         .await?;
@@ -329,7 +329,7 @@ async fn relations_tx(
 ) -> Result<Vec<super::RelationRecord>, StorageError> {
     let mut rows = tx
         .query(
-            "SELECT id, relation, source, target, data FROM wb_relation_edge WHERE is_delete=0",
+            "SELECT id, relation, source, target, data FROM wb_relation_edge WHERE is_delete=0 ORDER BY id",
             params![],
         )
         .await?;
@@ -680,6 +680,47 @@ mod tests {
 
     fn root() -> Ontology {
         Ontology::new().with_axiom(Axiom::subclass(class("Dog"), class("Animal")))
+    }
+
+    #[tokio::test]
+    async fn world_validation_reads_are_ordered_by_id() {
+        let storage = LibSQLStorage::open(":memory:").await.unwrap();
+        for id in ["zeta", "alpha", "middle"] {
+            storage
+                .conn
+                .execute(
+                    "INSERT INTO wb_ontology_object (id, type, data) VALUES (?1, 'Thing', '{}')",
+                    params![id],
+                )
+                .await
+                .unwrap();
+        }
+        for (id, source, target) in [("edge-z", "zeta", "alpha"), ("edge-a", "alpha", "zeta")] {
+            storage
+                .conn
+                .execute(
+                    "INSERT INTO wb_relation_edge (id, relation, source, target) \
+                     VALUES (?1, 'related', ?2, ?3)",
+                    params![id, source, target],
+                )
+                .await
+                .unwrap();
+        }
+        let tx = storage.conn.transaction().await.unwrap();
+
+        let objects = objects_tx(&tx).await.unwrap();
+        let relations = relations_tx(&tx).await.unwrap();
+
+        let object_ids = objects
+            .iter()
+            .map(|object| object.id.as_str())
+            .collect::<Vec<_>>();
+        let relation_ids = relations
+            .iter()
+            .map(|relation| relation.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(["alpha", "middle", "zeta"], object_ids.as_slice());
+        assert_eq!(["edge-a", "edge-z"], relation_ids.as_slice());
     }
 
     #[tokio::test]
