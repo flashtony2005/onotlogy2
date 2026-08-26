@@ -42,8 +42,40 @@ oaip --db /var/lib/oaip/openaip.db backup \
 恢复不覆盖源备份，不对旧 WAL/SHM 旁车文件复用；恢复前必须停服务，否则并发写入
 不属于本工具的保证范围。
 
+## 可重复演练
+
+使用真实二进制执行隔离目录内的端到端演练：启动服务、经公开 HTTP 写入确定性对象、
+停止服务、执行 `backup`、恢复到新库、再次启动服务并校验 `/readyz`、审计链、全量对象计数、
+marker、抽样 ID 和 payload 长度。结果输出为机器可读 JSON：
+
+```bash
+make backup-rehearsal BACKUP_TARGET_MIB=64 BACKUP_PAYLOAD_KIB=16 BACKUP_CONCURRENCY=8
+```
+
+脚本入口：`scripts/backup-rpo-rto-rehearsal.py`。默认报告为
+`target/backup-rehearsal.json`；正式发布证据应复制到受保留的发布目录，不要只依赖本地
+`target/`。
+
+### 当前实测冒烟（2026-08-26，Apple M4 本机）
+
+| 项 | 结果 |
+|---|---|
+| 二进制 | oaip 0.14.0，SHA-256 `4c28e4a6f5ab267aedbb0f1c78e227094cbfe2e0fc11ee177d07a10396d1ff9d` |
+| 数据规模 | 目标 64 MiB；写入 2,048 个对象；主库 + sidecar 实测 67.203125 MiB |
+| 备份 | 67.140625 MiB，0.249s |
+| 恢复 CLI | 0.214s |
+| 恢复后 readyz | 0.290s |
+| 总 RTO | 0.505s（远小于 300s 目标） |
+| 数据校验 | 全量计数、marker、8 个抽样 ID 和 payload 长度全部一致 |
+| 审计 | `/readyz` 为 `ready` 且 `auditChain=valid`；恢复库审计可导出 |
+
+这次是**停止服务后的静默快照完整性/RTO 冒烟**。它不测量定时备份间隔内的写入丢失，
+因此不能单独宣称生产 RPO ≤ 15 分钟；该结论仍需要外部调度器每 15 分钟成功备份、失败告警、
+以及一次真实窗口内写入后的恢复证据。
+
 ## 当前限制
 
 - 备份/恢复尚未覆盖远程数据库。
-- RPO/RTO 是运维目标；必须在真实数据上完成定时备份与恢复演练后，才能记录实测值。
+- RPO/RTO 是运维目标；64 MiB 端到端静默演练已通过，但生产规模 1 GiB 演练和外部定时备份
+  RPO 证据仍未完成。
 - 迁移 `down` 的历史数据可恢复性仍需单独评审；恢复工具只接受 schema 校验通过的快照。

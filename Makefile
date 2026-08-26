@@ -84,6 +84,24 @@ soak-baseline:
 		--concurrency $(SOAK_CONCURRENCY) --mutation-interval $(SOAK_MUTATION_INTERVAL) \
 		--memory-warmup-seconds $(SOAK_MEMORY_WARMUP)
 
+# D10：真实二进制备份/恢复演练；64 MiB 是冒烟规模，发布证据应另跑 1 GiB。
+BACKUP_TARGET_MIB ?= 64
+BACKUP_PAYLOAD_KIB ?= 16
+BACKUP_CONCURRENCY ?= 8
+
+OAIP_TARGET_DIR ?= $(HOME)/.cargo/target
+
+backup-rehearsal:
+	mkdir -p target
+	$(CARGO) build --release --target-dir $(OAIP_TARGET_DIR) --bin oaip
+	./scripts/backup-rpo-rto-rehearsal.py \
+	  --binary $(OAIP_TARGET_DIR)/release/oaip \
+	  --odl examples/crm.odl \
+	  --target-mib $(BACKUP_TARGET_MIB) \
+	  --payload-kib $(BACKUP_PAYLOAD_KIB) \
+	  --concurrency $(BACKUP_CONCURRENCY) \
+	  --output target/backup-rehearsal.json
+
 # CI 主门禁
 check: fmt-check clippy test unwrap-budget
 

@@ -182,3 +182,22 @@ Phase 2.6.3 完成；当前趋势为最近任务窗口的本地派生视图。�
 - `cd ui && npm run typecheck && npm test`(40 passed)
 - 真实二进制黄金场景 GS-1~GS-5
 - `make ci`
+
+## 执行日志(2026-08-26 · D10 备份演练工程)
+
+### 已完成
+1. 新增真实二进制备份/恢复演练脚本 `scripts/backup-rpo-rto-rehearsal.py`：
+   启动服务 → 公开 API 写入确定性数据 → 停服 → backup → restore → 重启恢复服务 →
+   readyz/auditChain/全量计数/marker/抽样 ID/payload 校验 → 输出 JSON 证据。
+2. 新增 `make backup-rehearsal`，默认 64 MiB 冒烟规模，参数可覆盖。
+3. 修复演练中发现的验证边界：CLI `object list` 固定 1000 行，只适合运营视图；
+   规模化恢复校验改为对恢复库只读 SQL 计数与抽样。
+
+### 验证
+- 1 MiB 真实二进制闭环：PASS。
+- 8 MiB Makefile 入口闭环：PASS。
+- 64 MiB 真实二进制冒烟：PASS；2,048 对象，源库+sidecar 67.203125 MiB，
+  backup 0.249s，restore CLI 0.214s，恢复后 readyz 0.290s，总 RTO 0.505s；
+  全量计数、marker、抽样 ID 与 payload 长度一致，auditChain valid。
+- 明确边界：本次是静默快照完整性/RTO 冒烟；生产 RPO 仍需外部 15 分钟调度与真实写入窗口证据，
+  正式发布还需 1 GiB 演练。
