@@ -67,6 +67,10 @@ audit:
 bench:
 	$(CARGO) bench --bench performance
 
+# D7：5k world identity projection + whole-world consistency 的回归红线。
+reasoner-scale-sla:
+	REASONER_SCALE_SLA_MS=1000 $(CARGO) test --release --bench reasoner-scale -- --nocapture
+
 # D7/S4b：真实二进制并发 submit/approve + WebSocket 流基线。
 load-baseline:
 	$(CARGO) build --release --bin oaip
@@ -109,5 +113,5 @@ check: fmt-check clippy test unwrap-budget
 unwrap-budget:
 	./scripts/unwrap-budget.sh
 
-# 全量（含前端构建与依赖审计）
-ci: check ui audit
+# 全量（含前端构建、依赖审计与推理规模 SLA）
+ci: check ui audit reasoner-scale-sla

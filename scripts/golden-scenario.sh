@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # 黄金场景回归：ODL → dsh/process → 审批 → 审计/世界/WS → 演进 → 重启恢复。
 #
-# 真实执行器约定：默认使用 dsh。CI 或无 dsh 环境可设置 OAIP_DSH_COMMAND
-# 指向一个真实的进程执行器（脚本必须接受 --profile headless 后执行剩余 task）。
+# 真实执行器约定：核心黄金场景默认使用确定性 /bin/sh process executor，
+# 不依赖本机 dsh 登录态；如需验证特定外部 agent，显式设置 OAIP_DSH_COMMAND。
 set -euo pipefail
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -34,9 +34,8 @@ if [[ ! -x "$OAIP_BIN" ]]; then
   exit 1
 fi
 
-DSH_COMMAND=${OAIP_DSH_COMMAND:-dsh}
-if ! command -v "$DSH_COMMAND" >/dev/null 2>&1; then
-  DSH_SHIM="$TMP/dsh-shim"
+if [[ -z "${OAIP_DSH_COMMAND+x}" ]]; then
+  DSH_SHIM="$TMP/process-executor"
   cat >"$DSH_SHIM" <<'SHIM'
 #!/bin/sh
 set -eu
@@ -74,11 +73,7 @@ case "$task" in
 esac
 SHIM
   chmod +x "$DSH_SHIM"
-  DSH_COMMAND="$DSH_SHIM"
-  export OAIP_DSH_COMMAND="$DSH_COMMAND"
-  echo "golden: dsh unavailable; using real /bin/sh process executor via $DSH_COMMAND" >&2
-else
-  export OAIP_DSH_COMMAND="$DSH_COMMAND"
+  export OAIP_DSH_COMMAND="$DSH_SHIM"
 fi
 
 cat >"$ODL_V1" <<'ODL'

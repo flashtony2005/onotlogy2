@@ -1981,11 +1981,18 @@ fn data_consistency_projection(ontology: &Ontology) -> Vec<&Axiom> {
 /// Validate the asserted data fragment that is not yet covered soundly by the
 /// external tableau.  The checks are conservative for the supported vocabulary.
 pub fn validate_data_consistency(ontology: &Ontology) -> Result<()> {
-    let key = ontology_fingerprint(ontology);
-    let projection = data_consistency_projection(ontology);
     let mut cache = data_consistency_cache()
         .lock()
         .expect("data consistency cache mutex poisoned");
+    validate_data_consistency_with_cache(ontology, &mut cache)
+}
+
+fn validate_data_consistency_with_cache(
+    ontology: &Ontology,
+    cache: &mut DataConsistencyLru,
+) -> Result<()> {
+    let key = ontology_fingerprint(ontology);
+    let projection = data_consistency_projection(ontology);
 
     if let Some((result, _)) = cache.get(key, ontology) {
         record_exact_hit();
@@ -2212,23 +2219,12 @@ mod tests {
             Literal::String("active".into()),
         ));
         let key = ontology_fingerprint(&ontology);
+        let mut cache = DataConsistencyLru::new(4);
 
-        assert!(
-            !data_consistency_cache()
-                .lock()
-                .expect("cache mutex")
-                .contains_key(key, &ontology)
-        );
-        assert!(validate_data_consistency(&ontology).is_ok());
-        assert!(
-            data_consistency_cache()
-                .lock()
-                .expect("cache mutex")
-                .get(key, &ontology)
-                .map(|(result, _)| result)
-                == Some(Ok(()))
-        );
-        assert!(validate_data_consistency(&ontology).is_ok());
+        assert!(!cache.contains_key(key, &ontology));
+        assert!(validate_data_consistency_with_cache(&ontology, &mut cache).is_ok());
+        assert!(cache.get(key, &ontology).map(|(result, _)| result) == Some(Ok(())));
+        assert!(validate_data_consistency_with_cache(&ontology, &mut cache).is_ok());
     }
 
     #[test]
@@ -2238,13 +2234,12 @@ mod tests {
             .with_axiom(fact("cache-conflict", "age", Literal::Integer(30)))
             .with_axiom(fact("cache-conflict", "age", Literal::Integer(31)));
         let key = ontology_fingerprint(&conflict);
+        let mut cache = DataConsistencyLru::new(4);
 
-        assert!(validate_data_consistency(&conflict).is_err());
-        assert!(validate_data_consistency(&conflict).is_err());
+        assert!(validate_data_consistency_with_cache(&conflict, &mut cache).is_err());
+        assert!(validate_data_consistency_with_cache(&conflict, &mut cache).is_err());
         assert!(
-            data_consistency_cache()
-                .lock()
-                .expect("cache mutex")
+            cache
                 .get(key, &conflict)
                 .is_some_and(|(result, _)| result.is_err())
         );
@@ -2376,10 +2371,16 @@ mod tests {
         assert!(state.insert_delta(&same).is_err());
 
         let extended = base.clone().with_axiom(same);
-        let candidate = data_consistency_cache()
-            .lock()
-            .expect("cache mutex")
-            .find_prefix(&data_consistency_projection(&extended));
+        // Parallel tests share the process-global LRU, so use a deterministic
+        // local cache to prove the SameIndividual suffix is prefix-reusable.
+        let mut cache = DataConsistencyLru::new(4);
+        cache.put(
+            ontology_fingerprint(&base),
+            &base,
+            DataConsistencyState::from_ontology(&base).unwrap(),
+            Ok(()),
+        );
+        let candidate = cache.find_prefix(&data_consistency_projection(&extended));
         let Some((prefix_length, entry)) = candidate else {
             panic!("a real SameIndividuals suffix should use the append-only path");
         };
@@ -2388,10 +2389,7 @@ mod tests {
             data_consistency_projection(&extended).len(),
             prefix_length + 1
         );
-        data_consistency_cache()
-            .lock()
-            .expect("cache mutex")
-            .restore(entry);
+        drop(entry);
         assert!(validate_data_consistency(&extended).is_err());
     }
 
@@ -2753,18 +2751,15 @@ mod tests {
             Literal::Integer(31),
         ));
 
-        let state = DataConsistencyState::from_ontology(&base).unwrap();
-        data_consistency_cache().lock().expect("cache mutex").put(
+        let mut cache = DataConsistencyLru::new(4);
+        cache.put(
             ontology_fingerprint(&base),
             &base,
-            state,
+            DataConsistencyState::from_ontology(&base).unwrap(),
             Ok(()),
         );
 
-        let candidate = data_consistency_cache()
-            .lock()
-            .expect("cache mutex")
-            .find_patch_base(&next);
+        let candidate = cache.find_patch_base(&next);
         let Some((entry, patch)) = candidate else {
             panic!("same-schema fact replacement should reuse a patch base");
         };
@@ -2772,10 +2767,7 @@ mod tests {
         assert_eq!(1, patch.add_positive.len());
         assert!(patch.remove_negative.is_empty());
         assert!(patch.add_negative.is_empty());
-        data_consistency_cache()
-            .lock()
-            .expect("cache mutex")
-            .restore(entry);
+        drop(entry);
 
         assert!(validate_data_consistency(&next).is_ok());
     }
@@ -2831,18 +2823,15 @@ mod tests {
             term("patch-identity-b"),
         ]));
 
-        let state = DataConsistencyState::from_ontology(&base).unwrap();
-        data_consistency_cache().lock().expect("cache mutex").put(
+        let mut cache = DataConsistencyLru::new(4);
+        cache.put(
             ontology_fingerprint(&base),
             &base,
-            state,
+            DataConsistencyState::from_ontology(&base).unwrap(),
             Ok(()),
         );
 
-        let candidate = data_consistency_cache()
-            .lock()
-            .expect("cache mutex")
-            .find_patch_base(&changed_identity);
+        let candidate = cache.find_patch_base(&changed_identity);
         assert!(candidate.is_none());
         assert!(!same_data_schema(&base, &changed_identity));
     }

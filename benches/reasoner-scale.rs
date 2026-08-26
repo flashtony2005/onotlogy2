@@ -5,6 +5,7 @@
 //! Run with:
 //!   cargo test --release --bench reasoner-scale -- --nocapture
 
+use std::collections::BTreeMap;
 use std::time::Instant;
 
 use openaip_os::knowledge::{
@@ -38,7 +39,7 @@ struct PhaseTiming {
     duration_ms: f64,
 }
 
-fn run_probe(scale: usize) {
+fn run_probe(scale: usize) -> f64 {
     let mut timings = Vec::<PhaseTiming>::new();
 
     let t0 = Instant::now();
@@ -91,12 +92,26 @@ fn run_probe(scale: usize) {
     for t in &timings {
         println!("  {}: {:.1}ms", t.label, t.duration_ms);
     }
+    total
 }
 
 fn main() {
     let scales = [100usize, 500, 1_000, 5_000];
-    for scale in scales {
-        println!("\n=== scale={scale} ===");
-        run_probe(scale);
+    let totals = scales
+        .iter()
+        .map(|scale| {
+            println!("\n=== scale={scale} ===");
+            (*scale, run_probe(*scale))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    if let Ok(sla_ms) = std::env::var("REASONER_SCALE_SLA_MS") {
+        let sla_ms = sla_ms.parse::<f64>().expect("SLA must be milliseconds");
+        let actual_ms = totals[&5_000];
+        println!("\n5k SLA: {actual_ms:.1}ms <= {sla_ms}ms");
+        assert!(
+            actual_ms <= sla_ms,
+            "5k reasoning took {actual_ms:.1}ms, exceeding the {sla_ms}ms SLA"
+        );
     }
 }

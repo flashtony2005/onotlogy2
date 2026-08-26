@@ -1020,6 +1020,46 @@ fn runtime_object_axioms(
     Ok(axioms)
 }
 
+/// Encode pairwise distinctness without expanding an N-ary axiom.
+///
+/// A single `DifferentIndividuals` over every storage row is semantically
+/// correct, but reasoners expand it into N*(N-1)/2 pairs.  A binary code has
+/// the same entailment: two individuals with different bits share a disjoint
+/// partition in at least one bit and therefore cannot denote the same entity.
+fn identity_partition_axioms(objects: &[RuntimeObjectFact]) -> Vec<Axiom> {
+    let unique_ids = objects
+        .iter()
+        .map(|object| &object.id)
+        .collect::<BTreeSet<_>>();
+    let bit_count = usize::BITS - (unique_ids.len().saturating_sub(1)).leading_zeros();
+    let codes = unique_ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| (*id, index))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut axioms = Vec::new();
+    for bit in 0..bit_count {
+        let zero = Term::new(format!("urn:oaip:identity:{bit}:0"));
+        let one = Term::new(format!("urn:oaip:identity:{bit}:1"));
+        axioms.push(Axiom::DisjointClasses(vec![
+            class(zero.as_str()),
+            class(one.as_str()),
+        ]));
+    }
+    for object in objects {
+        let code = codes[&object.id];
+        for bit in 0..bit_count {
+            let partition = if code & (1 << bit) == 0 { "0" } else { "1" };
+            axioms.push(Axiom::ClassAssertion {
+                class: class(format!("urn:oaip:identity:{bit}:{partition}")),
+                individual: Term::new(&object.id),
+            });
+        }
+    }
+    axioms
+}
+
 /// Append the authoritative live-world snapshot to a canonical schema copy.
 pub fn runtime_world_to_knowledge(
     ontology: &Ontology,
@@ -1041,17 +1081,9 @@ pub fn runtime_world_to_knowledge(
             knowledge_base.push(axiom);
         }
     }
-    // Storage identifiers name distinct real-world entities.  Without this
-    // assertion, OWL may satisfy a functional relation by identifying two IDs.
-    if let Some(first) = objects.first()
-        && objects.len() > 1
-    {
-        knowledge_base.push(Axiom::DifferentIndividuals(
-            std::iter::once(Term::new(&first.id))
-                .chain(objects.iter().skip(1).map(|object| Term::new(&object.id)))
-                .collect(),
-        ));
-    }
+    // Storage identifiers name distinct real-world entities.  Without these
+    // partitions, OWL may satisfy a functional relation by identifying IDs.
+    knowledge_base.extend(identity_partition_axioms(objects));
     for relation in relations {
         knowledge_base.push(Axiom::ObjectPropertyAssertion {
             property: Term::new(&relation.relation),
@@ -2262,6 +2294,149 @@ relation parent:
         ];
         assert!(Reasoner::new(&ontology).unwrap().is_consistent().unwrap());
         assert!(validate_canonical_ontology_with_world(&ontology, &objects, &[]).is_err());
+    }
+
+    #[test]
+    fn storage_identity_partitions_preserve_pairwise_distinctness() {
+        let schema = Ontology::new()
+            .with_axiom(Axiom::FunctionalObjectProperty(Term::new("parent")))
+            .with_axiom(Axiom::EquivalentClasses(vec![
+                class("Person"),
+                ClassExpression::object_one_of(["parent-1", "parent-2"]),
+            ]))
+            .with_axiom(Axiom::subclass(
+                class("Child"),
+                ClassExpression::exact_cardinality(1, "parent", class("Person")),
+            ))
+            .with_axiom(Axiom::ClassAssertion {
+                class: class("Child"),
+                individual: Term::new("child"),
+            })
+            .with_axiom(Axiom::ClassAssertion {
+                class: class("Person"),
+                individual: Term::new("parent-1"),
+            })
+            .with_axiom(Axiom::ClassAssertion {
+                class: class("Person"),
+                individual: Term::new("parent-2"),
+            });
+        let objects = [
+            RuntimeObjectFact {
+                id: "child".to_owned(),
+                object_type: "Child".to_owned(),
+                data: serde_json::json!({}),
+            },
+            RuntimeObjectFact {
+                id: "parent-1".to_owned(),
+                object_type: "Person".to_owned(),
+                data: serde_json::json!({}),
+            },
+            RuntimeObjectFact {
+                id: "parent-2".to_owned(),
+                object_type: "Person".to_owned(),
+                data: serde_json::json!({}),
+            },
+        ];
+        let relations = [RuntimeRelationFact {
+            source: "child".to_owned(),
+            relation: "parent".to_owned(),
+            target: "parent-1".to_owned(),
+        }];
+        let base = runtime_world_to_knowledge(&schema, &objects, &relations).unwrap();
+        assert!(
+            base.axioms()
+                .iter()
+                .all(|axiom| !matches!(axiom, Axiom::DifferentIndividuals(_)))
+        );
+        assert!(Reasoner::new(&base).unwrap().is_consistent().unwrap());
+
+        let second_edge = RuntimeRelationFact {
+            source: "child".to_owned(),
+            relation: "parent".to_owned(),
+            target: "parent-2".to_owned(),
+        };
+        let inconsistent =
+            runtime_world_to_knowledge(&schema, &objects, &[relations[0].clone(), second_edge])
+                .unwrap();
+        assert!(
+            !Reasoner::new(&inconsistent)
+                .unwrap()
+                .is_consistent()
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn max_cardinality_requires_distinct_storage_identity_witnesses() {
+        let schema = Ontology::new().with_axiom(Axiom::subclass(
+            class("Child"),
+            ClassExpression::max_cardinality(1, "parent", class("Person")),
+        ));
+        let objects = [
+            RuntimeObjectFact {
+                id: "child".to_owned(),
+                object_type: "Child".to_owned(),
+                data: serde_json::json!({}),
+            },
+            RuntimeObjectFact {
+                id: "parent-1".to_owned(),
+                object_type: "Person".to_owned(),
+                data: serde_json::json!({}),
+            },
+            RuntimeObjectFact {
+                id: "parent-2".to_owned(),
+                object_type: "Person".to_owned(),
+                data: serde_json::json!({}),
+            },
+        ];
+        let edge = |target: &str| RuntimeRelationFact {
+            source: "child".to_owned(),
+            relation: "parent".to_owned(),
+            target: target.to_owned(),
+        };
+        let world = runtime_world_to_knowledge(&schema, &objects, &[edge("parent-1")]).unwrap();
+        assert!(Reasoner::new(&world).unwrap().is_consistent().unwrap());
+
+        let world =
+            runtime_world_to_knowledge(&schema, &objects, &[edge("parent-1"), edge("parent-2")])
+                .unwrap();
+        assert!(!Reasoner::new(&world).unwrap().is_consistent().unwrap());
+    }
+
+    #[test]
+    fn asymmetric_world_relation_edges_fail_the_consistency_gate() {
+        let schema = Ontology::new()
+            .with_axiom(Axiom::subclass(class("Customer"), ClassExpression::Thing))
+            .with_axiom(Axiom::AsymmetricObjectProperty(Term::new("received")));
+        let objects = [
+            RuntimeObjectFact {
+                id: "customer-1".to_owned(),
+                object_type: "Customer".to_owned(),
+                data: serde_json::json!({}),
+            },
+            RuntimeObjectFact {
+                id: "customer-2".to_owned(),
+                object_type: "Customer".to_owned(),
+                data: serde_json::json!({}),
+            },
+        ];
+        let forward = RuntimeRelationFact {
+            source: "customer-1".to_owned(),
+            relation: "received".to_owned(),
+            target: "customer-2".to_owned(),
+        };
+        let reverse = RuntimeRelationFact {
+            source: "customer-2".to_owned(),
+            relation: "received".to_owned(),
+            target: "customer-1".to_owned(),
+        };
+        let consistent =
+            runtime_world_to_knowledge(&schema, &objects, std::slice::from_ref(&forward)).unwrap();
+        assert!(Reasoner::new(&consistent).unwrap().is_consistent().unwrap());
+
+        assert!(
+            validate_canonical_ontology_with_world(&schema, &objects, &[forward, reverse]).is_err()
+        );
     }
 
     #[test]

@@ -30,6 +30,7 @@
 | Persisted knowledge recovery | 重开 file-backed DB 并读取 1 个已提交版本 + 1 个 pending proposal |
 | Index scaling | 250/500/1,000/2,000 条 functional assertion 的 cold rebuild |
 | HTTP/WS load | 10 次并发 submit/approve（并发 5），3 个 WebSocket 客户端，真实 release 二进制 |
+| Reasoner scale | 100/500/1,000/5,000 个 runtime object fact 的 whole-world consistency |
 | Knowledge soak / crash drill | 可配置持续时间（默认 1 小时）的 reason/diagnosis 并发读、每 5 秒受控演化、RSS 采样，以及 Pending proposal SIGKILL 重启校验 |
 
 ## 基线结果
@@ -87,10 +88,35 @@ World query 的平均耗时是返回 500 行的完整批次耗时，不是单行
 Criterion 报告的是均值和中位数置信区间，不产生 HTTP P99；端到端 API/WS P99 由
 S4b 负载测试补齐。当前数字只代表本机开发环境基线，不能直接外推为生产 SLA。
 
+### Reasoner 规模基线（2026-08-26）
+
+`runtime_world_to_knowledge()` 使用二进制身份分区表达所有 storage ID 的两两互异：
+每个对象进入 `ceil(log2(N))` 个 0/1 partition class，每对 partition class 声明不相交。
+任意两个不同编码的对象至少在一个位上冲突，因此语义仍严格等价于全局 pairwise distinct，
+但避免上游把 N 元 `DifferentIndividuals` 展开成 `N*(N-1)/2` 对。该路径不挑选“相关个体”，
+也不削弱 functional、inverse-functional、cardinality 或 nominal 身份推理。
+
+Apple M4 release 模式、`benches/reasoner-scale.rs` 最新结果如下；耗时包含事实生成、
+world projection、OWL conversion 和 `Reasoner::new() + is_consistent()`：
+
+| 对象数 | KB 公理 | 转换耗时 | 推理一致性耗时 |
+|-------:|-------:|-------:|---------------:|
+| 100 | 909 | 0.8 ms | 6.1 ms |
+| 500 | 5,511 | 1.2 ms | 23.4 ms |
+| 1,000 | 12,012 | 1.4 ms | 33.4 ms |
+| 5,000 | 75,015 | 6.1 ms | 211.1 ms |
+
+修复前同一 5k 负载约需 80.65 秒。CI 通过 `make reasoner-scale-sla` 固定
+`5,000 objects <= 1,000 ms` 门禁；这是本机回归红线，仍不等同于跨硬件生产合同 SLA。
+
 ## 复现方式
 
 ```bash
 make bench
+```
+
+```bash
+make reasoner-scale-sla
 ```
 
 ```bash

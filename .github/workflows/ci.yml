@@ -39,6 +39,9 @@ jobs:
       - name: test
         run: cargo test --workspace --all-targets
 
+      - name: reasoner scale SLA
+        run: make reasoner-scale-sla
+
       - name: Phase 1 golden scenario
         run: make golden
 

@@ -229,10 +229,49 @@ Phase 2.6.3 完成；当前趋势为最近任务窗口的本地派生视图。�
 - 本体论建模和演化功能正确；分析在小规模（≤500 对象）可用
 - 企业级规模（≥1k）时一致性检查成为吞吐瓶颈
 
-### 下一步方向（待决策）
-1. 仅对参与功能/基数/身份敏感约束的个体生成不同性（而非全局 N 个 ID）
-2. 引入分区推理或 bounded/projected reasoning
-3. 顶层一致性加 fail-closed 超时
-4. 常规业务健康检查与完整 DL reasoning 解耦
+## 执行日志(2026-08-26 · Reasoner 身份投影修复)
 
-约束：不得通过静默削弱正确性来提速。
+### 已完成
+1. 用二进制身份分区替换全局 N 元 `DifferentIndividuals`：每个对象获得
+   `ceil(log2(N))` 位编码，每个位的 0/1 partition class 互斥。任意两个不同 storage ID
+   至少在一个位上冲突，因此完整 pairwise distinctness 语义保留。
+2. 该投影不选择“身份敏感个体”，递归/nested nominal、functional、inverse-functional 和
+   cardinality witness 都继续进入同一成熟推理语义，不引入静默正确性缺口。
+3. 新增回归覆盖：函数型关系两个 witness、exact/max cardinality 两个 witness、嵌套 nominal
+   目标类，以及 asymmetric relation 双向 world edge 的 fail-closed gate。
+4. 新增 `make reasoner-scale-sla`，固定 `5,000 objects <= 1,000 ms` release 门禁，
+   并接入本地 `make ci` 与 GitHub Actions。
+5. 性能基线和边界已入档 `docs/03_架构设计/performance-baseline.md`。
+6. 黄金场景核心回归改为默认确定性 `/bin/sh` process executor；显式设置
+   `OAIP_DSH_COMMAND` 时仍可验证特定外部 agent。这样 GS-1~GS-5 不再被本机
+   dsh 凭证配置影响，同时保留真实进程执行、世界变更和恢复断言。
+7. 消除 data-consistency 缓存测试的并行 flake：校验核心改为可注入本地 LRU，
+   生产入口继续使用进程级缓存；测试不再把共享缓存的未淘汰状态当作断言。
+
+### Apple M4 release 实测
+
+| 对象数 | KB 公理 | 转换耗时 | 推理一致性耗时 |
+|-------:|-------:|-------:|---------------:|
+| 100 | 909 | 0.8ms | 6.1ms |
+| 500 | 5,511 | 1.2ms | 23.4ms |
+| 1k | 12,012 | 1.4ms | 33.4ms |
+| 5k | 75,015 | 6.1ms | 211.1ms |
+
+修复前 5k 一致性约 80.65s；修复后全管线约 217.7ms，SLA 门禁通过。
+
+### 验证
+
+- `make ci`: PASS（含 fmt/clippy/workspace tests/unwrap budget/UI audit/Reasoner SLA）。
+- `make golden`: PASS，GS-1~GS-5 全链路通过；5k release SLA 实测 217.9ms。
+- `cd ui && npm run typecheck && npm test -- --run`: PASS，40 tests。
+- `make backup-rehearsal`: PASS；2,048 对象、67.203MiB 源库，
+  backup 0.257s，restore CLI 0.184s，恢复后 ready 0.247s，总 RTO 0.432s。
+
+### Flake 修复后复验（2026-08-26）
+
+- `data::tests` 并行复跑 20 次：PASS。
+- `make ci`: PASS；release 5k 全管线 236.3ms（<=1000ms SLA）。
+- `make golden`: PASS，GS-1~GS-5 全链路通过。
+- `cd ui && npm run typecheck && npm test -- --run`: PASS，40 tests。
+- `make backup-rehearsal BACKUP_TARGET_MIB=67`: PASS；2,048 对象、67.203MiB，
+  总 RTO 0.407s。
