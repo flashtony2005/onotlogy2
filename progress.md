@@ -275,3 +275,37 @@ Phase 2.6.3 完成；当前趋势为最近任务窗口的本地派生视图。�
 - `cd ui && npm run typecheck && npm test -- --run`: PASS，40 tests。
 - `make backup-rehearsal BACKUP_TARGET_MIB=67`: PASS；2,048 对象、67.203MiB，
   总 RTO 0.407s。
+
+## 执行日志(2026-08-26 · S3d 发布收尾)
+
+### 已完成
+1. 修正升级/回滚演练对全局 Cargo target 目录的隐式假设：`OAIP_BASE_REF` 构建旧版时
+   强制使用隔离 target；真实二进制冒烟在需要构建时显式写入仓库 `target/`。
+2. 升级/回滚演练显式读取 `wb_meta.schema_version`，区分两类合法发布路径：
+   schema 变化时旧 binary 必须拒绝新库并返回 `WB2101`；同 schema 补丁发布允许停服后
+   直接回滚旧 binary。快照回滚断言在两条路径中均保留。
+3. 用真实 release binary 重演 schema 19→20：基线 `0a14d98`、候选 `cff1cd9`，
+   迁移、backup/restore、降级保护、快照回滚全部 PASS。
+4. 用真实 release binary 重演 `v0.14.0`（schema 20）→ reasoner 修复候选（schema 20）：
+   同 schema 直读、原对象校验、备份/恢复和升级前快照回滚 PASS。
+5. 真实二进制运维冒烟 PASS：`/healthz`、`/readyz`、`/metrics`、SIGTERM、备份、恢复。
+6. 完成 1 GiB 规模档备份/RTO 演练：31,226 个对象、源库+sidecar 1020.292969 MiB，
+   backup 9.636102s，restore CLI 5.996403s，恢复后 readyz 9.704044s，
+   总 RTO 15.701049s；全量计数/marker/抽样/payload 一致且审计链 valid。
+7. 将跨 schema、同 schema 和 1 GiB 规模档证据写入部署运维文档。
+8. 修复 `make ci` 的前端假绿：`ui` 目标与同名目录冲突导致 Make 认为目标最新；
+   声明 `.PHONY: ui` 后确认 `make ui` 实际执行 npm install/build。
+
+### 验证
+- `OAIP_BASE_BIN=<schema19> make ops-rehearsal`: PASS（19→20）。
+- `OAIP_BASE_BIN=<v0.14.0> make ops-rehearsal`: PASS（20→20）。
+- `make ops-smoke`: PASS。
+- `make backup-rehearsal BACKUP_TARGET_MIB=1016`: PASS。
+- `make ci`: PASS；5k release SLA 225.1ms <= 1000ms。
+- `cd ui && npm run typecheck && npm test -- --run`: PASS，40 tests。
+- 修复后 `make ui`: PASS，production build 1827 modules。
+
+### 边界
+- 本次 1 GiB 规模档仍是停止服务后的静默快照完整性/RTO 演练。
+- 生产 RPO ≤15 分钟还需要外部调度器成功执行记录、失败告警证据，以及一次真实写入窗口
+  内的恢复验证。

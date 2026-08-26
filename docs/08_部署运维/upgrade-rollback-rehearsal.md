@@ -17,8 +17,8 @@ S3d 不把“旧二进制能够启动”当作回滚证据，而是验证完整�
 候选 release binary 必须先构建：
 
 ```bash
-cargo build --release --bin oaip
-make release-manifest
+cargo build --release --target-dir "$PWD/target" --bin oaip
+OAIP_BIN="$PWD/target/release/oaip" make release-manifest
 ```
 
 发布清单中的 binary SHA-256、Git commit 和 schema 版本必须与演练记录一起留存。
@@ -58,6 +58,37 @@ make ops-rehearsal
 数据库。
 
 ## 4. 本轮实测记录
+
+### 2026-08-26：schema 19 → 20 升级与快照回滚（Apple M4）
+
+### 2026-08-19：首个跨 schema 演练基线
+
+| 项 | 结果 |
+|---|---|
+| 执行日期 | 2026-08-26 |
+| 旧 binary | Git `0a14d98`（schema 20 提交的父提交），版本 `0.14.0`，SHA-256 `421109e8b469cda9306775117e9bf9d2924781409ce51df879ee0e7fbab8c6e2` |
+| 新 binary | Git `cff1cd9`，版本 `0.14.0`，SHA-256 `88aa3af2cb55170cfd5846c1a09b77eb2498f6734bd045126b508738794f4ce0` |
+| Schema 迁移 | PASS；19 → 20 |
+| V1 数据种子 | PASS；旧 binary 写入并读回 `Customer/001`、`Customer/002` |
+| V2 backup/restore | PASS；恢复后对象与 `phase3_upgrade_verified` 审计事件可读 |
+| 降级保护 | PASS；schema 19 binary 拒绝 schema 20 数据，错误码 `WB2101` |
+| V2 → V1 | PASS；恢复升级前停止态快照后，对象和审计事件可读 |
+| 本地停止态恢复 RTO | 0 秒（小型临时库下界测量） |
+
+### 2026-08-26：v0.14.0 → reasoner 修复候选的同 schema 发布路径（Apple M4）
+
+| 项 | 结果 |
+|---|---|
+| 执行日期 | 2026-08-26 |
+| 旧 binary | Git `c7e68b7` / `v0.14.0`，版本 `0.14.0`，SHA-256 `0a3285df85617fd3c08e134894723e003ea55c2e6c139048e4e60d64576db0d9` |
+| 新 binary | Git `cff1cd9`，版本 `0.14.0`，SHA-256 `88aa3af2cb55170cfd5846c1a09b77eb2498f6734bd045126b508738794f4ce0` |
+| Schema 迁移 | PASS；20 → 20 |
+| 同 schema 回滚 | PASS；停止新版后，旧版可直接读取升级后数据库中的原有对象 |
+| 快照回滚 | PASS；恢复升级前停止态快照后，旧版可读取原对象和审计事件 |
+| 运维冒烟 | PASS；真实二进制验证 `/healthz`、`/readyz`、`/metrics`、备份和恢复 |
+
+同 schema 补丁发布不需要跨 schema 的降级保护；此时允许停服后直接替换回旧 binary。
+一旦 schema 版本变化，仍必须先停服、恢复升级前快照，再启动旧 binary。
 
 | 项 | 结果 |
 |---|---|

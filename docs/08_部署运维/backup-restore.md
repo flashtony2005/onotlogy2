@@ -69,6 +69,20 @@ make backup-rehearsal BACKUP_TARGET_MIB=64 BACKUP_PAYLOAD_KIB=16 BACKUP_CONCURRE
 | 数据校验 | 全量计数、marker、8 个抽样 ID 和 payload 长度全部一致 |
 | 审计 | `/readyz` 为 `ready` 且 `auditChain=valid`；恢复库审计可导出 |
 
+### 当前实测生产规模档（2026-08-26，Apple M4 本机）
+
+| 项 | 结果 |
+|---|---|
+| 二进制 | oaip `0.14.0`，Git `cff1cd9`，SHA-256 `88aa3af2cb55170cfd5846c1a09b77eb2498f6734bd045126b508738794f4ce0` |
+| 数据规模 | 种子目标 1016 MiB；写入 31,226 个对象；主库 + sidecar 实测 1020.292969 MiB（≤1 GiB 上限） |
+| 备份 | 1019.285156 MiB，9.636102s，SHA-256 `a82526285e7df2b0b6f215f508e5b3c58545bae4f6251b188b16c7309397a273` |
+| 恢复 CLI | 5.996403s |
+| 恢复后 readyz | 9.704044s |
+| 总 RTO | 15.701049s（≤300s 目标） |
+| 数据校验 | 全量计数 31,226、marker、8 个抽样 ID 和 31,226 行 payload 长度全部一致 |
+| 审计 | `/readyz` 为 `ready` 且 `auditChain=valid`；恢复库审计已导出 |
+| 报告 | 本机执行时归档 `target/backup-rehearsal.json`；正式发布必须复制到受保留目录 |
+
 这次是**停止服务后的静默快照完整性/RTO 冒烟**。它不测量定时备份间隔内的写入丢失，
 因此不能单独宣称生产 RPO ≤ 15 分钟；该结论仍需要外部调度器每 15 分钟成功备份、失败告警、
 以及一次真实窗口内写入后的恢复证据。
@@ -76,6 +90,6 @@ make backup-rehearsal BACKUP_TARGET_MIB=64 BACKUP_PAYLOAD_KIB=16 BACKUP_CONCURRE
 ## 当前限制
 
 - 备份/恢复尚未覆盖远程数据库。
-- RPO/RTO 是运维目标；64 MiB 端到端静默演练已通过，但生产规模 1 GiB 演练和外部定时备份
-  RPO 证据仍未完成。
+- RPO/RTO 是运维目标；1 GiB 规模档端到端静默演练已通过，但外部定时备份失败告警与真实
+  写入窗口的 RPO 证据仍未完成。
 - 迁移 `down` 的历史数据可恢复性仍需单独评审；恢复工具只接受 schema 校验通过的快照。

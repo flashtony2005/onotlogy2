@@ -21,7 +21,9 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ ! -x "${BIN}" ]]; then
-  cargo build --release --bin oaip
+  # Keep the artifact at the documented path even when the developer's Cargo
+  # config sets a global target-dir.
+  cargo build --release --target-dir "${ROOT_DIR}/target" --bin oaip
 fi
 if ! command -v curl >/dev/null 2>&1; then
   echo "curl is required for deployment smoke; install it and retry" >&2

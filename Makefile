@@ -3,6 +3,7 @@
 # 需 nightly（见 rust-toolchain.toml）；若 PATH 无 cargo，用 rustup 工具链 bin。
 
 CARGO ?= cargo
+.PHONY: ui
 LOAD_REQUESTS ?= 10
 LOAD_CONCURRENCY ?= 5
 LOAD_WS_CLIENTS ?= 3
