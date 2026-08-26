@@ -13,7 +13,8 @@ use crate::knowledge_bridge::world_snapshot_to_knowledge;
 use crate::plugin::catalog::{CatalogError, PluginCatalog};
 use crate::storage::leases::{ExecutionLeaseRecord, LEASE_COMPLETED, LEASE_RELEASED};
 use crate::storage::{
-    BusinessOptimizationRunRecord, LibSQLStorage, ProjectRecord, StorageError, WorldCommand,
+    AutomationJob, BusinessOptimizationRunRecord, LibSQLStorage, ProjectRecord, StorageError,
+    WorldCommand,
 };
 use crate::worker::policy::WorkerPolicy;
 use crate::worker::router::{RouterCriteria, WorkerRouter};
@@ -47,6 +48,11 @@ const TASK_SETTLED_FAILURE: &str = "Failed";
 const PATH_MAX_STEPS: usize = 3;
 const EXECUTION_LEASE_TTL_SECS: i64 = 600;
 pub const BUSINESS_LOOP_MAX_BATCH: usize = 20;
+pub const BUSINESS_OPTIMIZATION_PACK_ID: &str = "business-loop";
+pub const BUSINESS_OPTIMIZATION_JOB_TYPE: &str = "optimize";
+
+static BUSINESS_OPTIMIZATION_ENQUEUE_GATE: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 /// 同进程业务写入闸门：决策/执行必须串行读取并扣减共享预算。
 /// ponytail: 进程内闸门，多实例部署时升级为数据库事务化资源预留。
@@ -3982,6 +3988,51 @@ fn active_optimization_goal(goals: &[GoalGap]) -> Option<(&str, f64)> {
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
         .map(|goal| (goal.target_metric.as_str(), goal.gap))
+}
+
+pub async fn enqueue_business_optimization_job(
+    storage: &LibSQLStorage,
+    project_id: &str,
+    requested_by: &str,
+    max_cycles: u32,
+) -> Result<(AutomationJob, bool), BusinessLoopError> {
+    let project_id = project_id.trim();
+    let requested_by = requested_by.trim();
+    if project_id.is_empty() {
+        return Err(BusinessLoopError::invalid("projectId 不能为空"));
+    }
+    if requested_by.is_empty() {
+        return Err(BusinessLoopError::invalid("requestedBy 不能为空"));
+    }
+
+    let _gate = BUSINESS_OPTIMIZATION_ENQUEUE_GATE.lock().await;
+    let active_job = storage
+        .list_automation_jobs(Some(BUSINESS_OPTIMIZATION_PACK_ID), 200)
+        .await?
+        .into_iter()
+        .find(|job| {
+            job.payload.get("projectId").and_then(Value::as_str) == Some(project_id)
+                && (job.status == "queued" || job.status == "running")
+        });
+    if active_job.is_some() {
+        return Err(BusinessLoopError::invalid("该项目已有进行中的目标优化任务"));
+    }
+
+    let payload = json!({
+        "projectId": project_id,
+        "decidedBy": requested_by,
+        "maxCycles": max_cycles.clamp(1, BUSINESS_LOOP_MAX_BATCH as u32),
+    });
+    storage
+        .enqueue_automation_job(
+            BUSINESS_OPTIMIZATION_PACK_ID,
+            BUSINESS_OPTIMIZATION_JOB_TYPE,
+            &generated_id("optimization-job"),
+            &payload,
+            3,
+        )
+        .await
+        .map_err(BusinessLoopError::from)
 }
 
 async fn optimization_result(

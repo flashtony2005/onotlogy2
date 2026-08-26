@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Compass, Play, RefreshCw } from 'lucide-react'
 import {
+  getAutomationJob,
   getBusinessGoals,
   getBusinessPortfolio,
   getExpiredExecutionLeases,
@@ -10,8 +11,8 @@ import {
   getBusinessPathInsights,
   getBusinessOptimizationRuns,
   postProjectList,
-  optimizeBusinessGoals,
   reconcileBusinessExecution,
+  startBusinessOptimizationJob,
   runBusinessNext,
   settleBusinessFollowUp,
   startBusinessFollowUp,
@@ -210,14 +211,38 @@ export function BusinessPanel({
     setBusy(true)
     setError(null)
     setNotice(null)
+    const selectedId = projectId
     try {
-      const optimization = await optimizeBusinessGoals(projectId, 5)
-      setRun(optimization.cycles[optimization.cycles.length - 1] ?? null)
-      const executed = optimization.executedActions.length
-      setNotice(
-        `已执行 ${executed} 个动作；剩余差距 ${number(optimization.finalGap)}，停止原因：${optimization.stoppedBecause}`,
-      )
-      await loadInsight(projectId)
+      const job = await startBusinessOptimizationJob(selectedId, 5)
+      setNotice('目标优化任务已入队')
+
+      for (;;) {
+        await new Promise((resolve) => setTimeout(resolve, 500))
+        const current = await getAutomationJob(job.id)
+        if (current.status === 'queued' || current.status === 'running') continue
+        if (current.status === 'failed') {
+          throw new Error(current.last_error || '目标优化任务失败')
+        }
+        if (current.status !== 'succeeded') {
+          throw new Error(`目标优化任务异常终止：${current.status}`)
+        }
+
+        await loadInsight(selectedId)
+        const runId = typeof current.result?.optimizationRunId === 'string'
+          ? current.result.optimizationRunId
+          : null
+        const runs = await getBusinessOptimizationRuns(selectedId)
+        const optimization = runs.find((item) => item.id === runId) ?? null
+        if (optimization) {
+          setRun(optimization.cycles[optimization.cycles.length - 1] ?? null)
+          setNotice(
+            `目标优化完成：已执行 ${optimization.executedActions.length} 个动作；剩余差距 ${number(optimization.finalGap)}，停止原因：${optimization.stoppedBecause}`,
+          )
+        } else {
+          setNotice('目标优化完成')
+        }
+        break
+      }
     } catch (e) {
       if (!onAuthError(e)) setError((e as Error).message || '目标优化失败')
     } finally {

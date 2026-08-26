@@ -3,9 +3,10 @@
 use crate::auth::AuthUser;
 use crate::business_loop::{
     BusinessLoopError, decide_business_approval, decide_opportunity, discover_opportunities,
-    execute_opportunity, goal_gaps, list_follow_ups, list_learning_insights, list_path_insights,
-    optimize_toward_goals, plan_business_portfolio, plan_opportunity_paths, recommend_next_actions,
-    reopen_interrupted_execution, run_next_best_action, settle_follow_up, start_follow_up,
+    enqueue_business_optimization_job, execute_opportunity, goal_gaps, list_follow_ups,
+    list_learning_insights, list_path_insights, optimize_toward_goals, plan_business_portfolio,
+    plan_opportunity_paths, recommend_next_actions, reopen_interrupted_execution,
+    run_next_best_action, settle_follow_up, start_follow_up,
 };
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -377,6 +378,27 @@ pub(crate) async fn optimize(
     .await
     {
         Ok(runs) => ApiResponse::ok(runs).into_response(),
+        Err(error) => error_response(error),
+    }
+}
+
+pub(crate) async fn start_optimization_job(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<BusinessOptimizationBody>,
+) -> Response {
+    if let Some(response) = write_denied(&user) {
+        return response;
+    }
+    match enqueue_business_optimization_job(
+        &st.storage,
+        &body.project_id,
+        &user.username,
+        body.max_cycles.unwrap_or(5),
+    )
+    .await
+    {
+        Ok((job, _created)) => ApiResponse::ok(job).into_response(),
         Err(error) => error_response(error),
     }
 }

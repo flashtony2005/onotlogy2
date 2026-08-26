@@ -10,9 +10,10 @@ use openaip_os::abi::ir::ActorKind;
 use openaip_os::abi::odl::parse_odl;
 use openaip_os::business_loop::{
     DecisionOptions, decide_business_approval, decide_opportunity, discover_opportunities,
-    execute_opportunity, list_follow_ups, list_learning_insights, list_path_insights,
-    optimize_toward_goals, plan_opportunity_paths, recommend_next_actions,
-    reopen_interrupted_execution, run_next_best_action, settle_follow_up, start_follow_up,
+    enqueue_business_optimization_job, execute_opportunity, list_follow_ups,
+    list_learning_insights, list_path_insights, optimize_toward_goals, plan_opportunity_paths,
+    recommend_next_actions, reopen_interrupted_execution, run_next_best_action, settle_follow_up,
+    start_follow_up,
 };
 use openaip_os::knowledge::{
     Axiom, ClassExpression, Ontology, OntologyChange, OntologyProposal, Term,
@@ -943,6 +944,80 @@ async fn optimization_endpoint_runs_goal_directed_cycles() {
     assert_eq!(history.len(), 1);
     assert_eq!(history[0]["id"], result["id"]);
     assert_eq!(history[0]["stoppedBecause"], json!("MaxCycles"));
+}
+
+#[tokio::test]
+async fn optimization_enqueue_rejects_duplicate_active_project() {
+    let storage = LibSQLStorage::open(":memory:").await.unwrap();
+    let (job, created) =
+        enqueue_business_optimization_job(&storage, "crm-retention", "contract-test", 1)
+            .await
+            .expect("首个优化任务应能入队");
+    assert!(created);
+    assert_eq!(job.status, "queued");
+    assert_eq!(job.payload["projectId"], json!("crm-retention"));
+
+    let error = enqueue_business_optimization_job(&storage, "crm-retention", "contract-test", 1)
+        .await
+        .expect_err("活跃项目不能重复入队");
+    assert!(error.to_string().contains("该项目已有进行中的目标优化任务"));
+}
+
+#[tokio::test]
+async fn optimization_job_scheduler_persists_history() {
+    let storage = Arc::new(LibSQLStorage::open(":memory:").await.unwrap());
+    let addr = common::spawn_server(storage.clone()).await;
+    let (_, body) = common::http_call(
+        addr,
+        "POST",
+        "/api/v1/domain-packs/crm-retention/install",
+        None,
+    )
+    .await;
+    assert!(body.contains("\"code\":0"), "业务包应安装成功：{body}");
+    let (status, body) = common::http_call(
+        addr,
+        "POST",
+        "/api/v1/business/optimization-jobs",
+        Some(r#"{"projectId":"crm-retention","maxCycles":1}"#),
+    )
+    .await;
+    assert_eq!(status, 200, "目标优化任务应入队成功：{body}");
+    let queued = data(&body).await;
+    assert_eq!(queued["status"], json!("queued"));
+
+    let mut completed = None;
+    for _ in 0..20 {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let (status, body) = common::http_call(addr, "GET", "/api/v1/automation/jobs", None).await;
+        assert_eq!(status, 200, "应能读取自动化任务：{body}");
+        let jobs = data(&body).await["jobs"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        if let Some(job) = jobs.iter().find(|job| job["id"] == queued["id"])
+            && (job["status"] == json!("succeeded") || job["status"] == json!("failed"))
+        {
+            completed = Some(job.clone());
+            break;
+        }
+    }
+    let job = completed.expect("调度器应在测试窗口内完成优化任务");
+    assert_eq!(job["status"], json!("succeeded"), "任务结果：{job}");
+    let (status, body) = common::http_call(
+        addr,
+        "GET",
+        "/api/v1/business/optimization-runs?projectId=crm-retention",
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "应能读取持久化运行历史：{body}");
+    let history = data(&body).await.as_array().cloned().unwrap_or_default();
+    assert_eq!(history.len(), 1);
+    assert_eq!(
+        history[0]["id"], job["result"]["optimizationRunId"],
+        "调度器结果应关联持久化运行"
+    );
 }
 
 #[tokio::test]

@@ -434,6 +434,10 @@ fn router() -> Router<Arc<AppState>> {
         .route("/api/v1/business/run-next", post(run_next))
         .route("/api/v1/business/optimize", post(business_loop::optimize))
         .route(
+            "/api/v1/business/optimization-jobs",
+            post(business_loop::start_optimization_job),
+        )
+        .route(
             "/api/v1/business/opportunities/:id/decide",
             post(business_loop::decide),
         )
@@ -652,11 +656,14 @@ pub async fn serve_with_facade(
         )
         .map_err(|error| std::io::Error::other(format!("插件目录装配失败：{error}")))?,
     );
-    let v2_state = v2::V2State::with_builtins()
-        .map_err(|error| std::io::Error::other(format!("内置 Skill 装配失败：{error}")))?;
+    let v2 = std::sync::Arc::new(
+        v2::V2State::with_builtins()
+            .map_err(|error| std::io::Error::other(format!("内置 Skill 装配失败：{error}")))?,
+    );
     let automation = Arc::new(crate::automation::AutomationEngine::new(
         storage.clone(),
         plugin_catalog.clone(),
+        v2.workers.clone(),
         domain_packs_dir.clone(),
         facade.event_tx(),
     ));
@@ -678,7 +685,7 @@ pub async fn serve_with_facade(
         }
     };
     let state = Arc::new(AppState {
-        v2: Arc::new(v2_state),
+        v2,
         storage,
         domain_packs_dir,
         plugin_catalog,

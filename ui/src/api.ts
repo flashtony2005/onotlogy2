@@ -661,16 +661,16 @@ export async function runBusinessNext(projectId: string): Promise<BusinessRunDto
   return unwrap<BusinessRunDto>(r)
 }
 
-export async function optimizeBusinessGoals(
+export async function startBusinessOptimizationJob(
   projectId: string,
   maxCycles: number,
-): Promise<BusinessOptimizationRunDto> {
-  const res = await authFetch('/api/v1/business/optimize', {
+): Promise<AutomationJobDto> {
+  const res = await authFetch('/api/v1/business/optimization-jobs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ projectId, maxCycles }),
   })
-  return unwrap<BusinessOptimizationRunDto>(res)
+  return unwrap<AutomationJobDto>(res)
 }
 
 export async function getBusinessOptimizationRuns(

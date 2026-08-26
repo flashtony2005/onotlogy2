@@ -18,14 +18,24 @@ use crate::domain_pack::DomainPack;
 use crate::domain_pack::DomainPackRuntime;
 use crate::plugin::catalog::SharedPluginCatalog;
 use crate::storage::{AutomationJob, LibSQLStorage, ObjectEngine, TraceQuery, WorldCommand};
+use crate::worker_core::registry::WorkerRegistry;
+
+pub type SharedWorkerRegistry = Arc<tokio::sync::RwLock<WorkerRegistry>>;
 
 const SYNC: &str = "sync";
 const IMPORT: &str = "import";
 const ANALYZE: &str = "analyze";
 const BACKTEST: &str = "backtest";
 const REVIEW: &str = "review";
+const BUSINESS_LOOP_PACK: &str = "business-loop";
+const OPTIMIZE: &str = "optimize";
 const DEFAULT_WINDOW: u64 = 50;
 const DEFAULT_TEST_COUNT: u64 = 30;
+
+#[cfg(test)]
+fn test_workers() -> SharedWorkerRegistry {
+    Arc::new(tokio::sync::RwLock::new(WorkerRegistry::new()))
+}
 
 /// 业务包调度器的稳定操作协议；存储层只保存其字符串表示。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,9 +162,14 @@ fn last_success_key(pack_id: &str) -> String {
     format!("automation:last_success_at:{pack_id}")
 }
 
+fn is_business_optimization_job(job: &AutomationJob) -> bool {
+    job.pack_id == BUSINESS_LOOP_PACK && job.job_type == OPTIMIZE
+}
+
 pub struct AutomationEngine {
     storage: Arc<LibSQLStorage>,
     plugin_catalog: SharedPluginCatalog,
+    workers: SharedWorkerRegistry,
     domain_packs_dir: PathBuf,
     event_tx: tokio::sync::broadcast::Sender<crate::trace::TraceEvent>,
     stop_tx: watch::Sender<bool>,
@@ -165,6 +180,7 @@ impl AutomationEngine {
     pub fn new(
         storage: Arc<LibSQLStorage>,
         plugin_catalog: SharedPluginCatalog,
+        workers: SharedWorkerRegistry,
         domain_packs_dir: PathBuf,
         event_tx: tokio::sync::broadcast::Sender<crate::trace::TraceEvent>,
     ) -> Self {
@@ -172,6 +188,7 @@ impl AutomationEngine {
         Self {
             storage,
             plugin_catalog,
+            workers,
             domain_packs_dir,
             event_tx,
             stop_tx,
@@ -700,8 +717,10 @@ impl AutomationEngine {
                 self.storage
                     .complete_automation_job(&job.id, &result)
                     .await?;
-                self.record_automation_run(&job, "succeeded", Some(&result), None)
-                    .await?;
+                if !is_business_optimization_job(&job) {
+                    self.record_automation_run(&job, "succeeded", Some(&result), None)
+                        .await?;
+                }
                 self.emit("automation.job_succeeded", &job, result).await;
             }
             Err(error) => {
@@ -709,8 +728,10 @@ impl AutomationEngine {
                 self.storage
                     .fail_automation_job(&job.id, &message, retry_delay(job.attempt))
                     .await?;
-                self.record_automation_run(&job, "failed", None, Some(&message))
-                    .await?;
+                if !is_business_optimization_job(&job) {
+                    self.record_automation_run(&job, "failed", None, Some(&message))
+                        .await?;
+                }
                 self.emit("automation.job_failed", &job, json!({"error": message}))
                     .await;
             }
@@ -719,6 +740,10 @@ impl AutomationEngine {
     }
 
     async fn execute_job(&self, job: &AutomationJob) -> Result<Value, AutomationError> {
+        if is_business_optimization_job(job) {
+            return self.execute_business_optimization(job).await;
+        }
+
         let runtime = self.runtime_for_pack(&job.pack_id).await?;
         match job.job_type.as_str() {
             SYNC => {
@@ -969,6 +994,48 @@ impl AutomationEngine {
         if self.storage.append_trace(&event).await.is_ok() {
             let _ = self.event_tx.send(event);
         }
+    }
+
+    async fn execute_business_optimization(
+        &self,
+        job: &AutomationJob,
+    ) -> Result<Value, AutomationError> {
+        let project_id = job
+            .payload
+            .get("projectId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                AutomationError::Runtime("business_optimization_invalid_project".into())
+            })?;
+        let decided_by = job
+            .payload
+            .get("decidedBy")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                AutomationError::Runtime("business_optimization_invalid_actor".into())
+            })?;
+        let max_cycles = job
+            .payload
+            .get("maxCycles")
+            .and_then(Value::as_u64)
+            .unwrap_or(5) as u32;
+        let workers = self.workers.read().await;
+        let run = crate::business_loop::optimize_toward_goals(
+            &self.storage,
+            &self.plugin_catalog,
+            &workers,
+            project_id,
+            decided_by,
+            max_cycles,
+        )
+        .await
+        .map_err(|error| AutomationError::Runtime(error.to_string()))?;
+        Ok(json!({
+            "optimizationRunId": run.id,
+            "projectId": run.project_id,
+            "stoppedBecause": run.stopped_because,
+            "finalGap": run.final_gap,
+        }))
     }
 }
 
@@ -1387,6 +1454,7 @@ mod tests {
         let engine = Arc::new(AutomationEngine::new(
             storage.clone(),
             catalog,
+            test_workers(),
             packs_dir,
             event_tx,
         ));
@@ -1543,6 +1611,7 @@ mod tests {
         let engine = Arc::new(AutomationEngine::new(
             storage.clone(),
             catalog,
+            test_workers(),
             dir.clone(),
             event_tx,
         ));
@@ -1641,7 +1710,13 @@ mod tests {
             .unwrap();
         let catalog = Arc::new(catalog);
         let (event_tx, _) = tokio::sync::broadcast::channel(16);
-        let engine = AutomationEngine::new(storage.clone(), catalog, packs_dir, event_tx);
+        let engine = AutomationEngine::new(
+            storage.clone(),
+            catalog,
+            test_workers(),
+            packs_dir,
+            event_tx,
+        );
         let mut last_scan = HashMap::new();
 
         engine.scan_due(&mut last_scan).await.unwrap();
@@ -1743,7 +1818,13 @@ mod tests {
             .unwrap();
         let catalog = Arc::new(catalog);
         let (event_tx, _) = tokio::sync::broadcast::channel(16);
-        let engine = AutomationEngine::new(storage.clone(), catalog, packs_dir, event_tx);
+        let engine = AutomationEngine::new(
+            storage.clone(),
+            catalog,
+            test_workers(),
+            packs_dir,
+            event_tx,
+        );
         let mut last_scan = HashMap::new();
 
         engine.scan_due(&mut last_scan).await.unwrap();

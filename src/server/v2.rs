@@ -21,7 +21,7 @@ use crate::worker_core::registry::WorkerRegistry;
 pub struct V2State {
     pub skills: RwLock<SkillRegistry>,
     pub plugins: RwLock<PluginRegistry>,
-    pub workers: tokio::sync::RwLock<WorkerRegistry>,
+    pub workers: std::sync::Arc<tokio::sync::RwLock<WorkerRegistry>>,
     pub sessions: Mutex<HashMap<String, SessionLog>>,
 }
 
