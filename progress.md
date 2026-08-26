@@ -365,3 +365,26 @@ Phase 2.6.3 完成；当前趋势为最近任务窗口的本地派生视图。�
 ### 边界
 - 本次 GA 是单机 Local-First 生产核心验收,不宣称跨硬件性能合同和多区域 HA。
 - 生产 RPO ≤15 分钟需要目标环境外部调度器证据;该证据在仓库外,作为运营验收边界。
+
+## 执行日志(2026-08-26 · V0.14.2 后 Round-2 审查加固)
+
+### 已完成
+1. 给 data-consistency LRU 增加单条目公理上限:超过 20,000 条的完整 snapshot 不再克隆进缓存,
+   避免 5k 世界(75,015 条合成后公理)在容量 32 下放大常驻内存。
+2. 世界校验读取的对象和关系快照统一 `ORDER BY id`,消除身份分区命名空间对 libSQL 行序的隐式依赖;
+   新增存储读取顺序回归测试。
+3. 收窄身份分区哈希输入为 schema 公理加排序去重 storage ID,并流式写入 SHA-256;relation 增删和
+   object payload 变化不再改写 6.5 万条分区公理。新增顺序、payload、重复 ID 和 ID 变化回归测试。
+4. 刷新 Reasoner scale 基线表到 Round-2 加固后的 release 复测数字。
+5. 记录提交卫生教训:后续版本号 bump 必须独立提交,不再与功能修复混合。
+
+### 验证
+- `cargo test -p oaip-knowledge --lib`: PASS,127 tests。
+- `cargo test -p oaip-storage --lib`: PASS,71 tests。
+- `cargo clippy -p oaip-knowledge -p oaip-storage -- -D warnings`: PASS。
+- Apple M4 release 5k 复测:KB 75,015 axioms、转换 8.8ms、推理一致性 229.1ms、全管线 238.2ms,
+  继续低于本机 1000ms 红线和 CI 3000ms 预算。
+
+### 边界
+- 本次是发布后的工程加固提交,HEAD 会越过 `v0.14.2` tag;正式产物仍以该 tag 和既有 manifest 为锚点,
+  本工作树构建属于 candidate。

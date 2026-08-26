@@ -88,7 +88,7 @@ World query 的平均耗时是返回 500 行的完整批次耗时，不是单行
 Criterion 报告的是均值和中位数置信区间，不产生 HTTP P99；端到端 API/WS P99 由
 S4b 负载测试补齐。当前数字只代表本机开发环境基线，不能直接外推为生产 SLA。
 
-### Reasoner 规模基线（2026-08-26）
+### Reasoner 规模基线（2026-08-26 · Round-2 加固后复测）
 
 `runtime_world_to_knowledge()` 使用二进制身份分区表达所有 storage ID 的两两互异：
 每个对象进入 `ceil(log2(N))` 个 0/1 partition class，每对 partition class 声明不相交。
@@ -96,15 +96,20 @@ S4b 负载测试补齐。当前数字只代表本机开发环境基线，不能�
 但避免上游把 N 元 `DifferentIndividuals` 展开成 `N*(N-1)/2` 对。该路径不挑选“相关个体”，
 也不削弱 functional、inverse-functional、cardinality 或 nominal 身份推理。
 
-Apple M4 release 模式、`benches/reasoner-scale.rs` 最新结果如下；耗时包含事实生成、
-world projection、OWL conversion 和 `Reasoner::new() + is_consistent()`：
+Apple M4 release 模式、`benches/reasoner-scale.rs` 最新结果如下；转换耗时是
+`runtime_world_to_knowledge()`，推理一致性耗时是 `Reasoner::new() + is_consistent()`，
+全管线另含确定性事实生成。身份命名空间哈希现在流式写入 SHA-256，输入只含 schema 公理和
+排序去重后的 storage ID；因此 relation 增删或对象 payload 变化不再改写分区公理：
 
 | 对象数 | KB 公理 | 转换耗时 | 推理一致性耗时 |
 |-------:|-------:|-------:|---------------:|
-| 100 | 909 | 0.8 ms | 6.1 ms |
-| 500 | 5,511 | 1.2 ms | 23.4 ms |
-| 1,000 | 12,012 | 1.4 ms | 33.4 ms |
-| 5,000 | 75,015 | 6.1 ms | 211.1 ms |
+| 100 | 909 | 0.8 ms | 6.0 ms |
+| 500 | 5,511 | 1.9 ms | 25.0 ms |
+| 1,000 | 12,012 | 2.0 ms | 35.6 ms |
+| 5,000 | 75,015 | 8.8 ms | 229.1 ms |
+
+同一轮 5k 全管线为 238.2ms。哈希成本随 schema JSON 字节数线性增长；上表仍是单次本机
+release 运行样本，不消除运行间噪声。
 
 修复前同一 5k 负载约需 80.65 秒。`make reasoner-scale-sla` 对推理一致性阶段固定
 `5,000 objects <= 1,000 ms` 本机回归红线；CI 通过 `make reasoner-scale-ci` 使用 3,000ms，
