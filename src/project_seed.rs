@@ -173,16 +173,45 @@ pub async fn seed_openaip_os(storage: &LibSQLStorage, root: &str) -> Result<usiz
     Ok(cmds.len())
 }
 
-/// 幂等 apply：已存在对象（UNIQUE）或重复关系边（WB2007）跳过；
-/// 其余错误透出。seed/check/commit 复用——世界收敛，不重复爆错。
+/// 幂等 apply：只有现有对象/关系与待写入命令完全一致时才跳过；
+/// 同 ID 不同类型、payload 或项目归属一律作为冲突透出。
 async fn apply_idempotent(storage: &LibSQLStorage, cmds: &[WorldCommand]) -> Result<(), String> {
     for cmd in cmds {
         match storage.apply_world(cmd.clone()).await {
             Ok(()) => {}
             Err(e) => {
                 let text = e.to_string();
-                let idempotent =
-                    text.contains("UNIQUE constraint failed") || text.contains("WB2007");
+                let idempotent = match cmd {
+                    WorldCommand::CreateObject {
+                        object_type,
+                        id,
+                        data,
+                        project_id,
+                    } if text.contains("UNIQUE constraint failed") => storage
+                        .get_object_for_project(id, project_id.as_deref())
+                        .await
+                        .map_err(|error| error.to_string())?
+                        .is_some_and(|existing| {
+                            existing.r#type == *object_type && existing.data == *data
+                        }),
+                    WorldCommand::LinkRelation {
+                        source,
+                        edge,
+                        target,
+                        project_id,
+                    } if text.contains("WB2007") || text.contains("UNIQUE constraint failed") => {
+                        storage
+                            .relation_exists_for_project(
+                                source,
+                                edge,
+                                target,
+                                project_id.as_deref(),
+                            )
+                            .await
+                            .map_err(|error| error.to_string())?
+                    }
+                    _ => false,
+                };
                 if !idempotent {
                     return Err(text);
                 }

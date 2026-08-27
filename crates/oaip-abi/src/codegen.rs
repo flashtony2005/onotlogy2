@@ -332,11 +332,13 @@ CREATE TABLE IF NOT EXISTS wb_run (
   status        TEXT NOT NULL,           -- Running | Completed | Failed | Interrupted
   human_approval INTEGER NOT NULL DEFAULT 0,
   project_id    TEXT,                      -- Phase 8：项目归属（NULL=全局）
+  owner_user_id TEXT,                      -- authenticated principal owning the run
   created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   finished_at   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_run_agent ON wb_run(agent_id);
+CREATE INDEX IF NOT EXISTS idx_run_owner ON wb_run(owner_user_id);
 
 -- Phase 8：项目注册表（项目 = 世界/事件/运营的顶层组织单元）。
 CREATE TABLE IF NOT EXISTS wb_project (
@@ -345,9 +347,11 @@ CREATE TABLE IF NOT EXISTS wb_project (
   description TEXT NOT NULL DEFAULT '',
   ontology    TEXT NOT NULL DEFAULT '',
   knowledge_version_id TEXT REFERENCES wb_ontology_version(id),
+  owner_user_id TEXT,
   status      TEXT NOT NULL DEFAULT 'active',
   created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_project_owner ON wb_project(owner_user_id);
 CREATE INDEX IF NOT EXISTS idx_run_status ON wb_run(status);
 
 -- 知识层：不可变本体版本。revision 是数据库分配的线性版本序。

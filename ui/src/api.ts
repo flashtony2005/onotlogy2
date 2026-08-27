@@ -129,6 +129,13 @@ export async function postLogin(
   return unwrap<{ token: string; user: AuthUserDto }>(res)
 }
 
+/** `POST /api/v1/wb/auth/ws-ticket`：为浏览器 WebSocket 换取短时一次性 ticket。 */
+export async function getWsTicket(): Promise<string> {
+  const res = await authFetch('/api/v1/wb/auth/ws-ticket', { method: 'POST' })
+  const data = await unwrap<{ ticket: string; expiresIn: number }>(res)
+  return data.ticket
+}
+
 /** `GET /api/v1/wb/auth/me`：恢复会话（刷新/重开页面后校验令牌仍有效）。 */
 export async function getMe(): Promise<AuthUserDto> {
   const res = await authFetch('/api/v1/wb/auth/me')

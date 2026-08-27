@@ -18,6 +18,7 @@ pub struct ProjectRecord {
     pub description: String,
     pub ontology: String,
     pub knowledge_version_id: Option<String>,
+    pub owner_user_id: Option<String>,
     pub status: String,
     pub created_at: String,
 }
@@ -78,7 +79,8 @@ impl LibSQLStorage {
                 message: format!("本体版本 {version_id} 缺少可执行 Runtime IR"),
             });
         };
-        crate::ontology::validate_runtime_ir_against_world(&tx, &runtime_ir).await?;
+        crate::ontology::validate_runtime_ir_against_world(&tx, Some(project_id), &runtime_ir)
+            .await?;
         let updated = tx
             .execute(
                 "UPDATE wb_project SET knowledge_version_id=?1 WHERE id=?2",
@@ -101,15 +103,35 @@ impl LibSQLStorage {
         ontology: &str,
         knowledge_version_id: Option<&str>,
     ) -> Result<ProjectRecord, StorageError> {
+        self.create_project_owned(id, name, description, ontology, knowledge_version_id, None)
+            .await
+    }
+
+    pub async fn create_project_owned(
+        &self,
+        id: &str,
+        name: &str,
+        description: &str,
+        ontology: &str,
+        knowledge_version_id: Option<&str>,
+        owner_user_id: Option<&str>,
+    ) -> Result<ProjectRecord, StorageError> {
         let project_ir = parse_odl(ontology)?;
         let bound_version_id = self
             .resolve_project_knowledge_version(&project_ir, knowledge_version_id)
             .await?;
         self.conn
             .execute(
-                "INSERT INTO wb_project (id, name, description, ontology, knowledge_version_id) \
-                 VALUES (?1,?2,?3,?4,?5)",
-                libsql::params![id, name, description, ontology, bound_version_id],
+                "INSERT INTO wb_project (id, name, description, ontology, knowledge_version_id, owner_user_id) \
+                 VALUES (?1,?2,?3,?4,?5,?6)",
+                libsql::params![
+                    id,
+                    name,
+                    description,
+                    ontology,
+                    bound_version_id,
+                    owner_user_id
+                ],
             )
             .await?;
         Ok(self.project(id).await?.expect("刚插入必在"))
@@ -120,7 +142,7 @@ impl LibSQLStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, name, description, ontology, knowledge_version_id, status, created_at \
+                "SELECT id, name, description, ontology, knowledge_version_id, owner_user_id, status, created_at \
                  FROM wb_project WHERE id = ?1",
                 libsql::params![id],
             )
@@ -134,8 +156,9 @@ impl LibSQLStorage {
             description: row.get(2)?,
             ontology: row.get(3)?,
             knowledge_version_id: row.get(4)?,
-            status: row.get(5)?,
-            created_at: row.get(6)?,
+            owner_user_id: row.get(5)?,
+            status: row.get(6)?,
+            created_at: row.get(7)?,
         }))
     }
 
@@ -144,7 +167,7 @@ impl LibSQLStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, name, description, ontology, knowledge_version_id, status, created_at \
+                "SELECT id, name, description, ontology, knowledge_version_id, owner_user_id, status, created_at \
                  FROM wb_project ORDER BY created_at ASC",
                 libsql::params![],
             )
@@ -157,8 +180,9 @@ impl LibSQLStorage {
                 description: row.get(2)?,
                 ontology: row.get(3)?,
                 knowledge_version_id: row.get(4)?,
-                status: row.get(5)?,
-                created_at: row.get(6)?,
+                owner_user_id: row.get(5)?,
+                status: row.get(6)?,
+                created_at: row.get(7)?,
             });
         }
         Ok(out)

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::auth::{AuthUser, clamp_view};
 use crate::storage::TraceQuery;
-use crate::trace::{RunTimeline, TraceEventDto, View, build_timeline};
+use crate::trace::{TraceEventDto, View, build_timeline};
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{Extension, Path, Query, State, WebSocketUpgrade};
 use axum::response::Response;
@@ -54,13 +54,19 @@ pub(crate) async fn list_trace(
     State(st): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
     Query(q): Query<TraceListParams>,
-) -> Json<ApiResponse<TraceListDto>> {
+) -> Response {
+    if let Some(run_id) = q.run_id.as_deref()
+        && user_owns_run(&st, run_id, &user.id).await != Some(true)
+    {
+        return ApiResponse::error(404, "运行不存在").into_response();
+    }
     let tq = TraceQuery {
         project_id: None,
         run_id: q.run_id,
         agent_id: q.agent_id,
         object_ref: q.object_ref,
         event_type: q.event_type,
+        event_type_prefixes: None,
         after_id: q.after_id,
         limit: 1000,
         newest_first: false,
@@ -77,7 +83,7 @@ pub(crate) async fn list_trace(
         .iter()
         .filter_map(|e| TraceEventDto::from_view(e, view))
         .collect();
-    ApiResponse::ok(TraceListDto { total, list })
+    ApiResponse::ok(TraceListDto { total, list }).into_response()
 }
 
 /// `GET /api/v1/wb/agent/trace/:id`：单条 Trace（缺失 → WB2002）。
@@ -88,6 +94,11 @@ pub(crate) async fn get_trace(
 ) -> Response {
     match st.storage.get_trace(&id).await {
         Ok(Some(e)) => {
+            if let Some(run_id) = e.run_id.as_deref()
+                && user_owns_run(&st, run_id, &user.id).await != Some(true)
+            {
+                return ApiResponse::error(404, "Trace 不存在").into_response();
+            }
             // M2：单条查询同样按角色钳制（Executive 剥 reasoning/IO 细节）。
             let view = clamp_view(View::Developer, user.role);
             match TraceEventDto::from_view(&e, view) {
@@ -106,7 +117,10 @@ pub(crate) async fn timeline(
     Extension(user): Extension<AuthUser>,
     Path(run_id): Path<String>,
     Query(q): Query<ViewParam>,
-) -> Json<ApiResponse<RunTimeline>> {
+) -> Response {
+    if user_owns_run(&st, &run_id, &user.id).await == Some(false) {
+        return ApiResponse::error(404, "运行不存在").into_response();
+    }
     // 服务端视图钳制：前端 `?view=` 仅作建议，被钳制到角色允许上限（不信任前端自提权限）。
     let requested = View::from_param(&q.view.unwrap_or_else(|| "operator".into()));
     let view = clamp_view(requested, user.role);
@@ -132,7 +146,7 @@ pub(crate) async fn timeline(
             tl.human_approval = "Required".to_string();
         }
     }
-    ApiResponse::ok(tl)
+    ApiResponse::ok(tl).into_response()
 }
 
 /// `GET /api/v1/wb/agent/memory`：记忆存储全量（V0.5 Memory 视图数据源，按 hits 降序）。
@@ -143,6 +157,11 @@ pub(crate) async fn ws_handler(
     Path(id): Path<String>,
     Query(params): Query<WsParams>,
 ) -> Response {
+    if let Ok(Some(run)) = st.storage.get_run(&id).await
+        && run.owner_user_id.as_deref() != Some(user.id.as_str())
+    {
+        return ApiResponse::error(404, "运行不存在").into_response();
+    }
     // 服务端视图钳制：WS 实时流与 REST timeline 同一套最小权限策略（不信任前端自提）。
     let view = clamp_view(View::Developer, user.role);
     let principal = user.id.clone();

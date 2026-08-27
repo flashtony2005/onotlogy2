@@ -40,7 +40,7 @@ pub(crate) async fn list_approvals(
     let g = lock_mutex(&st.pending);
     let mut list: Vec<PendingApprovalDto> = g
         .values()
-        .filter(|p| p.run_id == run_id)
+        .filter(|p| p.run_id == run_id && (!st.enforce_auth || p.owner_user_id == user.id))
         .map(|p| PendingApprovalDto {
             req_id: p.request.id.clone(),
             run_id: p.run_id.clone(),
@@ -75,6 +75,10 @@ pub(crate) async fn resolve_approval(
     let Some(p) = entry else {
         return ApiResponse::error(404, "审批请求不存在或已裁决").into_response();
     };
+    if p.owner_user_id != user.id {
+        lock_mutex(&st.pending).insert(req_id, p);
+        return ApiResponse::error(404, "审批请求不存在或已裁决").into_response();
+    }
     if p.run_id != run_id {
         // 错 run 的请求放回注册表（请求仍待裁决）
         lock_mutex(&st.pending).insert(req_id, p);
@@ -97,17 +101,20 @@ pub(crate) async fn resolve_approval(
     if let super::ResumeTarget::FabricRun { session_id, run_id } = &p.resume {
         let session_id = session_id.clone();
         let run_id = run_id.clone();
-        let out =
-            tokio::task::block_in_place(|| st.facade.fabric_resolve(&session_id, &run_id, approve));
+        let facade = st.facade.clone();
+        let out = run_blocking(&st, move || {
+            facade.fabric_resolve(&session_id, &run_id, approve)
+        })
+        .await;
         return match out {
-            Ok(msg) => ApiResponse::ok(json!({
+            Ok(Ok(msg)) => ApiResponse::ok(json!({
                 "reqId": req_id,
                 "decision": if approve { "Approved" } else { "Rejected" },
                 "status": msg.payload["status"],
                 "sender": msg.sender,
             }))
             .into_response(),
-            Err(e) => {
+            Ok(Err(e)) => {
                 // 拒绝本身是预期（fabric_resolve 对 reject 返回 Denied 错误）
                 if !approve {
                     return ApiResponse::ok(json!({
@@ -119,6 +126,7 @@ pub(crate) async fn resolve_approval(
                 }
                 ApiResponse::error(5000, format!("fabric 续跑失败: {e}")).into_response()
             }
+            Err(e) => ApiResponse::error(5000, format!("fabric 续跑失败: {e}")).into_response(),
         };
     }
     if p.tx.send(decision).is_err() {

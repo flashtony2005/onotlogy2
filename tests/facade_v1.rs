@@ -733,6 +733,16 @@ async fn tc_p6_project_event_lands_in_project_world() {
     )
     .await
     .unwrap();
+    let conflicting = project_add_object(
+        &storage,
+        "Task",
+        "task-1",
+        "openaip-os",
+        &serde_json::json!({ "title": "changed task", "status": "open" }),
+        None,
+    )
+    .await;
+    assert!(conflicting.is_err(), "同 ID 不同 payload 必须报告冲突");
 
     tokio::task::block_in_place(|| {
         let facade = Facade::new(

@@ -92,6 +92,21 @@ pub(crate) async fn auth_rotate_key(
     ApiResponse::ok(json!({ "rotated": true, "revokedSessions": revoked })).into_response()
 }
 
+/// `POST /api/v1/wb/auth/ws-ticket`：签发短时一次性 WebSocket ticket。需鉴权。
+pub(crate) async fn auth_ws_ticket(
+    State(st): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    token: Option<Extension<AuthToken>>,
+) -> Response {
+    let session_token = token.map(|Extension(value)| value.0);
+    let ticket = st.issue_ws_ticket(&user, session_token);
+    ApiResponse::ok(json!({
+        "ticket": ticket,
+        "expiresIn": WS_TICKET_TTL_SECS,
+    }))
+    .into_response()
+}
+
 /// `GET /api/v1/wb/auth/me`：返回当前认证用户（供前端初始化角色）。需鉴权。
 pub(crate) async fn auth_me(Extension(user): Extension<AuthUser>) -> Response {
     ApiResponse::ok(json!({

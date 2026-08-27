@@ -390,6 +390,26 @@ impl Facade {
         self.event_tx.clone()
     }
 
+    pub fn project_create_owned(
+        &self,
+        request: ProjectCreate,
+        owner_user_id: &str,
+    ) -> Result<ProjectView, FacadeError> {
+        let rec = self
+            .world
+            .handle
+            .block_on(self.storage.create_project_owned(
+                &request.id,
+                &request.name,
+                &request.description,
+                &request.ontology,
+                request.knowledge_version_id.as_deref(),
+                Some(owner_user_id),
+            ))
+            .map_err(|e| FacadeError::Fabric(format!("项目创建失败: {e}")))?;
+        Ok(rec.into())
+    }
+
     /// S2：服务关闭时回收孤儿后台 job（透传 fabric.shutdown）。
     /// 由 server/mod.rs 的 `with_graceful_shutdown` 在 SIGINT/SIGTERM 时调用——
     /// 避免 spawn_blocking 后台进程泄漏为孤儿。
@@ -673,31 +693,43 @@ impl AuditService {
 
     pub fn query(&self, req: AuditQuery) -> Result<AuditView, FacadeError> {
         let limit = if req.limit == 0 { 500 } else { req.limit };
+        let event_type_prefixes = match req.event_type.as_deref() {
+            Some(prefix)
+                if AUDIT_PREFIXES
+                    .iter()
+                    .any(|domain| prefix.starts_with(domain) || domain.starts_with(prefix)) =>
+            {
+                Some(vec![prefix.to_owned()])
+            }
+            Some(_) => Some(Vec::new()),
+            None => Some(
+                AUDIT_PREFIXES
+                    .iter()
+                    .map(|prefix| (*prefix).to_owned())
+                    .collect(),
+            ),
+        };
+        let query = TraceQuery {
+            project_id: req.project_id.clone(),
+            run_id: req.run_id.clone(),
+            agent_id: req.agent_id.clone(),
+            event_type_prefixes,
+            limit,
+            // C2/S3：审计语义域默认倒序（最新在前）。域过滤在 SQL 中完成，
+            // 避免先 LIMIT 再内存过滤导致遗漏匹配事件。
+            newest_first: true,
+            ..Default::default()
+        };
         let events: Vec<TraceEvent> = self
             .handle
-            .block_on(self.storage.list_events(TraceQuery {
-                project_id: req.project_id.clone(),
-                run_id: req.run_id.clone(),
-                agent_id: req.agent_id.clone(),
-                limit,
-                // C2/S3：审计语义域默认倒序（最新在前）——「查最新审计」拿到最旧 500 条
-                // 是反直觉且会让 CLI 异步轮询永远漏掉最新终局事件。WS 断线补齐靠
-                // after_id 游标（仍 ASC），不受影响。
-                newest_first: true,
-                ..Default::default()
-            }))
+            .block_on(self.storage.list_events(query.clone()))
+            .map_err(|e| FacadeError::Audit(e.to_string()))?;
+        let total = self
+            .handle
+            .block_on(self.storage.count_events(query))
             .map_err(|e| FacadeError::Audit(e.to_string()))?;
         let filtered: Vec<AuditEvent> = events
             .into_iter()
-            .filter(|e| {
-                let in_domain = AUDIT_PREFIXES.iter().any(|p| e.event_type.starts_with(p));
-                let by_type = req
-                    .event_type
-                    .as_ref()
-                    .map(|t| e.event_type.starts_with(t))
-                    .unwrap_or(true);
-                in_domain && by_type
-            })
             .map(|e| AuditEvent {
                 id: e.id,
                 event_type: e.event_type,
@@ -706,7 +738,6 @@ impl AuditService {
                 timestamp: e.timestamp,
             })
             .collect();
-        let total = filtered.len();
         Ok(AuditView {
             events: filtered,
             total,

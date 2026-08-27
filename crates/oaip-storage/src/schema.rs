@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 /// 版本化迁移注册表：`(from_version, sql)`，按版本升序执行；每步成功后推进
 /// `wb_meta.schema_version`。迁移在事务内执行（失败整体回滚，版本不推进，可安全重试）。
 /// 新库由 `canonical_schema` 直接建到当前版本，不执行迁移。
-pub(crate) const SCHEMA_VERSION: i64 = 20;
+pub(crate) const SCHEMA_VERSION: i64 = 22;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     // V1 → V2：wb_learned 补 auto_approve_enabled（REQ-018）。
@@ -299,6 +299,18 @@ CREATE INDEX IF NOT EXISTS idx_business_optimization_project
            AND job_type = 'optimize'
            AND status IN ('queued', 'running');"#,
     ),
+    // V20 → V21：项目归属持久化，HTTP 资源授权以数据库事实源为准。
+    (
+        20,
+        "ALTER TABLE wb_project ADD COLUMN owner_user_id TEXT; \
+         CREATE INDEX IF NOT EXISTS idx_project_owner ON wb_project(owner_user_id)",
+    ),
+    // V21 → V22：运行归属持久化，避免重启后通过 run/timeline 越权读取。
+    (
+        21,
+        "ALTER TABLE wb_run ADD COLUMN owner_user_id TEXT; \
+         CREATE INDEX IF NOT EXISTS idx_run_owner ON wb_run(owner_user_id)",
+    ),
 ];
 
 const MIGRATION_NAMES: &[(i64, &str)] = &[
@@ -322,6 +334,8 @@ const MIGRATION_NAMES: &[(i64, &str)] = &[
     (18, "project_knowledge_version_binding"),
     (19, "business_optimization_run_history"),
     (20, "active_business_optimization_project_uniqueness"),
+    (21, "project_owner"),
+    (22, "run_owner"),
 ];
 
 const MIGRATION_DOWNS: &[(i64, &str)] = &[
@@ -409,6 +423,14 @@ DROP TABLE IF EXISTS wb_audit_chain",
     (
         19,
         "DROP INDEX IF EXISTS uq_automation_active_business_optimization_project",
+    ),
+    (
+        20,
+        "DROP INDEX IF EXISTS idx_project_owner; ALTER TABLE wb_project DROP COLUMN owner_user_id",
+    ),
+    (
+        21,
+        "DROP INDEX IF EXISTS idx_run_owner; ALTER TABLE wb_run DROP COLUMN owner_user_id",
     ),
 ];
 

@@ -25,7 +25,7 @@ pub mod views;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::auth::{AuthUser, IdentityProvider, LocalIdentityProvider, Role, SessionStore};
 use crate::cognitive::approval::{ApprovalDecision, ApprovalRequest};
@@ -38,8 +38,10 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use rand_core::{OsRng, RngCore};
 use serde::Serialize;
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 
 use rate_limit::{Channel, RateLimiter};
 
@@ -50,6 +52,7 @@ use auth::auth_login;
 use auth::auth_logout;
 use auth::auth_me;
 use auth::auth_rotate_key;
+use auth::auth_ws_ticket;
 use automation::{
     cancel_job, get_job, get_pack_status, list_jobs, run_operation, run_pack, scan_pack,
 };
@@ -87,6 +90,37 @@ pub(crate) fn lock_mutex<'a, T>(m: &'a Mutex<T>) -> MutexGuard<'a, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Return whether a run is known and owned by the user.
+///
+///  distinguishes an unknown run from a known run owned by another user;
+/// callers that need to preserve the empty-timeline contract can handle those
+/// cases differently without weakening cross-user isolation.
+pub(crate) async fn user_owns_run(
+    state: &Arc<AppState>,
+    run_id: &str,
+    user_id: &str,
+) -> Option<bool> {
+    if let Some(record) = lock_mutex(&state.runs).get(run_id) {
+        return Some(record.owner_user_id.as_deref() == Some(user_id));
+    }
+    match state.storage.get_run(run_id).await {
+        Ok(Some(record)) => Some(record.owner_user_id.as_deref() == Some(user_id)),
+        Ok(None) => None,
+        Err(_) => Some(false),
+    }
+}
+
+pub(crate) async fn user_owns_project(
+    state: &Arc<AppState>,
+    project_id: &str,
+    user_id: &str,
+) -> bool {
+    matches!(
+        state.storage.project(project_id).await,
+        Ok(Some(project)) if project.owner_user_id.as_deref() == Some(user_id)
+    )
+}
+
 /// HTTP 审批挂起的最长等待时间；超时按 Expire 裁决（不授予权限）。
 pub(crate) const APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -94,6 +128,7 @@ struct RunRecord {
     status: RunStatus,
     /// 仅 Policy 拒绝才要求 Human Approval（WB2005）。
     human_approval: bool,
+    owner_user_id: Option<String>,
 }
 
 /// M1c 挂起审批条目：请求展示信息 + 裁决通道（run 的 resolver 阻塞等待）。
@@ -109,6 +144,8 @@ pub enum ResumeTarget {
 
 pub struct PendingApproval {
     pub run_id: String,
+    /// 审批资源的真实提交者；不能由 URL 中的 run/request id 推断。
+    pub owner_user_id: String,
     pub request: ApprovalRequest,
     pub tx: std::sync::mpsc::Sender<ApprovalDecision>,
     pub created_at: std::time::Instant,
@@ -128,6 +165,7 @@ impl PendingApproval {
             run_id.clone(),
             Self {
                 run_id: run_id.clone(),
+                owner_user_id: request.sender.clone(),
                 request: ApprovalRequest {
                     id: run_id.clone(),
                     run_id: run_id.clone(),
@@ -174,6 +212,8 @@ pub struct AppState {
     approval_timeout: Option<Duration>,
     /// M1c 挂起审批注册表（run 路径 Waiting 时注册；HTTP 端点据此列表/裁决）。
     pub pending: Arc<Mutex<HashMap<String, PendingApproval>>>,
+    /// Fabric correlation → authenticated principal，服务端取消/审批授权依据。
+    pub fabric_owners: Arc<Mutex<HashMap<String, String>>>,
     /// 事件发布（WS 实时流；run 终局 flush 时逐条发布，订阅者与历史补齐同源去重）。
     pub event_tx: tokio::sync::broadcast::Sender<crate::trace::TraceEvent>,
     runs: Mutex<HashMap<String, RunRecord>>,
@@ -190,6 +230,10 @@ pub struct AppState {
     pub facade: Arc<crate::facade::Facade>,
     /// S2a：执行/审批/WS 独立限流；限流器自身故障时 fail-closed。
     pub(crate) rate_limiter: Arc<RateLimiter>,
+    /// 一次性 WebSocket 握票；仅短暂存在内存，避免把会话令牌放进 URL。
+    ws_tickets: Mutex<HashMap<String, WsTicket>>,
+    /// 限制同步 Facade/seed 工作占用 spawn_blocking 线程，避免请求洪峰耗尽运行时。
+    pub(crate) blocking: Arc<Semaphore>,
 }
 
 /// 登录失败记录（连续失败次数 + 首次失败时间，用于锁定窗口判定）。
@@ -201,8 +245,42 @@ struct LoginFail {
 /// 登录限流参数：连续失败 5 次锁定 5 分钟（窗口过后自动放行并重置计数）。
 const MAX_LOGIN_FAILS: u32 = 5;
 const LOGIN_LOCK_SECS: u64 = 300;
+const WS_TICKET_TTL_SECS: u64 = 30;
+
+struct WsTicket {
+    user: AuthUser,
+    /// 强制认证模式下绑定原始会话，消费时重新校验撤销/过期/禁用状态。
+    session_token: Option<String>,
+    expires_at: Instant,
+}
 
 impl AppState {
+    /// 签发短时一次性 WebSocket ticket；原始会话令牌只留在服务端内存。
+    fn issue_ws_ticket(&self, user: &AuthUser, session_token: Option<String>) -> String {
+        let mut bytes = [0_u8; 32];
+        OsRng.fill_bytes(&mut bytes);
+        let ticket = hex::encode(bytes);
+        let mut tickets = lock_mutex(&self.ws_tickets);
+        let now = Instant::now();
+        tickets.retain(|_, t| t.expires_at > now);
+        tickets.insert(
+            ticket.clone(),
+            WsTicket {
+                user: user.clone(),
+                session_token,
+                expires_at: now + Duration::from_secs(WS_TICKET_TTL_SECS),
+            },
+        );
+        ticket
+    }
+
+    /// 原子消费 ticket；过期或不存在的 ticket 不得重复使用。
+    fn consume_ws_ticket(&self, ticket: &str) -> Option<WsTicket> {
+        let mut tickets = lock_mutex(&self.ws_tickets);
+        let value = tickets.remove(ticket)?;
+        (value.expires_at > Instant::now()).then_some(value)
+    }
+
     /// 检查该用户名是否处于登录锁定窗口。
     fn login_locked(&self, username: &str) -> bool {
         let g = lock_mutex(&self.login_fails);
@@ -317,6 +395,7 @@ fn router() -> Router<Arc<AppState>> {
         .route("/api/v1/wb/auth/logout", post(auth_logout))
         .route("/api/v1/wb/auth/rotate-key", post(auth_rotate_key))
         .route("/api/v1/wb/auth/me", get(auth_me))
+        .route("/api/v1/wb/auth/ws-ticket", post(auth_ws_ticket))
         // ── V0.9 用户管理（仅 Developer） ──
         .route("/api/v1/wb/users", get(list_users).post(create_user))
         .route(
@@ -697,6 +776,7 @@ pub async fn serve_with_facade(
         auto_approve_evolution,
         approval_timeout,
         pending: Arc::new(Mutex::new(HashMap::new())),
+        fabric_owners: Arc::new(Mutex::new(HashMap::new())),
         // C1：复用 Facade 自建的广播频道（Bridge sink 已 with_broadcast），
         // 保证 WS /stream 收到 fabric.* 事件，而非另建一个收不全的频道。
         event_tx: facade.event_tx(),
@@ -708,6 +788,8 @@ pub async fn serve_with_facade(
         login_fails: Mutex::new(HashMap::new()),
         facade,
         rate_limiter: Arc::new(RateLimiter::new()),
+        ws_tickets: Mutex::new(HashMap::new()),
+        blocking: Arc::new(Semaphore::new(16)),
     });
     let app = router()
         .layer(middleware::from_fn(auth_layer))
@@ -854,6 +936,7 @@ async fn recover(state: &Arc<AppState>) {
             RunRecord {
                 status: RunStatus::from_db_str(&r.status),
                 human_approval: r.human_approval,
+                owner_user_id: r.owner_user_id.clone(),
             },
         );
     }
@@ -861,9 +944,11 @@ async fn recover(state: &Arc<AppState>) {
 
 /// 恢复尚未终结的 fabric 审批：Event Log 是唯一持久化事实源，会话与审批表只是运行时投影。
 async fn recover_fabric_pending(state: &Arc<AppState>) {
-    // list_events 单页最多 1000 条；用 after_id 分页，避免事件量增长后旧挂起审批
-    // 被启动恢复的窗口截断。
-    let mut events = Vec::new();
+    // list_events 单页最多 1000 条；用 after_id 分页，边读边归约，避免把全量
+    // 事件日志复制到内存。只保留恢复活动审批所需的最后请求和状态集合。
+    let mut requests = HashMap::new();
+    let mut awaiting = std::collections::HashSet::new();
+    let mut terminal = std::collections::HashSet::new();
     let mut after_id = None;
     loop {
         let page = match state
@@ -887,44 +972,52 @@ async fn recover_fabric_pending(state: &Arc<AppState>) {
         }
         after_id = page.last().map(|event| event.id.clone());
         let complete_page = page.len() == 1000;
-        events.extend(page);
+        for event in page {
+            let Some(input) = event.input else {
+                continue;
+            };
+            match event.event_type.as_str() {
+                "fabric.task_requested" => {
+                    if let Some(request) = input.get("request").and_then(|v| {
+                        serde_json::from_value::<crate::fabric::AgentMessage>(v.clone()).ok()
+                    }) && let Some(run_id) = request.correlation_id.clone()
+                    {
+                        // Fabric session/correlation ownership is reconstructed from the
+                        // durable request log, not only from the in-memory map. Otherwise a
+                        // restart would let the first authenticated caller claim an existing
+                        // session or cancel another user's run.
+                        {
+                            let mut owners = lock_mutex(&state.fabric_owners);
+                            owners
+                                .entry(request.session_id.clone())
+                                .or_insert_with(|| request.sender.clone());
+                            owners
+                                .entry(run_id.clone())
+                                .or_insert_with(|| request.sender.clone());
+                        }
+                        requests.insert(run_id, request);
+                    }
+                }
+                "fabric.approval_requested" => {
+                    if let Some(run_id) = input.get("run_id").and_then(|v| v.as_str()) {
+                        awaiting.insert(run_id.to_string());
+                    }
+                }
+                "fabric.approval_rejected" => {
+                    if let Some(run_id) = input.get("run_id").and_then(|v| v.as_str()) {
+                        terminal.insert(run_id.to_string());
+                    }
+                }
+                "fabric.task_completed" | "fabric.task_failed" | "fabric.task_cancelled" => {
+                    if let Some(run_id) = input.get("correlation_id").and_then(|v| v.as_str()) {
+                        terminal.insert(run_id.to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
         if !complete_page {
             break;
-        }
-    }
-
-    let mut requests = HashMap::new();
-    let mut awaiting = std::collections::HashSet::new();
-    let mut terminal = std::collections::HashSet::new();
-    for event in events {
-        let Some(input) = event.input else {
-            continue;
-        };
-        match event.event_type.as_str() {
-            "fabric.task_requested" => {
-                if let Some(request) = input.get("request").and_then(|v| {
-                    serde_json::from_value::<crate::fabric::AgentMessage>(v.clone()).ok()
-                }) && let Some(run_id) = request.correlation_id.clone()
-                {
-                    requests.insert(run_id, request);
-                }
-            }
-            "fabric.approval_requested" => {
-                if let Some(run_id) = input.get("run_id").and_then(|v| v.as_str()) {
-                    awaiting.insert(run_id.to_string());
-                }
-            }
-            "fabric.approval_rejected" => {
-                if let Some(run_id) = input.get("run_id").and_then(|v| v.as_str()) {
-                    terminal.insert(run_id.to_string());
-                }
-            }
-            "fabric.task_completed" | "fabric.task_failed" | "fabric.task_cancelled" => {
-                if let Some(run_id) = input.get("correlation_id").and_then(|v| v.as_str()) {
-                    terminal.insert(run_id.to_string());
-                }
-            }
-            _ => {}
         }
     }
 
@@ -938,7 +1031,10 @@ async fn recover_fabric_pending(state: &Arc<AppState>) {
             continue;
         }
         if let Some((key, pending)) = PendingApproval::from_fabric_request(request) {
+            lock_mutex(&state.fabric_owners).insert(key.clone(), request.sender.clone());
             lock_mutex(&state.pending).insert(key, pending);
+        } else {
+            eprintln!("[server] fabric 审批请求无法构造 pending: {run_id}");
         }
     }
 }
@@ -983,18 +1079,24 @@ async fn auth_layer(mut req: Request, next: Next) -> Response {
             username: "test".into(),
             role: Role::Developer,
         });
-    } else {
-        let token = match bearer_token(&req).or_else(|| {
-            // 浏览器 WebSocket 无法设置 Authorization 头 → WS 流路径允许 `?token=` 查询参数。
-            if is_ws_stream_path(&path) {
-                query_token(&req)
-            } else {
-                None
-            }
-        }) {
-            Some(t) => t,
-            None => return unauthorized("缺少认证令牌"),
+    } else if is_ws_stream_path(&path) {
+        let Some(ticket) = query_ticket(&req) else {
+            return unauthorized("缺少 WebSocket ticket");
         };
+        let Some(ticket) = st.consume_ws_ticket(&ticket) else {
+            return unauthorized("无效或已过期的 WebSocket ticket");
+        };
+        if let Some(session_token) = ticket.session_token {
+            match st.sessions.validate(&session_token).await {
+                Ok(Some(user)) => {
+                    req.extensions_mut().insert(user);
+                }
+                _ => return unauthorized("无效或已过期的 WebSocket ticket"),
+            }
+        } else {
+            req.extensions_mut().insert(ticket.user);
+        }
+    } else if let Some(token) = bearer_token(&req) {
         match st.sessions.validate(&token).await {
             Ok(Some(user)) => {
                 req.extensions_mut().insert(user);
@@ -1002,6 +1104,8 @@ async fn auth_layer(mut req: Request, next: Next) -> Response {
             }
             _ => return unauthorized("无效或已过期的令牌"),
         }
+    } else {
+        return unauthorized("缺少认证令牌");
     }
 
     // WS 在 handler 中取得连接租约（需要在 upgrade 成功后持有 guard）；
@@ -1015,6 +1119,26 @@ async fn auth_layer(mut req: Request, next: Next) -> Response {
         }
     }
     next.run(req).await
+}
+
+/// 在受控的 blocking 池执行同步 Facade API；HTTP handler 不得直接 block_in_place。
+pub(crate) async fn run_blocking<T, F>(state: &Arc<AppState>, f: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let permit = state
+        .blocking
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| "阻塞任务调度器已关闭".to_string())?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        f()
+    })
+    .await
+    .map_err(|error| format!("阻塞任务异常退出: {error}"))
 }
 
 fn rate_channel(path: &str, method: &axum::http::Method) -> Option<Channel> {
@@ -1067,18 +1191,13 @@ fn bearer_token(req: &Request) -> Option<String> {
     s.strip_prefix("Bearer ").map(|t| t.trim().to_string())
 }
 
-/// 从查询参数提取令牌（仅 WS 流路径使用，REST 一律走 Bearer 头）。
-fn query_token(req: &Request) -> Option<String> {
+/// 从查询参数提取一次性 WebSocket ticket；会话令牌不得出现在 URL 中。
+fn query_ticket(req: &Request) -> Option<String> {
     let q = req.uri().query()?;
-    for pair in q.split('&') {
-        if let Some((k, v)) = pair.split_once('=')
-            && k == "token"
-            && !v.is_empty()
-        {
-            return Some(v.to_string());
-        }
-    }
-    None
+    q.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        (key == "ticket" && !value.is_empty()).then(|| value.to_string())
+    })
 }
 
 /// 401 响应（缺令牌 / 令牌无效）。

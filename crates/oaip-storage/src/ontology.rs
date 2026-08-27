@@ -250,13 +250,28 @@ async fn update_review_tx(
     Ok(())
 }
 
-async fn objects_tx(tx: &libsql::Transaction) -> Result<Vec<super::ObjectRecord>, StorageError> {
-    let mut rows = tx
-        .query(
-            "SELECT id, type, data, version FROM wb_ontology_object WHERE is_delete=0 ORDER BY id",
-            params![],
-        )
-        .await?;
+async fn objects_tx(
+    tx: &libsql::Transaction,
+    project_id: Option<&str>,
+) -> Result<Vec<super::ObjectRecord>, StorageError> {
+    let mut rows = match project_id {
+        Some(project_id) => {
+            tx.query(
+                "SELECT id, type, data, version FROM wb_ontology_object \
+                 WHERE is_delete=0 AND project_id=?1 ORDER BY id",
+                params![project_id],
+            )
+            .await?
+        }
+        None => {
+            tx.query(
+                "SELECT id, type, data, version FROM wb_ontology_object \
+                 WHERE is_delete=0 ORDER BY id",
+                params![],
+            )
+            .await?
+        }
+    };
     let mut objects = Vec::new();
     while let Some(row) = rows.next().await? {
         objects.push(super::row_to_object(&row)?);
@@ -266,10 +281,12 @@ async fn objects_tx(tx: &libsql::Transaction) -> Result<Vec<super::ObjectRecord>
 
 pub(crate) async fn validate_runtime_ir_against_world(
     tx: &libsql::Transaction,
+    project_id: Option<&str>,
     runtime_ir: &OntologyIR,
 ) -> Result<(), StorageError> {
     validate_runtime_ir(runtime_ir).map_err(knowledge)?;
-    for object in objects_tx(tx).await? {
+    let objects = objects_tx(tx, project_id).await?;
+    for object in &objects {
         let Some(definition) = runtime_ir.find(&object.r#type) else {
             continue;
         };
@@ -281,12 +298,11 @@ pub(crate) async fn validate_runtime_ir_against_world(
         }
     }
     let endpoints = relation_endpoints(runtime_ir);
-    let object_types = objects_tx(tx)
-        .await?
+    let object_types = objects
         .into_iter()
         .map(|object| (object.id, object.r#type))
         .collect::<std::collections::HashMap<_, _>>();
-    for edge in relations_tx(tx).await? {
+    for edge in relations_tx(tx, project_id).await? {
         let Some((source_type, target_type)) = endpoints.get(&edge.relation) else {
             return Err(governance(format!(
                 "关系 {} 未在候选运行时本体中声明",
@@ -326,13 +342,26 @@ pub(crate) async fn validate_runtime_ir_against_world(
 
 async fn relations_tx(
     tx: &libsql::Transaction,
+    project_id: Option<&str>,
 ) -> Result<Vec<super::RelationRecord>, StorageError> {
-    let mut rows = tx
-        .query(
-            "SELECT id, relation, source, target, data FROM wb_relation_edge WHERE is_delete=0 ORDER BY id",
-            params![],
-        )
-        .await?;
+    let mut rows = match project_id {
+        Some(project_id) => {
+            tx.query(
+                "SELECT id, relation, source, target, data FROM wb_relation_edge \
+                 WHERE is_delete=0 AND project_id=?1 ORDER BY id",
+                params![project_id],
+            )
+            .await?
+        }
+        None => {
+            tx.query(
+                "SELECT id, relation, source, target, data FROM wb_relation_edge \
+                 WHERE is_delete=0 ORDER BY id",
+                params![],
+            )
+            .await?
+        }
+    };
     let mut relations = Vec::new();
     while let Some(row) = rows.next().await? {
         relations.push(super::row_to_relation(&row)?);
@@ -344,7 +373,7 @@ async fn validate_canonical_in_transaction(
     tx: &libsql::Transaction,
     ontology: &Ontology,
 ) -> Result<(), StorageError> {
-    let objects = objects_tx(tx)
+    let objects = objects_tx(tx, None)
         .await?
         .into_iter()
         .map(|object| RuntimeObjectFact {
@@ -353,7 +382,7 @@ async fn validate_canonical_in_transaction(
             data: object.data,
         })
         .collect::<Vec<_>>();
-    let relations = relations_tx(tx)
+    let relations = relations_tx(tx, None)
         .await?
         .into_iter()
         .map(|relation| RuntimeRelationFact {
@@ -386,7 +415,7 @@ impl LibSQLStorage {
         }
         let mut persisted_ontology = ontology.clone();
         if let Some(runtime_ir) = runtime_ir {
-            validate_runtime_ir_against_world(&tx, runtime_ir).await?;
+            validate_runtime_ir_against_world(&tx, None, runtime_ir).await?;
             persisted_ontology = canonical_runtime_ontology(ontology, None, Some(runtime_ir));
             oaip_knowledge::validate_canonical_ontology(&persisted_ontology).map_err(knowledge)?;
         }
@@ -426,7 +455,7 @@ impl LibSQLStorage {
         };
         let proposed_target = proposal.target(&source.ontology).map_err(knowledge)?;
         if let Some(runtime_ir) = candidate_runtime_ir {
-            validate_runtime_ir_against_world(&tx, runtime_ir).await?;
+            validate_runtime_ir_against_world(&tx, None, runtime_ir).await?;
             let preview = canonical_runtime_ontology(
                 &proposed_target,
                 source.runtime_ir.as_ref(),
@@ -435,7 +464,7 @@ impl LibSQLStorage {
             validate_canonical_in_transaction(&tx, &preview).await?;
         } else {
             if let Some(runtime_ir) = source.runtime_ir.as_ref() {
-                validate_runtime_ir_against_world(&tx, runtime_ir).await?;
+                validate_runtime_ir_against_world(&tx, None, runtime_ir).await?;
             }
             validate_canonical_in_transaction(&tx, &proposed_target).await?;
         }
@@ -552,7 +581,7 @@ impl LibSQLStorage {
             .clone()
             .or_else(|| source.runtime_ir.clone());
         if let Some(runtime_ir) = active_runtime_ir.as_ref() {
-            validate_runtime_ir_against_world(&tx, runtime_ir).await?;
+            validate_runtime_ir_against_world(&tx, None, runtime_ir).await?;
         }
         let target_ontology = canonical_runtime_ontology(
             &applied_ontology,
@@ -708,8 +737,8 @@ mod tests {
         }
         let tx = storage.conn.transaction().await.unwrap();
 
-        let objects = objects_tx(&tx).await.unwrap();
-        let relations = relations_tx(&tx).await.unwrap();
+        let objects = objects_tx(&tx, None).await.unwrap();
+        let relations = relations_tx(&tx, None).await.unwrap();
 
         let object_ids = objects
             .iter()

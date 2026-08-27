@@ -17,7 +17,7 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::{HeaderValue, Request};
+use tokio_tungstenite::tungstenite::http::Request;
 
 /// 登录并返回 (status, token)。
 async fn login(addr: SocketAddr, username: &str, password: &str) -> (u16, Option<String>) {
@@ -33,18 +33,37 @@ async fn login(addr: SocketAddr, username: &str, password: &str) -> (u16, Option
 
 /// 连接 WS 并收集消息（2s 超时），带可选 Bearer 令牌。成功返回消息列表；无令牌被拒返回 Err。
 async fn collect_ws(addr: &SocketAddr, path: &str, token: Option<&str>) -> Result<Vec<Value>, ()> {
-    let url = format!("ws://{addr}{path}");
-    let mut req = url.into_client_request().map_err(|_| ())?;
-    if let Some(t) = token {
-        req.headers_mut().insert(
-            "Authorization",
-            HeaderValue::from_str(&format!("Bearer {t}")).unwrap(),
-        );
-    }
-    collect_ws_req(req).await
+    let path = if let Some(session_token) = token {
+        let ticket = issue_ws_ticket(addr, session_token).await?;
+        format!(
+            "{path}{}ticket={ticket}",
+            if path.contains('?') { '&' } else { '?' }
+        )
+    } else {
+        path.to_string()
+    };
+    collect_ws_query(addr, &path).await
 }
 
-/// 连接 WS（不带 Authorization 头）——浏览器 WebSocket 场景：令牌经 `?token=` 查询参数传递。
+async fn issue_ws_ticket(addr: &SocketAddr, token: &str) -> Result<String, ()> {
+    let (status, body) = http_call_auth(
+        *addr,
+        "POST",
+        "/api/v1/wb/auth/ws-ticket",
+        None,
+        Some(token),
+    )
+    .await;
+    if status != 200 {
+        return Err(());
+    }
+    serde_json::from_str::<Value>(&body)
+        .ok()
+        .and_then(|v| v["data"]["ticket"].as_str().map(str::to_owned))
+        .ok_or(())
+}
+
+/// 连接 WS（不带 Authorization 头）——浏览器 WebSocket 场景：一次性 ticket 经 `?ticket=` 查询参数传递。
 async fn collect_ws_query(addr: &SocketAddr, path: &str) -> Result<Vec<Value>, ()> {
     let url = format!("ws://{addr}{path}");
     let req = url.into_client_request().map_err(|_| ())?;
@@ -159,10 +178,10 @@ async fn tc_ws_no_token_rejected() {
     assert!(res.is_err(), "无令牌 WS 应被拒（401）");
 }
 
-// ── TC-ws-d：浏览器场景 — 令牌经 ?token= 查询参数（无 Authorization 头）可连接 ──
-// 浏览器 WebSocket 无法设置请求头；服务端须仅对 WS 流路径接受 `?token=`（REST 仍只认 Bearer）。
+// ── TC-ws-d：浏览器场景 — 一次性 ticket 经 ?ticket= 查询参数可连接 ──
+// 浏览器 WebSocket 无法设置请求头；会话令牌只通过认证 REST 接口换取短时 ticket。
 #[tokio::test]
-async fn tc_ws_query_token_authenticates() {
+async fn tc_ws_ticket_authenticates_once() {
     let (addr, storage) = spawn_ws_server_raw().await;
     let kernel = Arc::new(storage.clone());
     seed_and_run(&kernel).await;
@@ -170,16 +189,42 @@ async fn tc_ws_query_token_authenticates() {
 
     let (_, tok) = login(addr, "admin", "adminpw").await;
     let tok = tok.expect("admin 应登录");
-    let msgs = collect_ws_query(
+    let (status, body) =
+        http_call_auth(addr, "POST", "/api/v1/wb/auth/ws-ticket", None, Some(&tok)).await;
+    assert_eq!(status, 200);
+    let ticket = serde_json::from_str::<Value>(&body).unwrap()["data"]["ticket"]
+        .as_str()
+        .expect("应返回 ticket")
+        .to_string();
+
+    let path = format!("/api/v1/wb/agent/{run_id}/stream?ticket={ticket}");
+    let msgs = collect_ws_query(&addr, &path).await;
+    assert!(msgs.is_ok(), "?ticket= 应通过 WS 鉴权");
+    assert!(
+        !msgs.unwrap().is_empty(),
+        "应收到历史事件（ticket 连接有效）"
+    );
+
+    let second = collect_ws_query(&addr, &path).await;
+    assert!(second.is_err(), "同一 ticket 不得重复使用");
+}
+
+// 会话令牌不能作为 WS 查询参数；避免 URL 日志/Referer 暴露可直接重放的凭据。
+#[tokio::test]
+async fn tc_ws_query_token_rejected() {
+    let (addr, storage) = spawn_ws_server_raw().await;
+    let kernel = Arc::new(storage.clone());
+    seed_and_run(&kernel).await;
+    let run_id = last_run_id(&kernel).await;
+
+    let (_, tok) = login(addr, "admin", "adminpw").await;
+    let tok = tok.expect("admin 应登录");
+    let res = collect_ws_query(
         &addr,
         &format!("/api/v1/wb/agent/{run_id}/stream?token={tok}"),
     )
     .await;
-    assert!(msgs.is_ok(), "?token= 应通过 WS 鉴权");
-    assert!(
-        !msgs.unwrap().is_empty(),
-        "应收到历史事件（?token= 连接有效）"
-    );
+    assert!(res.is_err(), "?token= 必须被拒绝");
 }
 
 /// 启动强制认证服务并直接返回 storage（供测试构造 kernel 触发运行）。

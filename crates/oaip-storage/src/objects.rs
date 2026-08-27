@@ -4,6 +4,27 @@ use serde_json::Value;
 use super::*;
 
 impl LibSQLStorage {
+    /// 查找指定项目中的活跃对象，供幂等写入核对完整 payload。
+    pub async fn get_object_for_project(
+        &self,
+        id: &str,
+        project_id: Option<&str>,
+    ) -> Result<Option<ObjectRecord>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, type, data, version FROM wb_ontology_object WHERE id=?1 AND is_delete=0 \
+                 AND ((project_id = ?2) OR (project_id IS NULL AND ?2 IS NULL))",
+                params![id, project_id],
+            )
+            .await?;
+        if let Some(row) = rows.next().await? {
+            Ok(Some(row_to_object(&row)?))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub async fn list_all_objects(&self) -> Result<Vec<ObjectRecord>, StorageError> {
         let mut rows = self
             .conn

@@ -77,10 +77,14 @@ pub(crate) async fn run_start(
         RunRecord {
             status: RunStatus::Running,
             human_approval: false,
+            owner_user_id: Some(user.id.clone()),
         },
     );
     // 持久化 run（DB 真相源，跨重启可恢复状态；G7：wb_run = V2 run store）。
-    let _ = st.storage.insert_run(&run_id, &agent_id, &body.goal).await;
+    let _ = st
+        .storage
+        .insert_run_owned(&run_id, &agent_id, &body.goal, Some(&user.id))
+        .await;
 
     // run 上下文（blocking 线程内使用；全部 Send + 'static）
     let st2 = st.clone();
@@ -93,6 +97,8 @@ pub(crate) async fn run_start(
     let engine = Arc::clone(&st.v2_engine);
     let pending = Arc::clone(&st.pending);
     let approval_timeout = st.approval_timeout;
+    let owner_user_id = user.id.clone();
+    let resolver_owner_user_id = owner_user_id.clone();
 
     // run 在 blocking 线程执行（同步闭环 + 可能的 pi 子进程）；JoinHandle 有意不等待
     // （HTTP 端点经 pending 注册表与 run 交互），故显式 drop。
@@ -121,6 +127,7 @@ pub(crate) async fn run_start(
                     RunRecord {
                         status: RunStatus::Failed,
                         human_approval: false,
+                        owner_user_id: Some(owner_user_id.clone()),
                     },
                 );
                 eprintln!("run {rid}: 创建 Context 失败: {e}");
@@ -154,6 +161,7 @@ pub(crate) async fn run_start(
                     RunRecord {
                         status: RunStatus::Failed,
                         human_approval: false,
+                        owner_user_id: Some(owner_user_id.clone()),
                     },
                 );
                 eprintln!("run {rid}: 世界投影失败: {e}");
@@ -179,6 +187,7 @@ pub(crate) async fn run_start(
                     req.id.clone(),
                     PendingApproval {
                         run_id: rid2.clone(),
+                        owner_user_id: resolver_owner_user_id.clone(),
                         request: req.clone(),
                         tx: tx.clone(),
                         created_at: Instant::now(),
@@ -250,6 +259,7 @@ pub(crate) async fn run_start(
                     RunRecord {
                         status: RunStatus::Failed,
                         human_approval: false,
+                        owner_user_id: Some(owner_user_id.clone()),
                     },
                 );
                 eprintln!("run {rid}: {e}");
@@ -310,6 +320,7 @@ pub(crate) async fn run_start(
             status: report.status,
             human_approval: matches!(report.outcome, LoopOutcome::Denied(_))
                 || report.human_approval,
+            owner_user_id: Some(owner_user_id.clone()),
         };
         lock_mutex(&st2.runs).insert(rid, rec);
     });

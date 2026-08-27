@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use tokio::io::AsyncReadExt;
 
 use super::manifest::WorkerManifest;
 use super::sdk::{Worker, WorkerError, WorkerResult};
@@ -15,6 +16,11 @@ use super::sdk::{Worker, WorkerError, WorkerResult};
 /// an explicit execution context. Five minutes matches the approval lease and
 /// prevents an unbounded child from consuming the local execution plane.
 pub const MAX_EXECUTION_TIMEOUT_MS: u64 = 300_000;
+/// Cap captured process output so a misbehaving provider cannot exhaust memory.
+pub const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
+/// Limits for line-oriented Fabric progress streams.
+pub const MAX_PROGRESS_LINE_BYTES: usize = 64 * 1024;
+pub const MAX_PROGRESS_MESSAGES: usize = 10_000;
 
 /// Facade/Fabric 的正式执行上下文 DTO。
 ///
@@ -314,7 +320,9 @@ impl Worker for ProcessWorker {
 
     async fn execute(&self, _capability: &str, input: Value) -> Result<WorkerResult, WorkerError> {
         let start = std::time::Instant::now();
-        if self.requires_isolated_context
+        let capability_requires_isolation =
+            matches!(_capability, "agent.task" | "code.write" | "shell.execute");
+        if (self.requires_isolated_context || capability_requires_isolation)
             && input
                 .get("execution_context")
                 .is_none_or(serde_json::Value::is_null)
@@ -350,18 +358,34 @@ impl Worker for ProcessWorker {
         cmd.kill_on_drop(true);
         #[cfg(unix)]
         cmd.process_group(0);
-        let child = cmd
+        let mut child = cmd
             .spawn()
             .map_err(|e| WorkerError::Execution(format!("进程启动失败 {}: {e}", self.command)))?;
         let child_pid = child.id();
-        let output = if let Some(timeout_ms) = context.timeout_ms {
-            match tokio::time::timeout(
-                std::time::Duration::from_millis(timeout_ms),
-                child.wait_with_output(),
-            )
-            .await
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| WorkerError::Execution("stdout 管道不可用".to_string()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| WorkerError::Execution("stderr 管道不可用".to_string()))?;
+        let stdout_task = tokio::spawn(read_bounded(stdout, child_pid));
+        let stderr_task = tokio::spawn(read_bounded(stderr, child_pid));
+        let wait_task = tokio::spawn(async move { child.wait().await });
+        let collect = async move {
+            let (stdout, stderr, status) = tokio::join!(stdout_task, stderr_task, wait_task);
+            let stdout = stdout.map_err(|_| "stdout 读取任务崩溃".to_string())??;
+            let stderr = stderr.map_err(|_| "stderr 读取任务崩溃".to_string())??;
+            let status = status
+                .map_err(|_| "等待任务崩溃".to_string())?
+                .map_err(|e| format!("等待进程失败: {e}"))?;
+            Ok::<_, String>((status, stdout, stderr))
+        };
+        let collected = if let Some(timeout_ms) = context.timeout_ms {
+            match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), collect).await
             {
-                Ok(output) => output,
+                Ok(result) => result,
                 Err(_) => {
                     #[cfg(unix)]
                     if let Some(pid) = child_pid {
@@ -374,19 +398,42 @@ impl Worker for ProcessWorker {
                 }
             }
         } else {
-            child.wait_with_output().await
+            collect.await
         };
-        let out = output
-            .map_err(|e| WorkerError::Execution(format!("进程启动失败 {}: {e}", self.command)))?;
-        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        let (status, stdout, stderr) = collected.map_err(|e| {
+            WorkerError::Execution(format!("进程输出/等待失败 {}: {e}", self.command))
+        })?;
+        let stdout = String::from_utf8_lossy(&stdout).to_string();
+        let stderr = String::from_utf8_lossy(&stderr).to_string();
         Ok(WorkerResult {
-            ok: out.status.success(),
+            ok: status.success(),
             output: json!({ "stdout": stdout }),
             stderr: Some(stderr),
-            exit_code: out.status.code(),
+            exit_code: status.code(),
             duration_ms: start.elapsed().as_millis() as u64,
         })
+    }
+}
+
+async fn read_bounded<R>(mut reader: R, child_pid: Option<u32>) -> Result<Vec<u8>, String>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut output = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let n = reader.read(&mut chunk).await.map_err(|e| e.to_string())?;
+        if n == 0 {
+            return Ok(output);
+        }
+        if output.len().saturating_add(n) > MAX_OUTPUT_BYTES {
+            #[cfg(unix)]
+            if let Some(pid) = child_pid {
+                terminate_process_group(pid);
+            }
+            return Err(format!("进程输出超过 {} 字节", MAX_OUTPUT_BYTES));
+        }
+        output.extend_from_slice(&chunk[..n]);
     }
 }
 

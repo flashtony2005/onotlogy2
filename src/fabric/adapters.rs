@@ -15,7 +15,10 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -92,6 +95,66 @@ pub struct ProcessAdapter {
     /// 为互斥判据——cancel 与 stream 都先操作 `running`，谁先 remove 谁赢，故「已结束
     /// 任务被延迟 cancel 误标」竞态消除（见 mod.rs `finish` 注释）。
     killed: Mutex<HashSet<String>>,
+}
+
+fn read_progress_line(
+    reader: &mut BufReader<impl std::io::Read>,
+) -> std::io::Result<Option<String>> {
+    let mut bytes = Vec::new();
+    loop {
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() {
+            if bytes.is_empty() {
+                return Ok(None);
+            }
+            break;
+        }
+        let newline = chunk.iter().position(|b| *b == b'\n');
+        let take = newline.map_or(chunk.len(), |index| index + 1);
+        bytes.extend_from_slice(&chunk[..take]);
+        reader.consume(take);
+        if bytes.len() > crate::worker::process::MAX_PROGRESS_LINE_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::FileTooLarge,
+                format!(
+                    "单行进度超过 {} 字节",
+                    crate::worker::process::MAX_PROGRESS_LINE_BYTES
+                ),
+            ));
+        }
+        if newline.is_some() {
+            break;
+        }
+    }
+    if bytes.last() == Some(&b'\n') {
+        bytes.pop();
+    }
+    if bytes.last() == Some(&b'\r') {
+        bytes.pop();
+    }
+    Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
+}
+
+fn read_bounded_std<R: Read>(mut reader: R, limited: &AtomicBool) -> std::io::Result<Vec<u8>> {
+    let mut output = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let n = reader.read(&mut chunk)?;
+        if n == 0 {
+            return Ok(output);
+        }
+        if output.len().saturating_add(n) > crate::worker::process::MAX_OUTPUT_BYTES {
+            limited.store(true, Ordering::Release);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::FileTooLarge,
+                format!(
+                    "进程输出超过 {} 字节",
+                    crate::worker::process::MAX_OUTPUT_BYTES
+                ),
+            ));
+        }
+        output.extend_from_slice(&chunk[..n]);
+    }
 }
 
 impl ProcessAdapter {
@@ -216,9 +279,9 @@ impl ProcessAdapter {
         command.args(args);
         context.apply_std(&mut command);
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
-        if let Some(timeout_ms) = context.timeout_ms {
-            #[cfg(unix)]
-            command.process_group(0);
+        #[cfg(unix)]
+        command.process_group(0);
+        {
             let mut child = command.spawn().map_err(|error| {
                 FabricError::Adapter(format!("进程启动失败 {}: {error}", self.worker.command()))
             })?;
@@ -230,26 +293,43 @@ impl ProcessAdapter {
                 .stderr
                 .take()
                 .ok_or_else(|| FabricError::Adapter("stderr 管道不可用".into()))?;
+            let stdout_limited = Arc::new(AtomicBool::new(false));
+            let stderr_limited = Arc::new(AtomicBool::new(false));
+            let stdout_limited2 = Arc::clone(&stdout_limited);
+            let stderr_limited2 = Arc::clone(&stderr_limited);
             let stdout_thread = std::thread::spawn(move || {
-                let mut bytes = Vec::new();
-                let result = BufReader::new(stdout).read_to_end(&mut bytes);
-                (result, bytes)
+                let result = read_bounded_std(stdout, &stdout_limited2);
+                (result, ())
             });
             let stderr_thread = std::thread::spawn(move || {
-                let mut bytes = Vec::new();
-                let result = BufReader::new(stderr).read_to_end(&mut bytes);
-                (result, bytes)
+                let result = read_bounded_std(stderr, &stderr_limited2);
+                (result, ())
             });
-            let deadline = std::time::Instant::now()
-                .checked_add(std::time::Duration::from_millis(timeout_ms))
-                .unwrap_or_else(std::time::Instant::now);
+            let deadline = context.timeout_ms.map(|timeout_ms| {
+                std::time::Instant::now()
+                    .checked_add(std::time::Duration::from_millis(timeout_ms))
+                    .unwrap_or_else(std::time::Instant::now)
+            });
             let status = loop {
+                if stdout_limited.load(Ordering::Acquire) || stderr_limited.load(Ordering::Acquire)
+                {
+                    kill_child_tree(&mut child);
+                    let _ = stdout_thread.join();
+                    let _ = stderr_thread.join();
+                    return Err(FabricError::Adapter(format!(
+                        "进程输出超过 {} 字节",
+                        crate::worker::process::MAX_OUTPUT_BYTES
+                    )));
+                }
                 if let Some(status) = child.try_wait().map_err(|error| {
                     FabricError::Adapter(format!("等待进程失败 {}: {error}", self.worker.command()))
                 })? {
                     break status;
                 }
-                if std::time::Instant::now() >= deadline {
+                if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+                    let timeout_ms = context
+                        .timeout_ms
+                        .expect("deadline only exists with timeout");
                     kill_child_tree(&mut child);
                     let _ = stdout_thread.join();
                     let _ = stderr_thread.join();
@@ -260,28 +340,22 @@ impl ProcessAdapter {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(5));
             };
-            let (stdout_result, stdout) = stdout_thread
+            let (stdout_result, _) = stdout_thread
                 .join()
                 .map_err(|_| FabricError::Adapter("读取 stdout 线程崩溃".into()))?;
-            let (stderr_result, stderr) = stderr_thread
+            let (stderr_result, _) = stderr_thread
                 .join()
                 .map_err(|_| FabricError::Adapter("读取 stderr 线程崩溃".into()))?;
-            stdout_result.map_err(|error| FabricError::Adapter(format!("读取 stdout: {error}")))?;
-            stderr_result.map_err(|error| FabricError::Adapter(format!("读取 stderr: {error}")))?;
-            return Ok((
+            let stdout = stdout_result
+                .map_err(|error| FabricError::Adapter(format!("读取 stdout: {error}")))?;
+            let stderr = stderr_result
+                .map_err(|error| FabricError::Adapter(format!("读取 stderr: {error}")))?;
+            Ok((
                 String::from_utf8_lossy(&stdout).to_string(),
                 Some(String::from_utf8_lossy(&stderr).to_string()),
                 status.code(),
-            ));
+            ))
         }
-        let out = command.output().map_err(|e| {
-            FabricError::Adapter(format!("进程启动失败 {}: {e}", self.worker.command()))
-        })?;
-        Ok((
-            String::from_utf8_lossy(&out.stdout).to_string(),
-            Some(String::from_utf8_lossy(&out.stderr).to_string()),
-            out.status.code(),
-        ))
     }
 
     /// Worker 输出 → task.result（协议翻译：进程退出码 → 语义 status）。
@@ -431,9 +505,19 @@ impl AgentAdapter for ProcessAdapter {
         // stream 路径也能生效，而不会被 BufRead::read_line 永久阻塞。
         let (line_tx, line_rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                if line_tx.send(line).is_err() {
-                    break;
+            let mut reader = BufReader::new(stdout);
+            loop {
+                match read_progress_line(&mut reader) {
+                    Ok(Some(line)) => {
+                        if line_tx.send(Ok(line)).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(error) => {
+                        let _ = line_tx.send(Err(error));
+                        break;
+                    }
                 }
             }
         });
@@ -457,6 +541,19 @@ impl AgentAdapter for ProcessAdapter {
                 Ok(Ok(line)) => {
                     if line.trim().is_empty() {
                         continue;
+                    }
+                    if captured.len().saturating_add(line.len()).saturating_add(1)
+                        > crate::worker::process::MAX_OUTPUT_BYTES
+                        || out.len() >= crate::worker::process::MAX_PROGRESS_MESSAGES
+                    {
+                        if let Some(mut child) = self.running()?.remove(&corr) {
+                            kill_child_tree(&mut child);
+                        }
+                        return Err(FabricError::Adapter(format!(
+                            "进程进度输出超过限制（{} 字节或 {} 条）",
+                            crate::worker::process::MAX_OUTPUT_BYTES,
+                            crate::worker::process::MAX_PROGRESS_MESSAGES
+                        )));
                     }
                     captured.push_str(&line);
                     captured.push('\n');
@@ -670,6 +767,30 @@ mod tests {
             })
         );
         assert_eq!(result.payload["failure_category"], Value::Null);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dsh_send_rejects_unbounded_output_without_timeout() {
+        let path = test_script(&format!(
+            "head -c {} /dev/zero",
+            crate::worker::process::MAX_OUTPUT_BYTES + 1
+        ));
+        let root = std::env::temp_dir().to_string_lossy().into_owned();
+        let mut request = test_request(json!({
+            "workspace": { "root": root, "mode": "isolated" }
+        }));
+        request.payload = json!({
+            "task_spec": {
+                "description": "检查输出限制",
+                "kind": "analysis"
+            }
+        });
+        let error = dsh_adapter(Some(path.to_str().unwrap()))
+            .send(&request)
+            .expect_err("超过输出上限的进程必须失败");
+        assert!(error.to_string().contains("进程输出超过"));
         std::fs::remove_file(path).unwrap();
     }
 

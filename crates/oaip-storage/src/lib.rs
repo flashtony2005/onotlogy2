@@ -244,6 +244,8 @@ pub struct TraceQuery {
     pub agent_id: Option<String>,
     pub object_ref: Option<String>,
     pub event_type: Option<String>,
+    /// Prefix filters combined with OR; Some(vec![]) intentionally matches no rows.
+    pub event_type_prefixes: Option<Vec<String>>,
     pub after_id: Option<String>,
     pub limit: usize,
     /// 倒序返回（timestamp DESC）：审计/CLI 轮询取「最新」事件时用，避免

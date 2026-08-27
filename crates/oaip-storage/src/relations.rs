@@ -10,6 +10,25 @@ fn is_unique_violation(e: &libsql::Error) -> bool {
 }
 
 impl LibSQLStorage {
+    /// 判断指定项目中的活跃关系是否已存在，供幂等写入核对完整关系键。
+    pub async fn relation_exists_for_project(
+        &self,
+        source: &str,
+        relation: &str,
+        target: &str,
+        project_id: Option<&str>,
+    ) -> Result<bool, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT 1 FROM wb_relation_edge WHERE source=?1 AND relation=?2 AND target=?3 \
+                 AND is_delete=0 AND ((project_id = ?4) OR (project_id IS NULL AND ?4 IS NULL)) LIMIT 1",
+                params![source, relation, target, project_id],
+            )
+            .await?;
+        Ok(rows.next().await?.is_some())
+    }
+
     /// 列出项目内全部活跃关系边，供项目级 DL ABox 快照使用。
     pub async fn list_project_relations(
         &self,

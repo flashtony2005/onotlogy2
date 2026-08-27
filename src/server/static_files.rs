@@ -1,3 +1,4 @@
+use std::path::{Component, Path};
 use std::sync::Arc;
 
 use axum::extract::{OriginalUri, State};
@@ -9,48 +10,74 @@ pub(crate) async fn serve_static(State(st): State<Arc<AppState>>, uri: OriginalU
         let body = ApiResponse::<()>::error(404, "接口不存在");
         return (StatusCode::NOT_FOUND, body).into_response();
     }
-    let path = uri.path().trim_start_matches('/');
-    let rel = if path.is_empty() {
-        "index.html".to_string()
-    } else {
-        path.to_string()
+
+    let root = Path::new(&st.static_dir);
+    let Ok(root) = tokio::fs::canonicalize(root).await else {
+        return Html("<h1>OpenAIP-OS Agent Observation UI</h1>\
+                     <p>未检测到 ui/dist。请进入 ui/ 执行 <code>npm install &amp;&amp; npm run build</code> 后重启服务。</p>".to_string()).into_response();
     };
-    let full = format!("{}/{}", st.static_dir, rel);
-    match tokio::fs::read(&full).await {
-        Ok(bytes) => {
-            // 缓存策略：index.html 完全不缓存（no-store——HTML 是入口，必须每次最新）；
-            // 带 hash 的资源（assets/*）长期缓存（immutable——文件名即指纹）。
-            let cache = if rel.starts_with("assets/") {
-                "public, max-age=31536000, immutable"
-            } else {
-                "no-store, no-cache, must-revalidate"
-            };
-            (
-                [
-                    (axum::http::header::CONTENT_TYPE, content_type(&full)),
-                    (axum::http::header::CACHE_CONTROL, cache.to_string()),
-                ],
-                bytes,
-            )
-                .into_response()
-        }
-        Err(_) => {
-            let idx = format!("{}/index.html", st.static_dir);
-            match tokio::fs::read(&idx).await {
-                Ok(b) => (
-                    [(
-                        axum::http::header::CONTENT_TYPE,
-                        "text/html; charset=utf-8".to_string(),
-                    )],
-                    b,
+    let path = uri.path().trim_start_matches('/');
+    let rel = if path.is_empty() { "index.html" } else { path };
+    // Reject traversal before joining. canonicalize below also prevents symlink escape.
+    let components: Vec<_> = Path::new(rel).components().collect();
+    if components
+        .iter()
+        .any(|c| !matches!(c, Component::Normal(_)))
+    {
+        return (
+            StatusCode::NOT_FOUND,
+            ApiResponse::<()>::error(404, "资源不存在"),
+        )
+            .into_response();
+    }
+    let candidate = root.join(rel);
+    match tokio::fs::canonicalize(&candidate).await {
+        Ok(full)
+            if full.starts_with(&root)
+                && tokio::fs::metadata(&full)
+                    .await
+                    .map(|m| m.is_file())
+                    .unwrap_or(false) =>
+        {
+            match tokio::fs::read(&full).await {
+                Ok(bytes) => {
+                    let cache = if rel.starts_with("assets/") {
+                        "public, max-age=31536000, immutable"
+                    } else {
+                        "no-store, no-cache, must-revalidate"
+                    };
+                    (
+                        [
+                            (
+                                axum::http::header::CONTENT_TYPE,
+                                content_type(full.to_string_lossy().as_ref()),
+                            ),
+                            (axum::http::header::CACHE_CONTROL, cache.to_string()),
+                        ],
+                        bytes,
+                    )
+                        .into_response()
+                }
+                Err(_) => (
+                    StatusCode::NOT_FOUND,
+                    ApiResponse::<()>::error(404, "资源不存在"),
                 )
                     .into_response(),
-                Err(_) => Html(
-                    "<h1>OpenAIP-OS Agent Observation UI</h1>\
-                     <p>未检测到 ui/dist。请进入 ui/ 执行 <code>npm install &amp;&amp; npm run build</code> 后重启服务。</p>"
-                        .to_string(),
-                )
-                .into_response(),
+            }
+        }
+        _ => {
+            // SPA fallback is only for safe, non-traversal paths and never for API routes.
+            let idx = root.join("index.html");
+            match tokio::fs::canonicalize(&idx).await {
+                Ok(index) if index.starts_with(&root) => match tokio::fs::read(&index).await {
+                    Ok(b) => ([
+                        (axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8".to_string()),
+                    ], b).into_response(),
+                    Err(_) => Html("<h1>OpenAIP-OS Agent Observation UI</h1>\
+                         <p>未检测到 ui/dist。请进入 ui/ 执行 <code>npm install &amp;&amp; npm run build</code> 后重启服务。</p>".to_string()).into_response(),
+                },
+                _ => Html("<h1>OpenAIP-OS Agent Observation UI</h1>\
+                     <p>未检测到 ui/dist。请进入 ui/ 执行 <code>npm install &amp;&amp; npm run build</code> 后重启服务。</p>".to_string()).into_response(),
             }
         }
     }

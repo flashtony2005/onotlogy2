@@ -615,7 +615,7 @@ async fn tc_w10_dsh_adapter_command_shape() {
     use openaip_os::worker::router::WorkerRouter;
 
     // 假 dsh：把收到的全部参数逐行打印到 stdout（验证命令构造形态）
-    let shim = std::env::temp_dir().join("dsh_shim_test.sh");
+    let shim = std::env::temp_dir().join(format!("dsh_shim_test_{}.sh", std::process::id()));
     std::fs::write(&shim, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
     #[cfg(unix)]
     {
@@ -776,7 +776,7 @@ async fn tc_w12_codex_adapter_command_shape() {
     use openaip_os::worker::orchestrator::{WorkerOrchestrator, WorkerTask};
     use openaip_os::worker::router::WorkerRouter;
 
-    let shim = std::env::temp_dir().join("codex_shim_test.sh");
+    let shim = std::env::temp_dir().join(format!("codex_shim_test_{}.sh", std::process::id()));
     std::fs::write(&shim, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
     #[cfg(unix)]
     {
@@ -864,7 +864,7 @@ async fn tc_w14_pi_adapter_command_shape() {
     use openaip_os::worker::orchestrator::{WorkerOrchestrator, WorkerTask};
     use openaip_os::worker::router::WorkerRouter;
 
-    let shim = std::env::temp_dir().join("pi_shim_test.sh");
+    let shim = std::env::temp_dir().join(format!("pi_shim_test_{}.sh", std::process::id()));
     std::fs::write(&shim, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
     #[cfg(unix)]
     {

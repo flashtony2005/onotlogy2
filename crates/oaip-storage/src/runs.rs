@@ -8,6 +8,7 @@ pub struct RunRecord {
     pub goal: String,
     pub status: String, // Running | Completed | Failed | Interrupted
     pub human_approval: bool,
+    pub owner_user_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub finished_at: Option<String>,
@@ -21,10 +22,20 @@ impl LibSQLStorage {
         agent_id: &str,
         goal: &str,
     ) -> Result<(), StorageError> {
+        self.insert_run_owned(id, agent_id, goal, None).await
+    }
+
+    pub async fn insert_run_owned(
+        &self,
+        id: &str,
+        agent_id: &str,
+        goal: &str,
+        owner_user_id: Option<&str>,
+    ) -> Result<(), StorageError> {
         self.conn
             .execute(
-                "INSERT INTO wb_run (id, agent_id, goal, status) VALUES (?1,?2,?3,'Running')",
-                params![id, agent_id, goal],
+                "INSERT INTO wb_run (id, agent_id, goal, status, owner_user_id) VALUES (?1,?2,?3,'Running',?4)",
+                params![id, agent_id, goal, owner_user_id],
             )
             .await?;
         #[cfg(test)]
@@ -69,7 +80,7 @@ impl LibSQLStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, agent_id, goal, status, human_approval, created_at, updated_at, finished_at \
+                "SELECT id, agent_id, goal, status, human_approval, owner_user_id, created_at, updated_at, finished_at \
                  FROM wb_run ORDER BY created_at ASC LIMIT 1000",
                 params![],
             )
@@ -86,7 +97,7 @@ impl LibSQLStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, agent_id, goal, status, human_approval, created_at, updated_at, finished_at \
+                "SELECT id, agent_id, goal, status, human_approval, owner_user_id, created_at, updated_at, finished_at \
                  FROM wb_run WHERE id = ?1",
                 params![id],
             )
@@ -113,15 +124,16 @@ impl LibSQLStorage {
 }
 
 fn row_to_run(row: &libsql::Row) -> Result<RunRecord, StorageError> {
-    let finished_at: Option<String> = row.get(7)?;
+    let finished_at: Option<String> = row.get(8)?;
     Ok(RunRecord {
         id: row.get(0)?,
         agent_id: row.get(1)?,
         goal: row.get(2)?,
         status: row.get(3)?,
         human_approval: row.get::<i64>(4)? != 0,
-        created_at: row.get(5)?,
-        updated_at: row.get(6)?,
+        owner_user_id: row.get(5)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
         finished_at,
     })
 }

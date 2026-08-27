@@ -564,11 +564,12 @@ impl LibSQLStorage {
 
     /// 按条件查询 Trace 事件（认知/世界同源）。
     /// [强制] after_id 游标用于 WebSocket 断线重连补齐：返回该事件之后的全部匹配事件（按 timestamp,id 升序）。
-    pub async fn list_events(&self, q: TraceQuery) -> Result<Vec<TraceEvent>, StorageError> {
-        let mut sql = String::from(
-            "SELECT id, kind, event_type, object_refs, project_id, run_id, agent_id, reasoning, input, output, confidence, timestamp \
-             FROM wb_trace_event WHERE 1=1",
-        );
+    async fn event_query(
+        &self,
+        q: &TraceQuery,
+        projection: &str,
+    ) -> Result<(String, Vec<libsql::Value>), StorageError> {
+        let mut sql = format!("SELECT {projection} FROM wb_trace_event WHERE 1=1");
         let mut params: Vec<libsql::Value> = Vec::new();
 
         if let Some(v) = &q.project_id {
@@ -587,9 +588,23 @@ impl LibSQLStorage {
             sql.push_str(" AND event_type = ?");
             params.push(libsql::Value::Text(v.clone()));
         }
+        if let Some(prefixes) = &q.event_type_prefixes {
+            if prefixes.is_empty() {
+                sql.push_str(" AND 0=1");
+            } else {
+                sql.push_str(" AND (");
+                for (index, prefix) in prefixes.iter().enumerate() {
+                    if index > 0 {
+                        sql.push_str(" OR ");
+                    }
+                    sql.push_str("event_type LIKE ? ESCAPE '\\'");
+                    params.push(libsql::Value::Text(format!("{}%", escape_like(prefix))));
+                }
+                sql.push(')');
+            }
+        }
         if let Some(v) = &q.object_ref {
             // object_refs 存 JSON 数组文本，按 `"id"` 子串匹配（反查经 wb_ontology_object.id）。
-            // M6：输入经 LIKE 通配符转义，防止 %/_ 被当通配符放大匹配。
             sql.push_str(" AND object_refs LIKE ? ESCAPE '\\'");
             params.push(libsql::Value::Text(format!("%\"{}\"%", escape_like(v))));
         }
@@ -611,6 +626,18 @@ impl LibSQLStorage {
                 params.push(libsql::Value::Text(id));
             }
         }
+        Ok((sql, params))
+    }
+
+    /// 按条件查询 Trace 事件（认知/世界同源）。
+    /// [强制] after_id 游标用于 WebSocket 断线重连补齐：返回该事件之后的全部匹配事件（按 timestamp,id 升序）。
+    pub async fn list_events(&self, q: TraceQuery) -> Result<Vec<TraceEvent>, StorageError> {
+        let (mut sql, params) = self
+            .event_query(
+                &q,
+                "id, kind, event_type, object_refs, project_id, run_id, agent_id, reasoning, input, output, confidence, timestamp",
+            )
+            .await?;
         if q.newest_first {
             sql.push_str(" ORDER BY timestamp DESC, id DESC");
         } else {
@@ -627,6 +654,19 @@ impl LibSQLStorage {
             out.push(row_to_trace(&row)?);
         }
         Ok(out)
+    }
+
+    /// 统计满足同一组 TraceQuery 条件的全部事件，不受 list 的 LIMIT 截断。
+    pub async fn count_events(&self, q: TraceQuery) -> Result<usize, StorageError> {
+        let (sql, params) = self.event_query(&q, "COUNT(*)").await?;
+        let mut rows = self
+            .conn
+            .query(&sql, libsql::params_from_iter(params))
+            .await?;
+        match rows.next().await? {
+            Some(row) => Ok(row.get::<i64>(0)? as usize),
+            None => Ok(0),
+        }
     }
 
     /// 按 ID 取单条 Trace 事件（供 `GET /trace/{id}`，缺失返 None → WB2002）。
