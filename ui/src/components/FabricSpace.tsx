@@ -77,7 +77,7 @@ export function FabricSpace({ currentUser, onSwitchUser }: FabricSpaceProps) {
       intent: taskIntent,
       payload,
     })
-    setSubmitResult(`任务已受理! ID: ${res.result.id} | 接收 Agent: ${res.result.receiver}`)
+    setSubmitResult(`任务已受理! 单号: ${res.result.id} | 接收智能体: ${res.result.receiver}`)
     setTimeout(() => setSubmitResult(null), 4000)
   }
 
@@ -89,7 +89,7 @@ export function FabricSpace({ currentUser, onSwitchUser }: FabricSpaceProps) {
     setNewSkillName('')
     setNewSkillContent('')
     await loadData()
-    setNotice(`新技能 [${newSkillName}] 导入成功！`)
+    setNotice(`新技能 [${newSkillName}] 添加成功！`)
     setTimeout(() => setNotice(null), 3000)
   }
 
@@ -99,10 +99,10 @@ export function FabricSpace({ currentUser, onSwitchUser }: FabricSpaceProps) {
       <div className="space-header">
         <div>
           <h2 className="space-title">
-            <span className="space-icon">⚡</span> 智能资产与网格 · Fabric & Assets
+            <span className="space-icon">⚡</span> 智能体与能力 · Agents & Capabilities
           </h2>
           <p className="space-subtitle">
-            分布式智能体通信拓扑、专业工人能力网格与技能资产库
+            管理协同工作的 AI 智能体团队、执行节点、业务技能库与外部系统插件
           </p>
         </div>
 
@@ -111,25 +111,25 @@ export function FabricSpace({ currentUser, onSwitchUser }: FabricSpaceProps) {
             className={`space-tab-btn ${subTab === 'agents' ? 'active' : ''}`}
             onClick={() => setSubTab('agents')}
           >
-            Agent 通信网格
+            智能体团队
           </button>
           <button
             className={`space-tab-btn ${subTab === 'workers' ? 'active' : ''}`}
             onClick={() => setSubTab('workers')}
           >
-            工人网格 ({workers.length})
+            执行节点 ({workers.length})
           </button>
           <button
             className={`space-tab-btn ${subTab === 'skills' ? 'active' : ''}`}
             onClick={() => setSubTab('skills')}
           >
-            技能资产库 ({skills.length})
+            技能库 ({skills.length})
           </button>
           <button
             className={`space-tab-btn ${subTab === 'users' ? 'active' : ''}`}
             onClick={() => setSubTab('users')}
           >
-            身份与权限角色
+            成员与权限
           </button>
         </div>
       </div>
@@ -141,24 +141,24 @@ export function FabricSpace({ currentUser, onSwitchUser }: FabricSpaceProps) {
         </div>
       )}
 
-      {/* ── 视图 1：Agent 通信网格 (Fabric) ─────────────────────────────────── */}
+      {/* ── 视图 1：智能体团队 (Agents) ─────────────────────────────────── */}
       {subTab === 'agents' && (
         <div className="fabric-grid">
           <div className="glass-card">
             <h3 className="card-title">
-              <Network size={17} /> 活跃智能体拓扑 (Active Agent Topology)
+              <Network size={17} /> 活跃智能体列表 (Active Agents)
             </h3>
             <div className="agents-topology">
               <div className="agent-node-card">
                 <div className="node-head">
                   <span className="dot on" />
                   <h4>retention-agent</h4>
-                  <span className="role-tag">Cognitive Reasoner</span>
+                  <span className="role-tag">决策分析 (Reasoner)</span>
                 </div>
                 <p>专司客户留存分析、流失风险评估与决策规划，直连 CRM 数据源与优惠券中台。</p>
                 <div className="node-meta">
-                  <span>协议: OAB-v2</span>
-                  <span>负载: 正常 (14 ops/m)</span>
+                  <span>通信协议: OAB-v2</span>
+                  <span>运行状态: 正常 (14 次/分)</span>
                 </div>
               </div>
 
@@ -166,28 +166,28 @@ export function FabricSpace({ currentUser, onSwitchUser }: FabricSpaceProps) {
                 <div className="node-head">
                   <span className="dot on" />
                   <h4>lottery-agent</h4>
-                  <span className="role-tag">Analytics Engine</span>
+                  <span className="role-tag">数据分析 (Analytics)</span>
                 </div>
-                <p>专司开奖大数据清洗、马尔可夫转移矩阵计算与策略回测。</p>
+                <p>专司历史业务数据清洗、概率转移模型计算与趋势模拟回测。</p>
                 <div className="node-meta">
-                  <span>协议: OAB-v2</span>
-                  <span>负载: 空闲</span>
+                  <span>通信协议: OAB-v2</span>
+                  <span>运行状态: 空闲待命</span>
                 </div>
               </div>
             </div>
 
             <h3 className="card-title" style={{ marginTop: '24px' }}>
-              <Terminal size={17} /> 经 Fabric 网关派发任务
+              <Terminal size={17} /> 🚀 手动下发测试任务 (Dispatch Task)
             </h3>
             <form onSubmit={handleSubmitTask} className="task-form">
-              <label className="field-lbl">意图识别码 (Task Intent):</label>
+              <label className="field-lbl">任务类型 (Task Type):</label>
               <input
                 className="input-text"
                 value={taskIntent}
                 onChange={(e) => setTaskIntent(e.target.value)}
               />
 
-              <label className="field-lbl">载荷参数 (Payload):</label>
+              <label className="field-lbl">任务参数 (JSON 格式):</label>
               <textarea
                 className="textarea-json"
                 rows={2}
@@ -196,7 +196,7 @@ export function FabricSpace({ currentUser, onSwitchUser }: FabricSpaceProps) {
               />
 
               <button type="submit" className="btn-action primary">
-                <Send size={14} /> 提交到 Agent Fabric
+                <Send size={14} /> 下发任务给智能体
               </button>
               {submitResult && <p className="success-tip">{submitResult}</p>}
             </form>
@@ -204,7 +204,7 @@ export function FabricSpace({ currentUser, onSwitchUser }: FabricSpaceProps) {
 
           <div className="glass-card">
             <h3 className="card-title">
-              <Activity size={17} /> 外部连接插件 (Plugins)
+              <Activity size={17} /> 外部连接插件 (Plugins & Connectors)
             </h3>
             <div className="plugins-list">
               {plugins.map((pl) => (
@@ -213,7 +213,7 @@ export function FabricSpace({ currentUser, onSwitchUser }: FabricSpaceProps) {
                     <b>{pl.name}</b>
                     <span className="runtime-tag">{pl.runtime}</span>
                   </div>
-                  <span className="pl-ep">{pl.endpoint || 'Internal Connector'}</span>
+                  <span className="pl-ep">{pl.endpoint || '内置连接器 (Internal Connector)'}</span>
                   <div className="pl-caps">
                     {pl.capabilities.map((c) => (
                       <span key={c} className="cap-pill">{c}</span>
@@ -226,7 +226,7 @@ export function FabricSpace({ currentUser, onSwitchUser }: FabricSpaceProps) {
         </div>
       )}
 
-      {/* ── 视图 2：工人网格 (Workers) ─────────────────────────────────────── */}
+      {/* ── 视图 2：执行节点 (Workers) ─────────────────────────────────────── */}
       {subTab === 'workers' && (
         <div className="workers-grid">
           {workers.map((w) => (
@@ -243,12 +243,12 @@ export function FabricSpace({ currentUser, onSwitchUser }: FabricSpaceProps) {
 
               <div className="worker-quality-row">
                 <div className="q-box">
-                  <span className="lbl">执行质量</span>
+                  <span className="lbl">任务成功率</span>
                   <span className="val hl">{(w.quality * 100).toFixed(1)}%</span>
                 </div>
                 <div className="q-box">
-                  <span className="lbl">执行成本</span>
-                  <span className="val">¥{w.cost.toFixed(2)} / op</span>
+                  <span className="lbl">单次执行成本</span>
+                  <span className="val">¥{w.cost.toFixed(2)} / 次</span>
                 </div>
                 <div className="q-box">
                   <span className="lbl">执行引擎</span>
@@ -257,7 +257,7 @@ export function FabricSpace({ currentUser, onSwitchUser }: FabricSpaceProps) {
               </div>
 
               <div className="worker-caps">
-                <span className="caps-title">挂载能力清单:</span>
+                <span className="caps-title">具备能力清单:</span>
                 <div className="caps-tags">
                   {w.capabilities.map((c) => (
                     <span key={c} className="cap-pill">{c}</span>
@@ -269,18 +269,18 @@ export function FabricSpace({ currentUser, onSwitchUser }: FabricSpaceProps) {
         </div>
       )}
 
-      {/* ── 视图 3：技能资产库 (Skills) ───────────────────────────────────── */}
+      {/* ── 视图 3：技能库 (Skills) ───────────────────────────────────────── */}
       {subTab === 'skills' && (
         <div className="skills-view">
           <div className="skills-toolbar">
             <p className="desc">
-              系统执行特定领域任务的纯函数认知契约，支持动态热导入与版本追溯。
+              智能体掌握的专业业务技能库，支持按业务场景自定义添加与动态更新。
             </p>
             <button
               className="btn-action primary small"
               onClick={() => setShowSkillModal(true)}
             >
-              <Plus size={14} /> 导入新 Skill
+              <Plus size={14} /> 添加新业务技能
             </button>
           </div>
 
@@ -304,7 +304,7 @@ export function FabricSpace({ currentUser, onSwitchUser }: FabricSpaceProps) {
         </div>
       )}
 
-      {/* ── 视图 4：用户身份与角色 (Users) ─────────────────────────────────── */}
+      {/* ── 视图 4：成员与权限 (Users) ─────────────────────────────────────── */}
       {subTab === 'users' && (
         <div className="users-view">
           <div className="glass-card">
@@ -312,7 +312,7 @@ export function FabricSpace({ currentUser, onSwitchUser }: FabricSpaceProps) {
               <Shield size={17} /> 快速切换当前工作身份
             </h3>
             <p className="card-desc">
-              不同角色拥有不同的治理权限（如仅 Developer 可导入 Skill，Operator 负责业务放行）。
+              不同角色拥有不同的操作权限：开发者可管理技能与插件，运营者负责业务执行与审批，决策官查看全局大盘。
             </p>
 
             <div className="user-switch-pills">
@@ -339,11 +339,11 @@ export function FabricSpace({ currentUser, onSwitchUser }: FabricSpaceProps) {
         </div>
       )}
 
-      {/* 导入 Skill 弹窗 */}
+      {/* 添加新技能弹窗 */}
       {showSkillModal && (
         <div className="modal-backdrop">
           <div className="modal-card">
-            <h3>导入领域认知 Skill</h3>
+            <h3>添加新业务技能</h3>
             <form onSubmit={handleImportSkill}>
               <label className="field-lbl">技能名称 (Name):</label>
               <input
@@ -354,11 +354,11 @@ export function FabricSpace({ currentUser, onSwitchUser }: FabricSpaceProps) {
                 autoFocus
               />
 
-              <label className="field-lbl">技能规范说明或代码 (Content):</label>
+              <label className="field-lbl">技能逻辑与触发说明 (Content):</label>
               <textarea
                 className="textarea-json"
                 rows={4}
-                placeholder="定义目标、触发条件与执行指令..."
+                placeholder="描述技能的触发条件、业务目标与执行逻辑..."
                 value={newSkillContent}
                 onChange={(e) => setNewSkillContent(e.target.value)}
               />
@@ -372,7 +372,7 @@ export function FabricSpace({ currentUser, onSwitchUser }: FabricSpaceProps) {
                   取消
                 </button>
                 <button type="submit" className="btn-action primary">
-                  确认导入
+                  确认添加
                 </button>
               </div>
             </form>

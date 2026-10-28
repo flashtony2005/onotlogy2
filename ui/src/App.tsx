@@ -123,15 +123,15 @@ export default function App() {
   }
 
   const missionPresets = [
-    { label: '🎯 VIP 客户流失紧急干预', goal: '对近14天活跃骤降60%的高净值金卡用户制定挽留与专属权益计划' },
-    { label: '📊 双色球马尔可夫走势回测', goal: '挖掘历史出球特征并回测冷热号马尔可夫转移概率' },
-    { label: '🛡️ 知识库公理冲突自愈诊断', goal: '全面诊断 TBox 与当前实时 ABox 实体一致性并验证安全约束' },
+    { label: '🎯 客户流失挽留方案', goal: '对近14天活跃下降的高价值客户自动制定专属挽留方案' },
+    { label: '📈 业务规律分析回测', goal: '分析历史业务数据特征并测算未来指标变化走势' },
+    { label: '🛡️ 业务数据与规则体检', goal: '全面体检当前业务数据完整性与规则逻辑一致性' },
   ]
 
   if (sessionChecking) {
     return (
       <div className="auth-page">
-        <div className="auth-empty">❯ 正在载入认知空间…</div>
+        <div className="auth-empty">❯ 正在载入工作台…</div>
       </div>
     )
   }
@@ -141,10 +141,10 @@ export default function App() {
       <div className="auth-page">
         <nav className="auth-nav">
           <div className="auth-brand">
-            <span className="auth-brand-leaf">🌿</span> OpenAIP-OS · 极简本体认知空间
+            <span className="auth-brand-leaf">🌿</span> OpenAIP-OS · 智能业务协同工作台
           </div>
           <div className="auth-nav-links">
-            <span style={{ fontSize: '12px', color: '#6d857b' }}>Less is More · 哲学美学重构版</span>
+            <span style={{ fontSize: '12px', color: '#6d857b' }}>简单明了 · 高效协同</span>
           </div>
         </nav>
 
@@ -169,19 +169,19 @@ export default function App() {
           </span>
           <div className="zen-brand-info">
             <span className="zen-title">OpenAIP-OS</span>
-            <span className="zen-sub">Ontological Agent Architecture</span>
+            <span className="zen-sub">智能业务协同平台</span>
           </div>
         </div>
 
-        {/* 三个纯粹空间选择器 */}
+        {/* 核心工作空间选择器 */}
         <nav className="zen-spaces">
           <button
             className={`space-nav-btn ${space === 'execution' ? 'active' : ''}`}
             onClick={() => setSpace('execution')}
           >
             <Target size={16} />
-            <span>运行与决策</span>
-            <span className="sub-tag">Execution</span>
+            <span>业务任务</span>
+            <span className="sub-tag">Tasks</span>
           </button>
 
           <button
@@ -189,8 +189,8 @@ export default function App() {
             onClick={() => setSpace('world')}
           >
             <Globe2 size={16} />
-            <span>本体世界</span>
-            <span className="sub-tag">World</span>
+            <span>业务知识</span>
+            <span className="sub-tag">Knowledge</span>
           </button>
 
           <button
@@ -198,8 +198,8 @@ export default function App() {
             onClick={() => setSpace('fabric')}
           >
             <Cpu size={16} />
-            <span>智能资产</span>
-            <span className="sub-tag">Fabric</span>
+            <span>团队与工具</span>
+            <span className="sub-tag">Agents & Tools</span>
           </button>
         </nav>
 
@@ -207,7 +207,7 @@ export default function App() {
         <div className="zen-user-group">
           <div className={`conn-status ${connected ? 'live' : 'offline'}`}>
             <span className="dot" />
-            <span>{connected ? '实时流已连通' : '断开'}</span>
+            <span>{connected ? '实时连接正常' : '连接中断'}</span>
           </div>
 
           <div className="zen-user-badge">
@@ -225,10 +225,10 @@ export default function App() {
         </div>
       </header>
 
-      {/* ── 快速目标预设推荐 ────────────────────────────────────────────── */}
+      {/* ── 快速任务预设推荐 ────────────────────────────────────────────── */}
       <div className="zen-quick-bar">
         <span className="quick-label">
-          <Sparkles size={14} /> 典型使命目标:
+          <Sparkles size={14} /> 快捷任务推荐:
         </span>
         <div className="quick-pills">
           {missionPresets.map((m) => (
@@ -269,7 +269,7 @@ export default function App() {
         )}
       </main>
 
-      {/* ── 底部对话式 Composer ────────────────────────────────────────── */}
+      {/* ── 底部任务执行栏 Composer ─────────────────────────────────────── */}
       <footer className="zen-composer">
         <div className="composer-inner">
           <span className="composer-prompt">❯</span>
@@ -277,14 +277,14 @@ export default function App() {
             className="composer-agent"
             value={agentId}
             onChange={(e) => setAgentId(e.target.value)}
-            placeholder="Agent ID"
-            title="执行智能体"
+            placeholder="智能体 (Agent)"
+            title="负责执行的智能体"
           />
           <input
             className="composer-input"
             value={goal}
             onChange={(e) => setGoal(e.target.value)}
-            placeholder="输入自然语言业务目标（例如：为高风险流失客户生成挽留计划），Enter 立即驱动闭环"
+            placeholder="输入业务任务目标（例如：为近14天活跃下降的VIP客户制定挽留方案），按 Enter 立即执行..."
             onKeyDown={(e) => e.key === 'Enter' && handleTriggerRun()}
           />
           <button
@@ -294,7 +294,7 @@ export default function App() {
             title="快捷键: Enter"
           >
             {running ? <span className="spin">⏳</span> : <Play size={13} fill="currentColor" />}
-            <span>{running ? '执行中…' : '触发闭环'}</span>
+            <span>{running ? '执行中…' : '执行任务'}</span>
             <kbd className="composer-kbd">↵</kbd>
           </button>
         </div>

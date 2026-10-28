@@ -114,7 +114,7 @@ export function WorldSpace() {
     setAddingEntity(false)
     setNewEntityId('')
     await loadData()
-    setBannerMsg(`成功注入新实体 [${newEntityId.trim()}] 到世界模型`)
+    setBannerMsg(`已成功添加业务对象 [${newEntityId.trim()}] 到知识库`)
     setTimeout(() => setBannerMsg(null), 3000)
   }
 
@@ -124,10 +124,10 @@ export function WorldSpace() {
       <div className="space-header">
         <div>
           <h2 className="space-title">
-            <span className="space-icon">🌐</span> 本体世界图谱 · World & Ontology
+            <span className="space-icon">🌐</span> 业务知识中心 · Business Knowledge
           </h2>
           <p className="space-subtitle">
-            现实物理世界、业务状态与公理概念的单一真实世界投影 (Single Source of Truth)
+            集中沉淀企业客户、业务规则与实体对象之间的全景关联网络
           </p>
         </div>
 
@@ -136,25 +136,25 @@ export function WorldSpace() {
             className={`space-tab-btn ${subTab === 'graph' ? 'active' : ''}`}
             onClick={() => setSubTab('graph')}
           >
-            拓扑图谱 ({graph.nodes.length} 实体)
+            关系网络图 ({graph.nodes.length} 个对象)
           </button>
           <button
             className={`space-tab-btn ${subTab === 'entities' ? 'active' : ''}`}
             onClick={() => setSubTab('entities')}
           >
-            实体与关系清单
+            业务数据清单
           </button>
           <button
             className={`space-tab-btn ${subTab === 'packs' ? 'active' : ''}`}
             onClick={() => setSubTab('packs')}
           >
-            领域业务包 ({packs.length})
+            行业规则包 ({packs.length})
           </button>
           <button
             className={`space-tab-btn ${subTab === 'health' ? 'active' : ''}`}
             onClick={() => setSubTab('health')}
           >
-            本体一致性健康度
+            数据健康检查
           </button>
         </div>
       </div>
@@ -166,12 +166,12 @@ export function WorldSpace() {
         </div>
       )}
 
-      {/* ── 视图 1：交互式拓扑图谱 (Graph) ─────────────────────────────────── */}
+      {/* ── 视图 1：交互式关系网络图 (Graph) ─────────────────────────────── */}
       {subTab === 'graph' && (
         <div className="graph-container">
           <div className="graph-toolbar">
             <div className="filter-group">
-              <span className="lbl">实体类型:</span>
+              <span className="lbl">对象类型:</span>
               {types.map((t) => (
                 <button
                   key={t}
@@ -187,7 +187,7 @@ export function WorldSpace() {
               className="btn-action primary small"
               onClick={() => setAddingEntity(true)}
             >
-              <Plus size={14} /> 新增实体
+              <Plus size={14} /> 添加业务对象
             </button>
           </div>
 
@@ -286,22 +286,22 @@ export function WorldSpace() {
               })}
             </svg>
 
-            {/* 实体详情侧抽屉 */}
+            {/* 对象详情侧抽屉 */}
             {selectedNode && (
               <div className="node-drawer">
                 <div className="drawer-head">
-                  <h4>实体详情检视</h4>
+                  <h4>业务对象详情</h4>
                   <button className="close-btn" onClick={() => setSelectedNode(null)}>
                     ✕
                   </button>
                 </div>
                 <div className="drawer-body">
                   <div className="kv">
-                    <span className="k">Entity ID</span>
+                    <span className="k">对象编号 (ID)</span>
                     <span className="v mono">{selectedNode.id}</span>
                   </div>
                   <div className="kv">
-                    <span className="k">Type</span>
+                    <span className="k">对象分类 (Type)</span>
                     <span className="v badge" style={{ background: colorForType(selectedNode.type), color: '#fff' }}>
                       {selectedNode.type}
                     </span>
@@ -324,13 +324,13 @@ export function WorldSpace() {
         </div>
       )}
 
-      {/* ── 视图 2：实体列表与新建 (Entities) ─────────────────────────────── */}
+      {/* ── 视图 2：业务数据清单 (Entities) ───────────────────────────────── */}
       {subTab === 'entities' && (
         <div className="entities-view">
           <div className="search-bar">
             <Search size={16} />
             <input
-              placeholder="搜索实体 ID 或谓词..."
+              placeholder="搜索对象编号或关联关系..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -340,9 +340,9 @@ export function WorldSpace() {
             <table className="pure-table">
               <thead>
                 <tr>
-                  <th>源实体 (Source)</th>
-                  <th>关联谓词 (Predicate)</th>
-                  <th>目标实体 (Target)</th>
+                  <th>起始对象 (Source)</th>
+                  <th>关联关系 (Relation)</th>
+                  <th>目标对象 (Target)</th>
                   <th>有效时效 (Validity)</th>
                 </tr>
               </thead>
@@ -352,7 +352,7 @@ export function WorldSpace() {
                     <td><code>{r.source}</code></td>
                     <td><span className="pred-pill">{r.predicate}</span></td>
                     <td><code>{r.target}</code></td>
-                    <td>{r.validUntil ? `截止 ${fmtTime(new Date(r.validUntil * 1000).toISOString())}` : '永久有效 (Permanent)'}</td>
+                    <td>{r.validUntil ? `截止 ${fmtTime(new Date(r.validUntil * 1000).toISOString())}` : '永久有效'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -361,7 +361,7 @@ export function WorldSpace() {
         </div>
       )}
 
-      {/* ── 视图 3：领域业务包 (Domain Packs) ──────────────────────────────── */}
+      {/* ── 视图 3：行业规则包 (Domain Packs) ──────────────────────────────── */}
       {subTab === 'packs' && (
         <div className="packs-grid">
           {packs.map((p) => (
@@ -382,15 +382,15 @@ export function WorldSpace() {
               <div className="pack-stats">
                 <div className="stat">
                   <span className="num">{p.ontology_types}</span>
-                  <span className="lbl">领域概念</span>
+                  <span className="lbl">业务概念</span>
                 </div>
                 <div className="stat">
                   <span className="num">{p.bootstrap_objects}</span>
-                  <span className="lbl">种子对象</span>
+                  <span className="lbl">预置对象</span>
                 </div>
                 <div className="stat">
                   <span className="num">{p.bootstrap_relations}</span>
-                  <span className="lbl">关系拓扑</span>
+                  <span className="lbl">关联规则</span>
                 </div>
               </div>
 
@@ -405,7 +405,7 @@ export function WorldSpace() {
                   className="btn-pack-op"
                   onClick={() => handleRunPackOp(p.id, 'backtest')}
                 >
-                  <Play size={13} /> 策略回测
+                  <Play size={13} /> 模拟测试
                 </button>
               </div>
             </div>
@@ -413,25 +413,25 @@ export function WorldSpace() {
         </div>
       )}
 
-      {/* ── 视图 4：本体一致性健康度 (Health) ──────────────────────────────── */}
+      {/* ── 视图 4：数据健康检查 (Health) ─────────────────────────────────── */}
       {subTab === 'health' && (
         <div className="health-grid">
           <div className="glass-card">
             <h3 className="card-title">
-              <CheckCircle size={18} className="clean-icon" /> TBox/ABox 逻辑一致性状态
+              <CheckCircle size={18} className="clean-icon" /> 业务规则与数据一致性检查
             </h3>
             <div className="health-status-box">
               <span className="status-badge-big">
-                {diagnosis?.consistent ? '一致且可满足 (Satisfiable & Sound)' : '异常'}
+                {diagnosis?.consistent ? '✅ 规则健康正常，无逻辑冲突' : '⚠️ 存在规则冲突'}
               </span>
               <p className="health-desc">
-                公理体系与运行态实体无逻辑冲突，所有定义类均为可满足类，支持稳态推理。
+                系统内所有业务规则与运行数据均保持逻辑一致，无冲突规则，可保障系统稳态运行。
               </p>
             </div>
           </div>
 
           <div className="glass-card">
-            <h3 className="card-title">不可变版本演化脉络</h3>
+            <h3 className="card-title">规则版本演进脉络 (Version History)</h3>
             <div className="versions-timeline">
               {versions.map((v) => (
                 <div key={v.id} className="version-row">
@@ -440,7 +440,7 @@ export function WorldSpace() {
                     <span>(Revision {v.revision})</span>
                   </div>
                   <span className="v-date">{fmtTime(v.created_at)}</span>
-                  <span className="v-axioms">{v.ontology.axioms.length} 条基础公理</span>
+                  <span className="v-axioms">{v.ontology.axioms.length} 条业务规则定义</span>
                 </div>
               ))}
             </div>
@@ -448,13 +448,13 @@ export function WorldSpace() {
         </div>
       )}
 
-      {/* 新增实体弹窗 */}
+      {/* 添加业务对象弹窗 */}
       {addingEntity && (
         <div className="modal-backdrop">
           <div className="modal-card">
-            <h3>向本体世界注入新实体</h3>
+            <h3>添加新业务对象</h3>
             <form onSubmit={handleCreateEntity}>
-              <label className="field-lbl">实体标识 (Entity ID):</label>
+              <label className="field-lbl">对象编号 (ID):</label>
               <input
                 className="input-text"
                 placeholder="例如 crm:Customer_9901"
@@ -463,20 +463,20 @@ export function WorldSpace() {
                 autoFocus
               />
 
-              <label className="field-lbl">概念分类 (Entity Type):</label>
+              <label className="field-lbl">对象类型 (Type):</label>
               <select
                 className="select-input"
                 value={newEntityType}
                 onChange={(e) => setNewEntityType(e.target.value)}
               >
-                <option value="Customer">Customer (客户)</option>
-                <option value="ChurnRisk">ChurnRisk (流失预警)</option>
-                <option value="RetentionStrategy">RetentionStrategy (挽留策略)</option>
-                <option value="Policy">Policy (治理规则)</option>
-                <option value="Worker">Worker (执行单元)</option>
+                <option value="Customer">客户 (Customer)</option>
+                <option value="ChurnRisk">流失预警 (ChurnRisk)</option>
+                <option value="RetentionStrategy">挽留策略 (RetentionStrategy)</option>
+                <option value="Policy">安全规则 (Policy)</option>
+                <option value="Worker">执行节点 (Worker)</option>
               </select>
 
-              <label className="field-lbl">属性负载 (JSON Properties):</label>
+              <label className="field-lbl">对象属性 (JSON 格式):</label>
               <textarea
                 className="textarea-json"
                 rows={3}
@@ -493,7 +493,7 @@ export function WorldSpace() {
                   取消
                 </button>
                 <button type="submit" className="btn-action primary">
-                  确认注入
+                  确认添加
                 </button>
               </div>
             </form>

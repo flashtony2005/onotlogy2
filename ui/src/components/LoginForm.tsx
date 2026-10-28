@@ -29,8 +29,8 @@ export function LoginForm({ error, onLogin }: LoginFormProps) {
     <div className="auth-card">
       <div className="auth-card-head">
         <div className="auth-card-icon">🌿</div>
-        <h2>欢迎进入认知空间</h2>
-        <p>OpenAIP-OS · Ontological Agent Runtime</p>
+        <h2>欢迎登录协同平台</h2>
+        <p>OpenAIP-OS · 企业智能业务工作台</p>
       </div>
 
       {/* 快捷身份选择 */}
@@ -143,12 +143,12 @@ export function LoginForm({ error, onLogin }: LoginFormProps) {
         {error && <div className="auth-error">⚠ {error}</div>}
 
         <button className="auth-submit" type="submit" disabled={submitting || !username.trim() || !password}>
-          {submitting ? '进入中…' : '登 录 空 间'}
+          {submitting ? '登录中…' : '登 录 系 统'}
         </button>
       </form>
 
       <div className="auth-foot">
-        OpenAIP-OS 认知平台 · 统一三元本体架构
+        OpenAIP-OS 协同平台 · 业务智能体与知识管理
       </div>
     </div>
   )

@@ -78,7 +78,7 @@ export function ExecutionSpace({
     try {
       await runBusinessNext('proj-crm-retention')
       await loadData()
-      setActionMsg('已触发业务闭环寻优演进，目标差距已收敛')
+      setActionMsg('已完成智能分析与指标测算，推荐方案已更新')
       setTimeout(() => setActionMsg(null), 3500)
     } finally {
       setAdvancing(false)
@@ -89,7 +89,7 @@ export function ExecutionSpace({
     try {
       await postRunApprovalDecision('', reqId, approve)
       await loadData()
-      setActionMsg(approve ? '已批准放行，解除执行阻断' : '已拒绝该请求，终止高危动作')
+      setActionMsg(approve ? '已批准操作，任务已继续执行' : '已拒绝该操作，终止执行')
       setTimeout(() => setActionMsg(null), 3500)
     } catch (e) {
       setActionMsg(`审批处理失败: ${(e as Error).message}`)
@@ -102,10 +102,10 @@ export function ExecutionSpace({
       <div className="space-header">
         <div>
           <h2 className="space-title">
-            <span className="space-icon">🎯</span> 运行与决策空间 · Execution & Decisions
+            <span className="space-icon">🎯</span> 业务任务中心 · Tasks & Execution
           </h2>
           <p className="space-subtitle">
-            连接现实指标缺口、智能体认知推理时间线与人类治理闸门
+            跟踪核心业务指标达成、查看智能体自动化执行过程与处理安全审批
           </p>
         </div>
 
@@ -114,19 +114,19 @@ export function ExecutionSpace({
             className={`space-tab-btn ${subTab === 'cockpit' ? 'active' : ''}`}
             onClick={() => setSubTab('cockpit')}
           >
-            业务驾驶舱 ({goals.length} 目标)
+            业务看板 ({goals.length} 项指标)
           </button>
           <button
             className={`space-tab-btn ${subTab === 'timeline' ? 'active' : ''}`}
             onClick={() => setSubTab('timeline')}
           >
-            认知流水线 {runId ? `(Run #${runId.slice(-4)})` : ''}
+            运行明细 {runId ? `(#${runId.slice(-4)})` : ''}
           </button>
           <button
             className={`space-tab-btn ${subTab === 'governance' ? 'active' : ''}`}
             onClick={() => setSubTab('governance')}
           >
-            治理审批 {approvals.length > 0 ? `(${approvals.length} 待决)` : ''}
+            安全审批 {approvals.length > 0 ? `(${approvals.length} 待审批)` : ''}
           </button>
         </div>
       </div>
@@ -138,14 +138,14 @@ export function ExecutionSpace({
         </div>
       )}
 
-      {/* ── 视图 1：业务驾驶舱 (Cockpit) ─────────────────────────────────── */}
+      {/* ── 视图 1：业务看板 (Cockpit) ─────────────────────────────────── */}
       {subTab === 'cockpit' && (
         <div className="cockpit-grid">
           {/* 目标与指标缺口 */}
           <div className="glass-card">
             <div className="card-header-row">
               <h3 className="card-title">
-                <Layers size={17} /> 企业目标差距追踪 (Goal Gap)
+                <Layers size={17} /> 核心业务指标跟踪 (Goals & Metrics)
               </h3>
               <button
                 className="btn-action primary"
@@ -153,7 +153,7 @@ export function ExecutionSpace({
                 disabled={advancing}
               >
                 <RotateCcw size={14} className={advancing ? 'spin' : ''} />
-                {advancing ? '寻优计算中…' : '推进一轮优化'}
+                {advancing ? '分析测算中…' : '智能测算与优化'}
               </button>
             </div>
 
@@ -173,18 +173,18 @@ export function ExecutionSpace({
                   </div>
                   <div className="goal-metric-row">
                     <div className="metric-box">
-                      <span className="label">当前值</span>
+                      <span className="label">当前实际值</span>
                       <span className="val curr">{g.currentValue}</span>
                     </div>
                     <ArrowRight size={14} className="arrow" />
                     <div className="metric-box">
-                      <span className="label">目标值</span>
+                      <span className="label">预期目标值</span>
                       <span className="val target">{g.targetValue}</span>
                     </div>
                     <div className="metric-box">
-                      <span className="label">剩余缺口</span>
+                      <span className="label">距离目标差距</span>
                       <span className="val gap">
-                        {g.gap > 0 ? `-${g.gap}` : '已达标'}
+                        {g.gap > 0 ? `-${g.gap}` : '已达成'}
                       </span>
                     </div>
                   </div>
@@ -210,7 +210,7 @@ export function ExecutionSpace({
           <div className="glass-card">
             <div className="card-header-row">
               <h3 className="card-title">
-                <Sparkles size={17} /> 机会发现与策略推荐 (Recommendations)
+                <Sparkles size={17} /> 智能推荐行动方案 (Recommended Actions)
               </h3>
             </div>
 
@@ -219,19 +219,19 @@ export function ExecutionSpace({
                 <div key={rec.opportunityId} className="rec-card">
                   <div className="rec-top">
                     <span className="rec-subject">{rec.subject}</span>
-                    <span className="rec-score">置信度 {(rec.confidence * 100).toFixed(0)}%</span>
+                    <span className="rec-score">可信度 {(rec.confidence * 100).toFixed(0)}%</span>
                   </div>
                   <h4 className="rec-action">{rec.action}</h4>
                   <p className="rec-reason">{rec.reason}</p>
 
                   <div className="rec-footer">
-                    <span className="rec-actor">执行主体: {rec.actor === 'agent' ? '🤖 智能体' : '👤 人工协同'}</span>
+                    <span className="rec-actor">执行方式: {rec.actor === 'agent' ? '🤖 智能体自动执行' : '👤 人工协助跟进'}</span>
                     <button
                       className="btn-action secondary"
                       onClick={() => onTriggerRun(`执行针对 ${rec.subject} 的策略: ${rec.action}`)}
                       disabled={running}
                     >
-                      <Play size={13} /> 立即驱动 Agent 执行
+                      <Play size={13} /> 一键执行此方案
                     </button>
                   </div>
                 </div>
@@ -241,18 +241,18 @@ export function ExecutionSpace({
         </div>
       )}
 
-      {/* ── 视图 2：认知流水线 (Timeline) ─────────────────────────────────── */}
+      {/* ── 视图 2：运行明细 (Timeline) ─────────────────────────────────── */}
       {subTab === 'timeline' && (
         <div className="timeline-container">
           {runId && (
             <div className="run-status-card">
               <div className="run-meta-row">
-                <span className="run-id-tag">Run: <code>{runId}</code></span>
+                <span className="run-id-tag">任务编号: <code>{runId}</code></span>
                 <span className={`run-badge status-${timeline.status.toLowerCase()}`}>
                   {timeline.status}
                 </span>
                 <span className="run-approval-tag">
-                  治理闸门: <b>{timeline.humanApproval}</b>
+                  安全审核: <b>{timeline.humanApproval === 'Approved' ? '已放行' : timeline.humanApproval}</b>
                 </span>
               </div>
               <div className="run-progress-track">
@@ -264,15 +264,15 @@ export function ExecutionSpace({
           {timeline.decision && (
             <div className="decision-banner">
               <div className="dec-item">
-                <span className="lbl">使命目标</span>
+                <span className="lbl">任务目标</span>
                 <p>{timeline.decision.mission}</p>
               </div>
               <div className="dec-item">
-                <span className="lbl">决策结论</span>
+                <span className="lbl">执行结论</span>
                 <p className="hl">{timeline.decision.decision}</p>
               </div>
               <div className="dec-item">
-                <span className="lbl">风控研判</span>
+                <span className="lbl">风险评估</span>
                 <p>{timeline.decision.risk}</p>
               </div>
             </div>
@@ -281,8 +281,8 @@ export function ExecutionSpace({
           {events.length === 0 ? (
             <div className="empty-state">
               <Cpu size={32} />
-              <h4>等待认知触发</h4>
-              <p>在底部对话条输入目标并点击「▶」触发实时认知闭环推理。</p>
+              <h4>暂无运行记录</h4>
+              <p>在底部输入框输入任务目标后按回车，或在业务看板点击「一键执行此方案」开始。</p>
             </div>
           ) : (
             <div className="events-stream">
@@ -292,7 +292,7 @@ export function ExecutionSpace({
                     <span className="stream-badge">{ev.eventType}</span>
                     <span className="stream-time">{fmtTime(ev.timestamp)}</span>
                     {ev.confidence != null && (
-                      <span className="stream-conf">置信度 {(ev.confidence * 100).toFixed(0)}%</span>
+                      <span className="stream-conf">可信度 {(ev.confidence * 100).toFixed(0)}%</span>
                     )}
                   </div>
                   {ev.objectRefs && ev.objectRefs.length > 0 && (
@@ -313,7 +313,7 @@ export function ExecutionSpace({
                   )}
                   {ev.output != null && (
                     <details className="stream-details">
-                      <summary>执行产出</summary>
+                      <summary>输出结果</summary>
                       <pre>{fmtJson(ev.output)}</pre>
                     </details>
                   )}
@@ -324,28 +324,28 @@ export function ExecutionSpace({
         </div>
       )}
 
-      {/* ── 视图 3：治理审批闸门 (Governance) ─────────────────────────────── */}
+      {/* ── 视图 3：安全审批 (Governance) ─────────────────────────────── */}
       {subTab === 'governance' && (
         <div className="governance-grid">
           <div className="glass-card">
             <h3 className="card-title">
-              <AlertTriangle size={17} /> 挂起的人工放行申请 (Pending Approvals)
+              <AlertTriangle size={17} /> 待人工审批的高风险操作 (Pending Approvals)
             </h3>
             <p className="card-desc">
-              当策略触发高风险阈值（如大额现金流折算或参数变更）时，系统进入安全等待状态。
+              当智能体执行涉及大额优惠、权限变更或高敏感操作时，将自动暂停并等待人工审批放行。
             </p>
 
             {approvals.length === 0 ? (
               <div className="clean-state">
                 <CheckCircle2 size={28} className="clean-icon" />
-                <p>当前所有规则合规，无挂起的审批事项。</p>
+                <p>当前各项操作均符合安全规范，暂无待审批事项。</p>
               </div>
             ) : (
               <div className="approvals-list">
                 {approvals.map((appr) => (
                   <div key={appr.reqId} className="approval-card">
                     <div className="appr-head">
-                      <span className="appr-id">Req #{appr.reqId}</span>
+                      <span className="appr-id">审批单号 #{appr.reqId}</span>
                       <span className="appr-cap">{appr.capability}</span>
                     </div>
                     <h4 className="appr-action">{appr.action}</h4>
@@ -356,13 +356,13 @@ export function ExecutionSpace({
                         className="btn-appr approve"
                         onClick={() => handleDecision(appr.reqId, true)}
                       >
-                        <CheckCircle2 size={15} /> 批准放行
+                        <CheckCircle2 size={15} /> 批准执行
                       </button>
                       <button
                         className="btn-appr reject"
                         onClick={() => handleDecision(appr.reqId, false)}
                       >
-                        <XCircle size={15} /> 否决终止
+                        <XCircle size={15} /> 拒绝操作
                       </button>
                     </div>
                   </div>
@@ -373,7 +373,7 @@ export function ExecutionSpace({
 
           <div className="glass-card">
             <h3 className="card-title">
-              <CheckCircle2 size={17} /> 审计追踪记录 (Audit Trail)
+              <CheckCircle2 size={17} /> 系统操作审计日志 (Audit Logs)
             </h3>
             <div className="audit-timeline">
               {auditLogs.map((log) => (
