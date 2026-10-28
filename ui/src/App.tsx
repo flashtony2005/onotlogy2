@@ -180,8 +180,8 @@ export default function App() {
             onClick={() => setSpace('execution')}
           >
             <Target size={16} />
-            <span>业务任务</span>
-            <span className="sub-tag">Tasks</span>
+            <span>业务大盘</span>
+            <span className="sub-tag">Dashboard</span>
           </button>
 
           <button
@@ -189,8 +189,8 @@ export default function App() {
             onClick={() => setSpace('world')}
           >
             <Globe2 size={16} />
-            <span>业务知识</span>
-            <span className="sub-tag">Knowledge</span>
+            <span>业务图谱</span>
+            <span className="sub-tag">Graph</span>
           </button>
 
           <button
@@ -198,8 +198,8 @@ export default function App() {
             onClick={() => setSpace('fabric')}
           >
             <Cpu size={16} />
-            <span>团队与工具</span>
-            <span className="sub-tag">Agents & Tools</span>
+            <span>智能团队</span>
+            <span className="sub-tag">Agents</span>
           </button>
         </nav>
 
