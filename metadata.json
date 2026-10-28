@@ -1,0 +1,8 @@
+{
+  "name": "OpenAIP-OS · Agent 认知观察",
+  "description": "OpenAIP-OS Ontology Agent Runtime observation UI with multi-tier views, business loop optimization, world ontology graph, governance, knowledge reasoning, and execution tracking.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

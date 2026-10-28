@@ -37,3 +37,10 @@ graft/.graph/
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 graft/
+
+# AI Studio & 本地构建产物
+/.aistudio/
+/.playwright-cli/
+/node_modules/
+/dist/
+bun.lock

@@ -2,37 +2,102 @@ import { useState } from 'react'
 
 interface LoginFormProps {
   error: string | null
-  onLogin: (username: string, password: string) => void
+  onLogin: (username: string, password?: string) => void
 }
 
-/** 治愈插画风登录卡片：白底圆角、图标输入框、记住我/忘记密码、蓝色主按钮、注册引导。 */
+/** 现代极简建筑风登录卡片：白底圆角、毛玻璃微质感、角色快捷切换 */
 export function LoginForm({ error, onLogin }: LoginFormProps) {
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
+  const [username, setUsername] = useState('developer')
+  const [password, setPassword] = useState('admin123')
   const [submitting, setSubmitting] = useState(false)
 
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault()
+  const submit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault()
     if (!username.trim() || !password || submitting) return
     setSubmitting(true)
     Promise.resolve(onLogin(username.trim(), password)).finally(() => setSubmitting(false))
+  }
+
+  const quickLogin = (roleUser: string) => {
+    setUsername(roleUser)
+    setPassword('admin123')
+    setSubmitting(true)
+    Promise.resolve(onLogin(roleUser, 'admin123')).finally(() => setSubmitting(false))
   }
 
   return (
     <div className="auth-card">
       <div className="auth-card-head">
         <div className="auth-card-icon">🌿</div>
-        <h2>欢迎回来</h2>
-        <p>登录 OpenAIP-OS · Agent Runtime</p>
+        <h2>欢迎进入认知空间</h2>
+        <p>OpenAIP-OS · Ontological Agent Runtime</p>
+      </div>
+
+      {/* 快捷身份选择 */}
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '18px', justifyContent: 'center' }}>
+        <button
+          type="button"
+          onClick={() => quickLogin('developer')}
+          style={{
+            fontSize: '11px',
+            padding: '5px 10px',
+            borderRadius: '6px',
+            border: '1px solid',
+            borderColor: username === 'developer' ? 'var(--accent)' : 'var(--border)',
+            background: username === 'developer' ? 'var(--accent)' : 'var(--canvas-subtle)',
+            color: username === 'developer' ? '#ffffff' : 'var(--text-secondary)',
+            fontWeight: username === 'developer' ? 600 : 500,
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+          }}
+        >
+          开发者 Developer
+        </button>
+        <button
+          type="button"
+          onClick={() => quickLogin('operator')}
+          style={{
+            fontSize: '11px',
+            padding: '5px 10px',
+            borderRadius: '6px',
+            border: '1px solid',
+            borderColor: username === 'operator' ? 'var(--accent)' : 'var(--border)',
+            background: username === 'operator' ? 'var(--accent)' : 'var(--canvas-subtle)',
+            color: username === 'operator' ? '#ffffff' : 'var(--text-secondary)',
+            fontWeight: username === 'operator' ? 600 : 500,
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+          }}
+        >
+          运营者 Operator
+        </button>
+        <button
+          type="button"
+          onClick={() => quickLogin('executive')}
+          style={{
+            fontSize: '11px',
+            padding: '5px 10px',
+            borderRadius: '6px',
+            border: '1px solid',
+            borderColor: username === 'executive' ? 'var(--accent)' : 'var(--border)',
+            background: username === 'executive' ? 'var(--accent)' : 'var(--canvas-subtle)',
+            color: username === 'executive' ? '#ffffff' : 'var(--text-secondary)',
+            fontWeight: username === 'executive' ? 600 : 500,
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+          }}
+        >
+          决策官 Executive
+        </button>
       </div>
 
       <form onSubmit={submit}>
         <label className="auth-field">
-          <span className="auth-field-label">用户名 / 邮箱</span>
+          <span className="auth-field-label">用户名</span>
           <div className="auth-input-wrap">
             <svg className="auth-input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M4 6h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Z" />
-              <path d="m3 7 9 6 9-6" />
+              <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+              <circle cx="12" cy="7" r="4" />
             </svg>
             <input
               className="auth-input"
@@ -68,22 +133,22 @@ export function LoginForm({ error, onLogin }: LoginFormProps) {
         <div className="auth-row">
           <label className="auth-remember">
             <input type="checkbox" defaultChecked />
-            <span>记住我</span>
+            <span>记住会话</span>
           </label>
           <a className="auth-link" href="#" onClick={(e) => e.preventDefault()}>
-            忘记密码？
+            重置凭证
           </a>
         </div>
 
         {error && <div className="auth-error">⚠ {error}</div>}
 
         <button className="auth-submit" type="submit" disabled={submitting || !username.trim() || !password}>
-          {submitting ? '登录中…' : '登 录'}
+          {submitting ? '进入中…' : '登 录 空 间'}
         </button>
       </form>
 
       <div className="auth-foot">
-        还没有账号？<a className="auth-link" href="#" onClick={(e) => e.preventDefault()}>立即注册</a>
+        OpenAIP-OS 认知平台 · 统一三元本体架构
       </div>
     </div>
   )
