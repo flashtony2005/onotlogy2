@@ -1204,12 +1204,14 @@ async fn tc005_turso_roundtrip() {
 fn tc006_render_list() {
     let recs = vec![
         ObjectRecord {
+            project_id: None,
             id: "001".into(),
             r#type: "Customer".into(),
             data: json!({"name": "Apple", "level": "VIP"}),
             version: 1,
         },
         ObjectRecord {
+            project_id: None,
             id: "002".into(),
             r#type: "Customer".into(),
             data: json!({"name": "Tesla", "level": "GOLD"}),

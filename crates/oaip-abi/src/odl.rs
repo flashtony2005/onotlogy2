@@ -29,10 +29,11 @@ use crate::data_range::parse_data_range;
 use crate::data_range::validate_data_range;
 use crate::ir::{
     ActionDef, ActionPlanning, ActorKind, Clause, CompareOp, CreateEffect, DataLiteral,
-    DataPropertyHierarchy, DataPropertyRestriction, DataRestrictionKind, DisjointUnionGroup,
-    FieldUpdate, ObjectOneOfGroup, ObjectPropertyRestriction, ObjectRestrictionKind, ObjectType,
-    OntologyIR, OpportunityRule, OutcomeTiming, ParamDef, PolicyDef, PropertyDataRange,
-    PropertyDef, PropertyFacet, RelationDef, RelationHierarchy, ScalarType, ValueExpr,
+    DataPropertyHierarchy, DataPropertyRestriction, DataRestrictionKind, DeleteEffect,
+    DisjointUnionGroup, FieldUpdate, ObjectOneOfGroup, ObjectPropertyRestriction,
+    ObjectRestrictionKind, ObjectType, OntologyIR, OpportunityRule, OutcomeTiming, ParamDef,
+    PolicyDef, PropertyDataRange, PropertyDef, PropertyFacet, RelationDef, RelationHierarchy,
+    ScalarType, ValueExpr,
 };
 use crate::validation::validate_property_constraints;
 use std::collections::BTreeMap;
@@ -91,6 +92,7 @@ enum Section {
     ActionParams,
     ActionUpdates,
     ActionCreates,
+    ActionDeletes,
     CreateData,
     ActionPolicy,
     ActionPlanning,
@@ -113,6 +115,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     let mut cur_action: Option<(u32, ActionDef)> = None;
     let mut cur_update: Option<FieldUpdate> = None;
     let mut cur_create: Option<CreateEffect> = None;
+    let mut cur_delete: Option<DeleteEffect> = None;
     let mut cur_clause: Option<Clause> = None;
     let mut cur_opportunity: Option<(u32, OpportunityRule)> = None;
     let mut opportunity_fields = [false; 6];
@@ -155,6 +158,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
         if let Some(rest) = line.strip_prefix("datatype ") {
             flush_update(&mut cur_update, &mut cur_action);
             flush_create(&mut cur_create, &mut cur_action);
+            flush_delete(&mut cur_delete, &mut cur_action);
             flush_action(&mut cur_action, &mut current);
             if let Some(obj) = current.take() {
                 declared.push(obj);
@@ -200,6 +204,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
         if let Some(rest) = line.strip_prefix("disjoint_union ") {
             flush_update(&mut cur_update, &mut cur_action);
             flush_create(&mut cur_create, &mut cur_action);
+            flush_delete(&mut cur_delete, &mut cur_action);
             flush_action(&mut cur_action, &mut current);
             if let Some(obj) = current.take() {
                 declared.push(obj);
@@ -245,6 +250,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
         if let Some(rest) = line.strip_prefix("one_of ") {
             flush_update(&mut cur_update, &mut cur_action);
             flush_create(&mut cur_create, &mut cur_action);
+            flush_delete(&mut cur_delete, &mut cur_action);
             flush_action(&mut cur_action, &mut current);
             if let Some(obj) = current.take() {
                 declared.push(obj);
@@ -296,6 +302,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             };
             flush_update(&mut cur_update, &mut cur_action);
             flush_create(&mut cur_create, &mut cur_action);
+            flush_delete(&mut cur_delete, &mut cur_action);
             flush_action(&mut cur_action, &mut current);
             if let Some(obj) = current.take() {
                 declared.push(obj);
@@ -336,6 +343,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             };
             flush_update(&mut cur_update, &mut cur_action);
             flush_create(&mut cur_create, &mut cur_action);
+            flush_delete(&mut cur_delete, &mut cur_action);
             flush_action(&mut cur_action, &mut current);
             if let Some(obj) = current.take() {
                 declared.push(obj);
@@ -378,6 +386,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             };
             flush_update(&mut cur_update, &mut cur_action);
             flush_create(&mut cur_create, &mut cur_action);
+            flush_delete(&mut cur_delete, &mut cur_action);
             flush_action(&mut cur_action, &mut current);
             if let Some(obj) = current.take() {
                 declared.push(obj);
@@ -438,6 +447,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             };
             flush_update(&mut cur_update, &mut cur_action);
             flush_create(&mut cur_create, &mut cur_action);
+            flush_delete(&mut cur_delete, &mut cur_action);
             flush_action(&mut cur_action, &mut current);
             if let Some(obj) = current.take() {
                 declared.push(obj);
@@ -491,6 +501,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
         if let Some(rest) = line.strip_prefix("relation ") {
             flush_update(&mut cur_update, &mut cur_action);
             flush_create(&mut cur_create, &mut cur_action);
+            flush_delete(&mut cur_delete, &mut cur_action);
             flush_action(&mut cur_action, &mut current);
             if let Some(obj) = current.take() {
                 declared.push(obj);
@@ -522,6 +533,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
         if let Some(rest) = line.strip_prefix("object ") {
             flush_update(&mut cur_update, &mut cur_action);
             flush_create(&mut cur_create, &mut cur_action);
+            flush_delete(&mut cur_delete, &mut cur_action);
             flush_action(&mut cur_action, &mut current);
             if let Some(rule) = cur_opportunity.as_mut() {
                 flush_condition(&mut cur_clause, rule);
@@ -598,6 +610,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
             match section.last().expect("section 栈非空").0 {
                 Section::ActionUpdates => flush_update(&mut cur_update, &mut cur_action),
                 Section::ActionCreates => flush_create(&mut cur_create, &mut cur_action),
+                Section::ActionDeletes => flush_delete(&mut cur_delete, &mut cur_action),
                 Section::ActionPrecondition => flush_clause(&mut cur_clause, &mut cur_action),
                 Section::ActionPlanning => {
                     if !planning_fields.iter().all(|seen| *seen) {
@@ -634,6 +647,10 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
         // 列表项（actions 的 updates/creates 用 `- ` 开头）
         if let Some(content) = line.strip_prefix("- ") {
             let content = content.trim();
+            let param_names: Vec<String> = cur_action
+                .as_ref()
+                .map(|(_, a)| a.params.iter().map(|p| p.name.clone()).collect())
+                .unwrap_or_default();
             match cur.0 {
                 Section::ActionUpdates => {
                     flush_update(&mut cur_update, &mut cur_action);
@@ -642,6 +659,14 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                         cur_update = Some(FieldUpdate {
                             field: v.to_string(),
                             value: ValueExpr::Literal(serde_json::Value::Null),
+                        });
+                    }
+                }
+                Section::ActionDeletes => {
+                    flush_delete(&mut cur_delete, &mut cur_action);
+                    if let Some(v) = list_item_value(content, "id") {
+                        cur_delete = Some(DeleteEffect {
+                            id: parse_value_expr(v, &param_names),
                         });
                     }
                 }
@@ -726,6 +751,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                             params: Vec::new(),
                             updates: Vec::new(),
                             creates: Vec::new(),
+                            deletes: Vec::new(),
                             policy: PolicyDef::default(),
                             planning: None,
                         },
@@ -735,6 +761,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
                 (Section::Action, "params") => section.push((Section::ActionParams, indent)),
                 (Section::Action, "updates") => section.push((Section::ActionUpdates, indent)),
                 (Section::Action, "creates") => section.push((Section::ActionCreates, indent)),
+                (Section::Action, "deletes") => section.push((Section::ActionDeletes, indent)),
                 (Section::Action, "policy") => section.push((Section::ActionPolicy, indent)),
                 (Section::Action, "planning") => {
                     planning_fields = [false; 3];
@@ -1503,6 +1530,7 @@ pub fn parse_odl(src: &str) -> Result<OntologyIR, OdlError> {
     flush_opportunity(&mut cur_opportunity, &mut opportunity_fields, &mut current)?;
     flush_update(&mut cur_update, &mut cur_action);
     flush_create(&mut cur_create, &mut cur_action);
+    flush_delete(&mut cur_delete, &mut cur_action);
     flush_clause(&mut cur_clause, &mut cur_action);
     flush_action(&mut cur_action, &mut current);
     if let Some(obj) = current.take() {
@@ -2530,6 +2558,13 @@ fn flush_update(u: &mut Option<FieldUpdate>, a: &mut Option<(u32, ActionDef)>) {
 fn flush_create(c: &mut Option<CreateEffect>, a: &mut Option<(u32, ActionDef)>) {
     if let (Some(cr), Some((_, act))) = (c.take(), a.as_mut()) {
         act.creates.push(cr);
+    }
+}
+
+/// 冲刷当前删除效应到动作。
+fn flush_delete(d: &mut Option<DeleteEffect>, a: &mut Option<(u32, ActionDef)>) {
+    if let (Some(delete), Some((_, act))) = (d.take(), a.as_mut()) {
+        act.deletes.push(delete);
     }
 }
 

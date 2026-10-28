@@ -541,7 +541,7 @@ fn action_admissible(
     Ok(true)
 }
 
-fn validate_action_params(
+pub(crate) fn validate_action_params(
     action: &ActionDef,
     params: Option<&Value>,
 ) -> Result<String, BusinessLoopError> {
@@ -575,7 +575,7 @@ fn validate_action_params(
     serde_json::to_string(&params).map_err(|error| BusinessLoopError::invalid(error.to_string()))
 }
 
-fn evaluate_value(
+pub(crate) fn evaluate_value(
     expression: &ValueExpr,
     subject: &str,
     subject_data: &Value,
@@ -923,7 +923,11 @@ fn condition_literal(expression: &ValueExpr) -> Result<&Value, BusinessLoopError
     }
 }
 
-fn compare_values(left: &Value, op: CompareOp, right: &Value) -> Result<bool, BusinessLoopError> {
+pub(crate) fn compare_values(
+    left: &Value,
+    op: CompareOp,
+    right: &Value,
+) -> Result<bool, BusinessLoopError> {
     let invalid = || BusinessLoopError::invalid(format!("机会条件不能比较 {left} 和 {right}"));
     let ordered = |ordering: Option<std::cmp::Ordering>| {
         ordering.ok_or_else(invalid).map(|ordering| match op {
@@ -4186,6 +4190,7 @@ mod tests {
                 value: ValueExpr::Literal(json!(0)),
             }],
             creates: Vec::new(),
+            deletes: Vec::new(),
             policy: PolicyDef::default(),
             planning: Some(crate::abi::ir::ActionPlanning {
                 cost: 0.0,
@@ -4413,6 +4418,7 @@ mod tests {
     #[test]
     fn shared_resource_window_excludes_expired_outcomes() {
         let record = |days_ago: i64| crate::storage::ObjectRecord {
+            project_id: None,
             id: format!("outcome:{days_ago}"),
             r#type: "Outcome".into(),
             data: json!({

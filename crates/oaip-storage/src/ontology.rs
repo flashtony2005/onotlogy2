@@ -257,7 +257,7 @@ async fn objects_tx(
     let mut rows = match project_id {
         Some(project_id) => {
             tx.query(
-                "SELECT id, type, data, version FROM wb_ontology_object \
+                "SELECT id, type, data, version, project_id FROM wb_ontology_object \
                  WHERE is_delete=0 AND project_id=?1 ORDER BY id",
                 params![project_id],
             )
@@ -265,7 +265,7 @@ async fn objects_tx(
         }
         None => {
             tx.query(
-                "SELECT id, type, data, version FROM wb_ontology_object \
+                "SELECT id, type, data, version, project_id FROM wb_ontology_object \
                  WHERE is_delete=0 ORDER BY id",
                 params![],
             )
@@ -347,7 +347,7 @@ async fn relations_tx(
     let mut rows = match project_id {
         Some(project_id) => {
             tx.query(
-                "SELECT id, relation, source, target, data FROM wb_relation_edge \
+                "SELECT id, relation, source, target, data, project_id FROM wb_relation_edge \
                  WHERE is_delete=0 AND project_id=?1 ORDER BY id",
                 params![project_id],
             )
@@ -355,7 +355,7 @@ async fn relations_tx(
         }
         None => {
             tx.query(
-                "SELECT id, relation, source, target, data FROM wb_relation_edge \
+                "SELECT id, relation, source, target, data, project_id FROM wb_relation_edge \
                  WHERE is_delete=0 ORDER BY id",
                 params![],
             )

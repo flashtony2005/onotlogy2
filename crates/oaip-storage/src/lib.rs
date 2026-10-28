@@ -162,6 +162,9 @@ pub(crate) fn io_fault_if_requested(point: &str) -> Result<(), StorageError> {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ObjectRecord {
     pub id: String,
+    /// Project provenance; `None` denotes a shared/global object.
+    #[serde(default)]
+    pub project_id: Option<String>,
     pub r#type: String,
     pub data: Value,
     pub version: i64,
@@ -171,6 +174,9 @@ pub struct ObjectRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RelationRecord {
     pub id: String,
+    /// Project provenance; `None` denotes a shared/global relation.
+    #[serde(default)]
+    pub project_id: Option<String>,
     pub source: String,
     pub relation: String,
     pub target: String,
@@ -504,6 +510,7 @@ fn row_to_object(row: &libsql::Row) -> Result<ObjectRecord, StorageError> {
     let data: String = row.get(2)?;
     Ok(ObjectRecord {
         id: row.get(0)?,
+        project_id: row.get(4)?,
         r#type: row.get(1)?,
         data: serde_json::from_str(&data)?,
         version: row.get(3)?,
@@ -514,6 +521,7 @@ fn row_to_relation(row: &libsql::Row) -> Result<RelationRecord, StorageError> {
     let data: Option<String> = row.get(4)?;
     Ok(RelationRecord {
         id: row.get(0)?,
+        project_id: row.get(5)?,
         relation: row.get(1)?,
         source: row.get(2)?,
         target: row.get(3)?,

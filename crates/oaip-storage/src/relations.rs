@@ -37,7 +37,7 @@ impl LibSQLStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, relation, source, target, data FROM wb_relation_edge WHERE project_id=?1 AND is_delete=0 ORDER BY id",
+                "SELECT id, relation, source, target, data, project_id FROM wb_relation_edge WHERE project_id=?1 AND is_delete=0 ORDER BY id",
                 params![project_id],
             )
             .await?;
@@ -113,6 +113,7 @@ impl RelationEngine for LibSQLStorage {
         tx.commit().await?;
         Ok(RelationRecord {
             id,
+            project_id: None,
             source: source_id.to_string(),
             relation: edge_type.to_string(),
             target: target_id.to_string(),
@@ -124,7 +125,7 @@ impl RelationEngine for LibSQLStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, relation, source, target, data FROM wb_relation_edge WHERE source=?1 AND is_delete=0",
+                "SELECT id, relation, source, target, data, project_id FROM wb_relation_edge WHERE source=?1 AND is_delete=0",
                 params![source_id],
             )
             .await?;
@@ -139,7 +140,7 @@ impl RelationEngine for LibSQLStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, relation, source, target, data FROM wb_relation_edge WHERE relation=?1 AND is_delete=0",
+                "SELECT id, relation, source, target, data, project_id FROM wb_relation_edge WHERE relation=?1 AND is_delete=0",
                 params![edge_type],
             )
             .await?;
@@ -174,7 +175,7 @@ impl LibSQLStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, source, relation, target FROM wb_relation_edge WHERE is_delete=0 ORDER BY id ASC",
+                "SELECT id, source, relation, target, NULL, NULL FROM wb_relation_edge WHERE is_delete=0 ORDER BY id ASC",
                 params![],
             )
             .await?;
@@ -182,6 +183,7 @@ impl LibSQLStorage {
         while let Some(row) = rows.next().await? {
             out.push(RelationRecord {
                 id: row.get(0)?,
+                project_id: None,
                 source: row.get(1)?,
                 relation: row.get(2)?,
                 target: row.get(3)?,

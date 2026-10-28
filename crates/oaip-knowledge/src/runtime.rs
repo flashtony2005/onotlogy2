@@ -1465,6 +1465,7 @@ mod tests {
                             result_benefit_field: None,
                             result_benefit_factor: None,
                         }],
+                        deletes: Vec::new(),
                         policy: Default::default(),
                         planning: None,
                     }]

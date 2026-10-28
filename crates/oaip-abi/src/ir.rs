@@ -220,6 +220,12 @@ pub struct FieldUpdate {
     pub value: ValueExpr,
 }
 
+/// 删除效应：删除由表达式解析出的对象及其关系边（对应 `deletes:`）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeleteEffect {
+    pub id: ValueExpr,
+}
+
 /// 创建效应：新建一个对象，可选地经 `link_edge` 与目标对象连边（对应 `creates:`）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CreateEffect {
@@ -344,6 +350,8 @@ pub struct ActionDef {
     pub updates: Vec<FieldUpdate>,
     #[serde(default)]
     pub creates: Vec<CreateEffect>,
+    #[serde(default)]
+    pub deletes: Vec<DeleteEffect>,
     /// 动作的 Policy 约束（审批 / 前置条件）；ODL 未声明时为空（无约束，默认允许）。
     #[serde(default)]
     pub policy: PolicyDef,

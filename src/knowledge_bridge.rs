@@ -220,6 +220,7 @@ mod tests {
     fn world_object_becomes_class_and_scalar_data_assertions() {
         let schema = runtime_ir_to_knowledge(&ir());
         let record = ObjectRecord {
+            project_id: None,
             id: "customer-1".into(),
             r#type: "Customer".into(),
             data: json!({
@@ -253,18 +254,21 @@ mod tests {
     fn relation_edges_become_object_property_assertions() {
         let schema = runtime_ir_to_knowledge(&ir());
         let customer = ObjectRecord {
+            project_id: None,
             id: "c1".into(),
             r#type: "Customer".into(),
             data: json!({"name": "Grace"}),
             version: 1,
         };
         let order = ObjectRecord {
+            project_id: None,
             id: "o1".into(),
             r#type: "Order".into(),
             data: serde_json::Map::new().into(),
             version: 1,
         };
         let edge = RelationRecord {
+            project_id: None,
             id: "r1".into(),
             source: "c1".into(),
             relation: "placed".into(),
@@ -285,6 +289,7 @@ mod tests {
     fn nonscalar_runtime_data_is_rejected_fail_closed() {
         let schema = runtime_ir_to_knowledge(&ir());
         let record = ObjectRecord {
+            project_id: None,
             id: "bad".into(),
             r#type: "Customer".into(),
             data: json!({"tags": ["vip"]}),

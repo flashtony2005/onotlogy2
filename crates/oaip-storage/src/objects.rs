@@ -13,7 +13,7 @@ impl LibSQLStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, type, data, version FROM wb_ontology_object WHERE id=?1 AND is_delete=0 \
+                "SELECT id, type, data, version, project_id FROM wb_ontology_object WHERE id=?1 AND is_delete=0 \
                  AND ((project_id = ?2) OR (project_id IS NULL AND ?2 IS NULL))",
                 params![id, project_id],
             )
@@ -29,7 +29,7 @@ impl LibSQLStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, type, data, version FROM wb_ontology_object WHERE is_delete=0",
+                "SELECT id, type, data, version, project_id FROM wb_ontology_object WHERE is_delete=0",
                 params![],
             )
             .await?;
@@ -50,7 +50,7 @@ impl LibSQLStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, type, data, version FROM wb_ontology_object WHERE project_id=?1 AND type=?2 AND is_delete=0 ORDER BY id",
+                "SELECT id, type, data, version, project_id FROM wb_ontology_object WHERE project_id=?1 AND type=?2 AND is_delete=0 ORDER BY id",
                 params![project_id, object_type],
             )
             .await?;
@@ -69,7 +69,7 @@ impl LibSQLStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, type, data, version FROM wb_ontology_object WHERE project_id=?1 AND is_delete=0 ORDER BY id",
+                "SELECT id, type, data, version, project_id FROM wb_ontology_object WHERE project_id=?1 AND is_delete=0 ORDER BY id",
                 params![project_id],
             )
             .await?;
@@ -86,7 +86,7 @@ impl LibSQLStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, relation, source, target, data FROM wb_relation_edge WHERE is_delete=0",
+                "SELECT id, relation, source, target, data, project_id FROM wb_relation_edge WHERE is_delete=0",
                 params![],
             )
             .await?;
@@ -132,6 +132,7 @@ impl ObjectEngine for LibSQLStorage {
             .await?;
         Ok(ObjectRecord {
             id: id.to_string(),
+            project_id: None,
             r#type: object_type.to_string(),
             data,
             version: 1,
@@ -142,7 +143,7 @@ impl ObjectEngine for LibSQLStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, type, data, version FROM wb_ontology_object WHERE id=?1 AND is_delete=0",
+                "SELECT id, type, data, version, project_id FROM wb_ontology_object WHERE id=?1 AND is_delete=0",
                 params![id],
             )
             .await?;
@@ -196,7 +197,7 @@ impl ObjectEngine for LibSQLStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, type, data, version FROM wb_ontology_object WHERE id=?1 AND is_delete=0",
+                "SELECT id, type, data, version, project_id FROM wb_ontology_object WHERE id=?1 AND is_delete=0",
                 params![id],
             )
             .await?;
@@ -211,7 +212,7 @@ impl ObjectEngine for LibSQLStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, type, data, version FROM wb_ontology_object WHERE type=?1 AND is_delete=0 LIMIT 1000",
+                "SELECT id, type, data, version, project_id FROM wb_ontology_object WHERE type=?1 AND is_delete=0 LIMIT 1000",
                 params![object_type],
             )
             .await?;
