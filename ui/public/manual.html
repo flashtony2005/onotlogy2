@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>出海网站业务分析与本体论建模操作手册 · AuraGlobal 实践指南</title>
+  <style>
+    :root {
+      --primary: #0f766e;
+      --primary-dark: #115e59;
+      --primary-light: #f0fdf4;
+      --accent: #d97706;
+      --text: #1e293b;
+      --text-muted: #64748b;
+      --bg: #f8fafc;
+      --card-bg: #ffffff;
+      --border: #e2e8f0;
+      --code-bg: #1e293b;
+      --code-text: #f1f5f9;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      padding: 40px 20px;
+    }
+
+    .container {
+      max-width: 1080px;
+      margin: 0 auto;
+      background: var(--card-bg);
+      padding: 50px 60px;
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
+      border: 1px solid var(--border);
+    }
+
+    /* 封面与页头 */
+    .header {
+      border-bottom: 2px solid #e2e8f0;
+      padding-bottom: 30px;
+      margin-bottom: 40px;
+    }
+
+    .badge {
+      display: inline-block;
+      background: #e6fffa;
+      color: var(--primary);
+      font-weight: 700;
+      font-size: 13px;
+      padding: 4px 14px;
+      border-radius: 20px;
+      border: 1px solid #b2f5ea;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    h1 {
+      font-size: 32px;
+      color: #0f172a;
+      line-height: 1.3;
+      margin-bottom: 12px;
+      letter-spacing: -0.5px;
+    }
+
+    .subtitle {
+      font-size: 17px;
+      color: var(--text-muted);
+      margin-bottom: 20px;
+    }
+
+    .meta-bar {
+      display: flex;
+      gap: 20px;
+      font-size: 13px;
+      color: #64748b;
+      background: #f1f5f9;
+      padding: 10px 18px;
+      border-radius: 8px;
+    }
+
+    /* 章节与正文 */
+    h2 {
+      font-size: 23px;
+      color: #0f172a;
+      margin: 45px 0 18px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #edf2f7;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    h3 {
+      font-size: 17px;
+      color: #1e293b;
+      margin: 26px 0 12px;
+    }
+
+    p {
+      margin-bottom: 16px;
+      color: #334155;
+      font-size: 15px;
+    }
+
+    ul, ol {
+      margin-bottom: 20px;
+      padding-left: 24px;
+      color: #334155;
+      font-size: 15px;
+    }
+
+    li {
+      margin-bottom: 8px;
+    }
+
+    strong {
+      color: #0f172a;
+    }
+
+    /* 重点提示框 */
+    .callout {
+      background: #f0fdf4;
+      border-left: 4px solid var(--primary);
+      padding: 16px 20px;
+      border-radius: 0 8px 8px 0;
+      margin: 24px 0;
+      font-size: 14.5px;
+    }
+
+    .callout.warning {
+      background: #fffbeb;
+      border-left-color: var(--accent);
+    }
+
+    .callout-title {
+      font-weight: 700;
+      color: #0f172a;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* 代码与公式 */
+    pre, code {
+      font-family: var(--font-mono);
+    }
+
+    code {
+      background: #f1f5f9;
+      color: #0f766e;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 13.5px;
+    }
+
+    pre {
+      background: var(--code-bg);
+      color: var(--code-text);
+      padding: 18px 22px;
+      border-radius: 10px;
+      overflow-x: auto;
+      font-size: 13px;
+      line-height: 1.6;
+      margin: 18px 0;
+    }
+
+    /* 图表容器 */
+    .diagram-container {
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 24px;
+      margin: 28px 0;
+      text-align: center;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+    }
+
+    .diagram-caption {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 12px;
+      font-weight: 500;
+    }
+
+    svg {
+      max-width: 100%;
+      height: auto;
+    }
+
+    /* 数据对比表格 */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 20px 0;
+      font-size: 14px;
+    }
+
+    th, td {
+      border: 1px solid #e2e8f0;
+      padding: 12px 16px;
+      text-align: left;
+    }
+
+    th {
+      background: #f8fafc;
+      color: #334155;
+      font-weight: 600;
+    }
+
+    tr:nth-child(even) {
+      background: #fafafa;
+    }
+
+    /* 实操步骤卡片 */
+    .step-card {
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      padding: 20px 24px;
+      margin: 18px 0;
+    }
+
+    .step-num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      background: var(--primary);
+      color: #ffffff;
+      border-radius: 50%;
+      font-size: 13px;
+      font-weight: 700;
+      margin-right: 8px;
+    }
+
+    .step-header {
+      font-size: 16px;
+      font-weight: 700;
+      color: #0f172a;
+      display: flex;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <!-- 封面 Header -->
+  <div class="header">
+    <div class="badge">AuraGlobal · Cross-Border DTC Best Practice</div>
+    <h1>出海网站业务分析与本体论建模操作手册</h1>
+    <div class="subtitle">以全球 DTC 智能硬件出海独立站为例：从现实业务痛点到本体公理证明与协同复现</div>
+    <div class="meta-bar">
+      <span><strong>业务标杆：</strong>AuraGlobal (极光出海 · 智能充储硬件 DTC)</span>
+      <span><strong>核心方法：</strong>Palantir 形式化本体四位一体建模 (Object · Link · Action · Invariant)</span>
+      <span><strong>运行环境：</strong>OpenAIP-OS 智能协同平台</span>
+    </div>
+  </div>
+
+  <!-- 目录概览 -->
+  <div class="callout">
+    <div class="callout-title">📖 本手册解决的核心痛点</div>
+    <p>出海电商涉及全球多站点销售、跨国干线海空运、多海外仓库存周转、动态汇率及欧盟关税 VAT 合规。传统系统将业务动作降级为冷冰冰的代码 RPC 调拨（如 <code>erp.stock.transfer</code>），<strong>决策层无法理解风险与损益</strong>。本手册详述如何利用<strong>本体论（Ontology）</strong>，将现实出海世界形式化抽象，并在系统中实现 100% 可解释、带形式证明的人机协作。</p>
+  </div>
+
+  <!-- 第一章：出海网站业务背景与痛点 -->
+  <h2>一、出海网站现实业务分析：AuraGlobal 案例</h2>
+  <p><strong>AuraGlobal（极光智能出海）</strong>是一家总部位于中国深圳、面向欧美日市场的智能硬件跨境 DTC 品牌，主营 65W 氮化镓疾充头与 1000Wh 户外储能移动电源。其业务拓扑横跨：</p>
+  <ul>
+    <li><strong>前端渠道：</strong>Shopify 全球品牌独立站（US/DE/JP 站）+ Amazon/TikTok 全球闭环店。</li>
+    <li><strong>全球仓网：</strong>中国前置集货仓（深圳盐田）➔ 国际干线（美森快船/以星快船/中欧空运）➔ 区域海外仓（美西长滩 FBA-ONT8 仓、美东新泽西仓、欧洲汉堡保税仓）。</li>
+    <li><strong>核心业务痛点：</strong>
+      <ol>
+        <li><strong>断货 vs 滞销困境：</strong>黑五/网一大促爆发时，美西爆款由于海运延误即将断货；一旦缺货超过 48 小时，Google Ads / Amazon Listing 权重断崖暴跌，带来数十万美元损失；但若无节制空运，又会吞噬全部利润。</li>
+        <li><strong>跨境财税复杂性：</strong>欧洲新规下需代扣代缴 19% 德国 VAT；欧元兑美元汇率剧烈波动，稍有不慎单品毛利率就会跌破止损红线。</li>
+      </ol>
+    </li>
+  </ul>
+
+  <!-- 矢量图 1：出海全链路业务全景架构图 -->
+  <div class="diagram-container">
+    <svg viewBox="0 0 920 320" width="100%" height="320" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#f8fafc"/>
+          <stop offset="1%" stop-color="#edf2f7"/>
+        </linearGradient>
+        <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1 L 10 5 L 0 9 z" fill="#0f766e" />
+        </marker>
+      </defs>
+      <rect width="920" height="320" rx="10" fill="url(#bgGrad)" stroke="#cbd5e1"/>
+      
+      <!-- 中国供应链端 -->
+      <rect x="40" y="40" width="180" height="240" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-dasharray="4"/>
+      <text x="130" y="70" text-anchor="middle" font-weight="700" fill="#0f172a" font-size="14">🇨🇳 境内产研与集货</text>
+      <rect x="55" y="90" width="150" height="50" rx="6" fill="#f0fdf4" stroke="#86efac"/>
+      <text x="130" y="115" text-anchor="middle" font-size="12" font-weight="600" fill="#166534">爆款研发 SKU 库</text>
+      <text x="130" y="130" text-anchor="middle" font-size="10" fill="#15803d">GaN65W / Solar1000</text>
+      <rect x="55" y="160" width="150" height="50" rx="6" fill="#f0fdf4" stroke="#86efac"/>
+      <text x="130" y="185" text-anchor="middle" font-size="12" font-weight="600" fill="#166534">深圳盐田前置集运仓</text>
+      <text x="130" y="200" text-anchor="middle" font-size="10" fill="#15803d">头程合包 / 出口清关</text>
+
+      <!-- 国际物流干线 -->
+      <path d="M 220 185 L 340 185" stroke="#0f766e" stroke-width="2.5" marker-end="url(#arrow)" stroke-dasharray="5 3"/>
+      <text x="280" y="175" text-anchor="middle" font-size="11" fill="#0f766e" font-weight="600">国际海运/空运干线</text>
+
+      <!-- 国际多海外仓枢纽 -->
+      <rect x="350" y="40" width="240" height="240" rx="8" fill="#ffffff" stroke="#0f766e" stroke-width="1.5"/>
+      <text x="470" y="70" text-anchor="middle" font-weight="700" fill="#0f766e" font-size="14">🌐 区域海外仓网枢纽</text>
+      <rect x="365" y="90" width="210" height="50" rx="6" fill="#ecfeff" stroke="#a5f3fc"/>
+      <text x="470" y="115" text-anchor="middle" font-size="12" font-weight="600" fill="#0e7490">美西长滩 FBA 仓 (ONT8)</text>
+      <text x="470" y="130" text-anchor="middle" font-size="10" fill="#0891b2">当前库存: 320件 (高危断货预警)</text>
+      <rect x="365" y="150" width="210" height="50" rx="6" fill="#f8fafc" stroke="#cbd5e1"/>
+      <text x="470" y="175" text-anchor="middle" font-size="12" font-weight="600" fill="#475569">美东新泽西海外仓</text>
+      <text x="470" y="190" text-anchor="middle" font-size="10" fill="#64748b">当前库存: 4,800件 (周转低迷)</text>
+      <rect x="365" y="210" width="210" height="50" rx="6" fill="#f8fafc" stroke="#cbd5e1"/>
+      <text x="470" y="235" text-anchor="middle" font-size="12" font-weight="600" fill="#475569">欧洲德国汉堡保税仓</text>
+      <text x="470" y="250" text-anchor="middle" font-size="10" fill="#64748b">欧盟 VAT 代扣税率: 19%</text>
+
+      <!-- 跨国干线/销售终端 -->
+      <path d="M 590 115 L 690 115" stroke="#0f766e" stroke-width="2" marker-end="url(#arrow)"/>
+      <path d="M 590 235 L 690 235" stroke="#0f766e" stroke-width="2" marker-end="url(#arrow)"/>
+
+      <!-- 全球独立站与买家端 -->
+      <rect x="700" y="40" width="180" height="240" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-dasharray="4"/>
+      <text x="790" y="70" text-anchor="middle" font-weight="700" fill="#0f172a" font-size="14">🛒 全球销售与买家端</text>
+      <rect x="715" y="90" width="150" height="60" rx="6" fill="#fffbeb" stroke="#fde68a"/>
+      <text x="790" y="115" text-anchor="middle" font-size="12" font-weight="600" fill="#b45309">Shopify 北美站 (US)</text>
+      <text x="790" y="135" text-anchor="middle" font-size="10" fill="#92400e">黑五大促中 · 准时履约率 86%</text>
+      <rect x="715" y="170" width="150" height="60" rx="6" fill="#fffbeb" stroke="#fde68a"/>
+      <text x="790" y="195" text-anchor="middle" font-size="12" font-weight="600" fill="#b45309">Shopify 欧洲站 (DE)</text>
+      <text x="790" y="215" text-anchor="middle" font-size="10" fill="#92400e">绿电季促销 · 动态汇率对冲</text>
+    </svg>
+    <div class="diagram-caption">图 1：AuraGlobal 出海全链路业务流：从产研集货、干线中转、多海外仓到全球买家</div>
+  </div>
+
+  <!-- 第二章：本体论四位一体核心建模 -->
+  <h2>二、本体论（Ontology）形式化建模全景</h2>
+  <p>在本体论哲学中，业务系统不是由数据表和代码函数构成的，而是由<strong>实体（Object）、因果关联（Link）、状态变迁（Action）与守恒红线（Invariant）</strong>构建的形式化公理世界：</p>
+  
+  $$\mathcal{O}_{\text{CrossBorder}} = \langle \mathcal{E}, \mathcal{R}, \mathcal{A}, \mathcal{I} \rangle$$
+
+  <h3>1. 实体集（Objects $\mathcal{E}$）定义</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>实体类型 (Object Type)</th>
+        <th>实体唯一标示 (URI)</th>
+        <th>核心属性 (Attributes)</th>
+        <th>现实业务含义</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Market</strong> (全球目标站点)</td>
+        <td><code>market:US_NorthAmerica</code><br><code>market:EU_Germany</code></td>
+        <td>currency: USD/EUR<br>dailySalesRate: 450 pcs/day<br>vatRate: 0% / 19%</td>
+        <td>出海业务的区域市场终端与财税法域。</td>
+      </tr>
+      <tr>
+        <td><strong>OverseasWarehouse</strong> (海外仓网)</td>
+        <td><code>wh:Warehouse_US_West</code><br><code>wh:Warehouse_US_East</code><br><code>wh:Warehouse_EU_Hamburg</code></td>
+        <td>country: US/DE<br>currentStock: 320 pcs<br>safetyStockFloor: 1200 pcs<br>holdCostPerDay: $0.15/pc</td>
+        <td>本地化履约中心，决定最后一公里物流时效与断货风险。</td>
+      </tr>
+      <tr>
+        <td><strong>SKU</strong> (出海商品物料)</td>
+        <td><code>sku:AuraPro_GaN65W</code><br><code>sku:AuraPower_Solar1000</code></td>
+        <td>retailPrice: $69.99<br>cogs: $18.50<br>airFreightPerKg: $4.80</td>
+        <td>品牌在海外销售的核心载体，承载成本结构与毛利模型。</td>
+      </tr>
+      <tr>
+        <td><strong>RiskAlert</strong> (跨境风险预警)</td>
+        <td><code>alert:Stockout_BlackFriday_US</code><br><code>alert:VAT_Fluctuation_DE</code></td>
+        <td>riskLevel: Critical<br>projectedStockoutHours: 36h<br>listingPenaltyCost: $142,000</td>
+        <td>系统监测到的偏离稳态事件，推动智能体干预。</td>
+      </tr>
+      <tr>
+        <td><strong>Policy</strong> (合规治理红线)</td>
+        <td><code>policy:air_freight_roi_rule</code><br><code>policy:vat_margin_floor_rule</code></td>
+        <td>maxAutoBudget: $10,000<br>minGrossMarginFloor: 18%</td>
+        <td>系统无论如何不可突破的不变式与财务底线。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- 矢量图 2：实体关系拓扑网络图 -->
+  <div class="diagram-container">
+    <svg viewBox="0 0 880 340" width="100%" height="340" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrow2" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1 L 10 5 L 0 9 z" fill="#0f766e" />
+        </marker>
+      </defs>
+      <rect width="880" height="340" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+      
+      <!-- 节点 1: SKU -->
+      <g transform="translate(100, 150)">
+        <circle r="45" fill="#f0fdf4" stroke="#059669" stroke-width="2.5"/>
+        <text y="-5" text-anchor="middle" font-weight="700" fill="#065f46" font-size="12">SKU:GaN65W</text>
+        <text y="14" text-anchor="middle" fill="#047857" font-size="10">爆款充储物料</text>
+      </g>
+
+      <!-- 节点 2: 站点 Market -->
+      <g transform="translate(100, 40)">
+        <rect x="-60" y="-25" width="120" height="50" rx="6" fill="#fffbeb" stroke="#d97706" stroke-width="2"/>
+        <text y="-2" text-anchor="middle" font-weight="700" fill="#92400e" font-size="12">Market:US</text>
+        <text y="14" text-anchor="middle" fill="#b45309" font-size="10">北美核心站点</text>
+      </g>
+
+      <!-- 节点 3: 美西海外仓 -->
+      <g transform="translate(360, 150)">
+        <rect x="-70" y="-30" width="140" height="60" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+        <text y="-5" text-anchor="middle" font-weight="700" fill="#1e40af" font-size="12">wh:Warehouse_West</text>
+        <text y="14" text-anchor="middle" fill="#3b82f6" font-size="10">长滩仓 (库存仅剩320)</text>
+      </g>
+
+      <!-- 节点 4: 断货预警 -->
+      <g transform="translate(600, 60)">
+        <circle r="40" fill="#fef2f2" stroke="#dc2626" stroke-width="2"/>
+        <text y="-4" text-anchor="middle" font-weight="700" fill="#991b1b" font-size="11">alert:Stockout</text>
+        <text y="14" text-anchor="middle" fill="#b91c1c" font-size="9">黑五断货预警</text>
+      </g>
+
+      <!-- 节点 5: 治理规则 Policy -->
+      <g transform="translate(620, 260)">
+        <rect x="-75" y="-25" width="150" height="50" rx="6" fill="#fdf2f8" stroke="#db2777" stroke-width="2"/>
+        <text y="-2" text-anchor="middle" font-weight="700" fill="#9d174d" font-size="11">policy:AirFreightROI</text>
+        <text y="14" text-anchor="middle" fill="#be185d" font-size="9">紧急空运预算红线</text>
+      </g>
+
+      <!-- 节点 6: 美东仓 -->
+      <g transform="translate(360, 290)">
+        <rect x="-70" y="-25" width="140" height="50" rx="6" fill="#f8fafc" stroke="#64748b" stroke-width="1.5"/>
+        <text y="-2" text-anchor="middle" font-weight="700" fill="#334155" font-size="11">wh:Warehouse_East</text>
+        <text y="14" text-anchor="middle" fill="#64748b" font-size="9">美东备用仓 (库存4800)</text>
+      </g>
+
+      <!-- 连线关系 -->
+      <line x1="100" y1="105" x2="100" y2="65" stroke="#0f766e" stroke-width="2" marker-end="url(#arrow2)"/>
+      <text x="110" y="88" font-size="11" fill="#0f766e" font-weight="600">sells_in</text>
+
+      <line x1="145" y1="150" x2="290" y2="150" stroke="#0f766e" stroke-width="2" marker-end="url(#arrow2)"/>
+      <text x="210" y="140" font-size="11" fill="#0f766e" font-weight="600">stocked_at</text>
+
+      <line x1="430" y1="130" x2="565" y2="80" stroke="#dc2626" stroke-width="2" stroke-dasharray="4" marker-end="url(#arrow2)"/>
+      <text x="510" y="98" font-size="11" fill="#dc2626" font-weight="600">has_risk</text>
+
+      <line x1="600" y1="100" x2="620" y2="235" stroke="#9d174d" stroke-width="2" marker-end="url(#arrow2)"/>
+      <text x="615" y="165" font-size="11" fill="#9d174d" font-weight="600">governed_by</text>
+
+      <path d="M 360 265 L 360 180" stroke="#0f766e" stroke-width="2.5" marker-end="url(#arrow2)"/>
+      <text x="375" y="225" font-size="11" fill="#0f766e" font-weight="600">transfer_to</text>
+    </svg>
+    <div class="diagram-caption">图 2：AuraGlobal 出海本体语义因果图谱（实体与因果关联 Link 拓扑）</div>
+  </div>
+
+  <!-- 第三章：业务动作与形式化证明 -->
+  <h2>三、业务动作（Action）与形式化证明（Invariant Proof）</h2>
+  <p>在经典 Palantir / 本体论模型中，任何 Action 必须包含<strong>作用实体、前置条件（Pre-condition）、状态变迁（$\Delta$）与守恒红线证明（Invariant Proof）</strong>，杜绝“没人看得懂”的工程调用。</p>
+
+  <!-- 矢量图 3：形式化证明看板 -->
+  <div class="diagram-container">
+    <svg viewBox="0 0 880 260" width="100%" height="260" xmlns="http://www.w3.org/2000/svg">
+      <rect width="880" height="260" rx="8" fill="#1e293b"/>
+      <text x="30" y="38" fill="#38bdf8" font-family="monospace" font-size="14" font-weight="700">FORMAL INVARIANT PROOF (形式化合规与投资回报证明)</text>
+      
+      <rect x="30" y="55" width="820" height="180" rx="6" fill="#0f172a" stroke="#334155"/>
+      
+      <text x="50" y="85" fill="#f59e0b" font-family="monospace" font-size="13">1. 触发动作 (Triggered Action):</text>
+      <text x="290" y="85" fill="#ffffff" font-family="monospace" font-size="13">AirFreightTransfer(SKU=AuraPro_GaN65W, Qty=2500, From=East, To=West)</text>
+
+      <text x="50" y="115" fill="#f59e0b" font-family="monospace" font-size="13">2. 形式化不变式 (Invariant):</text>
+      <text x="290" y="115" fill="#34d399" font-family="monospace" font-size="13">Cost_AirFreight ($12,500) &lt; Loss_Stockout ($142,000) × P_Conv (0.88)</text>
+
+      <text x="50" y="145" fill="#f59e0b" font-family="monospace" font-size="13">3. 预算红线判定 (Policy Cap):</text>
+      <text x="290" y="145" fill="#f87171" font-family="monospace" font-size="13">Applied_Cost ($12,500) &gt; Auto_Approval_Cap ($10,000) → [BREACH +25%]</text>
+
+      <text x="50" y="175" fill="#f59e0b" font-family="monospace" font-size="13">4. 形式证明结论 (Proof Result):</text>
+      <text x="290" y="175" fill="#e2e8f0" font-family="monospace" font-size="13">数学证明收益显著为正 (净保全毛利 $112,460), 但触碰单笔预算红线;</text>
+
+      <text x="50" y="205" fill="#f59e0b" font-family="monospace" font-size="13">5. 裁决要求 (Review Mandate):</text>
+      <text x="290" y="205" fill="#cbd5e1" font-family="monospace" font-size="13">系统自动冻结并挂起 #appr-aura-001，强制要求出海供应链总监签署豁免。</text>
+    </svg>
+    <div class="diagram-caption">图 3：跨仓紧急空运动作的形式化证明推导与审批触发机制</div>
+  </div>
+
+  <!-- 第四章：人机协同与闭环操作流程 -->
+  <h2>四、人机协作流程（Human-in-the-Loop）</h2>
+  <p>当系统监控到本体状态异常时，由出海智能体自治生成方案，如果方案安全则自动化执行；一旦触碰财务或风控红线，则生成<strong>业务操作凭据（Approval Manifest）</strong>，交由业务操盘手裁决：</p>
+
+  <!-- 矢量图 4：协同闭环状态流转 -->
+  <div class="diagram-container">
+    <svg viewBox="0 0 880 200" width="100%" height="200" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrow3" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1 L 10 5 L 0 9 z" fill="#0f766e" />
+        </marker>
+      </defs>
+      <rect width="880" height="200" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+      
+      <!-- Step 1 -->
+      <rect x="30" y="60" width="160" height="80" rx="8" fill="#ffffff" stroke="#0f766e" stroke-width="1.5"/>
+      <text x="110" y="90" text-anchor="middle" font-weight="700" fill="#0f766e" font-size="13">1. 状态监测</text>
+      <text x="110" y="110" text-anchor="middle" font-size="11" fill="#64748b">美西海外仓跌破</text>
+      <text x="110" y="125" text-anchor="middle" font-size="11" fill="#64748b">安全库存水位线</text>
+
+      <path d="M 190 100 L 250 100" stroke="#0f766e" stroke-width="2" marker-end="url(#arrow3)"/>
+
+      <!-- Step 2 -->
+      <rect x="250" y="60" width="160" height="80" rx="8" fill="#ffffff" stroke="#0f766e" stroke-width="1.5"/>
+      <text x="330" y="90" text-anchor="middle" font-weight="700" fill="#0f766e" font-size="13">2. 智能体推演</text>
+      <text x="330" y="110" text-anchor="middle" font-size="11" fill="#64748b">全局供应链智能体</text>
+      <text x="330" y="125" text-anchor="middle" font-size="11" fill="#64748b">形式化证明调拨ROI</text>
+
+      <path d="M 410 100 L 470 100" stroke="#0f766e" stroke-width="2" marker-end="url(#arrow3)"/>
+
+      <!-- Step 3 -->
+      <rect x="470" y="60" width="160" height="80" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="2"/>
+      <text x="550" y="90" text-anchor="middle" font-weight="700" fill="#b45309" font-size="13">3. 预算门禁挂起</text>
+      <text x="550" y="110" text-anchor="middle" font-size="11" fill="#92400e">申请费用 $12,500</text>
+      <text x="550" y="125" text-anchor="middle" font-size="11" fill="#92400e">超出自动授权限额</text>
+
+      <path d="M 630 100 L 690 100" stroke="#0f766e" stroke-width="2" marker-end="url(#arrow3)"/>
+
+      <!-- Step 4 -->
+      <rect x="690" y="60" width="160" height="80" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+      <text x="770" y="90" text-anchor="middle" font-weight="700" fill="#15803d" font-size="13">4. 业务总监签署</text>
+      <text x="770" y="110" text-anchor="middle" font-size="11" fill="#166534">人话参数审阅放行</text>
+      <text x="770" y="125" text-anchor="middle" font-size="11" fill="#166534">本体图谱原子生效</text>
+    </svg>
+    <div class="diagram-caption">图 4：AuraGlobal 出海业务闭环：从事件监测、形式推演、红线裁决到状态跃迁</div>
+  </div>
+
+  <!-- 第五章：在项目中复现操作过程与结果 -->
+  <h2>五、在本项目中复现操作过程与结果（实操指引）</h2>
+  <p>用户可在当前系统中即时演练并复现上述 AuraGlobal 出海业务的完整流程：</p>
+
+  <div class="step-card">
+    <div class="step-header">
+      <span class="step-num">1</span> 查看业务大盘与核心出海指标 (Execution Space)
+    </div>
+    <p>点击顶部 <strong>「业务大盘 (Dashboard)」</strong>。您将看到已完全切换至出海独立站核心业务指标：</p>
+    <ul>
+      <li><strong>全渠道毛利率 (Gross Margin post-VAT):</strong> 当前 23.5% ➔ 目标 28.0%（已落后基线，处于警戒状态）</li>
+      <li><strong>北美/欧洲海外仓准时履约率 (OTD Rate):</strong> 当前 86.4% ➔ 目标 95.0%（受美西仓缺货影响）</li>
+      <li><strong>跨国海外仓周转天数 (DSI):</strong> 当前 42 天 ➔ 目标 28 天（美东仓库存滞销积压）</li>
+      <li><strong>黑五旺季断货风险率:</strong> 12.8%（高危级别，亟需跨仓应急调拨）</li>
+    </ul>
+  </div>
+
+  <div class="step-card">
+    <div class="step-header">
+      <span class="step-num">2</span> 审查待人工形式化裁决放行的审批凭据
+    </div>
+    <p>在大盘顶部首屏，查看系统自动挂起的两项关键出海操作凭据：</p>
+    <ul>
+      <li><strong>凭据 #appr-aura-001：</strong>【美西长滩海外仓跨仓空运紧急备货调拨】
+        <br>查看其<strong>形式化证明公式</strong>与<strong>参数白话对照表</strong>（从美东调拨 2500 件至美西，单件空运费 $5.00，对比预期保全 Listing 净毛利 $112,460）。
+      </li>
+      <li><strong>凭据 #appr-aura-002：</strong>【德国站 15% 绿电季 VAT 汇率对冲折扣申请】
+        <br>验证单品在扣除 19% 德国 VAT 及关税后，毛利率仍保持在 19.2%（高于 18% 底线）。
+      </li>
+    </ul>
+    <p>点击 <strong>「批准放行并应用本体变更」</strong>，瞬间完成形式化签名并录入审计轨！</p>
+  </div>
+
+  <div class="step-card">
+    <div class="step-header">
+      <span class="step-num">3</span> 漫游业务图谱验证因果网络 (World Space)
+    </div>
+    <p>切换至顶部 <strong>「业务图谱 (Graph)」</strong>，探索全网实体及其语义因果关系：</p>
+    <ul>
+      <li>观察 <code>sku:AuraPro_GaN65W</code> 如何通过 <code>stocked_at</code> 连接至美西仓与美东仓；</li>
+      <li>观察 <code>wh:Warehouse_US_West</code> 上的断货预警 <code>alert:Stockout_BlackFriday_US</code>；</li>
+      <li>查看治理规则 <code>policy:air_freight_roi_rule</code> 对全局调拨动作的红线约束。</li>
+    </ul>
+  </div>
+
+  <div class="step-card">
+    <div class="step-header">
+      <span class="step-num">4</span> 指挥出海智能体团队执行全局任务 (Fabric Space / Composer)
+    </div>
+    <p>在底栏输入框或点击快捷任务推荐：</p>
+    <ul>
+      <li>输入：<code>为近3天销量激增的美西长滩仓爆款 SKU 制定跨仓空运平衡方案</code></li>
+      <li>智能体 <code>global-supply-agent</code> 将实时流式输出推理过程（Goal ➔ Intent ➔ OntologyQuery ➔ Reasoning ➔ PolicyCheck ➔ Action），形成严密的闭环执行事实。</li>
+    </ul>
+  </div>
+
+  <div class="callout">
+    <div class="callout-title">✅ 形式化建模总结</div>
+    <p>通过本套本体论建模与实践，AuraGlobal 摆脱了传统 ERP 的技术黑盒暗语，将复杂的跨国供应链决策转化为<strong>业务可读、数学可证、合规可控</strong>的形式化本体凭据。业务决策人员与智能体紧密协作，在守护毛利底线的同时，确保了全球业务的高速增长。</p>
+  </div>
+</div>
+
+</body>
+</html>
