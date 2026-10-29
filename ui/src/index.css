@@ -2500,3 +2500,109 @@ input, select, textarea {
   color: var(--text-muted);
   margin-top: 16px;
 }
+
+/* ── 出海业务本体论操作手册模态视窗 ── */
+.zen-manual-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  color: #166534;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.zen-manual-btn:hover {
+  background: #dcfce7;
+  border-color: #86efac;
+  transform: translateY(-1px);
+}
+
+.manual-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.65);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.manual-modal-card {
+  width: 95%;
+  max-width: 1160px;
+  height: 90vh;
+  background: #ffffff;
+  border-radius: 14px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #cbd5e1;
+}
+
+.manual-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 20px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.manual-modal-body {
+  flex: 1;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.manual-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+.btn-manual-external {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #0f766e;
+  text-decoration: none;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+
+.btn-manual-external:hover {
+  background: #dcfce7;
+}
+
+.manual-close-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+
+.manual-close-btn:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+

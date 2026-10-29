@@ -34,8 +34,8 @@ export function FabricSpace({ currentUser, onSwitchUser }: FabricSpaceProps) {
   const [skills, setSkills] = useState<SkillDto[]>([])
   const [plugins, setPlugins] = useState<PluginDto[]>([])
   const [users, setUsers] = useState<UserDto[]>([])
-  const [taskIntent, setTaskIntent] = useState('CustomerRetentionEvaluation')
-  const [taskPayload, setTaskPayload] = useState('{"customerId": "crm:Customer_9482", "channel": "VIP_Phone"}')
+  const [taskIntent, setTaskIntent] = useState('CrossBorderInventoryRebalance')
+  const [taskPayload, setTaskPayload] = useState('{"skuId": "sku:AuraPro_GaN65W", "targetWarehouse": "wh:Warehouse_US_West", "emergencyAirFreightQty": 2500}')
   const [submitResult, setSubmitResult] = useState<string | null>(null)
   const [showSkillModal, setShowSkillModal] = useState(false)
   const [newSkillName, setNewSkillName] = useState('')
@@ -318,7 +318,7 @@ export function FabricSpace({ currentUser, onSwitchUser }: FabricSpaceProps) {
               <label className="field-lbl">技能名称 (Name):</label>
               <input
                 className="input-text"
-                placeholder="例如 CustomerRetentionOptimizer"
+                placeholder="例如 CrossBorderStockoutOptimizer"
                 value={newSkillName}
                 onChange={(e) => setNewSkillName(e.target.value)}
                 autoFocus
