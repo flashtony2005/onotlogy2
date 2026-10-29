@@ -507,6 +507,51 @@ const STORE: InMemStore = {
       action: 'DispatchHighValueCoupon',
       args: { customerId: 'crm:Customer_9482', amount: 200, rule: 'Limit > 150' },
       state: 'Pending',
+      targetEntity: {
+        id: 'crm:Customer_9482',
+        name: '杭州绿云科技有限公司 (年约 ¥12.8万 · VIP客群)',
+        type: '企业客户 (Customer)',
+        badgeColor: '#059669',
+      },
+      intentTitle: '申请破格发放 ¥200 高阶挽留激活权益券，挽回濒危流失核心企业客户',
+      businessAttribution:
+        '该客户近14天无登录且生产环境API调用量骤降82%，已自动触发 [高危流失预警 ALT-701]。经流失挽留智能体测算，向其技术决策人定向发放 ¥200 算力抵扣券能有效促成重新联调上云。',
+      formalInvariant: {
+        ruleId: 'POLICY-BUDGET-003',
+        ruleName: '单客户单次营销权益预算红线约束',
+        formula: '∀ act ∈ DiscountDispatch: act.amount ≤ 150 (当前请求值: 200, 溢出量: +50)',
+        proofConclusion:
+          '形式化断言判定：200 > 150 触发红线阻断。根据治理公理，超出自动化额度的动作必须由业务主管签名授予豁免权方可执行。',
+        requiresHumanReviewReason: '申请金额超出系统自动放行上限 (¥150)，存在预算溢出风险，需人工确认投资回报可行性。',
+      },
+      paramTranslations: [
+        {
+          param: 'customerId',
+          label: '目标客户对象',
+          newValue: '杭州绿云科技有限公司 (#9482)',
+          explanation: '所属华东区优质SaaS订阅客户，当前生命周期处于「高危挽留期」',
+        },
+        {
+          param: 'amount',
+          label: '权益抵扣金额',
+          oldValue: '¥0 (基准限额 ¥150)',
+          newValue: '¥200',
+          explanation: '破格申请超出限额 ¥50 的大额挽留券，用于覆盖客户一次核心算力重跑成本',
+        },
+        {
+          param: 'rule',
+          label: '触碰触发规则',
+          newValue: 'Limit > 150 (预算超额门禁)',
+          explanation: '财务预算风控红线，防止智能体无上限滥发优惠券',
+        },
+      ],
+      businessImpact: {
+        expectedGain: '预计客户流失概率降低 34.2%，挽回年化续约价值 ¥128,000',
+        budgetCost: '实付成本 ¥200 营销补贴券（仅在核销使用时产生财务支出）',
+        roiSummary: '预期 ROI 为 1:640（极高性价比投入）',
+        riskLevel: '低风险',
+        riskMitigation: '已配置 7 天有效期限与仅限本人企业认证账号使用，无倒卖黑产风险。',
+      },
     },
     {
       reqId: 'appr-002',
@@ -515,6 +560,45 @@ const STORE: InMemStore = {
       action: 'AdjustMarkovWindow',
       args: { model: 'MarkovDistribution', windowSize: 200 },
       state: 'Pending',
+      targetEntity: {
+        id: 'model:LotteryRiskEngine_01',
+        name: '营销抽奖防刷与赔率风控引擎 (MarkovDistribution)',
+        type: '风控模型 (Model)',
+        badgeColor: '#2563eb',
+      },
+      intentTitle: '扩大抽奖行为分析采样窗口至 200 单，跨会话拦截分布式薅羊毛团伙',
+      businessAttribution:
+        '近期检测到黑产利用多IP与脚本小号协同套利，在现行 50 单的短期滑动窗口内单账号行为与散客无异，成功规避了实时拦截；放大采样周期至 200 单可跨账号识别其聚集性概率特征。',
+      formalInvariant: {
+        ruleId: 'POLICY-PERF-SLA-001',
+        ruleName: '实时风控推理时延与内存边界保持不变式',
+        formula: '∀ w ∈ WindowSize: P99_Latency(w) ≤ 25ms ∧ Memory(w) ≤ 64MB',
+        proofConclusion:
+          '静态与压测证明：w=200 时预估 P99 延迟由 4.2ms 微升至 11.5ms（严格 ≤ 25ms 红线），内存占用约 32MB（严格 ≤ 64MB）；但因参数跳变幅度达到 400% (50→200)，命中模型稳定性安全警戒线。',
+        requiresHumanReviewReason: '参数跨度调整达 4 倍，需模型负责人确认非线上突发异常导致的过拟合调整。',
+      },
+      paramTranslations: [
+        {
+          param: 'model',
+          label: '目标风控模型',
+          newValue: '马尔可夫状态分布检测器 (MarkovDistribution)',
+          explanation: '用于实时分析用户抽奖点击序列与频次分布的概率转移模型',
+        },
+        {
+          param: 'windowSize',
+          label: '行为分析窗口大小',
+          oldValue: '50 单 (耗时约 2 分钟)',
+          newValue: '200 单 (采样跨度扩大至 8 分钟)',
+          explanation: '扩大 4 倍分析视野，使分布式脚本小号的聚集性特征无所遁形',
+        },
+      ],
+      businessImpact: {
+        expectedGain: '预计每日挽回被外挂脚本盗刷奖品损失约 ¥42,000，提高真实用户中奖率',
+        budgetCost: '服务器计算开销预估增加 3.2%（无额外财务采购成本）',
+        roiSummary: '直接止损回报极高，守护营销活动公正性',
+        riskLevel: '中风险',
+        riskMitigation: '已配置灰度放量监控，若上线 30 分钟内正常用户误伤率 > 0.05% 则自动回滚。',
+      },
     },
   ],
   auditLogs: [
@@ -547,6 +631,8 @@ const STORE: InMemStore = {
     { source: 'crm:Plan_Intervention_09', predicate: 'targets', target: 'crm:Customer_9482', validFrom: 1713170000, validUntil: null },
     { source: 'policy:churn_sla_rule', predicate: 'governs', target: 'crm:Strategy_Retention_A', validFrom: 1713170000, validUntil: null },
     { source: 'agent:retention-agent', predicate: 'dispatches_to', target: 'worker:crm-worker-01', validFrom: 1713170000, validUntil: null },
+    { source: 'model:LotteryRiskEngine_01', predicate: 'governed_by', target: 'policy:lottery_sla_rule', validFrom: 1713170000, validUntil: null },
+    { source: 'agent:retention-agent', predicate: 'tunes', target: 'model:LotteryRiskEngine_01', validFrom: 1713170000, validUntil: null },
   ],
   runs: [],
   automationJobs: [
@@ -826,6 +912,8 @@ export async function getGraph(): Promise<WorldGraphDto> {
     { id: 'agent:retention-agent', type: 'Agent' },
     { id: 'worker:crm-worker-01', type: 'Worker' },
     { id: 'policy:churn_sla_rule', type: 'Policy' },
+    { id: 'model:LotteryRiskEngine_01', type: 'Model' },
+    { id: 'policy:lottery_sla_rule', type: 'Policy' },
   ]
   const edges = STORE.worldRelations.map((r, i) => ({
     id: `e-${i}`,

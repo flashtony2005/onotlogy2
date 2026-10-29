@@ -459,7 +459,7 @@ export interface FabricSubmissionDto {
 
 // ── T1 Bridge 审批裁决（GET /run/:run_id/approvals + POST /run/:run_id/approval/:req_id）──
 
-/// 挂起审批列表项（后端 PendingApprovalDto，camelCase wire）。
+/// 挂起审批列表项（本体语义与业务操作凭据，解决技术暗语无人懂的痛点）。
 export interface PendingApprovalDto {
   reqId: string
   runId: string
@@ -467,6 +467,36 @@ export interface PendingApprovalDto {
   action: string
   args: unknown
   state: string
+  // ── 本体语义扩展（业务表达核心）──
+  targetEntity?: {
+    id: string
+    name: string
+    type: string
+    badgeColor?: string
+  }
+  intentTitle?: string
+  businessAttribution?: string
+  formalInvariant?: {
+    ruleId: string
+    ruleName: string
+    formula: string
+    proofConclusion: string
+    requiresHumanReviewReason: string
+  }
+  paramTranslations?: Array<{
+    param: string
+    label: string
+    oldValue?: string
+    newValue: string
+    explanation: string
+  }>
+  businessImpact?: {
+    expectedGain: string
+    budgetCost: string
+    roiSummary: string
+    riskLevel: '低风险' | '中风险' | '高风险'
+    riskMitigation: string
+  }
 }
 
 /// 裁决结果（后端 resolve_approval 成功体）。

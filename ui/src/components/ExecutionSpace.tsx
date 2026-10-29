@@ -125,37 +125,182 @@ export function ExecutionSpace({
         </div>
       )}
 
-      {/* 如果有待审批项目，在顶部突出显示 */}
+      {/* 如果有待审批项目，在顶部突出显示：以本体论业务操作凭据展示，拒绝技术暗语 */}
       {approvals.length > 0 && (
-        <div className="glass-card" style={{ borderColor: 'var(--warning)', background: 'var(--warning-light)', marginBottom: '16px' }}>
-          <div className="card-header-row">
-            <h3 className="card-title" style={{ color: '#b45309' }}>
-              <AlertTriangle size={18} /> 待人工审批放行 ({approvals.length} 项高风险操作)
-            </h3>
-            <span style={{ fontSize: '12px', color: '#b45309' }}>需人工授权后智能体方可继续</span>
+        <div className="glass-card" style={{ borderColor: '#d97706', background: 'rgba(254, 243, 199, 0.35)', marginBottom: '24px', boxShadow: '0 4px 20px rgba(217, 119, 6, 0.08)' }}>
+          <div className="card-header-row" style={{ borderBottom: '1px solid rgba(217, 119, 6, 0.2)', paddingBottom: '12px', marginBottom: '16px' }}>
+            <div>
+              <h3 className="card-title" style={{ color: '#92400e', fontSize: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <AlertTriangle size={20} color="#d97706" /> 待人工形式化裁决放行 ({approvals.length} 项关键业务操作)
+              </h3>
+              <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#b45309' }}>
+                触碰治理红线或超出自动化预算限额。需由业务负责人核验本体上下文、形式化证明与预期损益后签署。
+              </p>
+            </div>
+            <span style={{ fontSize: '12px', background: '#fef3c7', color: '#92400e', padding: '4px 10px', borderRadius: '12px', fontWeight: 600, border: '1px solid #fde68a' }}>
+              本体状态冻结中
+            </span>
           </div>
-          <div className="approvals-list">
+
+          <div className="approvals-list" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
             {approvals.map((appr) => (
-              <div key={appr.reqId} className="approval-card" style={{ background: '#ffffff' }}>
-                <div className="appr-head">
-                  <span className="appr-id">审批单号 #{appr.reqId}</span>
-                  <span className="appr-cap">{appr.capability}</span>
+              <div key={appr.reqId} className="ontology-approval-card">
+                {/* 1. 卡片顶栏：单号、目标业务实体、风险标签 */}
+                <div className="ont-appr-header">
+                  <div className="ont-appr-meta">
+                    <span className="ont-appr-id">审批凭据 #{appr.reqId}</span>
+                    {appr.targetEntity ? (
+                      <span className="ont-entity-pill" style={{ borderColor: appr.targetEntity.badgeColor || '#059669' }}>
+                        <span className="dot" style={{ background: appr.targetEntity.badgeColor || '#059669' }} />
+                        <span className="type">{appr.targetEntity.type}:</span>
+                        <strong className="name">{appr.targetEntity.name}</strong>
+                      </span>
+                    ) : (
+                      <span className="ont-entity-pill">
+                        <span className="type">系统能力:</span>
+                        <strong className="name">{appr.capability}</strong>
+                      </span>
+                    )}
+                  </div>
+                  {appr.businessImpact && (
+                    <span className={`ont-risk-badge risk-${appr.businessImpact.riskLevel === '高风险' ? 'high' : appr.businessImpact.riskLevel === '中风险' ? 'medium' : 'low'}`}>
+                      {appr.businessImpact.riskLevel}
+                    </span>
+                  )}
                 </div>
-                <h4 className="appr-action">{appr.action}</h4>
-                <pre className="appr-args">{fmtJson(appr.args)}</pre>
-                <div className="appr-actions">
-                  <button
-                    className="btn-appr approve"
-                    onClick={() => handleDecision(appr.reqId, true)}
-                  >
-                    <CheckCircle2 size={15} /> 批准执行
-                  </button>
-                  <button
-                    className="btn-appr reject"
-                    onClick={() => handleDecision(appr.reqId, false)}
-                  >
-                    <XCircle size={15} /> 拒绝操作
-                  </button>
+
+                {/* 2. 核心业务意图标题（白话人话直击目标） */}
+                <h4 className="ont-appr-title">
+                  {appr.intentTitle || appr.action}
+                </h4>
+
+                {/* 3. 业务归因与触发背景 */}
+                {appr.businessAttribution && (
+                  <div className="ont-appr-block ont-bg-reason">
+                    <span className="block-label">📌 业务归因与触发背景</span>
+                    <p className="block-text">{appr.businessAttribution}</p>
+                  </div>
+                )}
+
+                {/* 4. 形式化证明与红线规则约束 (Formal Invariant Guard) */}
+                {appr.formalInvariant && (
+                  <div className="ont-appr-block ont-formal-proof">
+                    <div className="proof-header">
+                      <span className="block-label" style={{ color: '#92400e' }}>
+                        ⚖️ 形式化约束与红线证明 ({appr.formalInvariant.ruleId} · {appr.formalInvariant.ruleName})
+                      </span>
+                      <span className="proof-badge">不可变式红线判定</span>
+                    </div>
+                    <div className="proof-formula-box">
+                      <code>{appr.formalInvariant.formula}</code>
+                    </div>
+                    <p className="proof-desc">
+                      <strong>形式证明判定：</strong>{appr.formalInvariant.proofConclusion}
+                    </p>
+                    <p className="proof-reason">
+                      <strong>裁决触发原因：</strong>{appr.formalInvariant.requiresHumanReviewReason}
+                    </p>
+                  </div>
+                )}
+
+                {/* 5. 参数人话白话对照表 (取代生硬不可读的 JSON) */}
+                {appr.paramTranslations && appr.paramTranslations.length > 0 ? (
+                  <div className="ont-appr-block ont-params-block">
+                    <span className="block-label">📋 参数意图白话对照表 (取代底层技术代码)</span>
+                    <div className="param-table-wrap">
+                      <table className="ont-param-table">
+                        <thead>
+                          <tr>
+                            <th>业务参数</th>
+                            <th>拟定取值 (变更前后)</th>
+                            <th>参数作用与业务影响</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {appr.paramTranslations.map((pt, idx) => (
+                            <tr key={idx}>
+                              <td className="param-label-cell">
+                                <span className="param-name">{pt.label}</span>
+                                <code className="param-code">({pt.param})</code>
+                              </td>
+                              <td className="param-val-cell">
+                                {pt.oldValue && (
+                                  <div className="val-old">
+                                    <span className="val-tag">原值:</span> {pt.oldValue}
+                                  </div>
+                                )}
+                                <div className="val-new">
+                                  <span className="val-tag">变更为:</span> <strong>{pt.newValue}</strong>
+                                </div>
+                              </td>
+                              <td className="param-desc-cell">{pt.explanation}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="ont-appr-block">
+                    <span className="block-label">📋 操作参数</span>
+                    <pre className="appr-args">{fmtJson(appr.args)}</pre>
+                  </div>
+                )}
+
+                {/* 6. 预期业务损益与风险控制边界 */}
+                {appr.businessImpact && (
+                  <div className="ont-impact-grid">
+                    <div className="impact-card gain">
+                      <span className="impact-title">🎯 预期业务收益</span>
+                      <span className="impact-val">{appr.businessImpact.expectedGain}</span>
+                    </div>
+                    <div className="impact-card cost">
+                      <span className="impact-title">💰 财务/算力成本</span>
+                      <span className="impact-val">{appr.businessImpact.budgetCost}</span>
+                    </div>
+                    <div className="impact-card roi">
+                      <span className="impact-title">📈 投产比 (ROI)</span>
+                      <span className="impact-val">{appr.businessImpact.roiSummary}</span>
+                    </div>
+                    <div className="impact-card defense">
+                      <span className="impact-title">🛡️ 风险防御与回滚</span>
+                      <span className="impact-val">{appr.businessImpact.riskMitigation}</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* 7. 底层技术审计透视 (可折叠) */}
+                <details className="ont-tech-details">
+                  <summary className="tech-summary">
+                    <span>🔍 查看底层接口技术调用明细 ({appr.capability} / {appr.action})</span>
+                  </summary>
+                  <div className="tech-payload">
+                    <div style={{ marginBottom: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                      智能体底层 RPC 调用载荷（原始状态）:
+                    </div>
+                    <pre>{fmtJson(appr.args)}</pre>
+                  </div>
+                </details>
+
+                {/* 8. 裁决操作按钮栏 */}
+                <div className="ont-decision-footer">
+                  <div className="decision-tip">
+                    <span>签署后将即时完成本体状态变迁，并计入全局防篡改审计轨</span>
+                  </div>
+                  <div className="decision-btns">
+                    <button
+                      className="btn-appr approve"
+                      onClick={() => handleDecision(appr.reqId, true)}
+                    >
+                      <CheckCircle2 size={16} /> 批准放行并应用本体变更
+                    </button>
+                    <button
+                      className="btn-appr reject"
+                      onClick={() => handleDecision(appr.reqId, false)}
+                    >
+                      <XCircle size={16} /> 驳回并要求智能体重新规划
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}
